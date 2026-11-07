@@ -1,14 +1,14 @@
 # Delayed check concepts for #361
 
-Round 1 of the [ui-design-gate](../../../.agents/skills/ui-design-gate/SKILL.md): five concepts for the test-only delayed check and the states after submission, on the adaptive Canvas and Today. Nothing here is approved.
+Round 1 of the [ui-design-gate](../../../.agents/skills/ui-design-gate/SKILL.md): five concepts for the test-only delayed check and the states after submission, on the adaptive Canvas and Today. The approved design is [approved.html](./approved.html); see [decision.md](./decision.md).
 
 | Concept | File | Varies |
 |---|---|---|
-| Quiet room | [concept-quiet-room.html](./concept-quiet-room.html) | Hierarchy: the check is the only thing on the page; after submit a small receipt sits above inline practice |
-| Lock in | [concept-lock-in.html](./concept-lock-in.html) | Interaction: write, then a review step asks confidence and locks the answer; practice and result are separate screens |
-| Status trail | [concept-status-trail.html](./concept-status-trail.html) | Layout: a trail beside the work (above on phones) carries every lifecycle and recovery state; Today shows the same trail |
-| Today hands off | [concept-today-handoff.html](./concept-today-handoff.html) | Placement: Today owns the check and holds the session closed until the answer is saved; scoring and results live on Today |
-| Open exit | [concept-open-exit.html](./concept-open-exit.html) | Interaction: help buttons stay in place but locked; “I’d rather learn it first” ends the check without a result and starts a lesson |
+| Quiet room | [rejected-1-quiet-room.html](./rejected-1-quiet-room.html) | Hierarchy: the check is the only thing on the page; after submit a small receipt sits above inline practice |
+| Lock in | [rejected-1-lock-in.html](./rejected-1-lock-in.html) | Interaction: write, then a review step asks confidence and locks the answer; practice and result are separate screens |
+| Status trail | [rejected-1-status-trail.html](./rejected-1-status-trail.html) | Layout: a trail beside the work (above on phones) carries every lifecycle and recovery state; Today shows the same trail |
+| Today hands off | [rejected-1-today-handoff.html](./rejected-1-today-handoff.html) | Placement: Today owns the check and holds the session closed until the answer is saved; scoring and results live on Today |
+| Open exit | [rejected-1-open-exit.html](./rejected-1-open-exit.html) | Interaction: help buttons stay in place but locked; “I’d rather learn it first” ends the check without a result and starts a lesson |
 
 Each file stacks every state with a review annotation (not product UI) and has a theme toggle. Annotations tag each state as a measurement repair, added teaching, recovery or context, as #361 asks.
 
@@ -54,15 +54,15 @@ HTML surfaces load one file for every case, so each surface has one case, `conce
 
 ## Round 2
 
-The owner’s reaction to round 1, verbatim: “i like 4,1”. That is Today hands off ([concept-today-handoff.html](./concept-today-handoff.html)) and Quiet room ([concept-quiet-room.html](./concept-quiet-room.html)). These five variations blend the two. Nothing here is approved.
+The owner’s reaction to round 1, verbatim: “i like 4,1”. That is Today hands off ([rejected-1-today-handoff.html](./rejected-1-today-handoff.html)) and Quiet room ([rejected-1-quiet-room.html](./rejected-1-quiet-room.html)). These five variations blend the two. The owner approved Today points ([approved.html](./approved.html)).
 
 | Variation | File | Idea | What varies |
 |---|---|---|---|
-| Shared receipt | [variation-shared-receipt.html](./variation-shared-receipt.html) | One small receipt is the whole after-state: it sits above practice on the Canvas where you submitted and, identically, above the opened session on Today. | Landing: stay on the Canvas. Result: both surfaces, from one component. Today gains one receipt card. |
-| Straight back | [variation-straight-back.html](./variation-straight-back.html) | The Canvas holds only the question; submitting returns you straight to Today, where a small receipt quotes your answer and the session opens beneath it. | Landing: Today, with no Canvas confirmation screen. Practice becomes the session’s first part. Result: Today only. |
-| Today points | [variation-today-points.html](./variation-today-points.html) | The Canvas is the only place the check and its result live; Today carries a single status row that points back to it. | Result: Canvas only. Today gains one row and never shows feedback. |
-| Read back | [variation-read-back.html](./variation-read-back.html) | Submitting locks your answer in place instead of replacing it, and the result arrives as short notes written against your own sentences. | Interaction: no receipt swap. Hierarchy: the learner’s answer is the feedback surface, on the Canvas and on Today. |
-| One page | [variation-one-page.html](./variation-one-page.html) | Today itself becomes the quiet room while the check is open, then folds the check into one status line under its title and lets the session take the page. | Entry and placement: no Canvas check at all; the Canvas only points to Today. |
+| Shared receipt | [rejected-2-shared-receipt.html](./rejected-2-shared-receipt.html) | One small receipt is the whole after-state: it sits above practice on the Canvas where you submitted and, identically, above the opened session on Today. | Landing: stay on the Canvas. Result: both surfaces, from one component. Today gains one receipt card. |
+| Straight back | [rejected-2-straight-back.html](./rejected-2-straight-back.html) | The Canvas holds only the question; submitting returns you straight to Today, where a small receipt quotes your answer and the session opens beneath it. | Landing: Today, with no Canvas confirmation screen. Practice becomes the session’s first part. Result: Today only. |
+| Today points | [approved.html](./approved.html) | The Canvas is the only place the check and its result live; Today carries a single status row that points back to it. | Result: Canvas only. Today gains one row and never shows feedback. |
+| Read back | [rejected-2-read-back.html](./rejected-2-read-back.html) | Submitting locks your answer in place instead of replacing it, and the result arrives as short notes written against your own sentences. | Interaction: no receipt swap. Hierarchy: the learner’s answer is the feedback surface, on the Canvas and on Today. |
+| One page | [rejected-2-one-page.html](./rejected-2-one-page.html) | Today itself becomes the quiet room while the check is open, then folds the check into one status line under its title and lets the session take the page. | Entry and placement: no Canvas check at all; the Canvas only points to Today. |
 
 Each file keeps the 13 states and the measurement repairs above, stacks every state with review annotations (not product UI), and has a theme toggle. Where a state reads differently on each surface, the file shows both frames, captioned.
 
@@ -105,4 +105,4 @@ No new colours, tokens or fonts.
 
 ### Captures
 
-Same conventions as round 1: one `concept/all-states` case per file, both themes, 1280, 390 and 320 wide. Definitions: `docs/design/surfaces/learn-delayed-check-v-<slug>.json`.
+Same conventions as round 1: one `concept/all-states` case per file, both themes, 1280, 390 and 320 wide. Only the approved design keeps a surface: `docs/design/surfaces/learn-delayed-check.json`.
