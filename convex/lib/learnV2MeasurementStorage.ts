@@ -114,6 +114,7 @@ export const assessmentCatalogFields = {
   ...base, catalogRevision: v.number(), instrumentationEpoch: v.string(),
   historyCompleteness: v.union(v.literal('unknown'), v.literal('prospective_complete')),
   historyBasisVersion: v.string(), historyCoverageWatermark: v.string(),
+  measurementCapability: v.optional(v.object({ enabled: v.boolean() })),
 }
 export const assessmentCaseFields = {
   ...base, caseKey: v.string(), scenarioFingerprint: v.string(), solutionFingerprint: v.string(),
