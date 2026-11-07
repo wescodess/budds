@@ -224,6 +224,16 @@ export const commitBatch = internalMutation({
   },
 })
 
+// Provider capacity belongs to the route, independently of any learner row.
+// Only the server-owned dispatch action calls this after an actual HTTP 429;
+// deletion may already have removed every originating assessment and attempt.
+export const recordProviderCooldown = internalMutation({
+  args: { provider: v.union(v.literal('openrouter'), v.literal('groq')), retryAfterMs: v.optional(v.number()) },
+  handler: async (ctx, { provider, retryAfterMs }) => {
+    await extendQuizGradingCooldown(ctx, Date.now() + Math.max(15_000, validatedProviderRetryDelay(retryAfterMs) ?? 0), provider)
+  },
+})
+
 export const failBatch = internalMutation({
   args: {
     ...batchClaim, items: v.array(v.object({ assessmentId: v.id('quizAnswerAssessments'), inputDigest: v.string() })),
@@ -324,6 +334,9 @@ export const dispatchBatch = internalAction({
     }
     else {
       const { status: _status, httpStatus, ...failure } = outcome
+      if (httpStatus === 429 && provider) {
+        await ctx.runMutation(internal.quizGrading.recordProviderCooldown, { provider, retryAfterMs: failure.retryAfterMs })
+      }
       console.warn('Quiz grading unavailable', {
         provider, reason: failure.reason, limiterSource: httpStatus === 429 ? 'upstream' : 'none',
         ...(httpStatus !== undefined ? { httpStatus } : {}),

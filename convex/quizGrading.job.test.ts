@@ -1347,6 +1347,41 @@ describe('free Groq dispatch integration', () => {
     expect(generateCompletion).not.toHaveBeenCalled()
   })
 
+  test.each(['folder', 'quiz', 'account'] as const)('an in-flight 429 preserves its provider floor after %s deletion', async (kind) => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const attemptId = await finish(fixture)
+    let release!: () => void
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => {
+      release = () => resolve(new Response('private provider response', { status: 429, headers: { 'retry-after': '86400' } }))
+      entered()
+    }))
+    const grading = runGrade(fixture, attemptId)
+    await dispatched
+    try {
+      const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+      if (kind === 'folder') await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+      if (kind === 'quiz') await fixture.user.mutation(api.quizzes.deleteQuiz, { quizId: fixture.quizId })
+      if (kind === 'account') await fixture.user.mutation(internal.accountDeletion.deleteCurrentUser, {})
+      const before = await gradingSnapshot(fixture, attemptId)
+      if (kind === 'quiz') expect(before.rows).toEqual([])
+      release()
+      await grading
+      expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+      const cooldown = (await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/groq-cooldown')
+      expect(cooldown).toMatchObject({ userId: '', expiresAt: NOW + 86_400_000 })
+      expect(JSON.stringify(cooldown)).not.toMatch(/private|daughter|quiz_grading_job|https:/)
+      vi.setSystemTime(NOW + 61_001)
+      const second = await finish(other)
+      await runGrade(other, second)
+      expect((await assessments(other, second))[0]).toMatchObject({ status: 'unavailable', attemptCount: 0, nextAttemptAt: NOW + 86_400_000 })
+      expect(fetch).toHaveBeenCalledTimes(1)
+    }
+    finally { release(); await grading }
+  })
+
   test.each(['selector', 'free-plan', 'zdr', 'key'])('configuration changes fence a stale claim and recover it safely: %s', async (change) => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture)
