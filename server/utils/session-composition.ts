@@ -36,7 +36,7 @@ export function buildEventDescription(opts: {
 }): string {
   const lines = [
     `${opts.slotMinutes} min ${opts.sessionType === 'new-content' ? 'new content' : opts.sessionType === 'review' ? 'review' : 'audio-only'} session`,
-    `Course: ${opts.courseName}`,
+    `Void: ${opts.courseName}`,
     '',
     opts.deepLink,
   ]

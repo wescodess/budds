@@ -334,6 +334,35 @@ describe('reviewItems.listDueWithContext', () => {
     expect(items[0]!.prompt).toBe('Enriched item')
   })
 
+  test('names the Void when the parent record is absent', async () => {
+    const t = convexTest(schema, modules)
+    const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
+
+    const today = new Date().toISOString().slice(0, 10)
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert('reviewItems', {
+        userId: USER_A.tokenIdentifier,
+        courseId,
+        sectionId,
+        flashcardRoomCardId: cardIds[0]!,
+        prompt: 'Orphaned item',
+        answer: 'Answer',
+        easeFactor: 2.5,
+        interval: 1,
+        repetitions: 0,
+        nextReviewDate: today,
+        flagged: false,
+        createdAt: Date.now(),
+      })
+      await ctx.db.delete(courseId)
+    })
+
+    const items = await asUser.query(api.reviewItems.listDueWithContext, {})
+    expect(items).toHaveLength(1)
+    expect(items[0]!.courseTitle).toBe('Unknown Void')
+  })
+
   test('respects daily cap from learnProfile', async () => {
     const t = convexTest(schema, modules)
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)

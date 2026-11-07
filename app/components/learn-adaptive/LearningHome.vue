@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '#convex/api'
+import { learnVoidRoute } from '~/utils/learn-void-routes'
 import { NEED_FIRST_DRAFT_MAX_NEED_BYTES, NEED_FIRST_DRAFT_MAX_PASTE_BYTES, canonicalNeedFirstUrl } from '~~/shared/learn-adaptive-draft'
 
 type SourceScope =
@@ -105,7 +106,7 @@ watch(ownerId, (userId) => {
 }, { immediate: true })
 function resumeReason(reason: string) {
   return reason === 'unfinished_activity' ? 'Unfinished activity' : reason === 'needs_review' ? 'Knowledge to review'
-    : reason === 'source_recovery' ? 'Source needs attention' : 'Recent thread'
+    : reason === 'source_recovery' ? 'Source needs attention' : 'Recent Void'
 }
 function openResume(event: MouseEvent, threadId: string) {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
@@ -257,15 +258,15 @@ function discardPaste() {
       <h3 class="mt-1 font-medium">{{ primaryResume.outcome }}</h3>
       <p v-if="primaryResume.unresolvedPoint" class="mt-1 text-sm text-muted-foreground">Still open: {{ primaryResume.unresolvedPoint }}</p>
       <p class="mt-1 text-sm text-muted-foreground">Next: {{ primaryResume.nextAction.label }}</p>
-      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(primaryResume.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, primaryResume.threadId)">{{ primaryResume.reason === 'needs_review' ? 'Review capability in thread' : primaryResume.reason === 'source_recovery' ? 'Review thread' : 'Continue' }}</NuxtLink>
+      <NuxtLink :to="learnVoidRoute(primaryResume.threadId)" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, primaryResume.threadId)">{{ primaryResume.reason === 'needs_review' ? 'Review capability in Void' : primaryResume.reason === 'source_recovery' ? 'Review Void' : 'Continue' }}</NuxtLink>
     </section>
     <section v-if="worthRevisiting" class="mt-5 rounded-xl border border-border bg-card p-4" aria-labelledby="learn-review-heading" data-testid="learn-adaptive-worth-revisiting">
       <h2 id="learn-review-heading" class="font-dm-sans text-lg font-semibold">Worth revisiting</h2>
       <p class="mt-1 text-sm text-muted-foreground">{{ worthRevisiting.reviewCapability }} is marked as needing review.</p>
       <h3 class="mt-2 font-medium">{{ worthRevisiting.outcome }}</h3>
-      <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(worthRevisiting.threadId)}`" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, worthRevisiting.threadId)">Review capability in thread</NuxtLink>
+      <NuxtLink :to="learnVoidRoute(worthRevisiting.threadId)" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline" @click="openResume($event, worthRevisiting.threadId)">Review capability in Void</NuxtLink>
     </section>
-    <form aria-label="Start a learning thread" @submit.prevent="submit"><UiCard class="mt-6 gap-5 p-5">
+    <form aria-label="Start a Void" @submit.prevent="submit"><UiCard class="mt-6 gap-5 p-5">
       <label class="text-sm font-medium">Your goal or question<textarea ref="needField" v-model="need" data-testid="learn-adaptive-need" rows="4" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Help me understand why this proof works." :aria-describedby="invalidField === 'need' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'need' ? true : undefined" /></label>
       <label class="text-sm font-medium">Useful outcome <span class="font-normal text-muted-foreground">(optional)</span><textarea ref="outcomeField" v-model="outcome" data-testid="learn-adaptive-outcome" rows="2" maxlength="8000" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="For example: Explain the proof clearly in my own words." :aria-describedby="invalidField === 'outcome' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'outcome' ? true : undefined" /></label>
       <LearnAdaptiveIntentChips v-model="intent" />
@@ -276,15 +277,15 @@ function discardPaste() {
       <label v-else-if="sourceKind === 'url'" class="text-sm font-medium">URL<input ref="urlField" v-model="sourceUrl" data-testid="learn-adaptive-url" type="url" class="mt-2 min-h-11 w-full rounded-lg border border-input bg-background px-3 py-2" placeholder="https://example.com/article" :aria-describedby="invalidField === 'url' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'url' ? true : undefined"></label>
       <div v-else-if="sourceKind === 'pasted'"><label class="text-sm font-medium">Pasted material<textarea ref="pasteField" v-model="pastedMaterial" data-testid="learn-adaptive-paste" rows="6" maxlength="65536" class="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2" :aria-describedby="invalidField === 'paste' ? ERROR_ID : undefined" :aria-invalid="invalidField === 'paste' ? true : undefined" /></label><p class="mt-1 text-xs text-muted-foreground">This text stays in this signed-in browser session. Budds stores only its digest and byte count until you import it as an owned document.</p><UiButton type="button" variant="ghost" size="sm" class="mt-2 min-h-11" data-testid="learn-adaptive-discard-paste" @click="discardPaste">Discard pasted material</UiButton></div>
       <p v-if="validationError || serverError" :id="ERROR_ID" role="alert" class="text-sm text-destructive">{{ validationError ?? serverError }}</p>
-      <p role="status" aria-live="polite" class="sr-only">{{ busy ? 'Saving your learning thread…' : '' }}</p>
+      <p role="status" aria-live="polite" class="sr-only">{{ busy ? 'Saving your Void…' : '' }}</p>
       <div class="flex justify-end"><UiButton type="submit" class="min-h-11" data-testid="learn-adaptive-start" :disabled="busy || !ownerId">{{ busy ? 'Saving…' : 'Start learning' }}</UiButton></div>
     </UiCard></form>
     <section class="mt-8" aria-labelledby="learn-history-heading" data-testid="learn-adaptive-thread-history">
       <h2 id="learn-history-heading" class="font-dm-sans text-lg font-semibold">Learning history</h2>
-      <p v-if="historyLoaded && !historyRows.length && historyDone" class="mt-2 text-sm text-muted-foreground">Your learning threads will appear here.</p>
+      <p v-if="historyLoaded && !historyRows.length && historyDone" class="mt-2 text-sm text-muted-foreground">Your Voids will appear here.</p>
       <ol v-if="historyRows.length" class="mt-3 space-y-2">
         <li v-for="thread in historyRows" :key="thread.threadId" class="rounded-lg border border-border p-3">
-          <NuxtLink :to="`/app/learn/thread/${encodeURIComponent(thread.threadId)}`" class="inline-flex min-h-11 items-center text-sm font-medium text-[var(--learn-action)] underline">{{ thread.outcome }}</NuxtLink>
+          <NuxtLink :to="learnVoidRoute(thread.threadId)" class="inline-flex min-h-11 items-center text-sm font-medium text-[var(--learn-action)] underline">{{ thread.outcome }}</NuxtLink>
           <p class="text-xs capitalize text-muted-foreground">{{ thread.lifecycle }}</p>
         </li>
       </ol>

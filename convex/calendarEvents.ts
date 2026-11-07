@@ -2,6 +2,7 @@ import { v } from 'convex/values'
 import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx } from './_generated/server'
 import { api, internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
+import { buildV1CoursePath } from '../shared/learn-v1-routes'
 import { getCalendarAccessToken, getStoredCalendarAccessToken } from './lib/calendarTokenRuntime'
 import type { Doc, Id } from './_generated/dataModel'
 import { markCalendarEventManaged, reserveCalendarCleanup } from './calendarEventCleanup'
@@ -584,6 +585,12 @@ async function syncCalendarPage(
     let failures = 0
 
     for (const course of activeCourses) {
+      const target = await ctx.runQuery(internal.courses.getCalendarLinkTarget, { userId, courseId: course._id })
+      if (!target) {
+        failures++
+        console.error(`[syncCalendar] Course ${course._id} has no available owned link target`)
+        continue
+      }
       const googleEventId = createGoogleEventId()
       const operationKey = `sync-course:${course._id}`
       const operationAvailable = await ctx.runQuery(internal.calendarEventCleanup.isOperationAvailable, {
@@ -624,12 +631,12 @@ async function syncCalendarPage(
         hasDueReviews: args.hasDueReviews,
         hasNewContent: course.completedSectionCount < course.totalSectionCount,
       })
-      const title = buildEventTitle(course.title, sessionType)
+      const title = buildEventTitle(target.title, sessionType)
       const description = buildEventDescription({
-        courseName: course.title,
+        courseName: target.title,
         sessionType,
         slotMinutes: prefs.sessionMinutes,
-        deepLink: siteUrl ? `${siteUrl}/app/learn/${course._id}` : '',
+        deepLink: siteUrl ? `${siteUrl}${buildV1CoursePath(target)}` : '',
       })
       const endDate = new Date(startDate.getTime() + prefs.sessionMinutes * 60_000)
 
@@ -924,6 +931,11 @@ export const checkMissedSessionsForUser = internalAction({
       let nextSlotAfter = args.nextSlotAfter ?? now
 
       for (const missedEvent of missed) {
+        const target = await ctx.runQuery(internal.courses.getCalendarLinkTarget, { userId, courseId: missedEvent.courseId })
+        if (!target) {
+          console.error(`[checkMissedSessions] Course ${missedEvent.courseId} has no available owned link target`)
+          continue
+        }
         const googleEventId = createGoogleEventId()
         const operationKey = `reschedule-event:${missedEvent.eventId}`
         const operationAvailable = await ctx.runQuery(internal.calendarEventCleanup.isOperationAvailable, {
@@ -959,9 +971,7 @@ export const checkMissedSessionsForUser = internalAction({
 
         const endTime = new Date(nextSlot.getTime() + prefs.sessionMinutes * 60_000)
 
-        const course = await ctx.runQuery(internal.courses.getById, { courseId: missedEvent.courseId })
-        if (!course) continue
-        const courseName = course.title
+        const courseName = target.title
 
         const typeLabel = missedEvent.sessionType === 'new-content'
           ? 'New Content'
@@ -970,10 +980,10 @@ export const checkMissedSessionsForUser = internalAction({
             : 'Audio Only'
 
         const title = `[Budds] ${courseName} - ${typeLabel}`
-        const deepLink = siteUrl ? `${siteUrl}/app/learn/${missedEvent.courseId}` : ''
+        const deepLink = siteUrl ? `${siteUrl}${buildV1CoursePath(target)}` : ''
         const description = [
           `${prefs.sessionMinutes} min ${missedEvent.sessionType === 'new-content' ? 'new content' : missedEvent.sessionType === 'review' ? 'review' : 'audio-only'} session (rescheduled)`,
-          `Course: ${courseName}`,
+          `Void: ${courseName}`,
           '',
           deepLink,
         ].join('\n')

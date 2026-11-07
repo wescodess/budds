@@ -39,7 +39,7 @@ const baseProps = {
   courseId: 'course_abc' as any,
   folderId: 'folder_123' as any,
   backUrl: '/app/folders/folder_123/learn/',
-  backLabel: 'Back to folder courses',
+  backLabel: 'Back to folder Voids',
   sectionUrlPrefix: '/app/folders/folder_123/learn/course_abc',
   needsStart: false,
 }

@@ -103,7 +103,7 @@ async function decide(decision: ReflectionDecision) {
     const result = await mutation.mutate({ threadId: props.canvas.thread.id as never, activityId: props.canvas.activity.id,
       decision, expectedRevision: revision.value, idempotencyKey: commandKey.value })
     if (result?.kind === 'ok') {
-      notice.value = 'Choice saved. Updating your learning thread…'
+      notice.value = 'Choice saved. Updating your Void…'
       return
     }
     commandKey.value = null
@@ -119,7 +119,7 @@ async function decide(decision: ReflectionDecision) {
 
 const completedLabel = computed(() => props.canvas.decision?.outcome === 'accepted'
   ? 'Next move accepted.'
-  : props.canvas.decision?.outcome === 'overridden' ? 'You chose a different next move.' : 'Thread ended.')
+  : props.canvas.decision?.outcome === 'overridden' ? 'You chose a different next move.' : 'Void ended.')
 </script>
 
 <template>
@@ -153,7 +153,7 @@ const completedLabel = computed(() => props.canvas.decision?.outcome === 'accept
       <div class="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <button v-if="reflection.props.allowedDecisions.includes('accept')" type="button" data-testid="learn-reflection-accept" class="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-[var(--learn-action)] px-4 py-2 font-medium text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" :disabled="busy || choiceCommitted || !isOnline" @click="decide('accept')">Accept next move</button>
         <button v-if="reflection.props.allowedDecisions.includes('override')" type="button" data-testid="learn-reflection-override" class="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-border px-4 py-2 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" :disabled="busy || choiceCommitted || !isOnline" @click="decide('override')">Choose another</button>
-        <button v-if="reflection.props.allowedDecisions.includes('end')" type="button" data-testid="learn-reflection-end" class="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-border px-4 py-2 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" :disabled="busy || choiceCommitted || !isOnline" @click="decide('end')">End this thread</button>
+        <button v-if="reflection.props.allowedDecisions.includes('end')" type="button" data-testid="learn-reflection-end" class="inline-flex min-h-11 w-full items-center justify-center rounded-lg border border-border px-4 py-2 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)] sm:w-auto" :disabled="busy || choiceCommitted || !isOnline" @click="decide('end')">End this Void</button>
       </div>
     </template>
   </section>

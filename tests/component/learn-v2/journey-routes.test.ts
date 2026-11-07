@@ -3,6 +3,8 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { defineComponent, ref as vueRef, watch } from 'vue'
 import { getFunctionName } from 'convex/server'
+import type { Id } from '../../../convex/_generated/dataModel'
+import { buildV1CoursePath } from '../../../shared/learn-v1-routes'
 
 const allowed = ref(true)
 const checkingAccess = ref(false)
@@ -58,6 +60,23 @@ describe('Learn V2 route entry', () => {
       global: { stubs: { LearnV2LearnHub: { props: ['snapshot'], template: '<section data-testid="hub" />' } } },
     })
     expect(wrapper.find('[data-testid="hub"]').exists()).toBe(true)
+  })
+
+  it('resolves a folder-qualified V1 link to the existing overview and section routes', async () => {
+    const Page = await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+    const wrapper = await mountSuspended(Page.default, {
+      global: { stubs: { LearnV2LearnHub: { template: '<section />' } } },
+    })
+    const folderId = '0000000000000000000010000folders' as Id<'folders'>
+    const courseId = '0000000000000000000010001courses' as Id<'courses'>
+    const path = buildV1CoursePath({ folderId, courseId })
+    const overview = wrapper.vm.$router.resolve(path)
+    expect(overview.name).toBe('app-folders-id-learn-courseId')
+    expect(overview.params).toEqual({ id: folderId, courseId })
+    const section = wrapper.vm.$router.resolve(`${path}/000000000000010006courseSections`)
+    expect(section.name).toBe('app-folders-id-learn-courseId-sectionId')
+    expect(section.params).toEqual({ id: folderId, courseId, sectionId: '000000000000010006courseSections' })
+    wrapper.unmount()
   })
 
   it('offers named V1/V2 handoffs while adaptive is on, and keeps the V2 hub when adaptive is off', async () => {
@@ -365,8 +384,14 @@ describe('Learn V2 route entry', () => {
     expect(wrapper.get('[data-testid="learn-continuation-ready"]').exists()).toBe(true)
     expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
     expect(sessionStorage.getItem(answerKey)).toBeNull()
+    const push = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined)
     await wrapper.get('[data-testid="learn-adaptive-open-diagnostic"]').trigger('click')
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.$router.resolve(push.mock.calls[0]![0]).fullPath).toBe('/app/learn/void/thread_terminal')
+    expect(createDraft).not.toHaveBeenCalled()
+    expect(prepareDecision).not.toHaveBeenCalled()
     expect(JSON.parse(sessionStorage.getItem(pointerKey) ?? '{}')).toMatchObject({ threadId: 'thread_terminal' })
+    push.mockRestore()
   })
 
   it.each(['expired_pointer', 'missing_authority'] as const)('removes unreachable raw answers for %s', async state => {

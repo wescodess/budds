@@ -5,6 +5,9 @@ import { getFunctionName } from 'convex/server'
 const mockCreate = vi.fn()
 const mockCourseData = ref<any>(null)
 const mockSectionsData = ref<any[]>([])
+const { mockToastError } = vi.hoisted(() => ({ mockToastError: vi.fn() }))
+
+vi.mock('vue-sonner', () => ({ toast: { error: mockToastError } }))
 
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: any, _args?: any) => {
@@ -29,6 +32,7 @@ const componentPath = ['~', 'components', 'learn', 'CourseCreator.vue'].join('/'
 describe('CourseCreator', () => {
   beforeEach(() => {
     mockCreate.mockReset()
+    mockToastError.mockReset()
     mockCourseData.value = null
     mockSectionsData.value = []
     mockCreate.mockResolvedValue({ courseId: 'course_1', taskId: 'task_1' })
@@ -60,6 +64,21 @@ describe('CourseCreator', () => {
     })
     expect(wrapper.text()).toContain("couldn't generate an outline")
     expect(wrapper.find('[data-testid="try-again-button"]').exists()).toBe(true)
+  })
+
+  it('names the Void when creation fails without a server message', async () => {
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, {
+      props: { folderId: 'folder_1' as any },
+    })
+
+    mockCreate.mockRejectedValue({})
+    await wrapper.find('[data-testid="topic-input"]').setValue('React hooks')
+    await wrapper.find('[data-testid="generate-outline-button"]').trigger('click')
+
+    await vi.waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith('Failed to create Void')
+    })
   })
 
   it('try again returns to source selection', async () => {

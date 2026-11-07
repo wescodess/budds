@@ -91,7 +91,7 @@ async function onSourceSubmit(payload: {
       })
     }
   } catch (e) {
-    toast.error(getErrorMessage(e, 'Failed to create course'))
+    toast.error(getErrorMessage(e, 'Failed to create Void'))
     step.value = 'error'
   } finally {
     submitting.value = false

@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { recordConvexCalls } from './helpers/convex-calls'
 import { waitForView } from './helpers/wait-for-view'
 
 const token = process.env.BUDDS_E2E_AUTH_TOKEN ?? 'e2e-local-token-please-do-not-use-outside-tests'
@@ -62,7 +63,7 @@ async function startRoutedDiagnostic(page: Page, request: APIRequestContext, key
   if (await page.getByTestId('learn-clarification-skip').isVisible()) await activate(page.getByTestId('learn-clarification-skip'))
   await expect(page.getByTestId('learn-adaptive-open-diagnostic')).toBeVisible()
   await activate(page.getByTestId('learn-adaptive-open-diagnostic'))
-  await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
+  await expect(page).toHaveURL(/\/app\/learn\/void\/[^/]+$/)
   await expect(page.getByTestId('learn-diagnostic-canvas')).toBeVisible()
   await expect(page.getByRole('main')).toHaveCount(1)
   await activate(page.getByTestId('learn-diagnostic-start'))
@@ -77,6 +78,30 @@ async function startRoutedDiagnostic(page: Page, request: APIRequestContext, key
     await expect(page.getByTestId('learn-diagnostic-response')).toHaveValue(response)
   }
   return { threadUrl: page.url(), response }
+}
+
+const LEARNER_COMMANDS = [
+  'learnAdaptiveDrafts:createThreadDraft', 'learnAdaptiveClarifications:prepareInitialDecision', 'learnAdaptiveClarifications:resolveClarification',
+  'learnAdaptive:setIntent', 'learnAdaptiveRecovery:continueDraft', 'learnAdaptiveRecovery:submitDiagnosticResponse', 'learnAdaptiveCanvas:attachReadySession',
+]
+
+async function openLegacyVoid(page: Page, canonicalUrl: string, suffix = '') {
+  const canonical = new URL(canonicalUrl)
+  const legacy = new URL(`${canonical.pathname.replace('/app/learn/void/', '/app/learn/thread/')}${suffix}`, canonical)
+  const navigation = await page.goto(legacy.href)
+  const redirect = navigation?.request().redirectedFrom()
+  expect(redirect, 'legacy entry redirected').toBeTruthy()
+  expect(redirect!.redirectedFrom(), 'one canonicalization hop').toBeNull()
+  expect(new URL(redirect!.url()).pathname).toBe(legacy.pathname)
+  const response = await redirect!.response()
+  expect(response!.status()).toBe(302)
+  expect(response!.headers()['cache-control']).toBe('no-store')
+  expect(response!.headers().location).toBe(`${canonical.pathname}${legacy.search}`)
+  expect(navigation!.status()).toBe(200)
+  const landed = new URL(page.url())
+  expect(landed.pathname).toBe(canonical.pathname)
+  expect([...landed.searchParams]).toEqual([...legacy.searchParams])
+  expect(landed.hash).toBe(legacy.hash)
 }
 
 async function saveRoutedDiagnostic(page: Page, request: APIRequestContext, keyboardOnly = false) {
@@ -322,6 +347,60 @@ test('keyboard-only Home to Thread journey saves a response and restores drawer 
   }
 })
 
+test('Home opens one canonical Void entry and legacy links keep history and the unsent response without repeating commands', async ({ page, context, request }) => {
+  test.setTimeout(5 * 60_000)
+  const calls = recordConvexCalls(page)
+  const { threadUrl, response } = await startRoutedDiagnostic(page, request)
+  const voidPath = new URL(threadUrl).pathname
+  expect(voidPath).toMatch(/^\/app\/learn\/void\/[^/]+$/)
+  const field = page.getByTestId('learn-diagnostic-response')
+  const sent = calls.length
+  const repeatedCommands = () => calls.slice(sent).filter(call => call.kind === 'mutation' && LEARNER_COMMANDS.includes(call.name))
+
+  await page.goBack()
+  await expect(page).toHaveURL(/\/app\/learn$/)
+  await expect(page.getByTestId('learn-adaptive-open-diagnostic')).toBeVisible()
+  await page.goForward()
+  await expect(page).toHaveURL(threadUrl)
+  await expect(field).toHaveValue(response)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await expect(field).toHaveValue(response)
+
+  await openLegacyVoid(page, threadUrl, '?utm_source=mail&empty=&repeat=1&repeat=2&q=a%2Fb%3F%26#learn-thread-history-title')
+  await expect(field).toHaveValue(response)
+  await page.goBack()
+  await expect(page).toHaveURL(threadUrl)
+  await page.goForward()
+  await expect(page).toHaveURL(new RegExp(`${voidPath}\\?utm_source=mail&`))
+  const entries = await page.evaluate(() => history.length)
+  await page.evaluate((path) => { setTimeout(() => location.replace(path)) }, voidPath.replace('/app/learn/void/', '/app/learn/thread/') + '?replaced=1')
+  await expect(page).toHaveURL(new RegExp(`${voidPath}\\?replaced=1$`))
+  expect(await page.evaluate(() => history.length)).toBe(entries)
+  await expect(field).toHaveValue(response)
+  expect(repeatedCommands()).toEqual([])
+
+  await page.getByTestId('learn-diagnostic-submit').click()
+  await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+  expect(repeatedCommands().map(call => call.name)).toEqual(['learnAdaptiveRecovery:submitDiagnosticResponse'])
+
+  await page.evaluate(() => sessionStorage.clear())
+  await page.goto('/app/learn')
+  const historyLink = page.getByTestId('learn-adaptive-thread-history').locator(`a[href="${voidPath}"]`)
+  await expect(historyLink).toBeVisible()
+  const opened = context.waitForEvent('page')
+  await historyLink.click({ modifiers: ['ControlOrMeta'] })
+  const tab = await opened
+  await expect(tab).toHaveURL(url => url.pathname === voidPath)
+  await tab.close()
+  await expect(page).toHaveURL(/\/app\/learn$/)
+  await historyLink.click()
+  await expect(page).toHaveURL(threadUrl)
+  await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+  await page.goBack()
+  await expect(page).toHaveURL(/\/app\/learn$/)
+  expect(repeatedCommands().map(call => call.name)).toEqual(['learnAdaptiveRecovery:submitDiagnosticResponse'])
+})
+
 test('server-owned rollback hides the routed Canvas and restores saved work', async ({ page, request }) => {
   test.setTimeout(5 * 60_000)
   const { threadUrl, response } = await saveRoutedDiagnostic(page, request)
@@ -341,7 +420,7 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
     await page.goto(threadUrl)
     const denied = page.getByTestId('learn-adaptive-thread-denied')
     await expect(denied, `${viewport.name}: rolled-back route`).toBeVisible()
-    await expect(denied.getByRole('status')).toHaveText('This learning thread is not available for this account.')
+    await expect(denied.getByRole('status')).toHaveText('This Void is not available for this account.')
     await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
     const recovery = denied.getByRole('link', { name: 'Open V2 learning plans' })
     await expect(recovery).toHaveAttribute('href', '/app/learn?legacy=v2')
@@ -352,6 +431,10 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
     await recovery.focus()
     await expect(recovery).toBeFocused()
   }
+
+  await openLegacyVoid(page, threadUrl, '?activity=rolled-back')
+  await expect(page.getByTestId('learn-adaptive-thread-denied').getByRole('link', { name: 'Open V2 learning plans' })).toHaveAttribute('href', '/app/learn?legacy=v2')
+  await expect(page.getByTestId('learn-adaptive-canvas-frame')).toHaveCount(0)
 
   await page.getByRole('link', { name: 'Open V2 learning plans', exact: true }).first().click()
   await expect(page).toHaveURL(/\/app\/learn\?legacy=v2$/)
@@ -364,5 +447,7 @@ test('server-owned rollback hides the routed Canvas and restores saved work', as
   await expect(page.getByRole('status')).toHaveText('Adaptive access restored.')
   await expect(page.getByTestId('adaptive-access-status')).toHaveText('allowed')
   await page.goto(threadUrl)
+  await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
+  await openLegacyVoid(page, threadUrl)
   await expect(page.getByTestId('learn-diagnostic-saved')).toContainText(response)
 })

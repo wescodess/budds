@@ -4,10 +4,10 @@ import { hasLearnV2Access } from './learnV2Access'
 
 export type AdaptiveLearnFallbackRoute =
   | { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
-  | { name: 'index', href: '/', label: 'Open your folders for classic courses' }
+  | { name: 'index', href: '/', label: 'Open your folders for classic Voids' }
 
 export const CURRENT_V2_FALLBACK_ROUTE = { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' } as const
-export const CLASSIC_LEARN_FALLBACK_ROUTE = { name: 'index', href: '/', label: 'Open your folders for classic courses' } as const
+export const CLASSIC_LEARN_FALLBACK_ROUTE = { name: 'index', href: '/', label: 'Open your folders for classic Voids' } as const
 
 export type AdaptiveLearnPublicStatus =
   | { kind: 'allowed', capabilities: { entry: true, read: true, write: true, jobAdmission: true } }

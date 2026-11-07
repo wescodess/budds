@@ -42,7 +42,7 @@ async function runRecord(command: RecordCommand) {
   if (props.threadId !== command.threadId || props.ownerId !== command.ownerId || props.folderId !== command.folderId
     || selectedQuiz.value?._id !== command.quizId) {
     pendingRecord.value = null
-    error.value = 'This quiz is no longer selected for your thread. Review the source before trying again.'
+    error.value = 'This quiz is no longer selected for your Void. Review the source before trying again.'
     return
   }
   const epoch = scopeEpoch
@@ -57,10 +57,10 @@ async function runRecord(command: RecordCommand) {
     if (epoch !== scopeEpoch) return
     pendingRecord.value = null
     if (result.kind === 'recorded') notice.value = 'Quiz practice context recorded. Choose it below for an unscored planning activity; no answer, score, or mastery was imported.'
-    else if (result.kind === 'conflict') error.value = 'The thread changed in another tab. Review the refreshed thread and select the quiz again.'
+    else if (result.kind === 'conflict') error.value = 'The Void changed in another tab. Review the refreshed Void and select the quiz again.'
     else error.value = result.code === 'source_revision_changed' || result.code === 'source_unavailable'
       ? 'The quiz changed or is unavailable. Review it before trying again.'
-      : 'This quiz could not be recorded. Review the thread and quiz before trying again.'
+      : 'This quiz could not be recorded. Review the Void and quiz before trying again.'
   }
   catch {
     if (epoch === scopeEpoch) error.value = 'The outcome could not be confirmed. Retry the same record to check its result.'
@@ -98,8 +98,8 @@ function retryRecord() { if (pendingRecord.value) void runRecord(pendingRecord.v
 <template>
   <div class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-quiz-producer">
     <p class="text-sm font-medium">Add quiz practice context</p>
-    <p class="mt-1 text-sm text-muted-foreground">Choose a ready quiz from this thread’s folder. Its questions are not shown in the next activity; no answer, score, or mastery is transferred.</p>
-    <label for="learn-quiz-select" class="mt-2 block text-sm">Quiz in this thread’s folder</label>
+    <p class="mt-1 text-sm text-muted-foreground">Choose a ready quiz from this Void’s folder. Its questions are not shown in the next activity; no answer, score, or mastery is transferred.</p>
+    <label for="learn-quiz-select" class="mt-2 block text-sm">Quiz in this Void’s folder</label>
     <select
       id="learn-quiz-select" v-model="selectedQuizId" data-testid="learn-quiz-select" :disabled="busy || Boolean(pendingRecord)"
       class="mt-1 min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm">

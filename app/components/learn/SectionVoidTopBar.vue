@@ -25,7 +25,7 @@ const progress = computed(() => {
       <button
         type="button"
         class="shrink-0 rounded-lg p-1.5 text-stone-400 transition-colors hover:bg-stone-800 hover:text-stone-200"
-        aria-label="Back to course"
+        aria-label="Back to Void"
         @click="emit('back')"
       >
         <ArrowLeft class="h-5 w-5" />

@@ -12,7 +12,7 @@ import { requireAuth } from './lib/auth'
 import { masteryAttemptArgs, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
 import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
-import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, representativeNextAction } from '../shared/learn-adaptive-completion'
+import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, presentNextAction, representativeNextAction } from '../shared/learn-adaptive-completion'
 import { LEARN_V2_MASTERY_THRESHOLD } from '../shared/learn-v2-mastery'
 import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
@@ -1029,6 +1029,7 @@ export async function representativeCompletion(ctx: QueryCtx | MutationCtx, user
     || job.checkpoint !== `attempt:${String(attempt._id)}`
     || !Number.isFinite(attempt.serverScorePercent) || Boolean(passedEvent) === Boolean(failedEvent)) return null
   const event = passedEvent ?? failedEvent!
+  if (event.taxonomyVersion === 'learn-v2.measurement-events.v1') return null
   const passed = attempt.serverScorePercent! >= LEARN_V2_MASTERY_THRESHOLD
   if (activity.evaluationContract.passingScorePercent !== LEARN_V2_MASTERY_THRESHOLD
     || event.threadId !== activity.threadId || event.activityId !== activity._id
@@ -1079,10 +1080,10 @@ function nextThreadAction(thread: Doc<'learningThreads'>, activity: Doc<'learnin
     kind: 'return_to_learn', label: 'Back to Learn', reasonCode: 'thread_unavailable', activityId: null,
   }
   if (activity?.activityClass === 'factual' && sourceEvidenceState !== 'ready') return {
-    kind: 'recover', label: 'Review your learning mission', reasonCode: `source_${sourceEvidenceState}`, activityId: activity.activityId,
+    kind: 'recover', label: 'Review your Void', reasonCode: `source_${sourceEvidenceState}`, activityId: activity.activityId,
   }
   if (activity?.activityClass === 'factual' && (!factualCanvas || factualCanvas.status === 'blocked')) return {
-    kind: 'recover', label: 'Review your learning mission', reasonCode: factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
+    kind: 'recover', label: 'Review your Void', reasonCode: factualCanvas ? 'canvas_blocked' : 'canvas_unavailable', activityId: activity.activityId,
   }
   if (artifactActionValid && thread.nextAction) return thread.nextAction
   if (activity && completion) {
@@ -1189,7 +1190,7 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
     unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
     completion,
     history,
-    nextAction: nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid),
+    nextAction: presentNextAction(nextThreadAction(thread, activity, factualCanvas, sourceEvidenceState, completion, reflectionDecisionValid, artifactActionValid)),
   }
 }
 

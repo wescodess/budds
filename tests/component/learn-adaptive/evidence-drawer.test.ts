@@ -15,7 +15,7 @@ describe('adaptive Evidence drawer', () => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
     const evidence = { ...base, integrityState: state, eligibility: state === 'accepted' ? 'eligible' as const : 'blocked' as const,
       claims: [{ ...base.claims[0]!, integrityState: state, source: { ...base.claims[0]!.source, locator: ['deleted', 'unavailable', 'insufficient'].includes(state) ? null : 'page:1' } }] }
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     const trigger = wrapper.get('[data-testid="learn-evidence-open"]')
     await trigger.trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
@@ -30,7 +30,7 @@ describe('adaptive Evidence drawer', () => {
 
   it('offers only the named safe recovery in blocked or preparing states and returns focus on close', async () => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence: null, pending: false, sourceState: 'blocked', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: null, pending: false, sourceState: 'blocked', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     const trigger = wrapper.get('[data-testid="learn-evidence-open"]')
     await trigger.trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
@@ -52,7 +52,7 @@ describe('adaptive Evidence drawer', () => {
     const origin = document.createElement('button')
     document.body.append(origin)
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission', openRequest: 0, returnFocusTo: origin }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void', openRequest: 0, returnFocusTo: origin }, attachTo: document.body })
     await wrapper.setProps({ openRequest: 1 })
     let drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
     ;(drawer.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
@@ -70,7 +70,7 @@ describe('adaptive Evidence drawer', () => {
 
   it.each(['preparing', 'blocked', 'stale', 'invalidated'] as const)('shows live %s source status over retained accepted claims', async sourceState => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState, safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState, safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
     expect(drawer.querySelector('[data-testid="learn-evidence-status"]')?.textContent).toContain(sourceState)
@@ -80,7 +80,7 @@ describe('adaptive Evidence drawer', () => {
 
   it('does not present retained accepted claims or locators as current support after source loss', async () => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'unavailable', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'unavailable', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const source = document.querySelector('[data-testid="learn-source-claim_1"]') as HTMLElement
     expect(source.textContent).toContain('unavailable')
@@ -94,7 +94,7 @@ describe('adaptive Evidence drawer', () => {
   ] as const)('distinguishes %s epistemic label from evidence integrity', async (claimStatus, label) => {
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
     const evidence = { ...base, claims: [{ ...base.claims[0]!, claimStatus }] }
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const source = document.querySelector('[data-testid="learn-source-claim_1"]') as HTMLElement
     expect(source.textContent).toContain(`Claim type: ${label}`)
@@ -116,19 +116,19 @@ describe('adaptive Evidence drawer', () => {
     const evidence = { ...base, integrityState: state === 'preparing' || state === 'blocked' || state === 'invalidated' ? 'accepted' as const : state,
       claims: [{ ...base.claims[0]!, integrityState: state === 'preparing' || state === 'blocked' || state === 'invalidated' ? 'accepted' as const : state }] }
     const sourceState = state === 'deleted' || state === 'insufficient' || state === 'conflicting' ? 'ready' : state
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState, safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence, pending: false, sourceState, safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
     expect(drawer.querySelector('[data-testid="learn-evidence-recovery-copy"]')?.textContent).toContain(explanation)
     expect(drawer.querySelector('[data-testid="learn-evidence-recovery-copy"]')?.textContent).toContain('This drawer is read-only; the named destination is the smallest authorized place to check source status or make changes.')
-    expect(drawer.querySelector('[data-testid="learn-evidence-recovery"]')?.textContent).toBe('Open your learning mission')
+    expect(drawer.querySelector('[data-testid="learn-evidence-recovery"]')?.textContent).toBe('Open your Void')
     wrapper.unmount()
   })
 
   it.each([390, 700, 1280])('mounts an operable drawer at %ipx viewport width', async width => {
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
     const Comp = await import('~/components/learn-adaptive/EvidenceDrawer.vue')
-    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your learning mission' }, attachTo: document.body })
+    const wrapper = await mountSuspended(Comp.default, { props: { evidence: base, pending: false, sourceState: 'ready', safeDestination: '/app/learn/void_1', safeDestinationLabel: 'Open your Void' }, attachTo: document.body })
     await wrapper.get('[data-testid="learn-evidence-open"]').trigger('click')
     const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]') as HTMLElement
     expect(drawer.textContent).toContain('Plants convert light energy.')

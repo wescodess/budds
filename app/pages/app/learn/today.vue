@@ -16,7 +16,7 @@ watch(() => result.value?.status === 'blocked' ? `${result.value.sessionId ?? ''
 })
 const blockedMessage = computed(() => {
   if (result.value?.status !== 'blocked') return ''
-  if (result.value.reason === 'evidence_unavailable' || result.value.reason === 'content_evidence_unavailable') return 'The accepted source evidence is no longer available. Review the mission sources before retrying.'
+  if (result.value.reason === 'evidence_unavailable' || result.value.reason === 'content_evidence_unavailable') return 'The accepted source evidence is no longer available. Review this Void’s sources before retrying.'
   return 'The provider returned material, but Budds could not safely publish it as a learning session. Your accepted plan and evidence are preserved.'
 })
 async function retryGeneration() {

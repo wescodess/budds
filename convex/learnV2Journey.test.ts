@@ -34,6 +34,18 @@ describe('Learn V2 public journey read model', () => {
     expect(await setupResult.asOwner.query(api.learnV2Journey.getCurrentMission, {})).toMatchObject({ learningVoid: { _id: setupResult.learningVoid._id } })
   })
 
+  test('rejects a V1 course ID while the owned V2 destination still loads', async () => {
+    const { asOwner, folderId, learningVoid } = await setup()
+    const { courseId } = await asOwner.mutation(api.courses.create, {
+      title: 'V1 source', sourceType: 'web-only', folderId,
+    })
+    await expect(asOwner.query(api.learnV2Journey.getMission, {
+      learningVoidId: courseId as never,
+    })).rejects.toThrow()
+    expect(await asOwner.query(api.learnV2Journey.getMission, { learningVoidId: learningVoid._id }))
+      .toMatchObject({ learningVoid: { _id: learningVoid._id } })
+  })
+
   test('keeps pre-acceptance setup usable but resolves accepted authority only from the active pointer', async () => {
     const setupResult = await setup()
     const blueprint = await setupResult.asOwner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: setupResult.learningVoid._id, expectedVoidRevision: 1, idempotencyKey: 'authority-blueprint' })

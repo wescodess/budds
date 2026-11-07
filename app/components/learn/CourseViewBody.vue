@@ -67,7 +67,7 @@ const showPaceSelector = ref(false)
 
         <div v-if="!course" class="py-8 text-center">
           <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
-          <p class="mt-3 text-sm text-stone-400">Loading course...</p>
+          <p class="mt-3 text-sm text-stone-400">Loading Void...</p>
         </div>
 
         <template v-else>
@@ -86,7 +86,7 @@ const showPaceSelector = ref(false)
               :aria-valuenow="progress"
               aria-valuemin="0"
               aria-valuemax="100"
-              :aria-label="`Course progress: ${progress}%`"
+              :aria-label="`Void progress: ${progress}%`"
               data-testid="progress-bar"
             />
           </div>
@@ -105,7 +105,7 @@ const showPaceSelector = ref(false)
         <LearnV2UpgradeLegacyCourseButton :legacy-course-id="courseId" />
       </div>
 
-      <div class="space-y-2" role="list" aria-label="Course sections">
+      <div class="space-y-2" role="list" aria-label="Void sections">
         <template v-for="(section, idx) in sections" :key="section._id">
           <NuxtLink
             v-if="canNavigate(section.status)"
@@ -207,7 +207,7 @@ const showPaceSelector = ref(false)
             <UiDropdownMenuTrigger as-child>
               <button
                 class="inline-flex items-center gap-2 rounded-md border border-stone-700 px-3 py-2 text-sm font-medium text-stone-300"
-                aria-label="Course actions"
+                aria-label="Void actions"
                 data-testid="mobile-menu-trigger"
               >
                 <MoreVertical class="h-4 w-4" />

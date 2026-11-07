@@ -31,11 +31,22 @@ describe('ready session attachment', () => {
   it.each([['randomUUID', false], ['the fallback generator', true]])('sends a key the command validator accepts using %s', async (_generator, fallback) => {
     if (fallback) vi.stubGlobal('crypto', { subtle: crypto.subtle })
     const wrapper = await mountPage()
+    expect(wrapper.get('[data-testid="learn-adaptive-continue-ready"]').text()).toBe('Continue in your Void')
     await wrapper.get('[data-testid="learn-adaptive-continue-ready"]').trigger('click')
-    await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledWith('/app/learn/thread/thread_1'))
+    await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledWith({ name: 'app-learn-void-threadId', params: { threadId: 'thread_1' } }))
     const idempotencyKey = attach.mock.calls[0]?.[0].idempotencyKey
     expect(idempotencyKey).toMatch(fallback ? /^adaptive-ready-\d+$/ : /^adaptive-ready-[0-9a-f-]{36}$/)
     await expect(prepareAttach(idempotencyKey)).resolves.toMatchObject({ idempotencyKeyHash: expect.stringMatching(/^sha256:/) })
+    wrapper.unmount()
+  })
+
+  it('opens the attached Void once with its ID encoded once by the router', async () => {
+    attach.mockResolvedValue({ kind: 'attached', threadId: 'thread/ä %2F' })
+    const wrapper = await mountPage()
+    await wrapper.get('[data-testid="learn-adaptive-continue-ready"]').trigger('click')
+    await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledTimes(1))
+    expect(useRouter().resolve(vi.mocked(useRouter().push).mock.calls[0]![0]).fullPath).toBe('/app/learn/void/thread%2F%C3%A4%20%252F')
+    expect(attach).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
@@ -46,7 +57,7 @@ describe('ready session attachment', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-adaptive-attach-error"]').exists()).toBe(true))
     expect(useRouter().push).not.toHaveBeenCalled()
     await wrapper.get('[data-testid="learn-adaptive-continue-ready"]').trigger('click')
-    await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledWith('/app/learn/thread/thread_1'))
+    await vi.waitFor(() => expect(useRouter().push).toHaveBeenCalledWith({ name: 'app-learn-void-threadId', params: { threadId: 'thread_1' } }))
     expect(attach.mock.calls[1]?.[0].idempotencyKey).toBe(attach.mock.calls[0]?.[0].idempotencyKey)
     wrapper.unmount()
   })

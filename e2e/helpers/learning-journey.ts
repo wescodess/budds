@@ -167,7 +167,7 @@ export async function runLearningJourney(page: Page, request: APIRequestContext,
     await page.goto(`/__e2e/adaptive-session?session=${encodeURIComponent(sessionId)}&mission=${encodeURIComponent(learningVoidId)}`)
     await expect(page.getByTestId('adaptive-session-attach')).toBeEnabled()
     await page.getByTestId('adaptive-session-attach').click()
-    await expect(page).toHaveURL(/\/app\/learn\/thread\/[^/]+$/)
+    await expect(page).toHaveURL(/\/app\/learn\/void\/[^/]+$/)
     await page.getByTestId('learn-canvas-start').click()
     await page.getByTestId('learn-canvas-continue').click()
     await page.getByTestId('learn-canvas-response').fill('The transfer orbit is a deliberate path between two orbital energies.')

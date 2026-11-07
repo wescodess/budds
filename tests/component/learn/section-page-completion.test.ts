@@ -90,6 +90,7 @@ const pagePath = [
 
 describe('legacy section page completion', () => {
   beforeEach(() => {
+    section.value = { ...section.value, status: 'ready' }
     mockCompleteSection.mockReset()
     mockCompleteSection.mockResolvedValue({
       practiceScore: 100,
@@ -125,5 +126,14 @@ describe('legacy section page completion', () => {
         quizTotal: 0,
       })
     })
+  })
+
+  it('names the Void in the unavailable-section recovery link', async () => {
+    section.value = { ...section.value, status: 'failed' }
+    const Comp = await import(pagePath)
+    const wrapper = await mountSuspended(Comp.default)
+
+    expect(wrapper.text()).toContain('Section not available')
+    expect(wrapper.find('button').text()).toBe('Back to Void')
   })
 })

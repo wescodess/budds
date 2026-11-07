@@ -144,7 +144,7 @@ export const listDueWithContext = query({
       let courseTitle = courseCache.get(item.courseId)
       if (!courseTitle) {
         const course = await ctx.db.get(item.courseId)
-        courseTitle = course?.title ?? 'Unknown Course'
+        courseTitle = course?.title ?? 'Unknown Void'
         courseCache.set(item.courseId, courseTitle)
       }
 

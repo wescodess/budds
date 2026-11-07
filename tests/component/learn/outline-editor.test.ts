@@ -88,6 +88,12 @@ describe('OutlineEditor', () => {
     expect(card.text()).toContain('Built from web sources')
   })
 
+  it('names the Void outline heading', async () => {
+    const Editor = await import(editorPath)
+    const wrapper = await mountSuspended(Editor.default, { props: baseProps() })
+    expect(wrapper.find('h2').text()).toBe('Void Outline')
+  })
+
   it('displays section count badge', async () => {
     const Editor = await import(editorPath)
     const wrapper = await mountSuspended(Editor.default, { props: baseProps() })

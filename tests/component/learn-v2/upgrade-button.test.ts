@@ -52,6 +52,11 @@ describe('LearnV2UpgradeLegacyCourseButton', () => {
     expect(wrapper.find('[data-testid="learn-v2-upgrade"]').exists()).toBe(false)
   })
 
+  it('names the Void it drafts from', async () => {
+    const wrapper = await mount()
+    expect(wrapper.text()).toContain('Create a V2 draft from this Void’s title and selected sources.')
+  })
+
   it('creates one V2 draft and clearly preserves V1 progress and mastery', async () => {
     const wrapper = await mount()
     const button = wrapper.get('[data-testid="learn-v2-upgrade"]')

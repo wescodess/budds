@@ -1,4 +1,5 @@
 import { deriveMastery } from './learn-v2-mastery'
+import { LEARN_MEASUREMENT_STORAGE_MANIFEST } from './learn-v2-measurement-storage-manifest'
 
 export type ContractIndex = {
   name: string
@@ -6,6 +7,7 @@ export type ContractIndex = {
 }
 
 export type RetentionClassName =
+  | 'artifact_lineage'
   | 'stable_aggregate'
   | 'immutable_revision'
   | 'ordered_child'
@@ -16,6 +18,14 @@ export type RetentionClassName =
   | 'operational_job'
   | 'provider_projection'
   | 'quota_ledger'
+  | 'owner_inventory'
+  | 'assessment_bank'
+  | 'response_history'
+  | 'response_body'
+  | 'response_receipt'
+  | 'report_source'
+  | 'report_snapshot'
+  | 'viewer_grant'
 
 export type ContractTable = {
   name: string
@@ -67,9 +77,9 @@ type ContractStateMachine<State extends string> = {
 type RetentionContract = {
   export: 'full' | 'redacted' | 'metadata_only'
   accountDeletion: 'delete' | 'provider_cleanup_then_delete'
-  folderDeletion: 'cascade' | 'detach' | 'evidence_tombstone' | 'provider_cleanup_then_delete'
+  folderDeletion: 'cascade' | 'detach' | 'evidence_tombstone' | 'provider_cleanup_then_delete' | 'invalidate_snapshot'
   folderMove: 'preserve_identity_revalidate_access' | 'preserve_revision_revalidate_access' | 'preserve_history_revalidate_access' | 'recompute_after_access_check' | 'cancel_if_scope_unauthorized' | 'reconcile_if_scope_unauthorized' | 'preserve_ledger_rebind_void_scope'
-  sourceDeletion: 'not_applicable' | 'delete' | 'preserve' | 'evidence_tombstone'
+  sourceDeletion: 'not_applicable' | 'delete' | 'preserve' | 'evidence_tombstone' | 'invalidate_snapshot'
 }
 
 export type LearnV2Contract = {
@@ -181,7 +191,7 @@ export type LearnV2Contract = {
 }
 
 const index = (...fields: string[]): ContractIndex => ({
-  name: `by_${fields.join('_and_')}`,
+  name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`,
   fields,
 })
 
@@ -356,6 +366,15 @@ export const LEARN_V2_CONTRACT: LearnV2Contract = {
   },
   persistence: {
     retentionClasses: {
+      artifact_lineage: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'evidence_tombstone', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },
+      owner_inventory: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'detach', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'preserve' },
+      assessment_bank: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_revision_revalidate_access', sourceDeletion: 'evidence_tombstone' },
+      response_history: { export: 'redacted', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },
+      response_body: { export: 'redacted', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'delete' },
+      response_receipt: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },
+      report_source: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_history_revalidate_access', sourceDeletion: 'evidence_tombstone' },
+      report_snapshot: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'invalidate_snapshot', folderMove: 'recompute_after_access_check', sourceDeletion: 'invalidate_snapshot' },
+      viewer_grant: { export: 'metadata_only', accountDeletion: 'delete', folderDeletion: 'detach', folderMove: 'preserve_identity_revalidate_access', sourceDeletion: 'not_applicable' },
       stable_aggregate: { export: 'full', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_identity_revalidate_access', sourceDeletion: 'not_applicable' },
       immutable_revision: { export: 'full', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_revision_revalidate_access', sourceDeletion: 'preserve' },
       ordered_child: { export: 'full', accountDeletion: 'delete', folderDeletion: 'cascade', folderMove: 'preserve_revision_revalidate_access', sourceDeletion: 'preserve' },
@@ -388,22 +407,27 @@ export const LEARN_V2_CONTRACT: LearnV2Contract = {
       table('learnSourceExcerpts', 'Bounded permitted excerpts or stable locators.', 'protected_evidence', [index('userId', 'sourceSnapshotId')], 'sourceSnapshotId'),
       table('learnObjectiveSources', 'Normalized objective coverage decisions.', 'evidence_identity', [index('userId', 'objectiveId', 'sourceSnapshotId')], 'objectiveId'),
       table('learnClaimSupports', 'Atomic claim-to-evidence entailment and conflict records.', 'protected_evidence', [index('userId', 'sessionContentClaimId'), index('userId', 'sourceExcerptId')], 'sessionContentClaimId'),
-      table('masteryAttempts', 'Append-only server-scored attempt ledger.', 'attempt_ledger', [index('userId', 'blueprintRevisionId'), index('userId', 'blueprintRevisionId', 'kind'), index('userId', 'blueprintRevisionId', 'objectiveId', 'attemptedAt'), index('userId', 'objectiveId', 'attemptedAt'), index('userId', 'idempotencyKey')], 'objectiveId'),
+      table('masteryAttempts', 'Append-only server-scored attempt ledger.', 'attempt_ledger', [index('userId', 'blueprintRevisionId'), index('userId', 'blueprintRevisionId', 'kind'), index('userId', 'blueprintRevisionId', 'objectiveId', 'attemptedAt'), index('userId', 'objectiveId', 'attemptedAt'), index('userId', 'idempotencyKey'), index('userId', 'submissionId'), index('userId', 'assessmentOpportunityId'), index('userId', 'firstCheckClaim.claimKey', 'checkSequence')], 'objectiveId'),
       table('masteryRecords', 'Derived objective mastery and scheduling-priority projection.', 'derived_projection', [index('userId', 'scopeKey'), index('userId', 'blueprintRevisionId'), index('userId', 'blueprintRevisionId', 'objectiveId'), index('userId', 'objectiveId'), index('userId', 'nextReviewAt')], 'objectiveId'),
       table('studyPlans', 'Stable study-plan identity for a Learning Void.', 'stable_aggregate', [index('userId', 'learningVoidId')], 'learningVoidId'),
       table('studyPlanRevisions', 'Immutable feasibility, availability, and schedule decisions.', 'immutable_revision', [index('userId', 'studyPlanId', 'revision'), index('userId', 'studyPlanId', 'feasibility', 'revision'), index('userId', 'learningVoidId', 'status')], 'studyPlanId'),
       table('learnPlanCommandReceipts', 'Owner-scoped idempotent study-plan command receipt.', 'operational_job', [index('userId', 'idempotencyKey'), index('userId', 'learningVoidId')], 'learningVoidId'),
       table('learnPlanAuditEvents', 'Pinned structured reasons for preview, acceptance, expiry, and reflow decisions.', 'attempt_ledger', [index('userId', 'learningVoidId'), index('userId', 'studyPlanRevisionId')], 'learningVoidId'),
-      table('studySessions', 'Placed session shell with exactly one primary objective.', 'ordered_child', [index('userId', 'studyPlanRevisionId', 'scheduledStartAt'), index('userId', 'status', 'scheduledStartAt')], 'studyPlanRevisionId'),
+      table('studySessions', 'Placed session shell with exactly one primary objective.', 'ordered_child', [index('userId', 'studyPlanRevisionId', 'scheduledStartAt'), index('userId', 'status', 'scheduledStartAt'), index('userId', 'assessmentOpportunityId')], 'studyPlanRevisionId'),
       table('studySessionRetrievalObjectives', 'Bounded normalized retrieval-objective links.', 'ordered_child', [index('userId', 'studySessionId', 'order')], 'studySessionId'),
-      table('sessionContent', 'Versioned generated session content and rubric metadata.', 'immutable_revision', [index('userId', 'studySessionId', 'revision'), index('userId', 'status')], 'studySessionId'),
+      table('sessionContent', 'Versioned generated session content and rubric metadata.', 'immutable_revision', [index('userId', 'studySessionId', 'revision'), index('userId', 'status'), index('userId', 'assessmentOpportunityId')], 'studySessionId'),
       table('sessionContentBlocks', 'Ordered normalized session content blocks.', 'ordered_child', [index('userId', 'sessionContentId', 'order')], 'sessionContentId'),
       table('sessionContentClaims', 'Normalized factual claims requiring support records.', 'ordered_child', [index('userId', 'sessionContentId', 'order')], 'sessionContentId'),
       table('calendarProjections', 'Idempotent Study Session to provider-event projection ledger.', 'provider_projection', [index('userId', 'studySessionId'), index('userId', 'provider', 'externalEventId')], 'studySessionId'),
       table('reminderPolicies', 'Owner-scoped channel, offset, quiet-hour, and timezone policy.', 'stable_aggregate', [index('userId', 'learningVoidId')], 'learningVoidId'),
       table('searchQuotaBuckets', 'UTC product, user, and Learning Void allowance counters and reconciliation status.', 'quota_ledger', [index('provider', 'scopeKind', 'scopeKey', 'periodKey'), index('userId', 'provider', 'periodKey'), index('userId', 'learningVoidId', 'periodKey'), index('provider', 'reconciliationStatus', 'periodKey')]),
       table('searchReservations', 'Transactional provider-credit reservations and outcomes.', 'quota_ledger', [index('userId', 'idempotencyKeyHash'), index('userId', 'learningVoidId'), index('provider', 'status', 'dispatchState', 'expiresAt'), index('provider', 'reconciliationRequired', 'updatedAt')]),
-      table('learnJobs', 'Typed, leased, checkpointed, bounded V2 jobs.', 'operational_job', [index('userId', 'idempotencyKey'), index('userId', 'status', 'leaseExpiresAt'), index('type', 'status', 'leaseExpiresAt'), index('userId', 'learningVoidId', 'type'), index('userId', 'blueprintRevisionId', 'type', 'status')], 'learningVoidId'),
+      table('learnJobs', 'Typed, leased, checkpointed, bounded V2 jobs.', 'operational_job', [index('userId', 'idempotencyKey'), index('userId', 'status', 'leaseExpiresAt'), index('type', 'status', 'leaseExpiresAt'), index('userId', 'learningVoidId', 'type'), index('userId', 'blueprintRevisionId', 'type', 'status'), index('userId', 'assessmentOpportunityId')], 'learningVoidId'),
+      ...LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => table(
+        entry.table, 'Inactive Phase C storage; bounded owner enumeration and explicit private payload policy.',
+        entry.retention, entry.indexes.map(fields => ({ name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields] })),
+        'parentField' in entry ? entry.parentField : undefined,
+      )),
     ],
   },
   runtime: {
@@ -790,7 +814,7 @@ export function validateLearnV2Contract(contract: LearnV2Contract): string[] {
     if (contractTable.queryMode !== 'bounded') violations.push(`persistence.${contractTable.name}.queryMode must be bounded`)
     if (!contract.persistence.retentionClasses[contractTable.retentionClass]) violations.push(`persistence.${contractTable.name} has unknown retention class`)
     for (const contractIndex of contractTable.indexes) {
-      const expectedName = `by_${contractIndex.fields.join('_and_')}`
+      const expectedName = `by_${contractIndex.fields.map(field => field.replaceAll('.', '_')).join('_and_')}`
       if (contractIndex.name !== expectedName) violations.push(`persistence.${contractTable.name}.${contractIndex.name} must be named ${expectedName}`)
     }
   }

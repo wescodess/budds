@@ -135,3 +135,17 @@ it('uses a modal mobile Sheet with keyboard dismissal and labeled controls', asy
   wrapper.unmount()
   outside.remove()
 })
+
+it.each([
+  ['paused', { ...memory, lifecycle: 'paused' }, 'Resume this Void to delete an artifact.'],
+  ['ended', { ...memory, lifecycle: 'ended' }, 'This ended Void is available for review only.'],
+  ['unavailable', null, 'Memory is unavailable. Try refreshing the Void.'],
+] as const)('names the container Void when memory is %s', async (_state, value, notice) => {
+  const Comp = await import('~/components/learn-adaptive/MemoryDrawer.vue')
+  const wrapper = await mountSuspended(Comp.default, { props: { memory: value, pending: false }, attachTo: document.body })
+  await wrapper.get('[data-testid="learn-memory-open"]').trigger('click')
+  const drawer = document.querySelector('[data-testid="learn-memory-drawer"]') as HTMLElement
+  expect(drawer.textContent).toContain(notice)
+  expect(drawer.textContent).not.toMatch(/\b(thread|mission)s?\b/i)
+  wrapper.unmount()
+})

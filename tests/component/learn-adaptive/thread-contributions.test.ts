@@ -34,7 +34,7 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
   return { data, pending: ref(false) }
 })
 
-const path = ['~', 'pages', 'app', 'learn', 'thread', '[threadId].vue'].join('/')
+const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 function contribution(id: string, overrides: Record<string, unknown> = {}) {
   return { _id: id, userId: 'auth-issuer|owner_1', threadId: 'thread_1', sourceIdentity: 'private-source-id', sourceRevision: 'sha256:private-revision', sourceFeature: 'chat',
@@ -63,7 +63,7 @@ describe('adaptive thread contribution conversion', () => {
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), sourceScope: { kind: 'folder', sourceId: 'folder_owned' } } }
     quizzes.value = [{ _id: 'quiz_ready', folderId: 'folder_owned', title: 'Practice quiz', status: 'ready' }]
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     expect(wrapper.get('[data-testid="learn-thread-quiz-producer"]').text()).toContain('Practice quiz')
     expect(wrapper.get('[data-testid="learn-thread-document-producer"]').exists()).toBe(true)
     wrapper.unmount()
@@ -73,7 +73,7 @@ describe('adaptive thread contribution conversion', () => {
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), sourceScope: { kind: 'document', sourceId: 'document_owned' } } }
     record.mockResolvedValue({ kind: 'recorded', contributionId: 'contribution_new', replayed: false })
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-record-document"]').trigger('click')
     await flushPromises()
@@ -92,7 +92,7 @@ describe('adaptive thread contribution conversion', () => {
       { _id: 'document_foreign', folderId: 'folder_other', filename: 'Other folder', status: 'success' }]
     record.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ kind: 'recorded', contributionId: 'contribution_new', replayed: true })
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     expect(wrapper.get('[data-testid="learn-document-select"]').findAll('option')).toHaveLength(2)
     await wrapper.get('[data-testid="learn-document-select"]').setValue('document_owned')
@@ -110,7 +110,7 @@ describe('adaptive thread contribution conversion', () => {
     projection.value = { ...projection.value!, thread: { ...(projection.value!.thread as Record<string, unknown>), sourceScope: { kind: 'document', sourceId: 'document_owned' } } }
     record.mockResolvedValueOnce({ kind: 'rejected', code: 'source_revision_changed' }).mockRejectedValueOnce(new Error('timeout'))
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-record-document"]').trigger('click')
     await flushPromises()
@@ -132,7 +132,7 @@ describe('adaptive thread contribution conversion', () => {
     let finishInspection!: (value: { status: string, revision: string }) => void
     inspect.mockReturnValueOnce(new Promise(resolve => { finishInspection = resolve }))
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-record-document"]').trigger('click')
     requestedRoute.params.threadId = 'thread_2'
@@ -152,7 +152,7 @@ describe('adaptive thread contribution conversion', () => {
       contribution('contribution_other_thread', { threadId: 'thread_other' }),
     ], isDone: true, continueCursor: '' }
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     const chooser = wrapper.get('[data-testid="learn-thread-contributions"]')
     expect(chooser.text()).toContain('Chat')
@@ -169,7 +169,7 @@ describe('adaptive thread contribution conversion', () => {
     contributions.value = { page: [contribution('contribution_safe')], isDone: true, continueCursor: '' }
     convert.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ kind: 'ok', value: { activityId: 'activity_2', activityClass: 'non_factual' }, revision: 8 })
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-convert-contribution"]').trigger('click')
     await flushPromises()
@@ -193,7 +193,7 @@ describe('adaptive thread contribution conversion', () => {
     contributions.value = { page: [contribution('contribution_safe')], isDone: true, continueCursor: '' }
     convert.mockResolvedValueOnce({ kind: 'blocked', code: 'source_revision_changed' })
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-convert-contribution"]').trigger('click')
     await flushPromises()
@@ -206,7 +206,7 @@ describe('adaptive thread contribution conversion', () => {
     contributions.value = { page: [contribution('contribution_safe')], isDone: true, continueCursor: '' }
     convert.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision' }).mockRejectedValueOnce(new Error('timeout'))
     const Page = await import(path)
-    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/thread/thread_1' })
+    const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
 
     await wrapper.get('[data-testid="learn-convert-contribution"]').trigger('click')
     await flushPromises()

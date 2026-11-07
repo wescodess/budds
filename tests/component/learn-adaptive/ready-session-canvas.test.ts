@@ -102,6 +102,14 @@ describe('ready adaptive Canvas', () => {
     fallback.unmount()
   })
 
+  it('names its container Void above the learner outcome', async () => {
+    const Comp = await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+    const wrapper = await mountSuspended(Comp.default, { props: { canvas } })
+    expect(wrapper.text()).toContain('Void · understand')
+    expect(wrapper.get('[data-testid="learn-adaptive-canvas"]').attributes('aria-labelledby')).toBe('learn-canvas-title')
+    expect(wrapper.get('#learn-canvas-title').text()).toBe('Explain gravity')
+  })
+
   it('renders an independent application and submits through the authoritative scoring path', async () => {
     const application = { ...canvas, status: 'started', activity: { ...canvas.activity,
       primitive: { ...canvas.activity.primitive, type: 'independent_application', action: 'submit_response', testId: 'learn-primitive-independent-application', props: { prompt: 'Explain why an apple falls.', responseFormat: 'long_text', draftPersistence: true } },

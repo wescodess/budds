@@ -120,7 +120,7 @@ function requestPromotion(kind: 'review' | 'mastery', candidate: NonNullable<Mem
         <button type="button" data-testid="learn-memory-refresh" class="min-h-11 rounded-lg border border-border px-4 text-sm" @click="emit('refresh')">Review current memory</button>
         <button v-if="retryAvailable" type="button" data-testid="learn-memory-retry" :disabled="busy" class="min-h-11 rounded-lg border border-border px-4 text-sm disabled:opacity-50" @click="emit('retry')">Retry same change</button>
       </div>
-      <p v-if="!pending && !memory" role="status" class="text-sm">Memory is unavailable. Try refreshing the thread.</p>
+      <p v-if="!pending && !memory" role="status" class="text-sm">Memory is unavailable. Try refreshing the Void.</p>
       <template v-else-if="memory">
         <section aria-labelledby="learn-memory-next-heading" class="rounded-xl border border-border p-4">
           <h3 id="learn-memory-next-heading" class="font-semibold">Where you left off</h3>
@@ -142,7 +142,7 @@ function requestPromotion(kind: 'review' | 'mastery', candidate: NonNullable<Mem
             </div>
           </div>
           <h4 class="font-medium">Saved artifacts</h4>
-          <p v-if="memory.lifecycle === 'paused'" class="text-sm text-muted-foreground">Resume this thread to delete an artifact.</p>
+          <p v-if="memory.lifecycle === 'paused'" class="text-sm text-muted-foreground">Resume this Void to delete an artifact.</p>
           <p v-if="memory.artifacts.length === 0" class="text-sm">No saved artifacts.</p>
           <ul v-else class="space-y-2">
             <li v-for="artifact in memory.artifacts" :key="artifact.id" class="rounded-xl border border-border p-3 text-sm">
@@ -165,7 +165,7 @@ function requestPromotion(kind: 'review' | 'mastery', candidate: NonNullable<Mem
               </div>
             </li>
           </ul>
-          <p v-if="memory.lifecycle === 'ended'" class="text-sm text-muted-foreground">This ended thread is available for review only.</p>
+          <p v-if="memory.lifecycle === 'ended'" class="text-sm text-muted-foreground">This ended Void is available for review only.</p>
           <ul v-if="memory.promotionProposals?.length" class="space-y-2" aria-label="Requested proposals">
             <li v-for="proposal in memory.promotionProposals" :key="proposal.id" class="rounded-lg border border-border p-3 text-sm">
               {{ proposal.kind === 'review' ? 'Review' : 'Mastery path' }} proposed from {{ proposal.sourceLabel }}. No check is scheduled and no mastery is awarded.

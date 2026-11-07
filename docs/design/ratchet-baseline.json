@@ -143,8 +143,8 @@
     "app/components/quiz/wizard/TopicStep.vue": 2,
     "app/layouts/default.vue": 1,
     "app/pages/app/learn/[learningVoidId]/calibration.vue": 1,
-    "app/pages/app/learn/thread/[threadId].vue": 2,
     "app/pages/app/learn/today.vue": 1,
+    "app/pages/app/learn/void/[threadId].vue": 2,
     "app/pages/index.vue": 1
   },
   "violet-indigo": {

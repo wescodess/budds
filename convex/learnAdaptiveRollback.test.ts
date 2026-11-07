@@ -11,7 +11,7 @@ const OWNER = { tokenIdentifier: 'https://auth.example.com|rollback-owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|rollback-other' }
 const originalFlag = process.env.LEARN_V2_ENABLED
 const v2Route = { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
-const classicRoute = { name: 'index', href: '/', label: 'Open your folders for classic courses' }
+const classicRoute = { name: 'index', href: '/', label: 'Open your folders for classic Voids' }
 const deniedCapabilities = { entry: false, read: false, write: false, jobAdmission: false }
 
 beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
