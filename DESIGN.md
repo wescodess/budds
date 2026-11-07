@@ -69,6 +69,7 @@ These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic to
 | Neutral metadata (timestamps, "saved", counts) | `--muted-foreground` / `--foreground` | Text and icon |
 
 - The icon or mark carries the state color; the text beside it stays `text-foreground` or `text-muted-foreground`, because warning and success are below AA as text on light cards.
+- Visible text beside the icon always names the state on its own ("Getting your result", "Not yet", "This check won't count"). The color is a second cue, never the only one: in the light theme `--warning` and `--success` icons fall below the 3:1 non-text contrast a sole carrier of meaning needs.
 - A busy spinner inside a button inherits the button's color; it is not a status.
 - A state from the first four rows never renders with only a neutral icon.
 - The `status-tone` check in `pnpm design:capture` measures icons in visible `role="status"` and `role="alert"` regions. Mark genuine neutral metadata with `data-tone="neutral"` on the region or an ancestor.
