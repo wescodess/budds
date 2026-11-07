@@ -1,8 +1,11 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
+import { z } from 'zod'
+import { learnIdSchema } from '../shared/learn-v2-responses'
 import { isLearnV2TransitionAllowed, type SourceState } from '../shared/learn-v2-contract'
 import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
 import { internal } from './_generated/api'
+import { canReadAssessmentTeaching, canReadSourceEvidence, disclosureLiterals, pageFields } from './lib/learnV2AssessmentDisclosure'
 import type { Doc, Id } from './_generated/dataModel'
 import {
   internalMutation,
@@ -174,7 +177,21 @@ function requireSourceTransition(from: SourceState, to: SourceState) {
   if (!isLearnV2TransitionAllowed('source', from, to)) throw new Error('Invalid source transition')
 }
 
-function sourceView(source: Doc<'learnSourceSnapshots'>) {
+const sourceSummary = v.object({
+  _id: v.id('learnSourceSnapshots'), sourceIdentityId: v.id('learnSourceIdentities'), learningVoidId: v.id('learningVoids'),
+  blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), revision: v.number(), recordRevision: v.number(),
+  status: disclosureLiterals(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable']),
+  effectiveStatus: disclosureLiterals(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable']),
+  contentHash: v.optional(v.string()), contentType: v.optional(disclosureLiterals(['text/html', 'text/plain', 'application/pdf'])),
+  publicLocator: v.optional(v.string()), rightsStatus: v.optional(disclosureLiterals(['permitted', 'unknown', 'prohibited'])),
+  rightsProvenance: v.optional(disclosureLiterals(['noarchive', 'link_license', 'html_license', 'none'])), rightsPolicyVersion: v.optional(v.string()),
+  fetchPolicyVersion: v.optional(v.string()), conflictStatus: v.optional(disclosureLiterals(['clear', 'unresolved'])),
+  trustClassification: v.optional(v.literal('untrusted_source_data')), unavailableReason: v.optional(v.string()),
+  fetchedAt: v.optional(v.number()), evaluatedAt: v.optional(v.number()), acceptedAt: v.optional(v.number()), rejectedAt: v.optional(v.number()),
+  createdAt: v.number(), updatedAt: v.number(),
+})
+
+function sourceView(source: Doc<'learnSourceSnapshots'>, teachingAllowed = true) {
   return {
     _id: source._id,
     sourceIdentityId: source.sourceIdentityId,
@@ -184,16 +201,16 @@ function sourceView(source: Doc<'learnSourceSnapshots'>) {
     recordRevision: currentRevision(source),
     status: source.status,
     effectiveStatus: effectiveStatus(source),
-    contentHash: source.contentHash,
+    contentHash: teachingAllowed ? source.contentHash : undefined,
     contentType: source.contentType,
-    publicLocator: sanitizePublicSourceLocator(source.publicLocator),
+    publicLocator: teachingAllowed && source.evidencePurgedAt === undefined && effectiveStatus(source) !== 'unavailable' ? sanitizePublicSourceLocator(source.publicLocator) : undefined,
     rightsStatus: source.rightsStatus,
     rightsProvenance: source.rightsProvenance,
     rightsPolicyVersion: source.rightsPolicyVersion,
     fetchPolicyVersion: source.fetchPolicyVersion,
     conflictStatus: source.conflictStatus,
     trustClassification: source.trustClassification,
-    unavailableReason: source.unavailableReason,
+    unavailableReason: source.unavailableReason === undefined ? undefined : 'evidence_unavailable',
     fetchedAt: source.fetchedAt,
     evaluatedAt: source.evaluatedAt,
     acceptedAt: source.acceptedAt,
@@ -275,7 +292,24 @@ async function findReceipt(ctx: MutationCtx, userId: string, rawIdempotencyKey: 
 
 function replayReceipt(receipt: Doc<'learnSourceCommandReceipts'>, command: string, fingerprint: string) {
   if (receipt.command !== command || receipt.requestFingerprint !== fingerprint) throw new Error('Idempotency key reuse')
-  return JSON.parse(receipt.response) as Record<string, unknown>
+  if (receipt.response.length > 8192) throw new Error('Source receipt is unavailable')
+  try { return projectSourceReceipt(JSON.parse(receipt.response)) }
+  catch { throw new Error('Source receipt is unavailable') }
+}
+
+const sourceReceipt = v.object({ sourceSnapshotId: v.id('learnSourceSnapshots'), status: sourceSummary.fields.status,
+  effectiveStatus: sourceSummary.fields.status, recordRevision: v.number(), conflictStatus: v.optional(disclosureLiterals(['clear', 'unresolved'])), unavailableReason: v.optional(v.string()) })
+const sourceReceiptSchema = z.object({ sourceSnapshotId: learnIdSchema<'learnSourceSnapshots'>(),
+  status: z.enum(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable']),
+  effectiveStatus: z.enum(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable']), recordRevision: z.number().int().positive(),
+  conflictStatus: z.enum(['clear', 'unresolved']).optional(), unavailableReason: z.string().max(96).optional() })
+function projectSourceReceipt(value: unknown) {
+  const parsed = sourceReceiptSchema.safeParse(value)
+  if (!parsed.success) throw new Error('Source receipt is unavailable')
+  const row = parsed.data
+  return { sourceSnapshotId: row.sourceSnapshotId, status: row.status, effectiveStatus: row.effectiveStatus, recordRevision: row.recordRevision,
+    ...(row.conflictStatus ? { conflictStatus: row.conflictStatus } : {}),
+    ...(row.unavailableReason ? { unavailableReason: ['source_deleted', 'access_lost', 'policy_denied', 'ssrf_blocked', 'fetch_failed', 'unsupported_content', 'rights_denied', 'unavailable', 'source_unavailable'].includes(row.unavailableReason) ? row.unavailableReason : 'source_unavailable' } : {}) }
 }
 
 async function saveReceipt(ctx: MutationCtx, args: {
@@ -294,7 +328,7 @@ async function saveReceipt(ctx: MutationCtx, args: {
     response: JSON.stringify(args.response),
     createdAt: Date.now(),
   })
-  return args.response
+  return projectSourceReceipt(args.response)
 }
 
 export const registerCandidate = mutation({
@@ -307,6 +341,7 @@ export const registerCandidate = mutation({
     expectedBlueprintRecordRevision: v.number(),
     idempotencyKey: v.string(),
   },
+  returns: sourceReceipt,
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx)
     validateKey(args.idempotencyKey)
@@ -378,10 +413,11 @@ export const registerCandidate = mutation({
 
 export const getSource = query({
   args: { sourceSnapshotId: v.id('learnSourceSnapshots') },
+  returns: sourceSummary,
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const source = await requireOwnedSource(ctx, userId, args.sourceSnapshotId)
-    return sourceView(source)
+    return sourceView(source, await canReadAssessmentTeaching(ctx, source.learningVoidId) && await canReadSourceEvidence(ctx, source))
   },
 })
 
@@ -391,9 +427,11 @@ export const listSources = query({
     status: v.optional(sourceStatus),
     paginationOpts: paginationOptsValidator,
   },
+  returns: v.object({ page: v.array(sourceSummary), ...pageFields }),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     await requireLiveVoid(ctx, userId, args.learningVoidId)
+    const teachingAllowed = await canReadAssessmentTeaching(ctx, args.learningVoidId)
     const paginationOpts = {
       cursor: args.paginationOpts.cursor,
       numItems: Math.min(MAX_PAGE, Math.max(1, Math.floor(args.paginationOpts.numItems))),
@@ -429,7 +467,7 @@ export const listSources = query({
               .paginate({ cursor: state.cursor, numItems: paginationOpts.numItems })
       const nextSegment = result.isDone ? nextSourceSegment(requestedStatus, state.segment) : null
       return {
-        page: result.page.map(sourceView),
+        page: await Promise.all(result.page.map(async row => sourceView(row, teachingAllowed && await canReadSourceEvidence(ctx, row)))),
         isDone: result.isDone && nextSegment === null,
         continueCursor: result.isDone
           ? nextSegment === null ? result.continueCursor : encodeSourceCursor(requestedStatus, nextSegment, null)
@@ -439,7 +477,7 @@ export const listSources = query({
     const result = await ctx.db.query('learnSourceSnapshots')
       .withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', userId).eq('learningVoidId', args.learningVoidId))
       .paginate(paginationOpts)
-    return { ...result, page: result.page.map(sourceView) }
+    return { page: await Promise.all(result.page.map(async row => sourceView(row, teachingAllowed && await canReadSourceEvidence(ctx, row)))), isDone: result.isDone, continueCursor: result.continueCursor }
   },
 })
 
@@ -451,6 +489,13 @@ export const listSourceReview = query({
     blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
     paginationOpts: paginationOptsValidator,
   },
+  returns: v.object({ page: v.array(v.object({ ...sourceSummary.fields,
+    identity: v.object({ origin: disclosureLiterals(['folder_document', 'user_url', 'open_database', 'general_web_search']), title: v.union(v.string(), v.null()), publisherDomain: v.union(v.string(), v.null()) }),
+    retrieval: v.object({ status: sourceSummary.fields.status, fetchedAt: v.union(v.number(), v.null()), evaluatedAt: v.union(v.number(), v.null()) }),
+    rights: v.object({ status: disclosureLiterals(['permitted', 'unknown', 'prohibited']), provenance: disclosureLiterals(['noarchive', 'link_license', 'html_license', 'none']), policyVersion: v.union(v.string(), v.null()), access: disclosureLiterals(['available', 'locator_only', 'evidence_unavailable']) }),
+    excerpt: v.union(v.string(), v.null()), signals: v.object({ authority: v.literal('unknown'), freshness: disclosureLiterals(['unknown', 'retrieved_at']), freshnessAt: v.union(v.number(), v.null()) }),
+    reviewedObjectives: v.array(v.object({ objectiveId: v.id('learnObjectives'), title: v.union(v.string(), v.null()), coverage: disclosureLiterals(['strong', 'partial', 'gap']) })),
+  })), ...pageFields }),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     if (args.blueprintRevisionId === null) return { page: [], isDone: true, continueCursor: '' }
@@ -461,6 +506,7 @@ export const listSourceReview = query({
       .order('desc').first()
     if (!newest || newest._id !== blueprint._id) return { page: [], isDone: true, continueCursor: '' }
     await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
+    const teachingAllowed = await canReadAssessmentTeaching(ctx, blueprint.learningVoidId)
     const result = await ctx.db.query('learnSourceSnapshots')
       .withIndex('by_userId_and_blueprintRevisionId', q => q
         .eq('userId', userId).eq('blueprintRevisionId', blueprint._id))
@@ -477,9 +523,10 @@ export const listSourceReview = query({
       const excerpt = await ctx.db.query('learnSourceExcerpts')
         .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id))
         .unique()
-      const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
+      const available = teachingAllowed && await canReadSourceEvidence(ctx, source)
+      const hasContent = available && source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
         && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
-      const hasLocator = Boolean(sanitizePublicSourceLocator(source.publicLocator)
+      const hasLocator = available && Boolean(sanitizePublicSourceLocator(source.publicLocator)
         ?? sanitizePublicSourceLocator(identity.publicLocator)
         ?? sanitizePublicSourceLocator(excerpt?.locator))
       const objectiveLinks = await ctx.db.query('learnObjectiveSources')
@@ -493,11 +540,11 @@ export const listSourceReview = query({
         reviewedObjectives.push({ objectiveId: objective._id, title: reviewTitle(objective.title), coverage: link.coverage })
       }
       page.push({
-        ...sourceView(source),
+        ...sourceView(source, available),
         identity: {
           origin: identity.origin,
-          title: reviewTitle(identity.title),
-          publisherDomain: reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl),
+          title: available ? reviewTitle(identity.title) : null,
+          publisherDomain: available ? reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl) : null,
         },
         retrieval: {
           status: effectiveStatus(source),
@@ -509,21 +556,21 @@ export const listSourceReview = query({
           provenance: source.rightsProvenance ?? 'none',
           policyVersion: source.rightsPolicyVersion ?? null,
           access: effectiveStatus(source) === 'unavailable' || source.evidencePurgedAt !== undefined
-            ? 'evidence_unavailable'
-            : hasContent ? 'available' : hasLocator ? 'locator_only' : 'evidence_unavailable',
+            ? 'evidence_unavailable' as const
+            : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const,
         },
         // Owner-scoped, text-only evidence. This is only present when the
         // rights policy allowed retention; private locators stay private.
         excerpt: hasContent ? excerpt!.excerpt!.trim() : null,
         signals: {
-          authority: 'unknown',
-          freshness: source.fetchedAt === undefined ? 'unknown' : 'retrieved_at',
+          authority: 'unknown' as const,
+          freshness: source.fetchedAt === undefined ? 'unknown' as const : 'retrieved_at' as const,
           freshnessAt: source.fetchedAt ?? null,
         },
         reviewedObjectives,
       })
     }
-    return { ...result, page }
+    return { page, isDone: result.isDone, continueCursor: result.continueCursor }
   },
 })
 
@@ -822,6 +869,7 @@ export const prepareFetchedSourceForReview = mutation({
     expectedRevision: v.number(),
     idempotencyKey: v.string(),
   },
+  returns: sourceReceipt,
   handler: async (ctx, args) => await recordEvaluationCommand(ctx, {
     ...args,
     tokenIdentifier: await requireLearnV2MutationAccess(ctx),
@@ -957,6 +1005,7 @@ export const prepareFolderSourceForReview = mutation({
     expectedRevision: v.number(),
     idempotencyKey: v.string(),
   },
+  returns: sourceReceipt,
   handler: async (ctx, args) => await prepareFolderSourceCommand(ctx, {
     ...args,
     tokenIdentifier: await requireLearnV2MutationAccess(ctx),
@@ -1104,15 +1153,18 @@ async function terminalCommand(ctx: MutationCtx, args: {
 
 export const acceptSource = mutation({
   args: { sourceSnapshotId: v.id('learnSourceSnapshots'), expectedRevision: v.number(), idempotencyKey: v.string() },
+  returns: sourceReceipt,
   handler: async (ctx, args) => terminalCommand(ctx, { ...args, userId: await requireLearnV2MutationAccess(ctx), command: 'accept_source' }),
 })
 
 export const rejectSource = mutation({
   args: { sourceSnapshotId: v.id('learnSourceSnapshots'), expectedRevision: v.number(), idempotencyKey: v.string() },
+  returns: sourceReceipt,
   handler: async (ctx, args) => terminalCommand(ctx, { ...args, userId: await requireLearnV2MutationAccess(ctx), command: 'reject_source' }),
 })
 
 export const markUnavailable = mutation({
   args: { sourceSnapshotId: v.id('learnSourceSnapshots'), expectedRevision: v.number(), idempotencyKey: v.string(), reason: v.union(v.literal('source_deleted'), v.literal('access_lost'), v.literal('policy_denied')) },
+  returns: sourceReceipt,
   handler: async (ctx, args) => terminalCommand(ctx, { ...args, userId: await requireLearnV2MutationAccess(ctx), command: 'mark_unavailable' }),
 })

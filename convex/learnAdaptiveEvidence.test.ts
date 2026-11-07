@@ -114,7 +114,7 @@ describe('Adaptive activity evidence projection', () => {
     await t.run(ctx => ctx.db.delete(ids.folderId))
     const result = await t.withIdentity({ tokenIdentifier: ownerId }).query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { threadId: ids.threadId, activityId: 'activity-evidence-1' })
     expect(result).toMatchObject({ kind: 'factual', eligibility: 'blocked', integrityState: 'unavailable',
-      claims: [{ integrityState: 'unavailable', claimStatus: 'unknown', source: { locator: null } }] })
+      claims: [] })
   })
 
   test.each(['deleted_folder', 'non_owned_document'] as const)('historical public evidence stays read-only but redacts support after %s source loss', async sourceLoss => {
@@ -131,7 +131,7 @@ describe('Adaptive activity evidence projection', () => {
     })
     const result = await t.withIdentity({ tokenIdentifier: ownerId }).query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { threadId: ids.threadId, activityId: 'activity-evidence-1' })
     expect(result).toMatchObject({ ownerId: ids.ownerUserId, threadId: ids.threadId, eligibility: 'historical', readOnly: true, integrityState: 'unavailable',
-      claims: [{ integrityState: 'unavailable', claimStatus: 'unknown', source: { locator: null } }] })
+      claims: sourceLoss === 'deleted_folder' ? [] : [{ integrityState: 'unavailable', claimStatus: 'unknown', claimText: null, source: { locator: null } }] })
   })
   test('projects source purge into exactly-once bounded invalidation and gap events', async () => {
     const { t, ids } = await fixture()

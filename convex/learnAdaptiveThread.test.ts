@@ -80,7 +80,7 @@ describe('owner scoped adaptive thread projection', () => {
       }
     })
     const restored = await owner.query(api.learnAdaptive.getThread, { threadId })
-    expect(restored?.currentActivity).toMatchObject({ id: 'activity-12', purpose: 'Purpose 12' })
+    expect(restored?.currentActivity).toMatchObject({ id: 'activity-12', purpose: '' })
     expect(restored?.history.map(item => item.id)).toEqual([
       'activity-11', 'activity-10', 'activity-9', 'activity-8', 'activity-7', 'activity-6', 'activity-5', 'activity-4',
     ])
