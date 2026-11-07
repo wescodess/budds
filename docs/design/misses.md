@@ -32,7 +32,13 @@ A promotion is done when the new rule, check or surface entry fails or shows the
 
 ## Log
 
-No entries yet. `DESIGN.md` and `docs/agents/design-skills.md` record no specific correction to seed from.
+### 2026-11-06 Delayed check: neutral icons replacing state colors
+
+- Source: [#409 pilot](https://github.com/wescodess/budds/issues/409), [#528 owner decision](https://github.com/wescodess/budds/issues/528)
+- Words: "neutral gray replacing meaningful colour"
+- Type: measurable
+- Judges: flagged
+- Promotion: [Functional Colors](../../DESIGN.md#functional-colors), [`status-tone` capture check](../../scripts/design-capture-checks.mjs), [browser regression](../../scripts/design-capture.browser.test.mjs). Straight back at `65943ab` reproduces the state 7 spinner and state 12 Not yet icon; `47796b9` supplies the corrected version. Across both themes and three widths, those two states fall from 12 findings to zero (24 total findings before, 12 after; restored-answer and unavailable-check statuses remain). Rendered color and inherited styling require measurement rather than a source ratchet.
 
 ## Shrink
 

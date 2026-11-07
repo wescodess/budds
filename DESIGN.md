@@ -1,7 +1,7 @@
 # DESIGN.md — Budds Visual Design System
 
 **Direction:** Warm Focus
-**Last Updated:** 2026-04-09
+**Last Updated:** 2026-11-06
 
 ---
 
@@ -46,14 +46,34 @@ A **Void** is a dedicated, full-screen workspace for a single learning interacti
 | `--input` | `rgba(250, 250, 249, 0.15)` | `oklch(1 0 0 / 15%)` | Input field borders |
 | `--ring` | `#f59e0b` | `oklch(0.769 0.163 75.8)` | Focus ring, amber |
 
-### Functional Colors (not in CSS tokens — use directly)
+### Functional Colors
 
-| Purpose | Hex | Usage |
-|---------|-----|-------|
-| Success | `#6ee7b7` | File indexed, upload complete, quiz passed |
-| Warning | `#fb923c` | Processing states, ingestion in progress |
-| Citation badge | `#f59e0b` | Inline citation pills [1] [2] |
-| Source highlight | `rgba(245, 158, 11, 0.1)` | Background tint on highlighted source passages |
+These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic token for the state, not a new hue.
+
+| Token | Light | Dark |
+|-------|-------|------|
+| `--warning` | `oklch(0.762 0.152 55.5)` (hex fallback `#d59b34`) | Same |
+| `--success` | `oklch(0.765 0.154 162.48)` (hex fallback `#41b883`) | Same |
+| `--destructive` | `oklch(0.577 0.245 27.325)` (hex fallback `#c24133`) | `oklch(0.704 0.165 11.2)` (hex fallback `#d16552`) |
+| `--learn-attention` | `var(--warning)` | Same |
+| `--learn-error` | `var(--destructive)` | Same |
+| `--learn-success` | `var(--success)` | Same |
+
+| State | Color | Where it goes |
+|-------|-------|---------------|
+| Processing, scoring, in progress | `--warning` | The status icon or spinner |
+| Needs attention, recoverable, won't count, couldn't confirm, not yet | `--learn-attention` (= `--warning`) | The status icon |
+| Error, failed | `--destructive` (`--learn-error`) | The status icon; destructive text only where it already meets AA |
+| Success, passed, saved-and-scored | `text-green-700 dark:text-green-400` (approved in quiz-grading-results) or `--learn-success` | The status icon |
+| Actions, active, focus, citations | Amber primary only | Actions, active marks, focus rings, citation badges |
+| Neutral metadata (timestamps, "saved", counts) | `--muted-foreground` / `--foreground` | Text and icon |
+
+- The icon or mark carries the state color; the text beside it stays `text-foreground` or `text-muted-foreground`, because warning and success are below AA as text on light cards.
+- A busy spinner inside a button inherits the button's color; it is not a status.
+- A state from the first four rows never renders with only a neutral icon.
+- The `status-tone` check in `pnpm design:capture` measures icons in visible `role="status"` and `role="alert"` regions. Mark genuine neutral metadata with `data-tone="neutral"` on the region or an ancestor.
+
+Citation badges use `--primary`; source highlights use `rgba(245, 158, 11, 0.1)` as a background tint.
 
 ### Sidebar Tokens
 

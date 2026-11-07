@@ -86,6 +86,56 @@ test('unmet readySelector fails with error staging', { timeout: 90_000 }, async 
   await assert.rejects(readFile(join(f.published, 'floor.json')), { code: 'ENOENT' })
 })
 
+test('status-tone catches neutral state icons with stable IDs and compares fixed colours and neutral opt-outs', { timeout: 90_000 }, async t => {
+  const icon = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="8" /></svg>'
+  const spinner = '<span class="animate-spin" style="display:inline-block;width:24px;height:24px;border:2px solid currentColor;border-radius:50%"></span>'
+  const body = tone => `<style>
+    :root { --foreground: oklch(0.168 0.008 49); --muted-foreground: #746b60; --warning: oklch(0.762 0.152 55.5); --learn-attention: var(--warning); }
+    .dark { --foreground: #fbfbf8; --muted-foreground: oklch(0.706 0.011 73.6); }
+    [role=status], [role=alert], .paired { color: var(--foreground); }
+    #processing { color: var(--muted-foreground); }
+    .text-\\[var\\(--learn-attention\\)\\] { color: var(--learn-attention); }
+    </style>
+    <div id="processing" role="status"><span class="${tone}">${spinner}</span>Processing</div>
+    <div id="not-yet" role="status"><svg style="display:none"></svg><span class="${tone}">${icon}</span>Not yet</div>
+    <div class="paired ${tone}">${icon}<div id="sibling-not-yet" role="status">Not yet: part of this slipped</div></div>
+    <div>${icon}<p>Unrelated content</p><div role="status">Text only, no paired icon</div></div>
+    <div data-tone="neutral">${icon}<div role="status">Saved metadata</div></div>
+    <div role="alert"><span class="text-[var(--learn-attention)]">${icon}</span>Needs attention</div>
+    <div role="status" data-tone="neutral">${icon}Saved</div>
+    <section data-tone="neutral"><div role="alert">${icon}Three items</div></section>
+    <button aria-label="Submit"><span role="status">${spinner}</span></button>
+    <div role="status"><button aria-label="Retry">${icon}${spinner}</button></div>
+    <div role="button" tabindex="0" aria-label="Save"><span role="status">${spinner}</span></div>
+    <div role="status" style="display:none">${icon}Hidden status</div>
+    <div role="status">Text only</div>`
+  const f = await fixture(t, body(''), { themes: ['dark', 'light'] })
+  const initial = await f.start().done
+  assert.equal(initial.code, 0, initial.output)
+  const neutral = (await f.reports(f.published)).floor
+  const findings = neutral.violations.filter(value => value.rule === 'status-tone')
+  assert.equal(findings.length, 6)
+  for (const theme of ['dark', 'light']) {
+    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#not-yet', '#sibling-not-yet'])
+  }
+  assert.equal(new Set(findings.map(value => value.id)).size, 6)
+  const baseline = join(f.root, 'neutral-baseline')
+  await cp(f.published, baseline, { recursive: true })
+  const unchanged = await f.start(['--compare', baseline]).done
+  assert.equal(unchanged.code, 0, unchanged.output)
+  assert.deepEqual((await f.reports(f.published)).floor.violations.filter(value => value.rule === 'status-tone').map(value => value.id), findings.map(value => value.id))
+  await writeFile(join(f.root, 'fixture.html'), html(body('text-[var(--learn-attention)]')))
+  const fixed = await f.start(['--compare', baseline]).done
+  assert.equal(fixed.code, 0, fixed.output)
+  assert.deepEqual((await f.reports(f.published)).floor.violations.filter(value => value.rule === 'status-tone'), [])
+  const fixedBaseline = join(f.root, 'fixed-baseline')
+  await cp(f.published, fixedBaseline, { recursive: true })
+  await writeFile(join(f.root, 'fixture.html'), html(body('')))
+  const regressed = await f.start(['--compare', fixedBaseline]).done
+  assert.equal(regressed.code, 1, regressed.output)
+  assert.equal((await f.reports(f.published)).floor.newViolations.length, 6)
+})
+
 test('missing required font fails with error staging', { timeout: 90_000 }, async t => {
   const f = await fixture(t, '<p>Fallback font</p>', { requiredFonts: ['MissingCaptureFont'] })
   await f.failed(await f.start().done, /Required font was not declared: MissingCaptureFont/)

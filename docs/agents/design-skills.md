@@ -63,6 +63,7 @@ Look at the rendered screen in dark and light themes first, then scan the diff.
 - [ ] Citations stay prominent and link to their source.
 - [ ] Motion answers a user action and respects reduced motion. No pulsing, hover lifts, or fade-up on every section.
 - [ ] No streaks, points, guilt loops, countdowns, tours, or "what's new" modals.
+- [ ] Status icons and spinners carry the [state color](../../DESIGN.md#functional-colors); text stays neutral, button spinners inherit the button, and only genuine neutral metadata opts out with `data-tone="neutral"`.
 - [ ] Loading, empty, error, and disabled states exist. An empty state offers one clear next action.
 - [ ] Long titles, a count of 1, and a 320px width all hold up.
 - [ ] Copy uses plain verbs and sentence case. Errors say what happened and how to fix it. No "unlock" or "elevate".
