@@ -11,7 +11,7 @@ import {
   isArtifactRegistrationRequiredForOwner, isArtifactRegistrationRequiredForRecord, normalizedInstructionalCaseFingerprints,
   prepareAndRegisterInstructionalArtifacts, prepareAndRegisterInstructionalArtifactsForOwner, prepareAndRegisterInstructionalArtifactsForRecord,
   resolveArtifactLineageForOwner,
-  admitArtifactInput, artifactContentProjection, artifactPayloadDigest,
+  admitArtifactInput, admitArtifactInputs, artifactContentProjection, artifactPayloadDigest,
 } from './lib/learnV2ArtifactLineage'
 import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactPreparationArgs, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
 
@@ -435,7 +435,7 @@ describe('round-2 producer budgets', () => {
       expect(total.preparation.readUsage.limitBytes).toBe(6 * 1024 * 1024)
       const inputs = total.admission.ctx
       expect(await isArtifactRegistrationRequired(inputs)).toBe(true)
-      for (const reference of refs) expect(await admitArtifactInput(inputs, { reference })).toMatchObject({ status: 'admitted_registered' })
+      if (refs.length) expect(await admitArtifactInputs(inputs, { references: refs })).toMatchObject({ status: 'admitted_registered' })
       const admission = { ...total.admission.readUsage, ranges: total.admission.indexRanges }
       const ctx = total.preparation.ctx
       await ctx.db.get(f.folderId)
@@ -478,19 +478,29 @@ describe('round-2 producer budgets', () => {
       const published = await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts })
       const publication = { ...total.readUsage, ranges: total.indexRanges }
       const preparation = { ...total.preparation.readUsage, ranges: total.preparation.indexRanges }
-      for (const reference of published.references) {
-        const admitted = await admitArtifactInput(total.admission.ctx, { reference })
-        if (admitted.status === 'rejected') console.log(JSON.stringify({ shape, rejected: reference.artifact.kind, admitted, publication, total: total.readUsage, ranges: total.indexRanges, phase: total.preparation.readUsage, phaseRanges: total.preparation.indexRanges }))
-        expect(admitted).toMatchObject({ status: 'admitted_registered' })
-      }
-      return { shape, inputs: refs.length, outputs: published.references.length, references: published.references, admission, preparation, publication, total: { ...total.readUsage, ranges: total.indexRanges } }
+      const decision = await admitArtifactInputs(total.admission.ctx, { references: published.references })
+      const sameTransaction = { ...total.readUsage, ranges: total.indexRanges, decision }
+      expect(decision).toMatchObject({ status: 'admitted_registered' })
+      expect(sameTransaction.ranges).toBeLessThanOrEqual(3072)
+      expect(sameTransaction.chargedBytes).toBeLessThan(8 * 1024 * 1024)
+      return { shape, inputs: refs.length, outputs: published.references.length, references: published.references, admission, preparation, publication, sameTransaction, total: publication }
     })
     const links = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId', q => q.eq('userId', userId)).take(4000))
     expect(links).toHaveLength(count ? count * (2 + result.outputs) : 2)
     const later = await f.asOwner.run(async raw => {
-      const total = createArtifactLineagePublicationContext(raw)
-      for (const reference of result.references) expect(await admitArtifactInput(total.admission.ctx, { reference })).toMatchObject({ status: 'admitted_registered' })
-      return { ...total.readUsage, ranges: total.indexRanges }
+      let versionCardReads = 0
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property === 'query' && typeof method === 'function') return (...args: unknown[]) => {
+          if (args[0] === 'flashcardVersionCards') versionCardReads++
+          return Reflect.apply(method, target, args)
+        }
+        return typeof method === 'function' ? method.bind(target) : method
+      } })
+      const total = createArtifactLineagePublicationContext({ ...raw, db })
+      expect(await admitArtifactInputs(total.admission.ctx, { references: result.references })).toMatchObject({ status: 'admitted_registered' })
+      expect(versionCardReads).toBe(section || shape === 'Flashcards' ? 2 : 0)
+      return { ...total.readUsage, ranges: total.indexRanges, versionCardReads }
     })
     const { references: _references, ...metrics } = result
     console.log(JSON.stringify({ ...metrics, later }))
@@ -559,7 +569,7 @@ describe('round-2 producer budgets', () => {
     })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
   })
 
-  test('round-3 preparation reads each source document once', async () => {
+  test('round-4 preparation rereads sources after its own writes', async () => {
     const f = await setup()
     await f.asOwner.run(async ctx => {
       let reads = 0
@@ -572,7 +582,7 @@ describe('round-2 producer budgets', () => {
         }
       } })
       await prepareAndRegisterInstructionalArtifacts({ ...ctx, db }, { artifacts: [member({ kind: 'document', id: f.documentId }), member({ kind: 'document_chunk', id: f.documentId }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)] })
-      expect(reads).toBe(1)
+      expect(reads).toBeGreaterThan(1)
     })
   })
 

@@ -30,6 +30,10 @@ export const learnArtifactReferenceSchema = z.strictObject({
   key: learnVersionSchema, revision: learnVersionSchema, payloadDigest: learnDigestSchema,
 })
 export const learnArtifactLookupArgsSchema = z.strictObject({ reference: learnArtifactReferenceSchema })
+export const learnArtifactInputBatchAdmissionArgsSchema = z.strictObject({
+  references: z.array(learnArtifactReferenceSchema).min(1).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxSources),
+})
+
 export const learnArtifactInputAdmissionResultSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('admitted_registered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('registered_lineage') }),
   z.strictObject({ status: z.literal('admitted_unregistered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('unregistered_ordinary_input') }),
