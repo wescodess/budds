@@ -33,6 +33,10 @@ export const learnArtifactLookupArgsSchema = z.strictObject({ reference: learnAr
 export const learnArtifactInputBatchAdmissionArgsSchema = z.strictObject({
   references: z.array(learnArtifactReferenceSchema).min(1).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxSources),
 })
+export const learnArtifactIdentityAdmissionArgsSchema = learnArtifactReferenceSchema.shape.artifact
+export const learnArtifactIdentityBatchAdmissionArgsSchema = z.strictObject({
+  artifacts: z.array(learnArtifactIdentityAdmissionArgsSchema).min(1).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxSources),
+})
 
 export const learnArtifactInputAdmissionResultSchema = z.discriminatedUnion('status', [
   z.strictObject({ status: z.literal('admitted_registered'), version: z.literal(LEARN_ARTIFACT_INPUT_ADMISSION_VERSION), reasonCode: z.literal('registered_lineage') }),
