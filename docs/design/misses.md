@@ -32,6 +32,15 @@ A promotion is done when the new rule, check or surface entry fails or shows the
 
 ## Log
 
+### 2026-11-06 learn-delayed-check: the owner kept Today lighter than the recommendation
+
+- Source: [#361 ledger](https://github.com/wescodess/budds/issues/361)
+- Words: "i like 4,1" (round 1, recommendation was Quiet room alone); "todays points satisfied" (round 2, recommendation was Shared receipt)
+- Type: taste
+- Judges: not run (concept checks never rank options)
+- Promotion: taste case
+- Chosen and rejected: chose [approved.html](learn-delayed-check/approved.html), where Today carries one status row and never shows feedback; rejected the recommended [Shared receipt](learn-delayed-check/rejected-2-shared-receipt.html), which repeats the result on Today, and [One page](learn-delayed-check/rejected-2-one-page.html), the heaviest Today
+
 ### 2026-11-06 Delayed check: neutral icons replacing state colors
 
 - Source: [#409 pilot](https://github.com/wescodess/budds/issues/409), [#528 owner decision](https://github.com/wescodess/budds/issues/528)
