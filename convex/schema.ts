@@ -1923,6 +1923,7 @@ export default defineSchema({
     .index('by_userId_and_reservedAt', ['userId', 'reservedAt'])
     .index('by_userId_and_caseKey', ['userId', 'caseKey'])
     .index('by_userId_and_scenarioFingerprint', ['userId', 'scenarioFingerprint'])
+    .index('by_userId_and_scenarioFingerprint_and_solutionFingerprint', ['userId', 'scenarioFingerprint', 'solutionFingerprint'])
     .index('by_userId_and_solutionFingerprint', ['userId', 'solutionFingerprint']),
   learnAssessmentCatalogs: defineTable(measurementStorage.assessmentCatalogFields)
     .index('by_userId', ['userId']),

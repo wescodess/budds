@@ -5,7 +5,8 @@ import {
   learnArtifactValidationSchema, learnArtifactRegistrationArgsSchema, learnArtifactRegistrationResultSchema,
   learnArtifactBatchRegistrationArgsSchema, learnArtifactBatchRegistrationResultSchema, learnArtifactOwnerRecordSchema,
   learnArtifactPreparationArgsSchema, learnArtifactPreparationResultSchema, LEARN_ARTIFACT_PREPARATION_VERSION,
-  validateLearnArtifactLookup, validateLearnArtifactLookupResult,
+  validateLearnArtifactLookup, validateLearnArtifactLookupResult, LEARN_ARTIFACT_CASE_LIMITS, learnArtifactReferenceSchema,
+  learnArtifactDescendantRepinArgsSchema, learnArtifactDescendantRepinResultSchema,
 } from './learn-v2-artifact-lineage'
 import { learnIdSchema } from './learn-v2-responses'
 
@@ -91,5 +92,34 @@ describe('server preparation contract', () => {
     expectTypeOf<typeof decision>().toExtend<Pick<Doc<'learnArtifactValidations'>, keyof typeof decision>>()
     expect(learnArtifactValidationSchema.safeParse({ ...decision, preparation: { ...preparation, reservedCaseCount: -1 } }).success).toBe(false)
     expect(learnArtifactValidationSchema.safeParse({ ...decision, preparation: { ...preparation, kind: 'personal_work' } }).success).toBe(false)
+  })
+})
+
+
+describe('B2 per-kind case caps and descendant re-pin envelopes', () => {
+  test('every artifact kind has a case cap sized to its largest projected content', () => {
+    expect(Object.keys(LEARN_ARTIFACT_CASE_LIMITS).sort()).toEqual(learnArtifactReferenceSchema.shape.artifact.options.map(option => option.shape.kind.value).sort())
+    expect(LEARN_ARTIFACT_CASE_LIMITS).toMatchObject({ flashcard_version: 200 + 1, section_block: 200 + 200 + 1 })
+    for (const [kind, cap] of Object.entries(LEARN_ARTIFACT_CASE_LIMITS)) if (kind !== 'flashcard_version' && kind !== 'section_block') expect(cap).toBe(LEARN_ARTIFACT_LINEAGE_LIMITS.maxCases)
+  })
+
+  test('a lookup carries graph-wide case links up to its bound within its byte ceiling', () => {
+    const pin = { caseId: id('learnAssessmentCases'), scenarioFingerprint: 'e'.repeat(64), solutionFingerprint: 'f'.repeat(64), identityPolicyVersion: 'learn-v2.instructional-case.v1', usageClass: 'instructional' as const }
+    const full = { ...result, cases: Array.from({ length: LEARN_ARTIFACT_LINEAGE_LIMITS.maxGraphCases }, () => pin) }
+    expect(validateLearnArtifactLookupResult(full).status).toBe('bound')
+    expect(learnArtifactLookupResultSchema.safeParse({ ...full, cases: [...full.cases, pin] }).success).toBe(false)
+  })
+
+  test('re-pin arguments accept only bounded preparation-kind identities', () => {
+    const question = { kind: 'quiz_question' as const, id: id('quizQuestions') }
+    expect(learnArtifactDescendantRepinArgsSchema.parse({ artifacts: [question] })).toEqual({ artifacts: [question] })
+    for (const input of [{ artifacts: [] }, { artifacts: Array.from({ length: 51 }, () => question) }, { artifacts: [question], origins: [] },
+      { artifacts: [{ kind: 'measurement_item', id: id('learnMeasurementItems') }] }, { artifacts: [{ ...question, revision: '1' }] }]) {
+      expect(learnArtifactDescendantRepinArgsSchema.safeParse(input).success).toBe(false)
+    }
+    const receipt = { version: LEARN_ARTIFACT_LINEAGE_VERSION, lineageIds: [], references: [], catalogRevision: 3,
+      readUsage: { chargedBytes: 0, documentsRead: 0, readRequests: 0, limitBytes: 4 * 1024 * 1024 } }
+    expect(learnArtifactDescendantRepinResultSchema.parse(receipt)).toEqual(receipt)
+    expect(learnArtifactDescendantRepinResultSchema.safeParse({ ...receipt, decision: 'pass' }).success).toBe(false)
   })
 })

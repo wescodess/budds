@@ -2224,7 +2224,7 @@ describe('round-3 shared validation exactness', () => {
       }
       if (mutation === 'extra_source') await raw.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: f.folderId } })
       if (mutation === 'duplicate_case' || mutation === 'unknown_case_patch' || mutation === 'known_case_patch') {
-        const pin = { scenarioFingerprint: 'b'.repeat(64), solutionFingerprint: 'c'.repeat(64) }
+        const pin = { scenarioFingerprint: 'b'.repeat(64), solutionFingerprint: 'b'.repeat(64) }
         if (mutation === 'duplicate_case') await raw.db.insert('learnAssessmentCases', { ...f.base, ...pin, caseKey: 'duplicate', identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
         else await raw.db.patch(spare, pin)
       }

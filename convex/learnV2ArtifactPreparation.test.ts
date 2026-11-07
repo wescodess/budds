@@ -14,6 +14,7 @@ import {
   resolveArtifactLineageForOwner,
   admitArtifactInput, admitArtifactInputs, artifactContentProjection, artifactPayloadDigest, artifactManifestDigest,
   admitArtifactInputByIdentity, admitArtifactInputByIdentityForOwner, admitArtifactInputByIdentityForRecord, admitArtifactInputsByIdentity, admitArtifactInputsByIdentityForOwner, admitArtifactInputsByIdentityForRecord,
+  repinArtifactLineageDescendants, repinArtifactLineageDescendantsForOwner, repinArtifactLineageDescendantsForRecord,
 } from './lib/learnV2ArtifactLineage'
 import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactPreparationArgs, type LearnArtifactReference } from '../shared/learn-v2-artifact-lineage'
 
@@ -25,7 +26,7 @@ const base = { userId, storageVersion: 'learn-v2.measurement-storage.v1' as cons
 type Store = TestConvex<typeof schema>
 type Fixture = Awaited<ReturnType<typeof setup>>
 
-afterEach(() => { vi.restoreAllMocks() })
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 function member(artifact: LearnArtifactPreparationArgs['artifacts'][number]['artifact'], key = 'whole'): LearnArtifactPreparationArgs['artifacts'][number] {
   return { artifact, key, origins: [], sources: [] }
@@ -399,13 +400,13 @@ describe('in-transaction artifact preparation', () => {
     expect(await inventory(f.t)).toEqual(before)
   })
 
-  test('scenario reuse remains distinct from a shared solution in the same batch', async () => {
+  test('only an exact scenario and solution pair reuses a case in the same batch', async () => {
     const f = await setup()
     await registerSource(f)
-    await publishQuiz(f, [{ question: 'Task A', answer: 'Solution A' }, { question: 'Task B', answer: 'Solution B' }, { question: 'Task A', answer: 'Solution B' }])
+    await publishQuiz(f, [{ question: 'Task A', answer: 'Solution A' }, { question: 'Task B', answer: 'Solution B' }, { question: 'Task A', answer: 'Solution B' }, { question: ' TASK  a', answer: 'solution A ' }])
     const state = await inventory(f.t)
-    expect(state.cases).toHaveLength(2)
-    expect(state.bindings.map(row => row.caseId)).toEqual([state.cases[0]!._id, state.cases[1]!._id, state.cases[0]!._id])
+    expect(state.cases).toHaveLength(3)
+    expect(state.bindings.map(row => row.caseId)).toEqual([state.cases[0]!._id, state.cases[1]!._id, state.cases[2]!._id, state.cases[0]!._id])
   })
 
   test('caps comparison coverage and rejects unbound or duplicate publication members', async () => {
@@ -421,12 +422,13 @@ describe('in-transaction artifact preparation', () => {
     expect(await f.t.run(ctx => prepareAndRegisterInstructionalArtifactsForRecord(ctx, { kind: 'document', id: f.documentId }, { artifacts: [member({ kind: 'document', id: f.documentId })] }))).toMatchObject({ catalogRevision: 1 })
   })
 
-  test('rejects a late batch collision and an already active binding without partial writes', async () => {
+  test('rejects a late batch collision without partial writes and returns an unchanged active binding', async () => {
     const f = await setup()
     await registerSource(f)
     const first = await publishQuiz(f)
     const before = await inventory(f.t)
-    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(first.references[0]!.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'])] }))).rejects.toThrow('unavailable')
+    expect(await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(first.references[0]!.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'])] })))
+      .toMatchObject({ lineageIds: first.lineageIds, references: first.references, catalogRevision: first.catalogRevision })
     expect(await inventory(f.t)).toEqual(before)
     await f.t.run(ctx => reserve(ctx, 'Last task', 'Last solution'))
     const reserved = await inventory(f.t)
@@ -444,7 +446,7 @@ describe('in-transaction artifact preparation', () => {
 
 
 describe('round-2 producer budgets', { timeout: 30_000 }, () => {
-  test.each(['Quiz', 'section_procedural', 'section_factual', 'section_conceptual', 'Flashcards', 'Audio Overview', 'document'] as const)('%s admits maximum sources and prepares the full output batch', async shape => {
+  test.each(['Quiz', 'section_procedural', 'section_factual', 'section_conceptual', 'Flashcards', 'Flashcards_200', 'Audio Overview', 'document'] as const)('%s admits maximum sources and prepares the full output batch', async shape => {
     const f = await setup()
     const section = shape.startsWith('section_')
     const count = shape === 'document' ? 0 : section ? 59 : 50
@@ -473,12 +475,14 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
       }
       const artifacts: LearnArtifactPreparationArgs['artifacts'] = []
       if (shape === 'Quiz') artifacts.push(...(await writeQuiz(ctx, f, Array.from({ length: 50 }, (_, i) => ({ question: `Question ${i} ${'q'.repeat(1200)}`, answer: `Answer ${i} ${'a'.repeat(1200)}` })), 's'.repeat(8192))).artifacts)
-      if (shape === 'Flashcards' || section) {
-        const cardCount = shape === 'section_procedural' ? 8 : shape === 'section_conceptual' ? 12 : 16
+      if (shape.startsWith('Flashcards') || section) {
+        // A full deck keeps every card's quote within the 500,000-byte content ceiling.
+        const full = shape === 'Flashcards_200'
+        const cardCount = full ? 200 : shape === 'section_procedural' ? 8 : shape === 'section_conceptual' ? 12 : 16
         const roomId = await ctx.db.insert('flashcardRooms', { userId, folderId: f.folderId, title: 'Cards', updatedAt: base.createdAt })
-        const versionId = await ctx.db.insert('flashcardRoomVersions', { userId, roomId, title: 'Cards', origin: 'ai', cardCount })
+        const versionId = await ctx.db.insert('flashcardRoomVersions', { userId, roomId, title: 'Cards', origin: 'ai', cardCount, ...(full ? { prompt: 'p'.repeat(2000) } : {}) })
         for (let i = 0; i < cardCount; i++) {
-          const card = { userId, roomId, term: `Term ${i}`, definition: `Definition ${i}`, displayOrder: i, sourceDocumentId: docs[i], sourceChunkContent: 's'.repeat(8192) }
+          const card = { userId, roomId, term: `Term ${i}`, definition: `Definition ${i}`, displayOrder: i, sourceDocumentId: docs[i % docs.length], sourceChunkContent: 's'.repeat(full ? 2050 : 8192) }
           await ctx.db.insert('flashcardRoomCards', card)
           await ctx.db.insert('flashcardVersionCards', { ...card, versionId })
         }
@@ -530,11 +534,24 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
       } })
       const total = createArtifactLineagePublicationContext({ ...raw, db })
       expect(await admitArtifactInputs(total.admission.ctx, { references: result.references })).toMatchObject({ status: 'admitted_registered' })
-      expect(versionCardReads).toBe(section || shape === 'Flashcards' ? 2 : 0)
+      expect(versionCardReads).toBe(section || shape.startsWith('Flashcards') ? 2 : 0)
       return { ...total.readUsage, ranges: total.indexRanges, versionCardReads }
     })
+    // Edit writers re-register a section alone; its components are admitted.
+    const edit = !section ? undefined : await f.asOwner.run(async raw => {
+      const reference = result.references.find(ref => ref.artifact.kind === 'section_block')!
+      if (reference.artifact.kind !== 'section_block') throw new Error('Expected section')
+      await raw.runMutation(api.courseSections.updateTitle, { sectionId: reference.artifact.id, title: 'Edited section' })
+      const total = createArtifactLineagePublicationContext(raw)
+      await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [0, 1, 2, 3].map(index => member(reference.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'], `block-${index}`)) })
+      return { ...total.readUsage, ranges: total.indexRanges }
+    })
     const { references: _references, ...metrics } = result
-    console.log(JSON.stringify({ ...metrics, later }))
+    console.log(JSON.stringify({ ...metrics, later, edit }))
+    if (edit) {
+      expect(edit.ranges).toBeLessThanOrEqual(3072)
+      expect(edit.chargedBytes).toBeLessThan(8 * 1024 * 1024)
+    }
     expect(later.ranges).toBeLessThanOrEqual(3072)
     expect(later.chargedBytes).toBeLessThan(8 * 1024 * 1024)
     expect(result.total.ranges).toBeLessThanOrEqual(3072)
@@ -643,12 +660,13 @@ describe('Stage B scenario identities and preparation provenance', () => {
       const result = await publishQuiz(f, [question])
       expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: result.references[0]! }))).toMatchObject({ status: 'admitted_registered' })
       const pins = await normalizedInstructionalCaseFingerprints(question.question, question.answer)
-      const found = await f.t.run(ctx => ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', pins.scenarioFingerprint)).take(2))
+      const found = await f.t.run(ctx => ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint_and_solutionFingerprint', q => q.eq('userId', userId)
+        .eq('scenarioFingerprint', pins.scenarioFingerprint).eq('solutionFingerprint', pins.solutionFingerprint)).take(2))
       expect(found).toHaveLength(1)
       expect(found[0]!.usageClass).toBe('instructional')
     }
     const state = await inventory(f.t)
-    expect(state.cases).toHaveLength(new Set(questions.map(row => row.question)).size)
+    expect(state.cases).toHaveLength(new Set(questions.map(row => `${row.question}\n${row.answer}`)).size)
     expect(new Set(state.bindings.map(row => row.caseId)).size).toBe(state.cases.length)
   })
 
@@ -727,7 +745,8 @@ describe('Stage B revision succession', () => {
     let published = await publishQuiz(f)
     const question = published.references[0]!.artifact
     if (question.kind !== 'quiz_question') throw new Error('Expected question')
-    const cases = (await inventory(f.t)).cases
+    const [original] = (await inventory(f.t)).cases
+    const pairs = { flag: await normalizedInstructionalCaseFingerprints('How does rain form?', 'Corrected solution'), unflag: await normalizedInstructionalCaseFingerprints('How does rain form?', 'Water condenses.') }
     for (const action of ['flag', 'unflag', 'flag'] as const) {
       const before = published.references[0]!
       published = await f.asOwner.run(async ctx => {
@@ -738,17 +757,22 @@ describe('Stage B revision succession', () => {
       })
       expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_registered' })
       expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: before }))).toMatchObject({ status: 'unavailable' })
-      expect((await inventory(f.t)).cases).toEqual(cases)
+      const state = await inventory(f.t)
+      expect(state.cases).toHaveLength(2)
+      expect(state.cases[0]).toEqual(original)
+      expect(state.cases.every(row => row.usageClass === 'instructional')).toBe(true)
+      const bound = state.bindings.filter(row => row.lineageId === published.lineageIds[0])
+      expect(bound).toMatchObject([pairs[action]])
     }
   })
 
-  test('twenty content edits retain all case bindings without an active-history lockout', async () => {
+  test('forty content edits bind only current cases, keep every taught case and never lock out', async () => {
     const f = await setup()
     await registerSource(f)
     let published = await publishQuiz(f)
     const artifact = published.references[0]!.artifact
     if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       published = await f.asOwner.run(async ctx => {
         await ctx.runMutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: `Edited scenario ${i}` })
         return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
@@ -756,9 +780,11 @@ describe('Stage B revision succession', () => {
       expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: published.references[0]! }))).toMatchObject({ status: 'admitted_registered' })
     }
     const state = await teachingInventory(f.t)
-    expect(state.cases).toHaveLength(21)
+    expect(state.cases).toHaveLength(41)
+    expect(state.cases.every(row => row.usageClass === 'instructional')).toBe(true)
     expect(state.lineages.filter(row => row.nextId === undefined)).toHaveLength(1)
-    expect(state.lineages.at(-1)!.caseCount).toBe(21)
+    expect(state.lineages.every(row => row.caseCount === 1)).toBe(true)
+    expect(new Set(state.bindings.map(row => row.caseId)).size).toBe(41)
   })
 
   test.each(['measurement', 'private_scoring', 'unknown'] as const)('a restrictive stranded %s row cannot be superseded by teaching', async classification => {
@@ -885,7 +911,7 @@ describe('Stage B document revision succession contract', () => {
 })
 
 describe('Stage B card version projection succession', () => {
-  test('a server-side version projection repair retains predecessor cases under its stable version ID', async () => {
+  test('a server-side version projection repair keeps its stable version ID and binds only its current cards', async () => {
     const f = await setup()
     await registerSource(f, true)
     const section = await f.t.run(ctx => writeSectionCards(ctx, f))
@@ -904,7 +930,8 @@ describe('Stage B card version projection succession', () => {
     expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, version))).toMatchObject({ status: 'admitted_registered' })
     const state = await teachingInventory(f.t)
     expect(state.cases).toHaveLength(2)
-    expect(state.lineages.at(-1)!.caseCount).toBe(2)
+    expect(state.lineages.map(row => row.caseCount)).toEqual([1, 1])
+    expect(state.bindings.map(row => row.caseId)).toEqual(state.cases.map(row => row._id))
   })
 })
 
@@ -970,7 +997,7 @@ describe('Stage B source availability and identity boundaries', () => {
     expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: next.references[0]! }))).toMatchObject({ status: 'admitted_registered' })
     const row = await f.t.run(ctx => ctx.db.get(next.lineageIds[0]!))
     expect(row!.sourceCount).toBe(2)
-    expect(row!.caseCount).toBe(2)
+    expect(row!.caseCount).toBe(1)
   })
 })
 
@@ -1047,5 +1074,501 @@ describe('Stage B independent enrollment, history and batch guards', () => {
     })
     expect(result.revisions).toEqual([2, 3])
     expect(await f.asOwner.run(ctx => admitArtifactInputs(ctx, { references: result.references }))).toMatchObject({ status: 'admitted_registered' })
+  })
+})
+
+type QuizArtifact = Extract<LearnArtifactReference['artifact'], { kind: 'quiz_question' }>
+function quizArtifact(reference: LearnArtifactReference) {
+  if (reference.artifact.kind !== 'quiz_question') throw new Error('Expected question')
+  return reference.artifact as QuizArtifact
+}
+
+type RunCtx = Parameters<Parameters<Store['run']>[0]>[0]
+async function writeLinkedSection(ctx: RunCtx, f: Pick<Fixture, 'folderId' | 'documentId'>, options: { questions: number, cards: number, audio?: boolean, prompt?: string, sources?: Doc<'documents'>['_id'][], text?: (kind: 'task' | 'solution' | 'term' | 'definition', index: number) => string }) {
+  const source = (index: number) => options.sources?.[index % options.sources.length] ?? f.documentId
+  const text = options.text ?? ((kind, index) => `Linked ${kind} ${index}`)
+  const courseId = await ctx.db.insert('courses', { userId, folderId: f.folderId, title: 'Course', status: 'ready', sourceType: 'folder', sourceConfidence: { docCount: 1, webPercent: 0 }, pace: 'steady',
+    outlineSections: [], completedSectionCount: 0, totalSectionCount: 1, webSearchEnabled: false, createdAt: base.createdAt, updatedAt: base.createdAt })
+  const quizId = await ctx.db.insert('quizzes', { userId, folderId: f.folderId, title: 'Section Quiz', status: 'ready', questionCount: options.questions, creationMethod: 'auto_generated', courseScoped: true, courseId })
+  const questions = []
+  for (let order = 0; order < options.questions; order++) {
+    questions.push(await ctx.db.insert('quizQuestions', { userId, quizId, order, question: text('task', order), correctAnswer: text('solution', order), type: 'free-response', sourceDocumentId: source(order) }))
+  }
+  const contentBlocks: Doc<'courseSections'>['contentBlocks'] = [{ type: 'text', order: 0, content: 'Section prose' }, { type: 'quiz', order: 1, entityId: quizId }]
+  const artifacts = questions.map(id => member({ kind: 'quiz_question', id }))
+  let versionId: Doc<'flashcardRoomVersions'>['_id'] | undefined
+  if (options.cards) {
+    const roomId = await ctx.db.insert('flashcardRooms', { userId, folderId: f.folderId, title: 'Section cards', updatedAt: base.createdAt, courseScoped: true })
+    versionId = await ctx.db.insert('flashcardRoomVersions', { userId, roomId, title: 'Section cards', origin: 'ai', cardCount: options.cards, prompt: options.prompt })
+    for (let displayOrder = 0; displayOrder < options.cards; displayOrder++) {
+      const card = { userId, roomId, term: text('term', displayOrder), definition: text('definition', displayOrder), displayOrder, sourceDocumentId: source(displayOrder) }
+      await ctx.db.insert('flashcardRoomCards', card)
+      await ctx.db.insert('flashcardVersionCards', { ...card, versionId })
+    }
+    await ctx.db.patch(roomId, { activeVersionId: versionId })
+    contentBlocks.push({ type: 'flashcard', order: 2, entityId: roomId })
+    artifacts.push(member({ kind: 'flashcard_version', id: versionId }))
+  }
+  if (options.audio) {
+    const audioFileId = await ctx.storage.store(new Blob(['audio']))
+    const audioId = await ctx.db.insert('audioOverviews', { userId, folderId: f.folderId, title: 'Section Audio Overview', status: 'ready', courseScoped: true, totalDurationMs: 1000,
+      voiceProfile: { hostA: 'a', hostB: 'b' }, sourceDocumentIds: [f.documentId], turns: [{ speaker: 'host_a', text: 'Spoken section content', audioFileId, durationMs: 1000 }] })
+    contentBlocks.push({ type: 'audio', order: 3, entityId: audioId })
+    artifacts.push(member({ kind: 'audio_overview', id: audioId }))
+  }
+  const sectionId = await ctx.db.insert('courseSections', { userId, courseId, title: 'Linked section', order: 0, knowledgeType: 'procedural', status: 'ready', masteryLevel: 'new', contentBlocks })
+  artifacts.push(member({ kind: 'section_block', id: sectionId }))
+  return { courseId, quizId, questions, versionId, sectionId, artifacts }
+}
+
+async function bindingsFor(t: Store, lineageId: Doc<'learnArtifactLineages'>['_id']) {
+  return t.run(ctx => ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', lineageId)).take(450))
+}
+
+async function registerDocument(f: Fixture, name: string) {
+  const id = await f.t.run(ctx => ctx.db.insert('documents', { userId, folderId: f.folderId, filename: `${name}.txt`, fileSize: 12, status: 'success', sourceRevision: 'source.r1', contentHash: 'b'.repeat(64), r2Key: `owned/${name}.r1` }))
+  await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'document', id }), member({ kind: 'document_chunk', id }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)] }))
+  return id
+}
+
+describe('B2 revision succession binds current content', { timeout: 60_000 }, () => {
+  test('a generated section survives thirty title edits and binds only its current cases', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 10, cards: 8 })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts })
+      return written
+    })
+    const artifact = { kind: 'section_block' as const, id: section.sectionId }
+    for (let i = 0; i < 30; i++) {
+      await f.asOwner.run(async ctx => {
+        await ctx.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: `Edited section ${i}` })
+        expect(await admitArtifactInputByIdentity(ctx, artifact)).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+        await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
+      })
+      expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, artifact))).toMatchObject({ status: 'admitted_registered' })
+    }
+    const state = await teachingInventory(f.t)
+    const sections = state.lineages.filter(row => row.artifact.kind === 'section_block')
+    expect(sections).toHaveLength(31)
+    expect(sections.filter(row => row.nextId === undefined)).toHaveLength(1)
+    expect(sections.every(row => row.caseCount === 19)).toBe(true)
+    expect(state.cases).toHaveLength(18 + 31)
+    expect(state.cases.every(row => row.usageClass === 'instructional')).toBe(true)
+  })
+
+  test('a flagged question keeps the sources and origins its generator recorded', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const origin = await publishQuiz(f, [{ question: 'Original generated task', answer: 'Original generated solution' }])
+    const published = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f, [{ question: 'Rewritten task', answer: 'Rewritten solution' }])
+      const scope = await ctx.db.insert('folders', { userId, name: 'Generation scope', documentCount: 0 })
+      quiz.artifacts[0]!.origins = [{ reference: origin.references[0]!, transformation: 'rewrite' }]
+      quiz.artifacts[0]!.sources = [{ kind: 'folder', folderId: scope }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })
+    const question = quizArtifact(published.references[0]!)
+    const flagged = await f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.contentFlags.flagQuizQuestion, { questionId: question.id, correctedAnswer: 'Corrected rewritten solution' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_registered' })
+    const rows = await f.t.run(async ctx => ({
+      before: await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', published.lineageIds[0]!)).take(10),
+      after: await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', flagged.lineageIds[0]!)).take(10),
+      origins: await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', flagged.lineageIds[0]!)).take(10),
+      row: await ctx.db.get(flagged.lineageIds[0]!),
+    }))
+    expect(rows.before).toHaveLength(2)
+    expect(rows.after.map(link => link.dependency)).toEqual(expect.arrayContaining(rows.before.map(link => link.dependency)))
+    expect(rows.after).toHaveLength(2)
+    expect(rows.origins).toMatchObject([{ originLineageId: origin.lineageIds[0], transformation: 'rewrite' }])
+    expect(rows.row).toMatchObject({ derivation: 'derived', originCount: 1, caseCount: 1, sourceCount: 2 })
+  })
+
+  test('deleting a linked question keeps its source document on the containing section', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const other = await registerDocument(f, 'other')
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 2, cards: 0, sources: [f.documentId, other] })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts })
+      return written
+    })
+    const artifact = { kind: 'section_block' as const, id: section.sectionId }
+    const next = await f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.deleteQuestion, { questionId: section.questions[1]! })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
+    })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, artifact))).toMatchObject({ status: 'admitted_registered' })
+    const links = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', next.lineageIds[0]!)).take(10))
+    expect(links.map(link => link.dependency)).toEqual(expect.arrayContaining([expect.objectContaining({ documentId: other }), expect.objectContaining({ documentId: f.documentId })]))
+    expect(await bindingsFor(f.t, next.lineageIds[0]!)).toHaveLength(2)
+  })
+
+  test('a successor still cannot drop a deleted generation source', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const other = await registerDocument(f, 'deleted-source')
+    const published = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f)
+      quiz.artifacts[0]!.sources = [{ kind: 'document', documentId: other, sourceRevision: 'source.r1' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })
+    const question = quizArtifact(published.references[0]!)
+    await f.t.run(ctx => ctx.db.delete(other))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Edited after source deletion' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('a teaching successor binds only its own checked cases while its predecessor keeps reserved history', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const first = await publishQuiz(f, [{ question: 'Superseded task', answer: 'Superseded solution' }])
+    const question = quizArtifact(first.references[0]!)
+    const [taught] = (await inventory(f.t)).cases
+    await f.t.run(ctx => ctx.db.patch(taught!._id, { reservedAt: 0 }))
+    vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'complete' })
+    const edit = (fields: { question?: string, correctAnswer?: string, explanation?: string }) => f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, ...fields })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })
+    await expect(edit({ explanation: 'Only the explanation changed' })).rejects.toThrow('reservation check rejected')
+    const next = await edit({ question: 'An unrelated replacement task', correctAnswer: 'An unrelated replacement solution' })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_registered' })
+    expect((await bindingsFor(f.t, first.lineageIds[0]!)).map(row => row.caseId)).toEqual([taught!._id])
+    expect((await bindingsFor(f.t, next.lineageIds[0]!)).map(row => row.caseId)).not.toContain(taught!._id)
+    expect(await f.t.run(ctx => ctx.db.get(taught!._id))).toMatchObject({ reservedAt: 0, usageClass: 'instructional' })
+  })
+})
+
+describe('B2 per-kind case caps', { timeout: 60_000 }, () => {
+  test('a 200-card deck with its prompt and a section above thirty-two cases register and admit', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 40, cards: 200, prompt: 'Make cards about cloud formation' })
+      return { ...written, result: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts }) }
+    })
+    const state = await teachingInventory(f.t)
+    const counts = Object.fromEntries(state.lineages.filter(row => row.classification === 'teaching').map(row => [row.artifact.kind, row.caseCount]))
+    expect(counts).toEqual({ quiz_question: 1, flashcard_version: 201, section_block: 241 })
+    expect(state.cases).toHaveLength(242)
+    const deck = { kind: 'flashcard_version' as const, id: section.versionId! }
+    const sectionArtifact = { kind: 'section_block' as const, id: section.sectionId }
+    expect(await f.asOwner.run(ctx => admitArtifactInputsByIdentity(ctx, { artifacts: [deck, sectionArtifact] }))).toMatchObject({ status: 'admitted_registered' })
+    const resolved = await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: section.result.references.at(-1)! }))
+    expect(resolved).toMatchObject({ status: 'bound', instructionalRegistered: true })
+    expect(resolved.status === 'bound' && resolved.cases).toHaveLength(241)
+  })
+})
+
+describe('B2 exact pair identity', () => {
+  test('a corrected answer binds its own pair, so reserving it later rejects admission', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const first = await publishQuiz(f, [{ question: 'What is the capital of Australia?', answer: 'Sydney' }])
+    const question = quizArtifact(first.references[0]!)
+    const corrected = await f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.contentFlags.flagQuizQuestion, { questionId: question.id, correctedAnswer: 'Canberra' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })
+    expect(await bindingsFor(f.t, corrected.lineageIds[0]!)).toMatchObject([await normalizedInstructionalCaseFingerprints('What is the capital of Australia?', 'Canberra')])
+    expect(await bindingsFor(f.t, first.lineageIds[0]!)).toMatchObject([await normalizedInstructionalCaseFingerprints('What is the capital of Australia?', 'Sydney')])
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_registered' })
+    await f.t.run(ctx => reserve(ctx, 'Name the national capital of Australia', 'Canberra'))
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+    expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: corrected.references[0]! }))).toMatchObject({ status: 'unavailable' })
+  })
+
+  test('"Which of the following is true?" stems keep one case per exact pair and fail closed on either fingerprint', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const stem = 'Which of the following is true?'
+    const first = await publishQuiz(f, ['Water boils at 100 °C at sea level', 'The Moon orbits the Earth', 'Copper conducts electricity'].map(answer => ({ question: stem, answer })))
+    const second = await publishQuiz(f, ['The Moon orbits the Earth', 'Light travels faster than sound'].map(answer => ({ question: stem, answer })))
+    const state = await teachingInventory(f.t)
+    expect(state.cases).toHaveLength(4)
+    expect(state.bindings.map(row => row.caseId)).toEqual([...state.cases.slice(0, 3).map(row => row._id), state.cases[1]!._id, state.cases[3]!._id])
+    const references = [...first.references, ...second.references]
+    const admit = async () => {
+      const statuses = []
+      for (const reference of references) statuses.push((await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference }))).status)
+      return statuses
+    }
+    expect(await admit()).toEqual(Array(5).fill('admitted_registered'))
+    await f.t.run(ctx => reserve(ctx, 'A held-out conductor question', 'Copper conducts electricity'))
+    expect(await admit()).toEqual(['admitted_registered', 'admitted_registered', 'rejected', 'admitted_registered', 'admitted_registered'])
+    await f.t.run(ctx => reserve(ctx, stem, 'A held-out answer'))
+    expect(await admit()).toEqual(Array(5).fill('rejected'))
+  })
+
+  test('a pair recorded under another identity policy is never reused', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    await f.t.run(async ctx => ctx.db.insert('learnAssessmentCases', { ...base, ...await normalizedInstructionalCaseFingerprints('How does rain form?', 'Water condenses.'),
+      caseKey: 'other-policy', identityPolicyVersion: 'learn-v2.other-identity.v1', usageClass: 'unknown' }))
+    const before = await inventory(f.t)
+    await expect(publishQuiz(f)).rejects.toThrow('reservation check rejected')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('a reservation under another identity policy fails closed for preparation and admission', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const published = await publishQuiz(f)
+    expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: published.references[0]! }))).toMatchObject({ status: 'admitted_registered' })
+    await f.t.run(async ctx => ctx.db.patch(await reserve(ctx, 'Unrelated held-out task', 'Unrelated held-out solution'), { identityPolicyVersion: 'learn-v2.other-identity.v1' }))
+    vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'complete' })
+    const before = await inventory(f.t)
+    await expect(publishQuiz(f, [{ question: 'Fresh task', answer: 'Fresh solution' }])).rejects.toThrow('reservation check unknown')
+    expect(await inventory(f.t)).toEqual(before)
+    expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: published.references[0]! }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+  })
+})
+
+describe('B2 descendant re-pinning', { timeout: 60_000 }, () => {
+  test('copies re-pin to an origin successor explicitly or at their next publication, never silently', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const origin = await publishQuiz(f, [{ question: 'Origin task', answer: 'Origin solution' }])
+    const copies: Awaited<ReturnType<typeof publishQuiz>>[] = []
+    for (const label of ['explicit', 'lazy', 'edited']) {
+      copies.push(await f.asOwner.run(async ctx => {
+        const quiz = await writeQuiz(ctx, f, [{ question: `Copied ${label} task`, answer: `Copied ${label} solution` }])
+        quiz.artifacts[0]!.origins = [{ reference: origin.references[0]!, transformation: 'copy' }]
+        return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+      }))
+    }
+    const [explicit, lazy, edited] = copies.map(copy => quizArtifact(copy.references[0]!))
+    const successor = await f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: quizArtifact(origin.references[0]!).id, question: 'Origin task, revised' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(quizArtifact(origin.references[0]!))] })
+    })
+    for (const copy of copies) {
+      expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: copy.references[0]! }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+      expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: copy.references[0]! }))).toMatchObject({ status: 'unavailable' })
+    }
+    await expect(f.t.withIdentity(foreign).run(ctx => repinArtifactLineageDescendantsForOwner(ctx, userId, { artifacts: [explicit!] }))).rejects.toThrow('access denied')
+    await expect(f.asOwner.run(ctx => repinArtifactLineageDescendants(ctx, { artifacts: [explicit!], origins: [] }))).rejects.toThrow()
+    await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: edited!.id, question: 'Copied edited task, changed' })
+    const repinned = await f.t.run(ctx => repinArtifactLineageDescendantsForRecord(ctx, { kind: 'document', id: f.documentId }, { artifacts: [explicit!, edited!] }))
+    expect(repinned).toMatchObject({ references: [copies[0]!.references[0]], catalogRevision: successor.catalogRevision + 1 })
+    expect(await f.asOwner.run(ctx => repinArtifactLineageDescendants(ctx, { artifacts: [explicit!] }))).toMatchObject({ lineageIds: [], references: [], catalogRevision: repinned.catalogRevision })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, edited!))).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+    const lazyResult = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(lazy!)] }))
+    const editedResult = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(edited!)] }))
+    for (const [index, result] of [repinned, lazyResult, editedResult].entries()) {
+      const reference = result.references[0]!
+      expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference }))).toMatchObject({ status: 'bound', lineageId: result.lineageIds[0], originLineageIds: [successor.lineageIds[0]] })
+      expect(await f.t.run(ctx => ctx.db.get(copies[index]!.lineageIds[0]!))).toHaveProperty('nextId', result.lineageIds[0])
+      expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'admitted_registered' })
+    }
+    expect(lazyResult.references).toEqual(copies[1]!.references)
+  })
+})
+
+describe('B2 enrollment, idempotency and linked components', { timeout: 60_000 }, () => {
+  test.each(['unchanged', 'edited', 'origin_edited', 'invalidated', 'origin_invalidated', 'origin_deleted', 'reserved', 'restricted', 'reenabled'] as const)('a disabled capability resolves %s registered teaching by its lineage', async condition => {
+    const f = await setup()
+    await registerSource(f, true)
+    const origin = await publishQuiz(f, [{ question: 'Origin task', answer: 'Origin solution' }])
+    const copy = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f, [{ question: 'Copied task', answer: 'Copied solution' }])
+      quiz.artifacts[0]!.origins = [{ reference: origin.references[0]!, transformation: 'copy' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })
+    const artifact = quizArtifact(copy.references[0]!)
+    await f.t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: false } }))
+    if (condition === 'origin_edited') await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: quizArtifact(origin.references[0]!).id, question: 'Origin edited while unenrolled' })
+    else if (condition !== 'unchanged') await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: 'Edited while unenrolled' })
+    await f.t.run(async ctx => {
+      const row = (await ctx.db.get(copy.lineageIds[0]!))!
+      if (condition === 'invalidated') await ctx.db.patch(row._id, { invalidatedAt: 0 })
+      if (condition === 'origin_invalidated') await ctx.db.patch(origin.lineageIds[0]!, { invalidatedAt: 0 })
+      if (condition === 'origin_deleted') await ctx.db.patch((await ctx.db.get(quizArtifact(origin.references[0]!).id))!.quizId, { deletedAt: 0 })
+      if (condition === 'restricted') await ctx.db.patch(row._id, { classification: 'measurement' })
+      if (condition === 'reserved') {
+        const [binding] = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(1)
+        await ctx.db.patch(binding!.caseId, { reservedAt: 0 })
+      }
+      if (condition === 'reenabled') await ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
+    })
+    const expected = {
+      unchanged: { status: 'admitted_registered' }, edited: { status: 'admitted_unregistered' }, origin_edited: { status: 'admitted_unregistered' },
+      invalidated: { status: 'rejected', reasonCode: 'lineage_unavailable' }, origin_invalidated: { status: 'rejected', reasonCode: 'lineage_unavailable' },
+      origin_deleted: { status: 'rejected', reasonCode: 'lineage_unavailable' }, reserved: { status: 'rejected', reasonCode: 'lineage_unavailable' },
+      restricted: { status: 'rejected', reasonCode: 'restricted_lineage' }, reenabled: { status: 'rejected', reasonCode: 'registration_required' },
+    }[condition]
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, artifact))).toMatchObject(expected)
+  })
+
+  test('a stale key cannot hide behind a current sibling key for an owner who is not enrolled', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const published = await f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f)
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [quiz.artifacts[0]!, member(quiz.artifacts[0]!.artifact, 'sibling')] })
+    })
+    const question = quizArtifact(published.references[0]!)
+    await f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Only the whole key is re-registered' })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })
+    await f.t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: false } }))
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+    await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Both keys are now stale' })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_unregistered' })
+  })
+
+  test('replaying an identical edit returns the existing registration until the reservation corpus rejects it', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const first = await publishQuiz(f, [{ question: 'Replayed task', answer: 'Replayed solution' }])
+    const question = quizArtifact(first.references[0]!)
+    const replay = () => f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Replayed task, edited' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
+    })
+    const edited = await replay()
+    const before = await inventory(f.t)
+    const semantic = vi.spyOn(instructionalReservationSemanticAdapter, 'compare')
+    expect(await replay()).toMatchObject({ lineageIds: edited.lineageIds, references: edited.references, catalogRevision: edited.catalogRevision })
+    expect(await inventory(f.t)).toEqual(before)
+    expect(semantic).not.toHaveBeenCalled()
+    await f.t.run(ctx => reserve(ctx, 'An unrelated held-out task', 'An unrelated held-out solution'))
+    await expect(replay()).rejects.toThrow('reservation check unknown')
+    expect(semantic).toHaveBeenCalledOnce()
+    await f.t.run(ctx => reserve(ctx, 'Another held-out task', 'Replayed solution'))
+    await expect(replay()).rejects.toThrow('reservation check rejected')
+    expect(semantic).toHaveBeenCalledOnce()
+  })
+
+  test('a moved registered document classifies while re-indexing and re-prepares idempotently', async () => {
+    vi.useFakeTimers()
+    const f = await setup()
+    const registered = await registerSource(f, true)
+    const document = { kind: 'document' as const, id: f.documentId }
+    const destinationFolderId = await f.t.run(ctx => ctx.db.insert('folders', { userId, name: 'Destination', documentCount: 0 }))
+    await f.asOwner.mutation(api.documents.moveDocument, { id: f.documentId, destinationFolderId })
+    expect(await f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, document))).toMatchObject({ classification: 'genuine_personal_work' })
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, document))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+    expect(await f.t.mutation(internal.documents.finalizeDocumentIndexing, { id: f.documentId, expectedFolderId: destinationFolderId, expectedR2Key: 'owned/notes.r1', status: 'success' })).toBe(true)
+    const before = await inventory(f.t)
+    const again = await f.t.run(ctx => prepareAndRegisterInstructionalArtifactsForRecord(ctx, document, { artifacts: [member(document), member({ kind: 'document_chunk', id: f.documentId }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)] }))
+    expect(again).toMatchObject({ lineageIds: registered.lineageIds, references: registered.references, catalogRevision: registered.catalogRevision })
+    expect(await inventory(f.t)).toEqual(before)
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, document))).toMatchObject({ status: 'admitted_registered' })
+  })
+
+  test.each((['quiz_question', 'flashcard_version', 'audio_overview'] as const).flatMap(component => (['measurement', 'private_scoring', 'unknown', 'invalidated', 'teaching'] as const).map(condition => ({ component, condition }))))('section preparation over a $condition linked $component', async ({ component, condition }) => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 1, audio: true })
+      return { ...written, result: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts }) }
+    })
+    const target = section.result.references.findIndex(reference => reference.artifact.kind === component)
+    if (condition !== 'teaching') await f.t.run(ctx => ctx.db.patch(section.result.lineageIds[target]!, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: condition }))
+    const before = await inventory(f.t)
+    const publish = f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: 'Edited over a linked component' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
+    })
+    if (condition === 'teaching') expect(await publish).toMatchObject({ catalogRevision: section.result.catalogRevision + 1 })
+    else {
+      await expect(publish).rejects.toThrow('unavailable')
+      expect(await inventory(f.t)).toEqual(before)
+    }
+  })
+})
+
+describe('B2 linked component and case memo boundaries', { timeout: 60_000 }, () => {
+  test('an unversioned linked deck blocks section preparation', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 2 })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts })
+      return written
+    })
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      const room = (await ctx.db.query('flashcardRoomCards').withIndex('by_userId', q => q.eq('userId', userId)).take(1))[0]!.roomId
+      await ctx.runMutation(api.flashcardRooms.createCard, { roomId: room, term: 'An unversioned term', definition: 'An unversioned definition' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('an unregistered linked question blocks section preparation', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const section = await f.asOwner.run(async ctx => {
+      const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 1 })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: written.artifacts })
+      return written
+    })
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      await ctx.runMutation(api.quizzes.addQuestion, { quizId: section.quizId, questionText: 'An unregistered task', type: 'free-response', correctAnswer: 'An unregistered solution' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('a case first seen through personal lineage is still reverse-checked for teaching', async () => {
+    const f = await setup()
+    await registerSource(f, true)
+    const published = await publishQuiz(f, [{ question: 'Shared memo task', answer: 'Shared memo solution' }])
+    const document = await f.t.run(async ctx => {
+      const [taught] = await ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', userId)).take(1)
+      const row = (await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', userId)).take(1))[0]!
+      await ctx.db.insert('learnArtifactCaseBindings', { ...base, lineageId: row._id, caseId: taught!._id, scenarioFingerprint: taught!.scenarioFingerprint,
+        solutionFingerprint: taught!.solutionFingerprint, identityPolicyVersion: taught!.identityPolicyVersion })
+      await ctx.db.patch(row._id, { caseCount: 1 })
+      const sealed = (await ctx.db.get(row._id))!
+      const cases = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(2)
+      const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', row._id)).take(2)
+      const manifestDigest = await artifactManifestDigest(ctx, sealed, [], cases, sources)
+      await ctx.db.patch(row._id, { manifestDigest })
+      await ctx.db.patch(sealed.validationId!, { manifestDigest })
+      await reserve(ctx, 'An unrelated held-out task', 'Shared memo solution')
+      return { artifact: sealed.artifact, key: sealed.key, revision: sealed.revision, payloadDigest: sealed.payloadDigest }
+    })
+    expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: document }))).toMatchObject({ status: 'bound', classification: 'genuine_personal_work' })
+    expect(await f.asOwner.run(ctx => admitArtifactInputs(ctx, { references: [document, published.references[0]!] }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+  })
+})
+
+describe('B2 section budget envelope', { timeout: 120_000 }, () => {
+  test('a section whose linked content exceeds the module budget fails closed and rolls back', async () => {
+    const f = await setup()
+    const docs = await f.t.run(async ctx => {
+      const ids = [f.documentId]
+      for (let i = 1; i < 59; i++) ids.push(await ctx.db.insert('documents', { userId, folderId: f.folderId, filename: `source-${i}.txt`, fileSize: 12, status: 'success', sourceRevision: 'source.r1', contentHash: 'a'.repeat(64), r2Key: `owned/source-${i}.r1` }))
+      return ids
+    })
+    for (let i = 0; i < docs.length; i += 25) {
+      await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: docs.slice(i, i + 25).flatMap(id => [member({ kind: 'document', id }), member({ kind: 'document_chunk', id }, LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY)]) }))
+    }
+    const section = await f.t.run(ctx => writeLinkedSection(ctx, f, { questions: 100, cards: 200, sources: docs }))
+    const questions = section.artifacts.filter(entry => entry.artifact.kind === 'quiz_question')
+    for (let i = 0; i < questions.length; i += 50) await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: questions.slice(i, i + 50) }))
+    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'flashcard_version', id: section.versionId! })] }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      await raw.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: 'Edited oversized section' })
+      return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
+    })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
+    expect(await inventory(f.t)).toEqual(before)
   })
 })

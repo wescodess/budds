@@ -98,15 +98,18 @@ describe('personal-work admission preserves every known document representation'
     expect(await state(f.t)).toEqual(before)
   })
 
-  test.each(kinds)('indexing revokes %s personal admission exactly when ordinary resolution becomes unavailable', async kind => {
+  test.each(kinds)('re-indexing keeps %s personal classification while pins match, but admission waits for success', async kind => {
     const f = await setup()
     const existing = await f.t.run(ctx => bind(ctx, f.documentId, kind, 'genuine_personal_work', true))
     expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: existing.reference }))).toMatchObject({ status: 'bound' })
     expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
     await f.t.run(ctx => ctx.db.patch(f.documentId, { status: 'indexing' }))
     expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference: existing.reference }))).toMatchObject({ status: 'unavailable' })
-    await personalClassificationRejected(f)
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+    expect(await f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).toMatchObject({ classification: 'genuine_personal_work' })
     expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: existing.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+    await f.t.run(ctx => ctx.db.patch(f.documentId, { contentHash: 'd'.repeat(64) }))
+    await personalClassificationRejected(f)
   })
 
   test.each(kinds)('cannot shed an older protected %s binding by changing the document revision', async kind => {

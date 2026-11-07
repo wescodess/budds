@@ -10,7 +10,14 @@ export const LEARN_ARTIFACT_SEMANTIC_VERSION = 'learn-v2.reservation-semantic.un
 export const LEARN_ARTIFACT_INPUT_ADMISSION_VERSION = 'learn-v2.artifact-input-admission.v1' as const
 // maxBatch is the largest single-write instructional publication: a generated
 // Quiz requests at most 50 questions. A document's chunks register as one set.
-export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOrigins: 8, maxCases: 32, maxSources: 64, maxBatch: 50, maxReservedCases: 256, maxLookupBytes: 64 * 1024 } as const
+export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOrigins: 8, maxCases: 32, maxGraphCases: 1024, maxSources: 64, maxBatch: 50, maxReservedCases: 256, maxLookupBytes: 512 * 1024 } as const
+// Each kind's case cap covers its largest projected content: a version's 200
+// cards plus its prompt, and a section's 200 linked questions, 200 live cards
+// and one prose aggregate. Other kinds keep the original per-node bound.
+export const LEARN_ARTIFACT_CASE_LIMITS = {
+  session_block: 32, document: 32, document_chunk: 32, quiz_question: 32, section_block: 401, flashcard_version: 201,
+  audio_overview: 32, learner_artifact: 32, measurement_item: 32, scoring_spec: 32,
+} as const
 export const LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY = 'chunk-set' as const
 export const LEARN_ARTIFACT_CLASSIFICATIONS = ['teaching', 'genuine_personal_work', 'legacy_history', 'measurement', 'private_scoring', 'unknown'] as const
 export const learnArtifactClassificationSchema = z.enum(LEARN_ARTIFACT_CLASSIFICATIONS)
@@ -83,7 +90,7 @@ export const learnArtifactLookupResultSchema = z.discriminatedUnion('status', [
     lineageId: learnIdSchema<'learnArtifactLineages'>(), reference: learnArtifactReferenceSchema,
     classification: learnArtifactClassificationSchema, instructionalRegistered: z.boolean(), catalogRevision: learnSequenceSchema,
     originLineageIds: z.array(learnIdSchema<'learnArtifactLineages'>()).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxNodes),
-    cases: z.array(learnArtifactCaseSchema.extend({ usageClass: z.enum(['instructional', 'measurement_reserved', 'unknown']) })).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxCases),
+    cases: z.array(learnArtifactCaseSchema.extend({ usageClass: z.enum(['instructional', 'measurement_reserved', 'unknown']) })).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxGraphCases),
     validation: learnArtifactValidationSchema.extend({ validationId: learnIdSchema<'learnArtifactValidations'>() }),
   }),
 ])
@@ -111,6 +118,13 @@ export const learnArtifactPreparationArgsSchema = z.strictObject({
 })
 export const learnArtifactPreparationResultSchema = learnArtifactBatchRegistrationResultSchema.extend({
   references: z.array(learnArtifactReferenceSchema).min(1).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch),
+})
+export const learnArtifactDescendantRepinArgsSchema = z.strictObject({
+  artifacts: z.array(preparationArtifactSchema).min(1).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch),
+})
+export const learnArtifactDescendantRepinResultSchema = learnArtifactBatchRegistrationResultSchema.extend({
+  lineageIds: z.array(learnIdSchema<'learnArtifactLineages'>()).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch),
+  references: z.array(learnArtifactReferenceSchema).max(LEARN_ARTIFACT_LINEAGE_LIMITS.maxBatch),
 })
 export const learnArtifactSupersessionArgsSchema = z.strictObject({ previousLineageId: learnIdSchema<'learnArtifactLineages'>(), replacementLineageId: learnIdSchema<'learnArtifactLineages'>() })
 export type LearnArtifactOwnerRecord = z.infer<typeof learnArtifactOwnerRecordSchema>
