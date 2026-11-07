@@ -134,6 +134,7 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
     <button aria-label="Submit"><span role="status">${spinner}</span></button>
     <div role="status"><button aria-label="Retry">${icon}${spinner}</button></div>
     <div role="button" tabindex="0" aria-label="Save"><span role="status">${spinner}</span></div>
+    <div class="paired ${tone}">${icon}<button role="status" aria-label="Upload">${spinner}</button></div>
     <div role="status" style="display:none">${icon}Hidden status</div>
     <div role="status">Text only</div>`
   const f = await fixture(t, body(''), { themes: ['dark', 'light'] })

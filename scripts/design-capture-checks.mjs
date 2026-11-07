@@ -63,7 +63,7 @@ export function checkLayout() {
   const visible = element => element.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }) && element.getClientRects().length > 0
   const findings = []
   for (const status of document.querySelectorAll('[role="status"], [role="alert"]')) {
-    if (!visible(status) || status.closest('[data-tone="neutral"]')) continue
+    if (!visible(status) || status.closest('button, [role="button"], [data-tone="neutral"]')) continue
     const eligible = element => visible(element) && [...element.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)
       && !element.closest('button, [role="button"]')
     let icon = [...status.querySelectorAll('svg')].find(eligible)
