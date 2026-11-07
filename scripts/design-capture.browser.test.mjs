@@ -100,8 +100,10 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
     .text-\\[var\\(--learn-attention\\)\\] { color: var(--learn-attention); }
     </style>
     <div id="processing" role="status"><span class="${tone}">${spinner}</span>Processing</div>
+    ${icon.replace('aria-hidden="true"', `id="self-spinner" class="animate-spin ${tone}" role="status" aria-label="Checking"`)}
     <div id="not-yet" role="status"><svg style="display:none"></svg><span class="${tone}">${icon}</span>Not yet</div>
     <div class="paired ${tone}">${icon}<div id="sibling-not-yet" role="status">Not yet: part of this slipped</div></div>
+    <div class="paired ${tone}">${spinner.replace('class="animate-spin"', 'class="animate-spin" aria-hidden="true"')}<div id="sibling-spinner" role="status">Processing</div></div>
     <div id="alert-neutral" role="alert"><span class="${tone}">${icon}</span>Failed</div>
     <section style="--foreground:#254870;--muted-foreground:#68547d">
       <div id="scoped-foreground" role="status"><span class="${tone}">${icon}</span>Processing</div>
@@ -118,6 +120,7 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
     <div class="paired">${zeroIcon}<div id="zero-svg-sibling" role="status">No visible icon</div></div>
     <div class="paired">${zeroWidthSpinner.replace('class="animate-spin"', 'class="animate-spin" aria-hidden="true"')}<div id="zero-spinner-sibling" role="status">No visible spinner</div></div>
     <div>${icon}<p>Unrelated content</p><div role="status">Text only, no paired icon</div></div>
+    <div class="paired"><p>Unrelated content</p>${icon}<div id="unrelated-sibling" role="status">Text only, no paired icon</div></div>
     <div data-tone="neutral">${icon}<div role="status">Saved metadata</div></div>
     <div role="alert"><span class="text-[var(--learn-attention)]">${icon}</span>Needs attention</div>
     <div role="status" data-tone="neutral">${icon}Saved</div>
@@ -132,11 +135,11 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
   assert.equal(initial.code, 0, initial.output)
   const neutral = (await f.reports(f.published)).floor
   const findings = neutral.violations.filter(value => value.rule === 'status-tone')
-  assert.equal(findings.length, 16)
+  assert.equal(findings.length, 20)
   for (const theme of ['dark', 'light']) {
-    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#not-yet', '#sibling-not-yet', '#alert-neutral', '#scoped-foreground', '#scoped-muted', '#zero-warning-svg', '#zero-warning-spinner'])
+    assert.deepEqual(findings.filter(value => value.capture.theme === theme).map(value => value.selector), ['#processing', '#self-spinner', '#not-yet', '#sibling-not-yet', '#sibling-spinner', '#alert-neutral', '#scoped-foreground', '#scoped-muted', '#zero-warning-svg', '#zero-warning-spinner'])
   }
-  assert.equal(new Set(findings.map(value => value.id)).size, 16)
+  assert.equal(new Set(findings.map(value => value.id)).size, 20)
   const baseline = join(f.root, 'neutral-baseline')
   await cp(f.published, baseline, { recursive: true })
   const unchanged = await f.start(['--compare', baseline]).done
@@ -151,7 +154,7 @@ test('status-tone catches neutral state icons with stable IDs and compares fixed
   await writeFile(join(f.root, 'fixture.html'), html(body('')))
   const regressed = await f.start(['--compare', fixedBaseline]).done
   assert.equal(regressed.code, 1, regressed.output)
-  assert.equal((await f.reports(f.published)).floor.newViolations.length, 16)
+  assert.equal((await f.reports(f.published)).floor.newViolations.length, 20)
 })
 
 test('missing required font fails with error staging', { timeout: 90_000 }, async t => {

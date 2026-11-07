@@ -52,9 +52,9 @@ These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic to
 
 | Token | Light | Dark |
 |-------|-------|------|
-| `--warning` | `oklch(0.762 0.152 55.5)` (hex fallback `#d59b34`) | Same |
-| `--success` | `oklch(0.765 0.154 162.48)` (hex fallback `#41b883`) | Same |
-| `--destructive` | `oklch(0.577 0.245 27.325)` (hex fallback `#c24133`) | `oklch(0.704 0.165 11.2)` (hex fallback `#d16552`) |
+| `--warning` | `oklch(0.762 0.152 55.5)` | Same |
+| `--success` | `oklch(0.765 0.154 162.48)` | Same |
+| `--destructive` | `oklch(0.577 0.245 27.325)` | `oklch(0.704 0.165 11.2)` |
 | `--learn-attention` | `var(--warning)` | Same |
 | `--learn-error` | `var(--destructive)` | Same |
 | `--learn-success` | `var(--success)` | Same |
@@ -64,7 +64,7 @@ These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic to
 | Processing, scoring, in progress | `--warning` | The status icon or spinner |
 | Needs attention, recoverable, won't count, couldn't confirm, not yet | `--learn-attention` (= `--warning`) | The status icon |
 | Error, failed | `--destructive` (`--learn-error`) | The status icon; destructive text only where it already meets AA |
-| Success, passed, saved-and-scored | `text-green-700 dark:text-green-400` (approved in quiz-grading-results) or `--learn-success` | The status icon |
+| Success, passed, saved-and-scored | `text-green-700 dark:text-green-400` (approved in quiz-grading-results; holds contrast on light cards) | Status icons; `--success` / `--learn-success` for non-icon marks such as fills and borders |
 | Actions, active, focus, citations | Amber primary only | Actions, active marks, focus rings, citation badges |
 | Neutral metadata (timestamps, "saved", counts) | `--muted-foreground` / `--foreground` | Text and icon |
 
@@ -73,6 +73,7 @@ These tokens already exist in `app/assets/css/tailwind.css`. Use the semantic to
 - A busy spinner inside a button inherits the button's color; it is not a status.
 - A state from the first four rows never renders with only a neutral icon.
 - The `status-tone` check in `pnpm design:capture` measures icons in visible `role="status"` and `role="alert"` regions. Mark genuine neutral metadata with `data-tone="neutral"` on the region or an ancestor.
+- Existing owner-approved surfaces keep their approved icon colors until changed through the UI design gate. In [quiz-grading-results](docs/design/quiz-grading-results/decision.md), partial `text-yellow-700 dark:text-yellow-400`, "Your call" `text-foreground`, and checking/not-checked muted icons are approved exceptions recorded in its decision.md and existing debt for `status-tone` if that surface is captured.
 
 Citation badges use `--primary`; source highlights use `rgba(245, 158, 11, 0.1)` as a background tint.
 
@@ -205,7 +206,7 @@ Mobile (<768px):
   - Menu options: Add Files (upload icon), Rename Folder (pencil), Delete Folder (trash, destructive color)
   - `+ New Folder` text button at tree bottom
 - **Files section:** below divider, lists files with status dot + filename + size
-  - Green dot = indexed, amber spinner = processing, red dot = failed
+  - Green dot = indexed, `--warning` spinner = processing, red dot = failed
 
 ### Chat Void
 
