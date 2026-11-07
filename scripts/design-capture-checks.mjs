@@ -64,7 +64,8 @@ export function checkLayout() {
   const findings = []
   for (const status of document.querySelectorAll('[role="status"], [role="alert"]')) {
     if (!visible(status) || status.closest('button, [role="button"], [data-tone="neutral"]')) continue
-    const eligible = element => visible(element) && !element.closest('button, [role="button"]')
+    const eligible = element => visible(element) && [...element.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)
+      && !element.closest('button, [role="button"]')
     let icon = [...status.querySelectorAll('svg')].find(eligible)
       || [status, ...status.querySelectorAll('.animate-spin')].find(element => element.classList.contains('animate-spin') && eligible(element))
     const sibling = status.previousElementSibling
