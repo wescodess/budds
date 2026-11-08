@@ -176,19 +176,25 @@ export function parseIndependent(adapter, blind, raw) {
   catch { return unavailable('malformed') }
 }
 
+function cancelBody(body) {
+  try { void Promise.resolve(body?.cancel()).catch(() => undefined) }
+  catch { /* Cleanup must not replace the observed outcome. */ }
+}
+
 async function boundedResponse(response) {
   const invalid = () => Object.assign(new Error('Invalid or oversized provider response'), { aiGatewayFailureKind: 'invalid_response' })
-  if (Number(response.headers.get('content-length')) > LIMITS.maxResponseBytes) throw invalid()
   const reader = response.body?.getReader()
-  if (!reader) throw new Error('Response body unavailable')
+  if (!reader) throw invalid()
   const chunks = []
   let size = 0
+  let complete = false
   try {
+    if (Number(response.headers.get('content-length')) > LIMITS.maxResponseBytes) throw invalid()
     while (true) {
       const { done, value } = await reader.read()
-      if (done) break
+      if (done) { complete = true; break }
       size += value.byteLength
-      if (size > LIMITS.maxResponseBytes) { void reader.cancel().catch(() => undefined); throw invalid() }
+      if (size > LIMITS.maxResponseBytes) throw invalid()
       chunks.push(Buffer.from(value))
     }
     try {
@@ -198,7 +204,10 @@ async function boundedResponse(response) {
     }
     catch { throw invalid() }
   }
-  finally { reader.releaseLock() }
+  finally {
+    if (!complete) cancelBody(reader)
+    reader.releaseLock()
+  }
 }
 
 // Called only after the runner's signed owner/cost admission and durable intent.
@@ -211,7 +220,11 @@ export async function liveInfer(adapter, request, signal, baselineRequest) {
     ? { 'x-api-key': key, 'anthropic-version': adapter.api }
     : { 'x-goog-api-key': key, 'Api-Revision': adapter.api }) }
   const response = await fetch(adapter.endpoint, { method: 'POST', headers, body: request.body, signal, redirect: 'error' })
-  if (!response.ok) return { failure: response.status >= 500 ? 'outcome_unknown' : 'definitive_failure' }
+  if (!response.ok) {
+    const failure = response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'
+    cancelBody(response.body)
+    return { failure }
+  }
   const body = await boundedResponse(response)
   return { ...body, requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? body.id }
 }

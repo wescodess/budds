@@ -7,6 +7,7 @@ import { mock, test } from 'node:test'
 import { syncBuiltinESMExports } from 'node:module'
 import * as artifacts from './artifacts.mjs'
 import { registerScorerImports, forbidNetwork } from './runtime.mjs'
+import { mockNativeFetch } from '../../../tests/fixtures/learn-v2-scorer-harness/network-deny.mjs'
 
 registerScorerImports()
 forbidNetwork()
@@ -217,8 +218,7 @@ async function workspace(t, approvalDurationMs = 600000) {
   return { createRun, approve, clock, setClock: value => { now = value } }
 }
 
-function syntheticHttp(t, setup, mode) {
-  let responseMode = mode
+function syntheticKeys(t) {
   const keys = ['ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'NUXT_OPENROUTER_API_KEY']
   const previous = keys.map(key => [key, process.env[key]])
   for (const key of keys) process.env[key] = 'local-synthetic-only'
@@ -228,6 +228,27 @@ function syntheticHttp(t, setup, mode) {
       else process.env[key] = value
     }
   })
+  return () => { for (const key of keys) process.env[key] = 'local-synthetic-only' }
+}
+
+function syntheticHttp(t, setup, mode) {
+  let responseMode = mode
+  const resetKeys = syntheticKeys(t)
+  const bodies = []
+  const rejectedBody = (status, declared = false, cleanup = 'resolve', streamed = false) => {
+    const transfer = { cancelled: 0 }
+    const body = new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(streamed ? contract.LIMITS.maxResponseBytes + 1 : 2)) },
+      cancel() {
+        transfer.cancelled++
+        if (cleanup === 'throw') throw new Error('Synthetic cancellation failure')
+        if (cleanup === 'reject') return Promise.reject(new Error('Synthetic cancellation rejection'))
+        if (cleanup === 'pending') return new Promise(() => {})
+      },
+    })
+    bodies.push({ body, signal: calls.at(-1).signal, count: () => transfer.cancelled })
+    return new Response(body, { status, headers: declared ? { 'content-length': String(contract.LIMITS.maxResponseBytes + 1) } : {} })
+  }
   realAdapters = true
   abortBeforeSend = mode === 'pre-send-abort'
   const timeouts = []
@@ -243,7 +264,33 @@ function syntheticHttp(t, setup, mode) {
     assert.ok(setup.state.pins.adapters.some(adapter => adapter.endpoint === url), 'Only pinned synthetic HTTP requests are accepted')
     assert.equal(request.method, 'POST')
     assert.equal(request.signal.aborted, false)
-    calls.push({ url })
+    calls.push({ url, signal: request.signal })
+    if (responseMode.startsWith('redirect-')) {
+      const status = responseMode.includes('307') ? 307 : 302
+      const endpoint = new URL(url)
+      const destination = new URL('/synthetic-redirect-target', endpoint)
+      const hops = calls.at(-1).hops = []
+      const native = mockNativeFetch({ dispatch(options, handler) {
+        assert.equal(String(options.origin), endpoint.origin)
+        assert.ok([endpoint.pathname, destination.pathname].includes(options.path))
+        hops.push({ method: options.method, path: options.path })
+        assert.ok(hops.length <= 21, 'Only the bounded native redirect loop may repeat')
+        queueMicrotask(() => {
+          let aborted = false
+          handler.onConnect(error => { aborted = true; handler.onError(error) })
+          const redirect = options.path === endpoint.pathname || responseMode === 'redirect-loop'
+          const headers = responseMode.endsWith('no-location') ? []
+            : [Buffer.from('location'), Buffer.from(destination.pathname)]
+          handler.onHeaders(redirect ? status : responseMode.endsWith('503') ? 503 : 400, redirect ? headers : [], () => {}, '')
+          if (!aborted) {
+            handler.onData(Buffer.from('Synthetic HTTP rejection'))
+            handler.onComplete([])
+          }
+        })
+        return true
+      } })
+      return native(url, request)
+    }
     if (responseMode === 'network-loss') throw new TypeError('Synthetic connection lost after send')
     if (responseMode === 'abort') throw new DOMException('Synthetic abort after send', 'AbortError')
     if (responseMode === 'classified-rejection') throw Object.assign(new Error('Synthetic classified rejection'), { aiGatewayFailureKind: 'definitive_failure' })
@@ -258,6 +305,7 @@ function syntheticHttp(t, setup, mode) {
       }, 0)
     })
     const status = /(?:^|-)([2345]\d\d)$/.exec(responseMode)?.[1] ?? '400'
+    if (responseMode === '204' || responseMode === '205') return new Response(null, { status: Number(responseMode) })
     if (responseMode === 'response-timeout' || responseMode.startsWith('body-')) {
       let sentChunk = false
       return new Response(new ReadableStream({
@@ -288,42 +336,53 @@ function syntheticHttp(t, setup, mode) {
     if (responseMode === 'null-200') return new Response('null', { status: 200 })
     if (responseMode === 'array-200') return new Response('[]', { status: 200 })
     if (responseMode === 'primitive-200') return new Response('"synthetic"', { status: 200 })
-    if (responseMode === 'oversized-cancel-200') return new Response(new ReadableStream({
-      start(controller) { controller.enqueue(new Uint8Array(contract.LIMITS.maxResponseBytes + 1)) },
-      cancel() { throw new Error('Synthetic cleanup failure after the size limit') },
-    }), { status: 200 })
-    if (responseMode.startsWith('oversized-')) return new Response('x'.repeat(contract.LIMITS.maxResponseBytes + 1), { status: Number(status) })
-    if (responseMode === 'declared-oversized-200') return new Response('{}', {
-      status: 200, headers: { 'content-length': String(contract.LIMITS.maxResponseBytes + 1) },
-    })
-    if (responseMode === '500' || responseMode === '302') return new Response('Synthetic HTTP rejection', { status: Number(responseMode) })
-    return new Response('Synthetic HTTP rejection', { status: 400 })
+    if (responseMode.startsWith('oversized-')) return rejectedBody(Number(status), false, responseMode.includes('cancel') ? 'throw' : 'resolve', true)
+    if (responseMode.startsWith('declared-')) return rejectedBody(200, true, /declared-(reject|throw|pending)-/.exec(responseMode)?.[1] ?? 'resolve')
+    return rejectedBody(Number(status))
   })
   t.after(() => fetchMock.mock.restore())
-  return () => {
+  const reset = () => {
     responseMode = '400'
     abortBeforeSend = false
-    for (const key of keys) process.env[key] = 'local-synthetic-only'
+    resetKeys()
   }
+  reset.verifyCleanup = async () => {
+    for (const { body, signal, count } of bodies) {
+      assert.equal(count(), 1, 'Each unread body must be cancelled once')
+      assert.equal(signal.aborted, false, 'Body cleanup does not abort the caller or change its result')
+      assert.equal(body.locked, false)
+      const reader = body.getReader()
+      try { assert.deepEqual(await reader.read(), { done: true, value: undefined }, 'No rejected body may remain open') }
+      finally { reader.releaseLock() }
+    }
+  }
+  return reset
 }
 
 // One executable contract for all adapters. Only the synthetic HTTP boundary
 // is replaced; capture, sealing, replay, reconciliation and admission are real.
 const transportOutcomes = [
-  ['400', 'definitive_failure'], ['500', 'outcome_unknown'], ['302', 'definitive_failure'],
+  ['400', 'definitive_failure'], ['429', 'definitive_failure'], ['500', 'outcome_unknown'], ['503', 'outcome_unknown'],
+  ['204', 'invalid_response'], ['205', 'invalid_response'],
+  ['redirect-302-to-400', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
+  ['redirect-307-to-400', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
+  ['redirect-302-no-location', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
+  ['redirect-302-to-503', 'outcome_unknown'], ['redirect-loop', 'outcome_unknown'],
   ['late-400', 'definitive_failure'], ['classified-rejection', 'definitive_failure'],
   ['network-loss', 'outcome_unknown'], ['timeout', 'outcome_unknown'], ['abort', 'outcome_unknown'],
   ['response-timeout', 'outcome_unknown'], ['body-reset-200', 'outcome_unknown'], ['body-abort-200', 'outcome_unknown'],
   ['malformed-200', 'invalid_response'], ['late-malformed-200', 'invalid_response'], ['null-200', 'invalid_response'],
   ['array-200', 'invalid_response'], ['primitive-200', 'invalid_response'],
   ['oversized-200', 'invalid_response'], ['declared-oversized-200', 'invalid_response'], ['oversized-cancel-200', 'invalid_response'],
+  ['declared-reject-200', 'invalid_response'], ['declared-throw-200', 'invalid_response'], ['declared-pending-200', 'invalid_response'],
   ['oversized-400', 'definitive_failure'], ['oversized-500', 'outcome_unknown'],
   ['body-reset-400', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
   ['missing-key', 'not_dispatched'], ['pre-send-abort', 'not_dispatched'],
 ]
-for (const [mode, failure] of transportOutcomes) {
+for (const [mode, classification] of transportOutcomes) {
   test(`A9 transport table ${mode}: classification, replay and admission`, async t => {
     for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+      const failure = typeof classification === 'string' ? classification : classification[role === 'baseline' ? 'baseline' : 'direct']
       const setup = await canary(t, role)
       const { state, approval, id, createRun, approve } = setup
       const before = calls.length
@@ -333,6 +392,13 @@ for (const [mode, failure] of transportOutcomes) {
         else process.env[role === 'claude' ? 'ANTHROPIC_API_KEY' : 'GEMINI_API_KEY'] = ''
       }
       const summary = await dispatchLive(state.directory, id, approval)
+      await rejectNextRequest.verifyCleanup()
+      if (mode.startsWith('redirect-')) {
+        const hops = calls.at(-1).hops
+        const followed = role === 'baseline' && !mode.endsWith('no-location')
+        assert.equal(hops.length, mode === 'redirect-loop' && followed ? 21 : followed ? 2 : 1)
+        if (followed && mode !== 'redirect-loop') assert.equal(hops[1].method, mode.includes('307') ? 'POST' : 'GET')
+      }
       const terminal = readJson(join(state.directory, `${id}.terminal.json`))
       const unknown = failure === 'outcome_unknown'
       const notSent = failure === 'not_dispatched'
@@ -363,9 +429,50 @@ for (const [mode, failure] of transportOutcomes) {
       assert.equal(calls.length, before + Number(!notSent) + Number(!unknown))
       await dispatchLive(state.directory, id, approval).then(() => assert.ok(!unknown), () => assert.ok(unknown))
       assert.equal(calls.length, before + Number(!notSent) + Number(!unknown), 'Original intent cannot be redispatched or refunded')
+      await rejectNextRequest.verifyCleanup()
     })
   })
 }
+
+test('A10 cancellation failures and pending cleanup cannot delay or change a completed invalid response', async t => {
+  syntheticKeys(t)
+  for (const role of ['baseline', 'claude', 'gemini']) for (const declared of [true, false]) for (const cleanup of ['pending', 'sync']) {
+    await t.test(`${role}/${declared ? 'declared' : 'streamed'}/${cleanup}`, async t => {
+      let cancelled = 0
+      const body = new ReadableStream({
+        start(controller) { controller.enqueue(new Uint8Array(contract.LIMITS.maxResponseBytes + 1)) },
+        cancel() { cancelled++; return cleanup === 'pending' ? new Promise(() => {}) : undefined },
+      })
+      if (cleanup === 'sync') {
+        const throwingCancel = cancel => () => {
+          void cancel().catch(() => undefined)
+          throw new Error('Synthetic synchronous cancellation failure after closing')
+        }
+        body.cancel = throwingCancel(body.cancel.bind(body))
+        const getReader = body.getReader.bind(body)
+        body.getReader = (...args) => {
+          const reader = getReader(...args)
+          reader.cancel = throwingCancel(reader.cancel.bind(reader))
+          return reader
+        }
+      }
+      const fetchMock = mock.method(globalThis, 'fetch', async () => new Response(body, {
+        headers: declared ? { 'content-length': String(contract.LIMITS.maxResponseBytes + 1) } : {},
+      }))
+      t.after(() => fetchMock.mock.restore())
+      const request = { model: 'openai/gpt-4.1', messages: [{ role: 'user', content: 'Synthetic cleanup contract' }], maxResponseBytes: contract.LIMITS.maxResponseBytes }
+      const result = await Promise.race([
+        adapters.liveInfer({ role, endpoint: 'https://cleanup.invalid', api: 'synthetic' }, { body: '{}' }, new AbortController().signal, request).catch(error => error),
+        new Promise(resolve => setTimeout(() => resolve(null), 50)),
+      ])
+      assert.equal(result?.aiGatewayFailureKind, 'invalid_response')
+      assert.equal(cancelled, 1)
+      const reader = body.getReader()
+      try { assert.equal((await reader.read()).done, true) }
+      finally { reader.releaseLock() }
+    })
+  }
+})
 
 test('A8 pre-send preparation rejections remain not dispatched', async t => {
   for (const point of ['prepare', 'infer-wrapper']) await t.test(point, async t => {

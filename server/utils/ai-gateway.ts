@@ -37,25 +37,36 @@ export interface GenerateParams {
 
 const DEFAULT_MAX_RESPONSE_BYTES = 512_000
 
+function cancelBody(body: { cancel: () => Promise<unknown> } | null | undefined) {
+  try { void Promise.resolve(body?.cancel()).catch(() => undefined) }
+  catch { /* Cleanup must not replace the observed outcome. */ }
+}
+
 async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    cancelBody(response.body)
+    throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
+  }
   const declaredLength = response.headers?.get?.('content-length')
   if (declaredLength !== null && declaredLength !== undefined) {
     const parsed = Number(declaredLength)
-    if (Number.isFinite(parsed) && parsed > maximumBytes) throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
+    if (Number.isFinite(parsed) && parsed > maximumBytes) {
+      cancelBody(response.body)
+      throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
+    }
   }
   if (response.body?.getReader) {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let total = 0
     let text = ''
+    let complete = false
     try {
       while (true) {
         const { done, value } = await reader.read()
-        if (done) break
+        if (done) { complete = true; break }
         total += value.byteLength
         if (total > maximumBytes) {
-          void reader.cancel().catch(() => undefined)
           throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
         }
         text += decoder.decode(value, { stream: true })
@@ -63,6 +74,7 @@ async function readBoundedResponseText(response: Response, maximumBytes: number)
       return text + decoder.decode()
     }
     finally {
+      if (!complete) cancelBody(reader)
       reader.releaseLock()
     }
   }
@@ -385,7 +397,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     const failure = response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'
     const fallback = 'Upstream provider request failed'
     const error = params.redactUpstreamErrorBody ? fallback : await readBoundedResponseText(response, maximumBytes).catch(() => fallback)
-    if (params.redactUpstreamErrorBody) void response.body?.cancel().catch(() => undefined)
+    if (params.redactUpstreamErrorBody) cancelBody(response.body)
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
     const retryAfter = response.headers?.get?.('retry-after')
     const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : NaN

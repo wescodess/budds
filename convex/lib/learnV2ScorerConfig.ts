@@ -34,7 +34,7 @@ export const LEARN_MASTERY_IMPLEMENTATION_PINS = {
   executionGuard: 'sha256:f04b087c8b5507aa99506952024ac1eaa02546d558adbfb40892c9985a766f18',
   gatewaySerializer: 'sha256:d88eb19ad882397b5263e9d2404934385586b513809010ac08aa5fc60e198583',
   gatewayProvenance: 'sha256:246a1980938330f4047f0537dc566b4c340aacbd15878d107c2b24abb2c81356',
-  gatewayTransport: 'sha256:43a5bf4b24a5ef48233b4ab665c3206e2bcbdbe164c42be582cab7794e895956',
+  gatewayTransport: 'sha256:d94fb9c5782c9f3d5f1a5087ea8469724e06f748524e174a41d6f2c9a3d14987',
 } as const
 
 function freeze<T>(value: T): T {
