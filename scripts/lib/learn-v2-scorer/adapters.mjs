@@ -200,6 +200,8 @@ async function boundedResponse(response) {
     try {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
       assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body))
+      // These names belong to harness outcomes, normalized IDs or sealed files.
+      assert.ok(!['failure', 'requestId', 'pinsDigest'].some(key => Object.hasOwn(body, key)), 'Internal field in provider response')
       return body
     }
     catch { throw invalid() }
@@ -226,5 +228,7 @@ export async function liveInfer(adapter, request, signal, baselineRequest) {
     return { failure }
   }
   const body = await boundedResponse(response)
-  return { ...body, requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? body.id }
+  const fields = ['id', 'model', 'usage', ...(adapter.role === 'claude' ? ['stop_reason', 'content'] : ['status', 'outputs'])]
+  return { ...Object.fromEntries(fields.filter(key => Object.hasOwn(body, key)).map(key => [key, body[key]])),
+    requestId: response.headers.get('request-id') ?? response.headers.get('x-request-id') ?? body.id }
 }

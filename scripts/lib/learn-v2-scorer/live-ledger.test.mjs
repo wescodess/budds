@@ -294,7 +294,8 @@ function syntheticHttp(t, setup, mode) {
     t.after(() => timerMock.mock.restore())
   }
   const fetchMock = mock.method(globalThis, 'fetch', async (url, request) => {
-    assert.ok(setup.state.pins.adapters.some(adapter => adapter.endpoint === url), 'Only pinned synthetic HTTP requests are accepted')
+    const adapter = setup.state.pins.adapters.find(adapter => adapter.endpoint === url)
+    assert.ok(adapter, 'Only pinned synthetic HTTP requests are accepted')
     assert.equal(request.method, 'POST')
     assert.equal(request.signal.aborted, false)
     calls.push({ url, signal: request.signal })
@@ -315,6 +316,24 @@ function syntheticHttp(t, setup, mode) {
         for (const timeout of timeouts) timeout()
       }, 0)
     })
+    if (responseMode.startsWith('provider-')) {
+      const wire = JSON.parse(request.body)
+      const payload = adapter.role === 'gemini' ? wire.input[0].content[0].text : wire.messages.find(row => row.role === 'user').content
+      const scoringInput = JSON.parse(payload)
+      const body = adapters.fixtureEnvelope(adapter, { id: setup.id, payload, scoringInput }, 'valid')
+      delete body.requestId // This is harness metadata, not a native provider field.
+      if (responseMode.startsWith('provider-failure-')) {
+        const value = responseMode.slice('provider-failure-'.length)
+        body.failure = value === 'null' ? null : value === 'false' ? false : value === 'empty' ? '' : value
+      }
+      if (responseMode === 'provider-requestId') body.requestId = 'provider-controlled-request-id'
+      if (responseMode === 'provider-pinsDigest') body.pinsDigest = hash('provider-controlled-pins')
+      if (responseMode === 'provider-extras') {
+        body.providerExtra = { ignored: true }
+        if (adapter.role === 'baseline') Object.assign(body, { failure: 'not_dispatched', requestId: 'provider-controlled-id', pinsDigest: hash('provider-controlled-pins') })
+      }
+      return new Response(JSON.stringify(body), { headers: { 'request-id': 'synthetic-header-request-id' } })
+    }
     const status = /(?:^|-)([2345]\d\d)$/.exec(responseMode)?.[1] ?? '400'
     if (responseMode === '204' || responseMode === '205') return new Response(null, { status: Number(responseMode) })
     if (responseMode === 'response-timeout' || responseMode.startsWith('body-')) {
@@ -388,10 +407,13 @@ const transportOutcomes = [
   ['oversized-400', 'definitive_failure'], ['oversized-500', 'outcome_unknown'],
   ['body-reset-400', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
   ['missing-key', 'not_dispatched'], ['pre-send-abort', 'not_dispatched'],
+  ...['not_dispatched', 'definitive_failure', 'outcome_unknown', 'invalid_response', 'null', 'false', 'empty']
+    .map(value => [`provider-failure-${value}`, 'invalid_response', ['claude', 'gemini']]),
+  ...['requestId', 'pinsDigest'].map(key => [`provider-${key}`, 'invalid_response', ['claude', 'gemini']]),
 ]
-for (const [mode, failure] of transportOutcomes) {
+for (const [mode, failure, roles = ['baseline', 'claude', 'gemini']] of transportOutcomes) {
   test(`A9 transport table ${mode}: classification, replay and admission`, async t => {
-    for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    for (const role of roles) await t.test(role, async t => {
       const setup = await canary(t, role)
       const { state, approval, id, createRun, approve } = setup
       const before = calls.length
@@ -428,6 +450,17 @@ for (const [mode, failure] of transportOutcomes) {
       if (!unknown) assert.equal([...ledger.resolutions.values()].find(row => row.intentDigest === terminal.payload.intentDigest).status, notSent ? 'not_dispatched' : 'failed')
       assert.equal((await replay(state.directory)).digest, summary.digest, 'Sealed classification must reproduce exactly')
       assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, notSent ? 'not_dispatched' : unknown ? 'still_unknown' : 'failed')
+      if (mode.startsWith('provider-')) {
+        const files = readdirSync(globalDirectory).sort()
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const recovered = await reconcileLive(state.directory, id, approval)
+          assert.equal(recovered.reconciliation, 'failed')
+          assert.equal(recovered.dispatched, before + 1)
+          assert.equal(readJson(recovered.report).payload.reservations.retainedMicroUsd, (before + 1) * 100)
+          assert.equal(artifacts.exists(join(state.directory, `${id}.not-dispatched.json`)), false, 'Provider fields never authorize cancellation')
+          assert.deepEqual(readdirSync(globalDirectory).sort(), files, 'Repeated recovery cannot release or rewrite the charge')
+        }
+      }
       assert.equal(calls.length, before + Number(!notSent), 'Replay and reconciliation never retry inference')
       assert.equal(metadataCalls.length, 0)
       const next = await createRun('separately-approved')
@@ -445,6 +478,75 @@ for (const [mode, failure] of transportOutcomes) {
     })
   })
 }
+
+test('A12 response projection keeps native fields and excludes provider metadata from harness state', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    const before = calls.length
+    syntheticHttp(t, setup, 'provider-extras')
+    const summary = await dispatchLive(state.directory, id, approval)
+    const { raw, result } = readJson(join(state.directory, `${id}.terminal.json`)).payload
+    assert.equal(result.status, 'valid')
+    for (const key of ['failure', 'pinsDigest', 'providerExtra']) assert.equal(Object.hasOwn(raw, key), false)
+    if (role === 'baseline') {
+      assert.equal(Object.hasOwn(raw, 'requestId'), false)
+      assert.ok(raw.scoringProvenance.metadataValid)
+    }
+    else {
+      assert.equal(raw.requestId, 'synthetic-header-request-id')
+      assert.deepEqual(Object.keys(raw).sort(), ['id', 'model', 'usage', 'requestId', ...(role === 'claude' ? ['stop_reason', 'content'] : ['status', 'outputs'])].sort())
+    }
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(calls.length, before + 1)
+  })
+})
+
+test('A12 provider outcome rejection recovers a missing terminal without cancellation or release', async t => {
+  for (const role of ['claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    const before = calls.length
+    syntheticHttp(t, setup, 'provider-failure-not_dispatched')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated publication failure/)
+    publicationFailures.clear()
+    assert.deepEqual(readJson(join(state.directory, `${id}.observation.json`)).payload.raw, { failure: 'invalid_response' })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const summary = await reconcileLive(state.directory, id, approval)
+      assert.equal(summary.reconciliation, 'failed')
+      assert.equal(summary.dispatched, before + 1)
+      assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + 1) * 100)
+      assert.equal(artifacts.exists(join(state.directory, `${id}.not-dispatched.json`)), false)
+      assert.equal(readJson(join(state.directory, `${id}.terminal.json`)).payload.result.status, 'malformed')
+    }
+    assert.equal(calls.length, before + 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('A12 unresolved terminal and reconciliation never publish a global resolution', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    const before = calls.length
+    const resolutions = () => readdirSync(globalDirectory).filter(name => name.startsWith('resolution-')).sort()
+    const original = resolutions()
+    syntheticHttp(t, setup, 'network-loss')
+    const summary = await dispatchLive(state.directory, id, approval)
+    assert.equal(summary.ambiguous, 1)
+    assert.deepEqual(resolutions(), original, 'Unknown terminal must not publish a global resolution')
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'still_unknown')
+      assert.deepEqual(resolutions(), original, 'Unknown reconciliation must not publish a global resolution')
+      const ledger = await openLiveLedger(globalDirectory)
+      assert.equal(unresolvedLiveDispatches(ledger).length, 1)
+      assert.equal([...ledger.resolutions.values()].some(row => row.id === id), false)
+    }
+    await assertBlocked(setup, before + 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
 
 test('A11 non-scoring gateway calls preserve native redirect following', async t => {
   syntheticKeys(t)
