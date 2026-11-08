@@ -34,7 +34,21 @@ Everything else comes from what already exists in the app.
 - Today never states the result or shows feedback. It says a result is ready and links to the Canvas.
 - A missing question never falls back to a lesson under the same check; Today shows no row.
 - Learner copy says "check", never "delayed", "retained" or "mastery". No rubric, criteria, score or model answer is shown.
-- "Budds will check this again in about three weeks" stands in for whatever the server schedules.
+- "8 days after you studied it" and "Budds will check this again in about three weeks" stay omitted until the server provides timing.
+
+## Copy approved after the mockup
+
+Owner, 2026-11-08. These override `approved.html`.
+
+- Not yet reads "That's common, and it's why we check.", replacing "That's common after a week, and it's why we check."
+- A failed start reads "Could not start this session. Try again."
+- Failed practice help reads "Could not load support. Try again."
+- A failed practice submit reads "Submission did not confirm. Your draft remains here. Retry submission to reconcile it."
+- A saved practice answer reads "Response submitted."
+- A failed online submit reads "It's still here on this device." under "Your answer wasn't submitted".
+- An empty practice answer reads "Write your answer before you submit."
+- A cancelled or abandoned check uses "Your check isn't ready yet".
+- The server's `instructions` field stays hidden.
 
 ## Known debt
 

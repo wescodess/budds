@@ -462,6 +462,8 @@ describe('Canvas check', () => {
       const wrapper = await mountCheck()
       expect(receiptKind(wrapper)).toBe('not_yet')
       expect(wrapper.get('[data-testid="learn-canvas-check-receipt"] h2').text()).toBe('Not yet: part of this slipped')
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"]').text()).toContain('That’s common, and it’s why we check.')
+      expect(wrapper.text()).not.toContain('after a week')
       expect(wrapper.get('[data-testid="learn-canvas-check-lesson"]').text()).toContain('Every enzyme has a range.')
       expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
       await wrapper.get('[data-testid="learn-canvas-check-try-practice"]').trigger('click')

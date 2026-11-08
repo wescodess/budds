@@ -13,6 +13,7 @@ const memory = ref<Record<string, unknown> | null>(null)
 const contributions = ref({ page: [], isDone: true, continueCursor: '' })
 const projection = ref<Record<string, unknown> | null>(null)
 const canvasPending = ref(false)
+const checkState = shallowRef<Record<string, unknown> | null>(null)
 const diagnosticPending = ref(false)
 const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined } })
@@ -31,14 +32,14 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
+  return { data: name === 'learnV2Assessments:getAssessmentState' ? checkState : name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; checkState.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); sessionStorage.clear() })
 
   it('does not subscribe to folder documents for a no-source thread', async () => {
     const Page = await import(path)
@@ -547,6 +548,115 @@ describe('adaptive thread route isolation', () => {
     await nextTick()
     expect(shell.find('[data-testid="learn-adaptive-canvas-fallback"]').exists()).toBe(false)
     expect(shell.get('[data-testid="learn-adaptive-canvas-loading"]').attributes('aria-live')).toBe('polite')
+  })
+
+  describe('during a Canvas check', () => {
+    const missionThread = () => ({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+      currentActivity: { id: 'activity_1', status: 'eligible', purpose: 'Answer the check.' }, history: [{ id: 'activity_0', status: 'completed', purpose: 'Earlier teaching canary' }],
+      nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_1' } })
+    const checkCanvas = (binding: unknown = { assessmentOpportunityId: 'opportunity_1' }) => ({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', revision: 2 }, status: 'started',
+      activity: { id: 'activity_1', status: 'eligible', purpose: 'Answer the check.', reasonCode: 'check', primitive: null,
+        fallback: { testId: 'learn-activity-fallback', title: 'Unavailable', body: 'Try later.', primaryAction: { label: 'Back to Learn' } }, requiredAction: { kind: 'submit_response', label: 'Submit response' } },
+      session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' }, responsePrompt: null, assessmentCheck: binding })
+    const assessment = (phase: string, submissionId: string | null = null) => ({ version: 'learn-v2.public-api.v1', status: 'available', assessmentOpportunityId: 'opportunity_1', revision: 2, phase, submissionId,
+      capabilities: { version: 'learn-v2.assessment-capabilities.v1', status: 'available', canDeliver: false, canSubmit: false, canRequestAssistance: false, canTeachSeparateCase: false, canReadFeedback: false, reasonCodes: [] } })
+
+    function expectToolsHidden(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
+      expect(wrapper.find('[data-testid="learn-memory-open"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-evidence-open"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-thread-contributions"]').exists()).toBe(false)
+      expect(wrapper.find('#learn-thread-history-title').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Earlier teaching canary')
+    }
+    function expectToolsShown(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
+      expect(wrapper.find('[data-testid="learn-memory-open"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-evidence-open"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-thread-contributions"]').exists()).toBe(true)
+      expect(wrapper.find('#learn-thread-history-title').exists()).toBe(true)
+    }
+
+    it.each([
+      ['preparing', () => assessment('preparing')],
+      ['ready', () => assessment('ready')],
+      ['test_open', () => assessment('test_open')],
+      ['an unknown server state', () => null],
+      ['a denied server state', () => ({ version: 'learn-v2.public-api.v1', status: 'disabled', reasonCodes: ['disabled'] })],
+    ])('hides Evidence, Memory, contributions and history in %s', async (_name, state) => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = state()
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsHidden(wrapper)
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('keeps a deep-linked past activity closed while the check is open', async () => {
+      const Page = await import(path)
+      requestedRoute.query.activity = 'activity_0'
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment('test_open')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?activity=activity_0' })
+      expect(wrapper.find('[data-testid="learn-selected-history"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
+      expectToolsHidden(wrapper)
+      wrapper.unmount()
+    })
+
+    it('stays closed while the Canvas binding is still loading', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvasPending.value = true
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsHidden(wrapper)
+      wrapper.unmount()
+    })
+
+    it('brings the tools back when the server seals the answer', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment('test_open')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsHidden(wrapper)
+      checkState.value = assessment('scoring_pending', 'submission_1')
+      await nextTick()
+      await nextTick()
+      expectToolsShown(wrapper)
+      wrapper.unmount()
+    })
+
+    it.each(['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required', 'scored_pass', 'scored_fail'])('shows the tools in sealed phase %s', async (phase) => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment(phase, 'submission_1')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsShown(wrapper)
+      wrapper.unmount()
+    })
+
+    it.each(['invalid', 'cancelled', 'abandoned'])('shows the tools once the check has ended as %s', async (phase) => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment(phase)
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsShown(wrapper)
+      wrapper.unmount()
+    })
+
+    it('leaves a mission without a check unchanged and reads no assessment state', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas(null)
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expectToolsShown(wrapper)
+      expect(calls.mock.calls.some(([name]) => name === 'learnV2Assessments:getAssessmentState')).toBe(false)
+      wrapper.unmount()
+    })
   })
 
   it('keeps denied and rollback states on a named safe destination without redirecting the route', async () => {

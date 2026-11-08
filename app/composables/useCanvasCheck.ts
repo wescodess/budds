@@ -2,10 +2,12 @@ import type { Ref } from 'vue'
 import type { LEARN_V2_PUBLIC_API_VERSION, LearnV2AssessmentDelivery, LearnV2AssessmentState, LearnV2ResponseState } from '~~/convex/lib/learnV2PublicContract'
 import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAdapters'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
+import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
 const PUBLIC_API_VERSION: typeof LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-api.v1'
 const MAX_ANSWER_LENGTH = 12_000
+const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
 export type CanvasCheckCitation = { sourceRef: string, label: string }
 export type CanvasCheckLaterTeaching = {
@@ -49,6 +51,18 @@ function scoredReceipt(state: AvailableState, work: AvailableWork | null): Canva
 function questionText(delivery: LearnV2AssessmentDelivery | null | undefined) {
   if (delivery?.status !== 'delivered' || delivery.responseSpec.kind !== 'bounded_rubric') return null
   return [delivery.declaredStimulus, delivery.prompt].filter(Boolean).join('\n\n')
+}
+
+export function useCanvasCheckLock(binding: () => CanvasCheckBinding | null | undefined) {
+  const stateQuery = useSkippableConvexQuery(checkApi.getAssessmentState, () => {
+    const opportunityId = binding()?.assessmentOpportunityId
+    return import.meta.client && opportunityId ? { version: PUBLIC_API_VERSION, assessmentOpportunityId: opportunityId as never } : 'skip'
+  })
+  return computed(() => {
+    if (!binding()) return false
+    const state = stateQuery.data.value
+    return state?.status !== 'available' || PRE_SEAL_PHASES.includes(state.phase)
+  })
 }
 
 export function useCanvasCheck(options: {

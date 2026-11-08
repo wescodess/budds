@@ -59,7 +59,7 @@ const receiptBody = computed(() => {
     case 'invalid': return invalidBySource.value
       ? 'A source this question relied on changed after you started, so your answer can’t be scored. It won’t count for or against you. You’ll get a new check with a different question later.'
       : 'It won’t count for or against you. You’ll get a new check with a different question later.'
-    case 'not_yet': return 'That’s common after a week, and it’s why we check.'
+    case 'not_yet': return 'That’s common, and it’s why we check.'
     default: return null
   }
 })
