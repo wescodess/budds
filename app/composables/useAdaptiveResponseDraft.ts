@@ -8,9 +8,11 @@ const MAX_RESPONSE_LENGTH = 12_000
 export function useAdaptiveResponseDraft(
   key: string | null,
   response: Ref<string>,
-  committed: Ref<boolean>,
+  committed: Readonly<Ref<boolean>>,
   confidence?: Ref<number | null>,
 ) {
+  const restored = ref(false)
+
   function remove() {
     if (!key) return
     try { sessionStorage.removeItem(key) } catch { /* Storage may be disabled. */ }
@@ -24,6 +26,7 @@ export function useAdaptiveResponseDraft(
       if (!stored || typeof stored.response !== 'string' || stored.response.length > MAX_RESPONSE_LENGTH
         || typeof stored.savedAt !== 'number' || Date.now() - stored.savedAt > DRAFT_TTL_MS || stored.savedAt > Date.now()) { remove(); return }
       response.value = stored.response
+      restored.value = stored.response.length > 0
       if (confidence && (stored.confidence === null || (typeof stored.confidence === 'number' && Number.isInteger(stored.confidence) && stored.confidence >= 1 && stored.confidence <= 5))) confidence.value = stored.confidence
     }
     catch { remove() }
@@ -35,4 +38,6 @@ export function useAdaptiveResponseDraft(
     if (value.length > MAX_RESPONSE_LENGTH) return
     try { sessionStorage.setItem(key, JSON.stringify({ response: value, confidence: certainty, savedAt: Date.now() })) } catch { /* Keep the in-memory draft. */ }
   })
+
+  return { restored: readonly(restored) }
 }

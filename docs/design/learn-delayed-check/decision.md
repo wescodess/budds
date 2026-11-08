@@ -23,6 +23,7 @@ Everything else comes from what already exists in the app.
 
 - Success icon `text-green-700 dark:text-green-400`, already approved in [quiz-grading-results](../quiz-grading-results/decision.md).
 - `text-[var(--learn-attention)]` on the processing spinner and on warning and Not yet icons. Text beside them stays `text-foreground` or `text-muted-foreground`, because the warning colour is below AA as text on the light card.
+- "Getting your result" on Today's status row uses that warning-colour spinner, where `approved.html` shows it grey. Owner, 2026-11-07: "yes". The Canvas line already uses it.
 - The practice card ends with a filled "Submit response", following `app/components/learn-adaptive/ReadySessionCanvas.vue`.
 
 ## Product decisions carried into the build
