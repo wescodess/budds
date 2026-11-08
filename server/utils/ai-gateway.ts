@@ -35,7 +35,7 @@ export interface GenerateParams {
 
 const DEFAULT_MAX_RESPONSE_BYTES = 512_000
 
-async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
+export async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
   const declaredLength = response.headers?.get?.('content-length')
   if (declaredLength !== null && declaredLength !== undefined) {
@@ -91,7 +91,7 @@ export interface GenerateResponse {
   }
 }
 
-function validateGenerateResponse(value: unknown): GenerateResponse {
+export function validateGenerateResponse(value: unknown): GenerateResponse {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw providerError({ statusCode: 502, message: 'AI Gateway returned an invalid completion envelope' }, 'invalid_response')
   const response = value as Partial<GenerateResponse>
   const firstChoice = Array.isArray(response.choices) ? response.choices[0] : undefined
@@ -179,6 +179,16 @@ function getGatewayConfig() {
   return { baseUrl, headers }
 }
 
+// Opaque configuration fence for durable consumers. It is not an account or
+// credential validity check, and no secret-bearing configuration is returned.
+export async function aiGatewayConfigurationDigest() {
+  let config: ReturnType<typeof getGatewayConfig> | null = null
+  try { config = getGatewayConfig() }
+  catch { /* An unconfigured gateway has a stable, non-secret fingerprint. */ }
+  const bytes = new TextEncoder().encode(JSON.stringify(config))
+  return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 export function serializeCompletionRequest(params: GenerateParams): string {
   return JSON.stringify({
     model: params.model,
@@ -218,6 +228,22 @@ export function serializeCompletionRequest(params: GenerateParams): string {
   })
 }
 
+// Retain only a validated numeric delay, never the raw upstream header. A later
+// floor must not be shortened to fit the scheduler's automatic retry window.
+export function providerRetryAfterMs(value: string | null | undefined, now = Date.now()): number | undefined {
+  if (!value || value.length > 128) return undefined
+  const text = value.trim()
+  const delay = /^\d+(?:\.\d{1,3})?$/.test(text) ? Number(text) * 1000
+    : /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(text) ? Date.parse(text) - now : NaN
+  return validatedProviderRetryDelay(delay, now)
+}
+
+export function validatedProviderRetryDelay(value: unknown, now = Date.now()): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
+  const delay = Math.max(0, Math.ceil(value))
+  return Number.isSafeInteger(now + delay) && now + delay <= 8_640_000_000_000_000 ? delay : undefined
+}
+
 export async function generateCompletion(params: GenerateParams): Promise<GenerateResponse> {
   const deterministic = deterministicLearnV2Completion(params)
   if (deterministic) return deterministic
@@ -239,16 +265,16 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     body: requestBody,
   })
 
-  const responseText = await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
   if (!response.ok) {
-    const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed' : responseText
+    const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed'
+      : await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
-    const retryAfter = response.headers?.get?.('retry-after')
-    const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : NaN
+    const delay = providerRetryAfterMs(response.headers?.get?.('retry-after'))
     throw Object.assign(providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'),
-      Number.isFinite(delay) ? { retryAfterMs: Math.max(0, delay) } : {})
+      delay !== undefined ? { retryAfterMs: delay } : {})
   }
 
+  const responseText = await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
   let parsed: unknown
   try {
     parsed = JSON.parse(responseText)

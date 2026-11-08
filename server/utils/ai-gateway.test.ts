@@ -191,6 +191,16 @@ describe('generateCompletion', () => {
     expect(error.retryAfterMs).toBeLessThanOrEqual(120_000)
   })
 
+  test('redacted upstream failures retain only safe status and retry delay even when the body exceeds its cap', async () => {
+    const response = new Response('private flagged input'.repeat(3000), { status: 429, headers: { 'retry-after': '86400', 'content-length': '60000' } })
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce(response)
+    const error = await generateCompletion({ ...baseParams, redactUpstreamErrorBody: true, maxResponseBytes: 32_000 }).catch(error => error)
+    expect(error).toMatchObject({ statusCode: 429, retryAfterMs: 86_400_000, aiGatewayFailureKind: 'definitive_failure' })
+    expect(error.message).toBe('AI Gateway error: Upstream provider request failed')
+    expect(response.bodyUsed).toBe(false)
+    expect(JSON.stringify(error)).not.toMatch(/private|flagged|metadata|raw/)
+  })
+
   test('falls back to NUXT_ env vars when runtime config is empty', async () => {
     vi.mocked((globalThis as any).useRuntimeConfig).mockReturnValue({})
     process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'env-account'

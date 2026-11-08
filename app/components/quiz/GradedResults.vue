@@ -59,7 +59,7 @@ const pointsLabel = computed(() => {
   return decisionCount.value > 0 ? 'Points for now' : 'Points'
 })
 
-const checkingCopy = computed(() => `Checking ${answerCount(checkingCount.value)}. Usually seconds, sometimes a few minutes. It keeps going if you leave.`)
+const checkingCopy = computed(() => `Checking ${answerCount(checkingCount.value)}. This can take several minutes. It keeps going if you leave.`)
 
 const activeResult = computed(() => props.results[activeIndex.value])
 

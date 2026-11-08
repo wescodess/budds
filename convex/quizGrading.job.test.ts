@@ -6,6 +6,7 @@ import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
 import { gradeAttempt as scheduledEntry } from './quizGrading'
+import { reserveQuizGradingDispatch } from './lib/quizGradingLimits'
 import { generateCompletion, serializeCompletionRequest, type GenerateParams, type GenerateResponse } from '../server/utils/ai-gateway'
 import { QUIZ_GRADER_POLICY, quizGradingRequestBytes, QUIZ_GRADING_MAX_REQUEST_BYTES, type QuizGradingInput } from '../server/utils/quiz-grading'
 
@@ -889,19 +890,31 @@ describe('failures and recovery', () => {
     }
     expect(generateCompletion).toHaveBeenCalledTimes(3)
     expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ score: 0, total: 1, gradingStatus: 'settled' })
-    expect(warn).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(3)
+    for (const [message, diagnostic] of warn.mock.calls) {
+      expect(message).toBe('Quiz grading unavailable')
+      expect(diagnostic).toMatchObject({ provider: 'openrouter', reason, limiterSource: reason === 'over_budget' ? 'upstream' : 'none' })
+    }
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|daughter|quiz_grading_job|metadata|raw/)
     expect(log).not.toHaveBeenCalled()
   })
 
-  test('clamps Retry-After to fifteen minutes and succeeds on a scheduled retry', async () => {
+  test('preserves a long Retry-After and requires a later manual retry without holding a lease', async () => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture)
     vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 429, aiGatewayFailureKind: 'definitive_failure', retryAfterMs: 86_400_000 })
     await runGrade(fixture, attemptId)
-    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ nextAttemptAt: NOW + 900_000, unavailableReason: 'over_budget' })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'unavailable', nextAttemptAt: NOW + 86_400_000, unavailableReason: 'over_budget', attemptCount: 1 })
+    expect((await assessments(fixture, attemptId))[0]!.claimId).toBeUndefined()
     await drain(fixture)
+    expect(generateCompletion).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(NOW + 86_399_999)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    vi.setSystemTime(NOW + 86_400_000)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    await runGrade(fixture, attemptId)
     expect(generateCompletion).toHaveBeenCalledTimes(2)
-    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', credit: 0.4, attemptCount: 2 })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', credit: 0.4, attemptCount: 1, manualRetryCount: 1 })
   })
 
   test.each(['not-json', 'wrong-key', 'missing-key', 'duplicate-key', 'extra-score', 'wrong-model'] as const)('rejects %s as malformed without awarding an incorrect grade', async (kind) => {
@@ -937,7 +950,7 @@ describe('failures and recovery', () => {
     await runGrade(fixture, attemptId)
     expect(generateCompletion).not.toHaveBeenCalled()
     await drain(fixture)
-    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 2 })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: dispatch ? 2 : 1 })
     await expectHistoryGrade(fixture, attemptId, { score: 0.4, gradingStatus: 'settled', gradingNeedsAttention: false })
     expect(generateCompletion).toHaveBeenCalledTimes(1)
     expect(await fixture.t.mutation(internal.quizGrading.failBatch, { attemptId, claimId: claim.claimId, items, reason: 'timeout', retryable: true })).toBe(0)
@@ -1085,7 +1098,7 @@ describe('Stage B durability and input isolation', () => {
     await fixture.t.run(ctx => ctx.scheduler.cancel(dispatch._id))
     await drain(fixture)
     expect(generateCompletion).toHaveBeenCalledTimes(1)
-    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 2 })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 1 })
   })
 
   test('one huge answer cannot poison a normal answer or rebuild on manual retry', async () => {
@@ -1121,7 +1134,307 @@ async function seedGradingCounter(fixture: Fixture, kind: 'admission' | 'dispatc
     userId: owner, route: `quiz-grading/${kind}`, count, windowStartedAt, expiresAt: windowStartedAt + duration,
   }))
 }
-const gradingCounters = (fixture: Fixture) => fixture.t.run(ctx => ctx.db.query('rateLimitBuckets').take(20))
+const gradingCounters = (fixture: Fixture) => fixture.t.run(ctx => ctx.db.query('rateLimitBuckets').take(128))
+
+describe('free Groq dispatch integration', () => {
+  beforeEach(() => {
+    vi.stubEnv('QUIZ_GRADING_PROVIDER', 'groq')
+    vi.stubEnv('QUIZ_GRADING_GROQ_API_KEY', 'synthetic-groq-key')
+    vi.stubEnv('QUIZ_GRADING_GROQ_FREE_PLAN_CONFIRMED', 'true')
+    vi.stubEnv('QUIZ_GRADING_GROQ_ZDR_CONFIRMED', 'true')
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async (_url, init) => {
+      const inputs = JSON.parse(JSON.parse(init.body).messages[1].content).items as QuizGradingInput[]
+      return new Response(JSON.stringify({
+        id: 'synthetic', model: 'openai/gpt-oss-120b', choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+          results: inputs.map(input => ({ id: input.id, criterionResults: input.criteria.map((criterion, index) => ({ key: criterion.key, verdict: index === 0 ? 'met' : 'not_met' })), feedback: 'You described the daughter cells.' })),
+        }) } }],
+      }))
+    }))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  test.each(['QUIZ_GRADING_GROQ_API_KEY', 'QUIZ_GRADING_GROQ_FREE_PLAN_CONFIRMED', 'QUIZ_GRADING_GROQ_ZDR_CONFIRMED', 'QUIZ_GRADING_PROVIDER'])('refuses missing or invalid %s before dispatch budgets', async (key) => {
+    vi.stubEnv(key, key === 'QUIZ_GRADING_PROVIDER' ? 'unknown' : '')
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    await runGrade(fixture, attemptId)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'unavailable', unavailableReason: 'unconfigured', attemptCount: 0 })
+    expect((await gradingCounters(fixture)).filter(row => row.route.includes('dispatch'))).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('packs complete wire bytes, isolates huge rows and records the actual provider revision', async () => {
+    const fixture = await createQuiz(5)
+    const huge = '\\"🌱'.repeat(1500)
+    const normal = '\\"🌱'.repeat(60)
+    const attemptId = await finish(fixture, [huge, normal, normal, normal, normal])
+    await drain(fixture)
+    const rows = await assessments(fixture, attemptId)
+    expect(rows[0]).toMatchObject({ status: 'unavailable', unavailableReason: 'oversized_evidence', attemptCount: 0, learnerAnswerSnapshot: huge })
+    expect(rows.slice(1).every(row => row.status === 'available' && row.provider === 'groq' && row.modelRevision?.startsWith('openai/gpt-oss-120b@groq:') && row.credit === 0.4)).toBe(true)
+    const calls = vi.mocked(fetch).mock.calls
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls.flatMap(([, init]) => {
+      expect(new TextEncoder().encode(init!.body as string).byteLength).toBeLessThanOrEqual(6000)
+      const inputs = JSON.parse(JSON.parse(init!.body as string).messages[1].content).items as QuizGradingInput[]
+      expect(inputs.length).toBeLessThanOrEqual(2)
+      expect(quizGradingRequestBytes(inputs)).toBe(new TextEncoder().encode(init!.body as string).byteLength)
+      expect(inputs.every(input => input.learnerAnswer === normal)).toBe(true)
+      return inputs
+    })).toHaveLength(4)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    expect(generateCompletion).not.toHaveBeenCalled()
+    const publicResult = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
+    expect(JSON.stringify(publicResult)).not.toMatch(/gpt-oss|groq|httpStatus|limiterSource/)
+  })
+
+  test('concurrent learners share one dispatch per 61 seconds without burning waiting attempts or budgets', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const first = await finish(fixture)
+    const second = await finish(other)
+    await Promise.all([runGrade(fixture, first), runGrade(other, second)])
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const pending = (await Promise.all([assessments(fixture, first), assessments(other, second)])).flat().find(row => row.status === 'pending')!
+    expect(pending).toMatchObject({ attemptCount: 0 })
+    expect(pending.claimId).toBeUndefined()
+    const before = await gradingCounters(fixture)
+    vi.setSystemTime(NOW + 60_999)
+    await runGrade(fixture, pending.attemptId)
+    expect(await gradingCounters(fixture)).toEqual(before)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(NOW + 61_000)
+    await runGrade(fixture, pending.attemptId)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect((await assessments(fixture, pending.attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 1 })
+  })
+
+  test('immediate manual retry queues behind pacing without consuming a manual cycle', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('private', { status: 400 }))
+    await runGrade(fixture, attemptId)
+    const before = await gradingCounters(fixture)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    await runGrade(fixture, attemptId)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await gradingCounters(fixture)).toEqual(before)
+    expect((await assessments(fixture, attemptId))[0]!.manualRetryCount).toBeUndefined()
+    vi.setSystemTime(NOW + 61_000)
+    await runGrade(fixture, attemptId)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', manualRetryCount: 1 })
+  })
+
+  test('the 24th shared Groq reservation is atomic and never consumes OpenRouter shared budget', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    await fixture.t.run(async (ctx) => {
+      for (let slot = 0; slot < 23; slot++) await ctx.db.insert('rateLimitBuckets', {
+        key: `internal:quiz-grading:groq-dispatch-shared-${slot}`, route: 'quiz-grading/groq-dispatch-shared',
+        userId: '', count: 1, windowStartedAt: NOW, expiresAt: NOW + 86_400_000,
+      })
+    })
+    const first = await finish(fixture)
+    const second = await finish(other)
+    await Promise.all([runGrade(fixture, first), runGrade(other, second)])
+    vi.setSystemTime(NOW + 61_000)
+    await runGrade(fixture, first)
+    await runGrade(other, second)
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const rows = (await Promise.all([assessments(fixture, first), assessments(other, second)])).flat()
+    expect(rows.find(row => row.status === 'unavailable')).toMatchObject({ unavailableReason: 'over_budget', attemptCount: 0 })
+    const shared = (await gradingCounters(fixture)).filter(row => row.route === 'quiz-grading/groq-dispatch-shared')
+    expect(shared).toHaveLength(24)
+    expect(shared.every(row => row.count === 1 && row.userId === '')).toBe(true)
+    expect((await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/dispatch-shared')).toBeUndefined()
+  })
+
+  test('one learner cannot spend the shared rolling allowance or regain it at UTC midnight', async () => {
+    const fixture = await createQuiz()
+    const day = 86_400_000
+    const start = day - 13 * 61_000
+    for (let call = 0; call < 12; call++) {
+      vi.setSystemTime(start + call * 61_000)
+      expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(0)
+    }
+    vi.setSystemTime(day + 61_000)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(start + day)
+    for (let call = 0; call < 12; call++) {
+      vi.setSystemTime(day + (call + 1) * 61_000)
+      expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, OTHER.tokenIdentifier))).toBe(0)
+    }
+    vi.setSystemTime(start + day - 1)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, 'third-learner'))).toBe(start + day)
+    vi.setSystemTime(start + day)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(0)
+    const counters = await gradingCounters(fixture)
+    expect(counters.filter(row => row.route === 'quiz-grading/groq-dispatch-shared')).toHaveLength(24)
+    expect(counters.filter(row => row.route === 'quiz-grading/groq-dispatch-user' && row.userId === USER.tokenIdentifier)).toHaveLength(12)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('long upstream floors settle the whole attempt and fence other learners and manual retries without budget burn', async () => {
+    const fixture = await createQuiz(3)
+    const other = await anotherLearner(fixture)
+    const first = await finish(fixture)
+    const second = await finish(other)
+    const queuedOther = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId: second }))!
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('private flagged input', { status: 429, headers: { 'Retry-After': '86400' } }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await runGrade(fixture, first)
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId: second, ...queuedOther })).toBeNull()
+    expect((await assessments(fixture, first)).every(row => row.status === 'unavailable' && row.nextAttemptAt === NOW + 86_400_000 && row.claimId === undefined)).toBe(true)
+    expect((await assessments(other, second))[0]).toMatchObject({ status: 'unavailable', nextAttemptAt: NOW + 86_400_000, attemptCount: 0 })
+    const counters = await gradingCounters(fixture)
+    for (const at of [NOW + 900_000, NOW + 86_399_999]) {
+      vi.setSystemTime(at)
+      expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: first })).toEqual({ retried: 0 })
+      expect(await other.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: second })).toEqual({ retried: 0 })
+      await runGrade(other, second)
+    }
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(await gradingCounters(fixture)).toEqual(counters)
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private|flagged|daughter|https:|quiz_grading_job/)
+    expect(warn).toHaveBeenCalledWith('Quiz grading unavailable', expect.objectContaining({ provider: 'groq', reason: 'over_budget', httpStatus: 429, limiterSource: 'upstream' }))
+    vi.setSystemTime(NOW + 86_400_000)
+    expect(await other.user.mutation(api.quizGrading.requestGradingRetry, { attemptId: second })).toEqual({ retried: 1 })
+    await runGrade(other, second)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect((await assessments(other, second))[0]!.manualRetryCount).toBeUndefined()
+  })
+
+  test('Groq retains three dispatches per cycle and two manual cycles while pacing every retry', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const times: number[] = []
+    vi.mocked(fetch).mockImplementation(async () => {
+      times.push(Date.now())
+      return new Response('private', { status: 503 })
+    })
+    await drain(fixture)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'unavailable', attemptCount: 3 })
+    for (let cycle = 1; cycle <= 2; cycle++) {
+      // Recovery wakeups have drained; no automatic call remains in flight.
+      vi.setSystemTime(Math.max(Date.now(), times.at(-1)! + 61_000))
+      expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+      await drain(fixture)
+      expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'unavailable', attemptCount: 3, manualRetryCount: cycle })
+    }
+    expect(times).toHaveLength(9)
+    expect(times.slice(1).every((at, index) => at - times[index]! >= 61_000)).toBe(true)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    expect((await assessments(fixture, attemptId))[0]!.label).toBeUndefined()
+  })
+
+  test('a Groq pacing race preserves a queued manual cycle until its first dispatch', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const attemptId = await finish(fixture)
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('private', { status: 400 }))
+    await runGrade(fixture, attemptId)
+    vi.setSystemTime(NOW + 61_000)
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    const queued = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
+    const second = await finish(other)
+    await runGrade(other, second)
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, ...queued })).toBeNull()
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'pending', attemptCount: 0, manualRetryPending: true })
+    expect((await assessments(fixture, attemptId))[0]!.manualRetryCount).toBeUndefined()
+    vi.setSystemTime(NOW + 122_000)
+    await runGrade(fixture, attemptId)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 1, manualRetryCount: 1 })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  test('stale successful grades cannot cross a credential change and recover with the current revision', async () => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const { args, claim, items } = await reserve(fixture, attemptId)
+    vi.stubEnv('QUIZ_GRADING_GROQ_API_KEY', 'rotated-synthetic-key')
+    expect(await fixture.t.mutation(internal.quizGrading.commitBatch, args)).toBe(0)
+    vi.setSystemTime(NOW + 120_001)
+    expect(await fixture.t.mutation(internal.quizGrading.recoverBatch, { attemptId, claimId: claim.claimId, assessmentIds: items.map(item => item.assessmentId) })).toBe(1)
+    await drain(fixture)
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', credit: 0.4, attemptCount: 2, provider: 'groq' })
+    expect(vi.mocked(fetch).mock.calls[0]![1]!.headers).toMatchObject({ Authorization: 'Bearer rotated-synthetic-key' })
+  })
+
+  test('a late 429 fences its original provider after a selector change while retaining row digest checks', async () => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const attemptId = await finish(fixture)
+    const { claim, items } = await reserve(fixture, attemptId)
+    const before = await assessments(fixture, attemptId)
+    vi.stubEnv('QUIZ_GRADING_PROVIDER', 'openrouter')
+    expect(await fixture.t.mutation(internal.quizGrading.failBatch, { attemptId, claimId: claim.claimId, items, reason: 'over_budget', retryable: true, retryAfterMs: 86_400_000 })).toBe(0)
+    expect(await assessments(fixture, attemptId)).toEqual(before)
+    const cooldown = (await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/groq-cooldown')!
+    expect(cooldown).toMatchObject({ userId: '', expiresAt: NOW + 86_400_000 })
+    vi.stubEnv('QUIZ_GRADING_PROVIDER', 'groq')
+    const second = await finish(other)
+    await runGrade(other, second)
+    expect((await assessments(other, second))[0]).toMatchObject({ status: 'unavailable', attemptCount: 0, nextAttemptAt: NOW + 86_400_000 })
+    expect(fetch).not.toHaveBeenCalled()
+    expect(generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test.each(['folder', 'quiz', 'account'] as const)('an in-flight 429 preserves its provider floor after %s deletion', async (kind) => {
+    const fixture = await createQuiz()
+    const other = await anotherLearner(fixture)
+    const attemptId = await finish(fixture)
+    let release!: () => void
+    let entered!: () => void
+    const dispatched = new Promise<void>((resolve) => { entered = resolve })
+    vi.mocked(fetch).mockImplementation(() => new Promise<Response>((resolve) => {
+      release = () => resolve(new Response('private provider response', { status: 429, headers: { 'retry-after': '86400' } }))
+      entered()
+    }))
+    const grading = runGrade(fixture, attemptId)
+    await dispatched
+    try {
+      const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
+      if (kind === 'folder') await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
+      if (kind === 'quiz') await fixture.user.mutation(api.quizzes.deleteQuiz, { quizId: fixture.quizId })
+      if (kind === 'account') await fixture.user.mutation(internal.accountDeletion.deleteCurrentUser, {})
+      const before = await gradingSnapshot(fixture, attemptId)
+      if (kind === 'quiz') expect(before.rows).toEqual([])
+      release()
+      await grading
+      expect(await gradingSnapshot(fixture, attemptId)).toEqual(before)
+      const cooldown = (await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/groq-cooldown')
+      expect(cooldown).toMatchObject({ userId: '', expiresAt: NOW + 86_400_000 })
+      expect(JSON.stringify(cooldown)).not.toMatch(/private|daughter|quiz_grading_job|https:/)
+      vi.setSystemTime(NOW + 61_001)
+      const second = await finish(other)
+      await runGrade(other, second)
+      expect((await assessments(other, second))[0]).toMatchObject({ status: 'unavailable', attemptCount: 0, nextAttemptAt: NOW + 86_400_000 })
+      expect(fetch).toHaveBeenCalledTimes(1)
+    }
+    finally { release(); await grading }
+  })
+
+  test.each(['selector', 'free-plan', 'zdr', 'key'])('configuration changes fence a stale claim and recover it safely: %s', async (change) => {
+    const fixture = await createQuiz()
+    const attemptId = await finish(fixture)
+    const claim = (await fixture.t.mutation(internal.quizGrading.claimBatch, { attemptId }))!
+    const { quizGradingInputDigest } = await import('./lib/quizGrading')
+    const row = (await assessments(fixture, attemptId))[0]!
+    if (change === 'selector') vi.stubEnv('QUIZ_GRADING_PROVIDER', 'openrouter')
+    if (change === 'free-plan') vi.stubEnv('QUIZ_GRADING_GROQ_FREE_PLAN_CONFIRMED', 'false')
+    if (change === 'zdr') vi.stubEnv('QUIZ_GRADING_GROQ_ZDR_CONFIRMED', 'false')
+    if (change === 'key') vi.stubEnv('QUIZ_GRADING_GROQ_API_KEY', 'rotated-synthetic-key')
+    expect(await quizGradingInputDigest(row)).not.toBe(claim.items[0]!.inputDigest)
+    expect(await fixture.t.mutation(internal.quizGrading.markDispatched, { attemptId, ...claim })).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+    expect((await gradingCounters(fixture)).filter(bucket => bucket.route.includes('dispatch'))).toEqual([])
+    vi.setSystemTime(NOW + 120_001)
+    await fixture.t.mutation(internal.quizGrading.recoverBatch, { attemptId, claimId: claim.claimId, assessmentIds: claim.items.map(item => item.assessmentId) })
+    expect((await assessments(fixture, attemptId))[0]).toMatchObject({ attemptCount: 0 })
+    expect((await assessments(fixture, attemptId))[0]!.claimId).toBeUndefined()
+  })
+})
 
 async function anotherLearner(fixture: Fixture): Promise<Fixture> {
   const user = fixture.t.withIdentity(OTHER)
@@ -1220,15 +1533,15 @@ describe('Stage B attempt and shared cooldown', () => {
     const other = await anotherLearner(fixture)
     const attemptId = await finish(fixture)
     const otherAttempt = await finish(other)
-    vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 429, retryAfterMs: 86_400_000 })
+    vi.mocked(generateCompletion).mockRejectedValueOnce({ statusCode: 429, retryAfterMs: 90_000 })
     await runGrade(fixture, attemptId)
     await runGrade(other, otherAttempt)
     expect(generateCompletion).toHaveBeenCalledTimes(1)
     expect((await assessments(other, otherAttempt))[0]!.attemptCount).toBe(0)
-    vi.setSystemTime(NOW + 899_999)
+    vi.setSystemTime(NOW + 89_999)
     await runGrade(other, otherAttempt)
     expect(generateCompletion).toHaveBeenCalledTimes(1)
-    vi.setSystemTime(NOW + 900_000)
+    vi.setSystemTime(NOW + 90_000)
     await runGrade(other, otherAttempt)
     expect(generateCompletion).toHaveBeenCalledTimes(2)
     await drain(fixture)
