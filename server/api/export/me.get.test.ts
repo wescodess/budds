@@ -16,6 +16,9 @@ import { PERSONAL_EXPORT_CONTENT_CASES, measurementExportFixture, seedExportCont
 import { standaloneResponseFixture } from '../../../tests/fixtures/learn-v2-standalone-response'
 import { BACKING_SOURCE_CASES, BACKING_SOURCE_KINDS, backingResponseFixture, replaceBackingDocument, purgeBackingResponse } from '../../../tests/fixtures/learn-v2-backing-response'
 import { ACTIVITY_RESPONSE_CASES, LEGACY_ACTIVITY_CASES, activityResponseFixture, legacyActivityResponseFixture, exerciseActivityResponseLimit } from '../../../tests/fixtures/learn-v2-activity-responses'
+import { privacyHistoryFixture, tracePrivacyReads, invokePrivacyQuery, addDistinctActivitySources } from '../../../tests/fixtures/learn-v2-privacy-reads'
+import { getUserDataPage as publicExportPage } from '../../../convex/dataExport'
+import * as privacyReads from '../../../convex/lib/learnV2PrivacyReadContext'
 
 vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
   const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
@@ -114,6 +117,51 @@ describe('GET /api/export/me', () => {
     for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
   })
+
+  test.each(['normal', 'reduced', 'dense'] as const)('decoded complete ZIP bounds every page and preserves row order with %s budget', async mode => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_001)
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const f = await privacyHistoryFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-read-budget', mode === 'dense' ? 16 : 7, mode === 'dense' ? 1 : 8)
+    if (mode === 'dense') await addDistinctActivitySources(f, 64)
+    const exhausted = mode === 'reduced'
+    const create = privacyReads.createResponsePrivacyReadContext
+    if (exhausted) vi.spyOn(privacyReads, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner) => create(ctx, owner, 56))
+    const calls: Array<{ collection: string, ranges: number }> = []
+    try {
+      authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+      getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+      getUserDataPageMock.mockImplementation(args => f.owner.run(async ctx => {
+        const traced = tracePrivacyReads(ctx)
+        const result = await invokePrivacyQuery(publicExportPage, traced.ctx, args)
+        expect(traced.stats.calls).toBeLessThanOrEqual(privacyReads.RESPONSE_PRIVACY_READ_BUDGET)
+        calls.push({ collection: args.collection, ranges: traced.stats.calls })
+        return result
+      }))
+      getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+      getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+      getDocumentDownloadUrlMock.mockResolvedValue(null)
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      for (const [collection, ids] of [['masteryAttempts', f.attempts], ['learningThreadActivities', f.activities]] as const) {
+        const rows = JSON.parse(strFromU8(entries[`${collection}.json`]!)) as Array<Record<string, unknown>>
+        expect(rows.map(row => row._id)).toEqual(ids)
+        expect(new Set(rows.map(row => row._id)).size).toBe(ids.length)
+        if (mode !== 'normal') {
+          expect(JSON.stringify(rows)).not.toContain(f.answer)
+          for (const row of rows) expect(row).toMatchObject({ bodyAvailability: 'unavailable' })
+        } else expect(JSON.stringify(rows)).toContain(f.answer)
+      }
+      for (const collection of ['learnResponses', 'learnResponseBodies'] as const) {
+        const expected = await f.t.run(ctx => ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', f.userId)).take(8))
+        const rows = JSON.parse(strFromU8(entries[`${collection}.json`]!)) as Array<Record<string, unknown>>
+        expect(rows.map(row => row._id)).toEqual(expected.map(row => row._id))
+        if (mode === 'reduced') expect(rows[0]).toMatchObject({ bodyAvailability: 'unavailable' })
+        else expect(rows[0]).toMatchObject({ bodyAvailability: 'available' })
+      }
+      expect(new Set(calls.map(row => row.collection))).toEqual(new Set(PERSONAL_EXPORT_COLLECTIONS))
+    }
+    finally { vi.restoreAllMocks() }
+  }, 90_000)
 
   test.each(LEGACY_ACTIVITY_CASES)('decoded ZIP withholds legacy %s aliases through %s', async (kind, scenario) => {
     vi.useFakeTimers()

@@ -18,6 +18,7 @@ import { learnActivityEventDedupeHash, writeLearnActivityEvent } from './lib/lea
 import { adaptiveArtifactKindValidator, adaptiveArtifactStatusValidator, boundedArtifactText } from '../shared/learn-adaptive-artifact'
 import { queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
 import { prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
+import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 
 const memoryPreferenceKeyValidator = v.union(v.literal('representation'), v.literal('pace'), v.literal('practice_style'))
 const memoryPreferenceOperationValidator = v.union(v.literal('set'), v.literal('disable'), v.literal('clear'))
@@ -898,7 +899,7 @@ export const applyOverride = mutation({
     apply: async (commandCtx, thread, userId) => {
       const activity = thread.currentActivityId && await commandCtx.db.get(thread.currentActivityId)
       if (!activity || activity.userId !== userId || activity.threadId !== thread._id || activity.activityId !== args.activityId) throw new Error('Current activity is unavailable')
-      const factualCanvas = activity.activityClass === 'factual' ? await loadReadyCanvas(commandCtx, userId, thread._id) : null
+      const factualCanvas = activity.activityClass === 'factual' ? await loadReadyCanvas(commandCtx, userId, thread._id, { includeSavedResponse: false }) : null
       const diagnosticOperable = activity.activityClass === 'non_factual' ? await isOperableDiagnosticActivity(activity) : false
       const evidenceState = await liveEvidenceState(commandCtx, thread)
       const controls = projectAdaptiveControls({ activityClass: activity.activityClass,
@@ -1130,6 +1131,17 @@ async function projectActivityAttribution(ctx: QueryCtx, userId: string, activit
   return { ...activity.attribution, sourceStatus }
 }
 
+function unavailableThreadProjection(thread: Doc<'learningThreads'>, ownerId: Id<'users'>) {
+  return {
+    ownerId,
+    thread: { id: thread._id, goal: thread.originalNeed, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
+      sourceScope: thread.sourceScope, evidenceState: 'unavailable' as const, lifecycle: thread.lifecycle, revision: thread.revision,
+      lifecycleChangedAt: thread.lifecycleChangedAt ?? null, authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null },
+    currentActivity: null, attemptContext: null, artifact: null, completion: null, history: [], unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
+    nextAction: presentNextAction({ kind: 'recover' as const, label: 'Back to Learn', reasonCode: 'source_unavailable', activityId: null }),
+  }
+}
+
 async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learningThreads'>) {
   const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
   if (!owner) return null
@@ -1141,7 +1153,7 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
       || activity?.activityClass === 'factual' && activity.learningVoidId !== learningVoid._id) return null
   }
   const sourceEvidenceState = await liveEvidenceState(ctx, thread)
-  const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id) : null
+  const factualCanvas = activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id, { includeSavedResponse: false }) : null
   const completion = await representativeCompletion(ctx, userId, activity)
   const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null
   const reflectionDecisionValid = Boolean(activity && reflectionPrimitive
@@ -1198,9 +1210,12 @@ export const getThread = query({
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
-    return await projectThread(ctx, userId, thread)
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return null
+    return await privacyRead(ctx, userId, ['thread-projection', thread._id], unavailableThreadProjection(thread, owner._id), async ctx => await projectThread(ctx, userId, thread))
   },
 })
 
@@ -1212,6 +1227,9 @@ export const listResumeCandidates = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
+    const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+    if (!owner) return []
     const recentThreads = await ctx.db.query('learningThreads')
       .withIndex('by_userId_and_updatedAt', q => q.eq('userId', userId))
       .order('desc').take(RESUME_CANDIDATE_LIMIT)
@@ -1247,31 +1265,39 @@ export const listResumeCandidates = query({
     const candidates = []
     for (const thread of threads.values()) {
       if (thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle)) continue
-      const projection = await projectThread(ctx, userId, thread)
-      if (!projection) continue
-      const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
-      const action = projection.nextAction
-      const safeAction = !['recover', 'return_to_learn', 'wait'].includes(action.kind)
-        && (activity?.activityClass !== 'factual' || projection.thread.evidenceState === 'ready')
-      const planValid = activity && (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
-      const unfinished = Boolean(activity && planValid && ['eligible', 'started', 'feedback'].includes(activity.status) && safeAction)
-      const mastery = activity?.objectiveId && activity.blueprintRevisionId
-        ? await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
-          .eq('blueprintRevisionId', activity.blueprintRevisionId!).eq('objectiveId', activity.objectiveId!)).first()
-        : null
-      const objective = mastery?.state === 'needs_review' ? await ctx.db.get(mastery.objectiveId) : null
-      const reviewCapability = objective?.userId === userId && objective.blueprintRevisionId === activity?.blueprintRevisionId
-        ? objective.capability ?? objective.title : null
-      const vulnerable = mastery?.state === 'needs_review' && reviewCapability !== null
-      const changedSource = activity?.activityClass === 'factual'
-        && ['stale', 'invalidated', 'unavailable'].includes(await liveEvidenceState(ctx, thread))
-      const priority = unfinished ? 3 : vulnerable ? 2 : changedSource ? 1 : 0
-      const reason = unfinished ? 'unfinished_activity' as const : vulnerable ? 'needs_review' as const
-        : changedSource ? 'source_recovery' as const : 'recent_thread' as const
-      candidates.push({ ownerId: projection.ownerId, threadId: thread._id, outcome: projection.thread.outcome, intent: projection.thread.intent,
-        lifecycle: projection.thread.lifecycle, evidenceState: projection.thread.evidenceState,
-        unresolvedPoint: projection.unresolvedPoint, currentActivity: projection.currentActivity,
-        nextAction: action, reason, reviewCapability, updatedAt: thread.updatedAt, priority })
+      const projectionFallback = unavailableThreadProjection(thread, owner._id)
+      const fallback = { ownerId: owner._id, threadId: thread._id, outcome: projectionFallback.thread.outcome, intent: thread.intent,
+        lifecycle: thread.lifecycle, evidenceState: 'unavailable' as const, unresolvedPoint: projectionFallback.unresolvedPoint,
+        currentActivity: null, nextAction: projectionFallback.nextAction, reason: 'source_recovery' as const,
+        reviewCapability: null, updatedAt: thread.updatedAt, priority: 0 }
+      const candidate = await privacyRead(ctx, userId, ['resume-projection', thread._id], fallback, async ctx => {
+        const projection = await projectThread(ctx, userId, thread)
+        if (!projection) return null
+        const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+        const action = projection.nextAction
+        const safeAction = !['recover', 'return_to_learn', 'wait'].includes(action.kind)
+          && (activity?.activityClass !== 'factual' || projection.thread.evidenceState === 'ready')
+        const planValid = activity && (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+        const unfinished = Boolean(activity && planValid && ['eligible', 'started', 'feedback'].includes(activity.status) && safeAction)
+        const mastery = activity?.objectiveId && activity.blueprintRevisionId
+          ? await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
+            .eq('blueprintRevisionId', activity.blueprintRevisionId!).eq('objectiveId', activity.objectiveId!)).first()
+          : null
+        const objective = mastery?.state === 'needs_review' ? await ctx.db.get(mastery.objectiveId) : null
+        const reviewCapability = objective?.userId === userId && objective.blueprintRevisionId === activity?.blueprintRevisionId
+          ? objective.capability ?? objective.title : null
+        const vulnerable = mastery?.state === 'needs_review' && reviewCapability !== null
+        const changedSource = activity?.activityClass === 'factual'
+          && ['stale', 'invalidated', 'unavailable'].includes(await liveEvidenceState(ctx, thread))
+        const priority = unfinished ? 3 : vulnerable ? 2 : changedSource ? 1 : 0
+        const reason = unfinished ? 'unfinished_activity' as const : vulnerable ? 'needs_review' as const
+          : changedSource ? 'source_recovery' as const : 'recent_thread' as const
+        return { ownerId: projection.ownerId, threadId: thread._id, outcome: projection.thread.outcome, intent: projection.thread.intent,
+          lifecycle: projection.thread.lifecycle, evidenceState: projection.thread.evidenceState,
+          unresolvedPoint: projection.unresolvedPoint, currentActivity: projection.currentActivity,
+          nextAction: action, reason, reviewCapability, updatedAt: thread.updatedAt, priority }
+      })
+      if (candidate) candidates.push(candidate)
     }
     return candidates.sort((a, b) => b.priority - a.priority || b.updatedAt - a.updatedAt
       || String(a.threadId).localeCompare(String(b.threadId)))

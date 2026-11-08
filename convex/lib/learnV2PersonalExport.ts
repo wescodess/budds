@@ -86,6 +86,7 @@ export async function requirePersonalExportAuthorization(ctx: QueryCtx, userId: 
 }
 
 export const PERSONAL_METADATA = {
+  learnResponses: ['createdAt', 'learningVoidId', 'threadId', 'assessmentOpportunityId', 'responseSlotId', 'acceptedAt', 'responseContractVersion', 'responseContextVersion', 'flow', 'baselineEpoch', 'measurementContext', 'disclosurePolicyVersion', 'bodyAvailability', 'bodyUnavailableReason', 'bodyPurgedAt', 'currentEligibility', 'evidenceStatus'],
   learningVoids: ['folderId', 'title', 'goal', 'status', 'revision', 'createdAt', 'updatedAt'],
   learnBlueprints: ['learningVoidId', 'revision', 'createdAt'],
   learnBlueprintRevisions: ['learningVoidId', 'blueprintId', 'revision', 'recordRevision', 'status', 'createdAt', 'updatedAt'],
@@ -148,10 +149,18 @@ export async function exportPersonalResponse(ctx: QueryCtx, userId: string, resp
       ? { bodyAvailability: 'purged', reasonCode: 'evidence_unavailable', purgedAt: response.bodyPurgedAt ?? response.acceptedAt }
       : { bodyAvailability: 'unavailable', reasonCode: 'evidence_unavailable' }, result: null },
   { owned: response.userId === userId, bodyDisclosureAllowed: payload !== null, resultDisclosureAllowed: false })
-  return { version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, assistance: work.assistanceSnapshot, validity: work.validitySnapshot,
+  return { ...privateFields(response, PERSONAL_METADATA.learnResponses), version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, assistance: work.assistanceSnapshot, validity: work.validitySnapshot,
     currentEligibility: payload ? response.currentEligibility : 'excluded',
     evidenceStatus: payload ? 'available' : 'evidence_unavailable',
     bodyAvailability: work.body.bodyAvailability, ...(payload ? {} : { bodyUnavailableReason: 'evidence_unavailable' }) }
+}
+
+export async function exportPersonalResponseBody(ctx: QueryCtx, userId: string, body: Doc<'learnResponseBodies'>) {
+  const response = await ctx.db.get(body.submissionId)
+  const payload = response?.userId === userId ? await retainedResponsePayload(ctx, userId, response) : null
+  return { _id: body._id, _creationTime: body._creationTime, createdAt: body.createdAt, submissionId: body.submissionId,
+    ...(payload ? { bodyAvailability: 'available', payload: payload.kind === 'source_comparison' ? { kind: payload.kind, comparison: payload.comparison } : payload }
+      : { bodyAvailability: 'unavailable', bodyUnavailableReason: 'evidence_unavailable' }) }
 }
 
 export async function exportLegacyAttempt(ctx: QueryCtx, userId: string, attempt: Doc<'masteryAttempts'>) {

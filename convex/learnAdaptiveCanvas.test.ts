@@ -8,6 +8,11 @@ import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { appendActivityResponseTargets } from '../tests/fixtures/learn-v2-activity-responses'
+import { tracePrivacyReads, invokePrivacyQuery, privacyHistoryFixture, addDistinctActivitySources } from '../tests/fixtures/learn-v2-privacy-reads'
+import { getCanvas } from './learnAdaptiveCanvas'
+import { getThread, listResumeCandidates } from './learnAdaptive'
+import { storedPlan } from './learnAdaptiveRecovery'
+import * as privacyReads from './lib/learnV2PrivacyReadContext'
 
 const modules = import.meta.glob('./**/*.ts')
 const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
@@ -16,7 +21,7 @@ const originalFlag = process.env.LEARN_V2_ENABLED
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 
 beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
-afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest); vi.useRealTimers() })
+afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest); vi.useRealTimers(); vi.restoreAllMocks() })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
 
 async function approveSyntheticPilot() {
@@ -77,6 +82,84 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test('thread and resume readers skip saved-answer work, share a budget and retain safe thread metadata', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'budget-thread-readers-control' })
+    const history = await privacyHistoryFixture(t, OWNER.tokenIdentifier, 16, 1)
+    await addDistinctActivitySources(history, 64)
+    await t.run(async ctx => {
+      const { _id: _threadId, _creationTime: _threadTime, ...thread } = (await ctx.db.get(attached.threadId))!
+      const activity = (await ctx.db.get(thread.currentActivityId!))!
+      const { _id: _activityId, _creationTime: _activityTime, ...activityFields } = activity
+      const original = storedPlan(activity)
+      for (let index = 0; index < 16; index++) {
+        const threadId = await ctx.db.insert('learningThreads', { ...thread, currentActivityId: undefined })
+        const composed = await composeAdaptiveActivityPlan({ ...original, threadId: String(threadId), activityId: `budget-readiness-${index}`,
+          replacesActivityId: original.replacesActivityId ?? undefined,
+          primitiveSequence: original.primitivePlan.map(block => ({ type: block.type, action: block.action, props: block.props })) })
+        const activityId = await ctx.db.insert('learningThreadActivities', { ...activityFields, threadId, activityId: composed.activityId,
+          primitivePlan: composed.primitivePlan, canonicalInputSnapshot: composed.canonicalInputSnapshot, inputDigest: composed.inputDigest,
+          masteryAttemptId: history.legacyAttemptId })
+        await ctx.db.patch(threadId, { currentActivityId: activityId })
+      }
+    })
+    const live = await owner.run(async ctx => {
+      const traced = tracePrivacyReads(ctx)
+      const rows = await invokePrivacyQuery(listResumeCandidates, traced.ctx, {})
+      expect(rows.length).toBeGreaterThan(8)
+      expect(traced.stats.calls).toBeLessThan(500)
+      expect(traced.stats.byTable['query:learnSourceExcerpts']).toBe(2)
+      return rows
+    })
+    const create = privacyReads.createResponsePrivacyReadContext
+    const spy = vi.spyOn(privacyReads, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner) => create(ctx, owner, 56))
+    await owner.run(async ctx => {
+      const traced = tracePrivacyReads(ctx)
+      const rows = await invokePrivacyQuery(listResumeCandidates, traced.ctx, {})
+      expect(traced.stats.calls).toBeLessThanOrEqual(56 + 16)
+      expect(new Set(rows.map(row => row.threadId))).toEqual(new Set(live.map(row => row.threadId)))
+      expect(rows).toEqual(expect.arrayContaining([expect.objectContaining({ currentActivity: null, evidenceState: 'unavailable' })]))
+    })
+    spy.mockImplementation((ctx, owner) => create(ctx, owner, 8))
+    await owner.run(async ctx => {
+      const traced = tracePrivacyReads(ctx)
+      const thread = await invokePrivacyQuery(getThread, traced.ctx, { threadId: attached.threadId })
+      expect(traced.stats.calls).toBeLessThanOrEqual(8 + 16)
+      expect(thread).toMatchObject({ thread: { id: attached.threadId, evidenceState: 'unavailable' }, currentActivity: null, completion: null, history: [] })
+      expect(JSON.stringify(thread)).not.toContain(STORAGE_CANARIES.answer)
+    })
+  }, 30_000)
+
+  test('Canvas bounds authority reads and retains safe session metadata when its budget denies the saved answer', async () => {
+    const { t, owner, ids } = await fixture()
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'budget-canvas-authority-control' })
+    await t.run(async ctx => {
+      const thread = (await ctx.db.get(attached.threadId))!
+      const documentId = await ctx.db.insert('documents', { userId: OWNER.tokenIdentifier, folderId: ids.folderId, filename: 'budget-scope.txt', fileSize: 1, status: 'success' })
+      await ctx.db.patch(thread._id, { sourceScope: { kind: 'document', sourceId: String(documentId) } })
+      await ctx.db.patch(thread.currentActivityId!, { submittedResponse: STORAGE_CANARIES.answer, submittedConfidence: 4 })
+    })
+    const liveCalls = await owner.run(async ctx => {
+      const traced = tracePrivacyReads(ctx)
+      const canvas = await invokePrivacyQuery(getCanvas, traced.ctx, { threadId: attached.threadId })
+      expect(canvas?.savedResponse).toMatchObject({ response: STORAGE_CANARIES.answer })
+      expect(traced.stats.calls).toBeLessThan(privacyReads.RESPONSE_PRIVACY_READ_BUDGET)
+      return traced.stats.calls
+    })
+    const create = privacyReads.createResponsePrivacyReadContext
+    const spy = vi.spyOn(privacyReads, 'createResponsePrivacyReadContext')
+    for (const limit of [liveCalls - 4, 14]) {
+      spy.mockImplementation((ctx, owner) => create(ctx, owner, limit))
+      await owner.run(async ctx => {
+        const traced = tracePrivacyReads(ctx)
+        const canvas = await invokePrivacyQuery(getCanvas, traced.ctx, { threadId: attached.threadId })
+        expect(traced.stats.calls).toBeLessThanOrEqual(liveCalls)
+        expect(canvas).toMatchObject({ thread: { id: attached.threadId }, session: { studySessionId: ids.studySessionId }, savedResponse: null })
+        expect(JSON.stringify(canvas)).not.toContain(STORAGE_CANARIES.answer)
+      })
+    }
+  })
+
   test.each(['body_purged', 'direct_document_deleted', 'unrelated_slots', 'unrelated_canvas_slots', 'unrelated_opportunities', 'activity_overflow'] as const)('Canvas and Journey preserve retained body authority through %s', async revocation => {
     vi.useFakeTimers()
     const { t, owner, ids } = await fixture()

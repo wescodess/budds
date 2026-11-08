@@ -1,3 +1,4 @@
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -172,6 +173,7 @@ export const getDiagnosticCanvas = query({
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.authorityKind !== 'standalone' || thread.deletionStartedAt !== undefined) return null
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()

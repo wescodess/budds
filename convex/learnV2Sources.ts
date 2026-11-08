@@ -1,3 +1,4 @@
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { isLearnV2TransitionAllowed, type SourceState } from '../shared/learn-v2-contract'
@@ -455,6 +456,7 @@ export const listSourceReview = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     if (args.blueprintRevisionId === null) return { page: [], isDone: true, continueCursor: '' }
     const blueprint = await ctx.db.get(args.blueprintRevisionId)
     if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
@@ -470,19 +472,12 @@ export const listSourceReview = query({
         cursor: args.paginationOpts.cursor,
         numItems: Math.min(MAX_PAGE, Math.max(1, Math.floor(args.paginationOpts.numItems))),
       })
-    const page = []
+    const metadata = []
     for (const source of result.page) {
       const identity = await ctx.db.get(source.sourceIdentityId)
       if (!identity || identity.userId !== userId || identity.learningVoidId !== blueprint.learningVoidId) {
         throw new Error('Source review identity mismatch')
       }
-      const authority = await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted: true })
-      const excerpt = authority ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
-      const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
-        && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
-      const hasLocator = Boolean(sanitizePublicSourceLocator(source.publicLocator)
-        ?? sanitizePublicSourceLocator(identity.publicLocator)
-        ?? sanitizePublicSourceLocator(excerpt?.locator))
       const objectiveLinks = await ctx.db.query('learnObjectiveSources')
         .withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', source._id))
         .take(LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveSourceLinks + 1)
@@ -493,6 +488,17 @@ export const listSourceReview = query({
         if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) throw new Error('Source review objective scope mismatch')
         reviewedObjectives.push({ objectiveId: objective._id, title: reviewTitle(objective.title), coverage: link.coverage })
       }
+      metadata.push({ source, identity, reviewedObjectives })
+    }
+    const page = []
+    for (const { source, identity, reviewedObjectives } of metadata) {
+      const authority = await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted: true })
+      const excerpt = authority ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
+      const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
+        && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
+      const hasLocator = Boolean(sanitizePublicSourceLocator(source.publicLocator)
+        ?? sanitizePublicSourceLocator(identity.publicLocator)
+        ?? sanitizePublicSourceLocator(excerpt?.locator))
       page.push({
         ...sourceView(source),
         identity: {

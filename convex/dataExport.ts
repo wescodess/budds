@@ -3,10 +3,12 @@ import { v } from 'convex/values'
 import { isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { exportMeasurementPage } from './lib/learnV2MeasurementExport'
 import { mutation, query } from './_generated/server'
-import { authorizePersonalExportPage, requirePersonalExportAuthorization, PERSONAL_METADATA, exportPersonalResponse, exportLegacyAttempt, exportActivity, exportThread, exportDecision } from './lib/learnV2PersonalExport'
-import { privateFields, retainedResponsePayload } from './lib/learnV2ResponsePrivacy'
+import { authorizePersonalExportPage, requirePersonalExportAuthorization, PERSONAL_METADATA, exportPersonalResponse, exportPersonalResponseBody, exportLegacyAttempt, exportActivity, exportThread, exportDecision } from './lib/learnV2PersonalExport'
+import { privateFields } from './lib/learnV2ResponsePrivacy'
 import { requireAuth } from './lib/auth'
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
+import { personalResponsePage } from './lib/learnV2PersonalExportPage'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
@@ -66,28 +68,17 @@ export const getUserDataPage = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const paginationOpts = boundedPaginationOpts(args.paginationOpts)
     await requirePersonalExportAuthorization(ctx, userId, args.authorizationId)
 
+    if (args.collection === 'masteryAttempts') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportLegacyAttempt(ctx, userId, row))
+    if (args.collection === 'learningThreadActivities') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportActivity(ctx, userId, row))
+    if (args.collection === 'learnResponses') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportPersonalResponse(ctx, userId, row))
+    if (args.collection === 'learnResponseBodies') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportPersonalResponseBody(ctx, userId, row))
     if (isLearnMeasurementCollection(args.collection)) {
       const result = await exportMeasurementPage(ctx, userId, args.collection, paginationOpts)
       if (args.collection === 'learnAssessmentExposures') result.page = result.page.filter(row => row.assessmentOpportunityId !== undefined || row.policyVersion !== 'learn-v2.personal-export.v1')
-      if (args.collection === 'learnResponses') for (const row of result.page) {
-        const response = await ctx.db.get('learnResponses', row._id as import('./_generated/dataModel').Id<'learnResponses'>)
-        if (response?.userId === userId) Object.assign(row, await exportPersonalResponse(ctx, userId, response))
-      }
-      if (args.collection === 'learnResponseBodies') {
-        const page = []
-        for (const row of result.page) {
-          const body = await ctx.db.get('learnResponseBodies', row._id as import('./_generated/dataModel').Id<'learnResponseBodies'>)
-          const response = body && await ctx.db.get(body.submissionId)
-          const payload = response?.userId === userId ? await retainedResponsePayload(ctx, userId, response) : null
-          page.push({ _id: row._id, _creationTime: row._creationTime, createdAt: row.createdAt, submissionId: body?.submissionId,
-            ...(payload ? { bodyAvailability: 'available', payload: payload.kind === 'source_comparison' ? { kind: payload.kind, comparison: payload.comparison } : payload }
-              : { bodyAvailability: 'unavailable', bodyUnavailableReason: 'evidence_unavailable' }) })
-        }
-        return { ...result, page }
-      }
       return result
     }
     if (args.collection === 'learningThreads') {
@@ -103,14 +94,6 @@ export const getUserDataPage = query({
       const result = await ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       return { ...result, page: result.page.map(row => ({ ...privateFields(row, PERSONAL_METADATA[collection]),
         ...(collection === 'learningThreadArtifacts' && 'status' in row && row.status === 'deleted' ? { title: '[deleted]', summary: '' } : {}) })) }
-    }
-    if (args.collection === 'masteryAttempts') {
-      const result = await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      return { ...result, page: await Promise.all(result.page.map(row => exportLegacyAttempt(ctx, userId, row))) }
-    }
-    if (args.collection === 'learningThreadActivities') {
-      const result = await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      return { ...result, page: await Promise.all(result.page.map(row => exportActivity(ctx, userId, row))) }
     }
 
     switch (args.collection) {

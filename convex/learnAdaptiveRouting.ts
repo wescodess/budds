@@ -110,7 +110,7 @@ export const decideNextActivity = mutation({
         outcome: 'completed', attemptId: null, attemptKind: null, assistance: 'none', confidence: null, masteryTransition: null } : null
       let mastery: AdaptiveRouterInput['mastery'] = null
       if (thread.authorityKind === 'v2_mission' && activity) {
-        const canvas = await loadReadyCanvas(commandCtx, userId, thread._id)
+        const canvas = await loadReadyCanvas(commandCtx, userId, thread._id, { includeSavedResponse: false })
         if (!canvas || !activity.learningVoidId || !activity.blueprintRevisionId || !activity.objectiveId || !activity.sessionContentId
           || thread.learningVoidId !== activity.learningVoidId || activity.evidenceReferences.length < 1 || activity.evidenceReferences.length > 16)
           throw new AdaptiveCommandRejection('blocked', 'factual_authority_unavailable', 'Pinned factual authority is unavailable')

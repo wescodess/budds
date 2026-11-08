@@ -5,6 +5,7 @@ import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { legacyResponseAvailable, retainedPlanCache, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 
 const MAX_VOIDS = 32
 const MAX_SOURCES = 64
@@ -62,12 +63,22 @@ async function mapProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0
   return { blueprint, milestones, objectives: objectiveViews }
 }
 
-async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {
+async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null, summaryOnly = false) {
   if (!blueprint) return { items: [], counts: { total: 0, accepted: 0, evaluated: 0, rejected: 0, unavailable: 0, pending: 0 } }
   const rows = await ctx.db.query('learnSourceSnapshots')
     .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id))
     .take(MAX_SOURCES + 1)
   if (rows.length > MAX_SOURCES) throw new Error('Learn V2 source set exceeds its bounded contract')
+  const counts = { total: rows.length, accepted: 0, evaluated: 0, rejected: 0, unavailable: 0, pending: 0 }
+  for (const source of rows) {
+    const status = source.effectiveStatus ?? source.status
+    if (status === 'user_accepted') counts.accepted += 1
+    else if (status === 'evaluated') counts.evaluated += 1
+    else if (status === 'rejected') counts.rejected += 1
+    else if (status === 'unavailable') counts.unavailable += 1
+    else counts.pending += 1
+  }
+  if (summaryOnly) return { items: [], counts }
   const objectives = await ctx.db.query('learnObjectives').withIndex('by_userId_and_blueprintRevisionId_and_order', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id)).take(MAX_OBJECTIVES + 1)
   if (objectives.length > MAX_OBJECTIVES) throw new Error('Learn V2 map exceeds its bounded contract')
   const mappedBySource = new Map<string, Array<{ objectiveId: Id<'learnObjectives'>, title: string, coverage: 'strong' | 'partial' | 'gap' }>>()
@@ -80,15 +91,9 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
       mappedBySource.set(String(link.sourceSnapshotId), current)
     }
   }
-  const counts = { total: rows.length, accepted: 0, evaluated: 0, rejected: 0, unavailable: 0, pending: 0 }
   const items = []
   for (const source of rows) {
     const status = source.effectiveStatus ?? source.status
-    if (status === 'user_accepted') counts.accepted += 1
-    else if (status === 'evaluated') counts.evaluated += 1
-    else if (status === 'rejected') counts.rejected += 1
-    else if (status === 'unavailable') counts.unavailable += 1
-    else counts.pending += 1
     const identity = await ctx.db.get(source.sourceIdentityId)
     const excerpt = await retainedSourceExcerpt(ctx, userId, source._id)
     items.push({
@@ -176,8 +181,16 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   for (const objective of map?.objectives ?? []) {
     const record = (await getScopedMasteryRecord(ctx, userId, blueprint!._id, objective._id)).record
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
-    mastery.push({ objectiveId: objective._id, record, attempts: await Promise.all(attempts.map(attempt => retainedAttempt(ctx, userId, attempt))) })
+    mastery.push({ objectiveId: objective._id, record, attempts })
   }
+  const retainedMastery = []
+  for (const row of mastery) {
+    const attempts = []
+    for (const attempt of row.attempts) attempts.push(await retainedAttempt(ctx, userId, attempt))
+    retainedMastery.push({ ...row, attempts })
+  }
+  const retainedCalibration = []
+  for (const attempt of calibrationAttempts) retainedCalibration.push(await retainedAttempt(ctx, userId, attempt))
   const availableSources = new Set(sources.items.filter(source => source.excerpt !== null).map(source => source._id))
   const calibrationItems = (map?.objectives ?? []).map(objective => {
     const supported = objective.sourceLinks.filter(link => link.coverage !== 'gap')
@@ -189,14 +202,15 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
     ...revision, inputSnapshot: retainedPlanCache(revision.inputSnapshot, 'input'), resultSnapshot: retainedPlanCache(revision.resultSnapshot, 'result'),
   }
   return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map,
-    calibration: { attempts: await Promise.all(calibrationAttempts.map(attempt => retainedAttempt(ctx, userId, attempt))), items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 },
-    plan: { ...plan, preview: safePlanRevision(plan.preview), accepted: safePlanRevision(plan.accepted) }, mastery }
+    calibration: { attempts: retainedCalibration, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 },
+    plan: { ...plan, preview: safePlanRevision(plan.preview), accepted: safePlanRevision(plan.accepted) }, mastery: retainedMastery }
 }
 
 export const listHub = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const rows = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).order('desc').take(MAX_VOIDS + 1)
     if (rows.length > MAX_VOIDS) throw new Error('Learn V2 Learning Void list exceeds its bounded contract')
     const items = []
@@ -204,7 +218,7 @@ export const listHub = query({
       const owned = await ownedVoid(ctx, userId, row._id)
       if (!owned) continue
       const blueprint = await currentBlueprint(ctx, userId, row)
-      const sources = await sourceProjection(ctx, userId, blueprint)
+      const sources = await sourceProjection(ctx, userId, blueprint, true)
       const plan = await planProjection(ctx, userId, row)
       items.push({ _id: row._id, title: row.title, status: row.status, revision: row.revision, folderId: row.folderId, blueprintRevisionId: blueprint?._id ?? null, nextAction: nextAction(row, blueprint, sources, plan), nextScheduledAt: plan.sessions.filter(session => session.status === 'planned' || session.status === 'ready').map(session => session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null })
     }
@@ -216,6 +230,7 @@ export const getMission = query({
   args: { learningVoidId: v.union(v.id('learningVoids'), v.null()) },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     if (args.learningVoidId === null) return null
     const owned = await ownedVoid(ctx, userId, args.learningVoidId)
     return owned ? await journey(ctx, userId, owned.row, owned.folder) : null
@@ -226,6 +241,7 @@ export const getCurrentMission = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const rows = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).order('desc').take(MAX_VOIDS + 1)
     if (rows.length > MAX_VOIDS) throw new Error('Learn V2 Learning Void list exceeds its bounded contract')
     const current = rows.find(row => !['completed', 'archived'].includes(row.status))

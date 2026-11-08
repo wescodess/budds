@@ -1,3 +1,4 @@
+import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -523,44 +524,47 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
 }
 
 async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnResponses'>) {
-  if (response.bodyAvailability === 'purged') return { bodyAvailability: 'purged' as const, reasonCode: 'evidence_unavailable' as const, purgedAt: response.bodyPurgedAt ?? response.invalidatedAt ?? response.acceptedAt }
-  const unavailable = { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }
-  if (response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return unavailable
-  if (!await responseActivityWithinBound(ctx, userId, response)) return unavailable
-  if (!await liveResponseAggregate(ctx, userId, response)) return unavailable
-  if (response.scopeKind === 'v2' && response.contextPins.kind === 'session' && response.contextPins.canvas) {
-    const thread = await ctx.db.get(response.contextPins.canvas.threadId)
-    if (thread && !await threadSourceAvailable(ctx, userId, thread)) return unavailable
-  }
-  const links = await ctx.db.query('learnResponseEvidenceLinks')
-    .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
-  if (links.length > 64 || (response.scopeKind === 'v2' && !links.length)) return unavailable
-  for (const link of links) {
-    if (link.invalidatedAt !== undefined || link.evidenceStatus !== 'available') return unavailable
-    const dependency = link.dependency
-    if (dependency.kind === 'snapshot') {
-      try {
-        const current = await snapshotDependency(ctx, userId, response.scopeKind === 'v2' ? response.learningVoidId : link.learningVoidId!, dependency.sourceSnapshotId, dependency.supportManifestDigest)
-        if (canonical(current) !== canonical(dependency)) return unavailable
-      } catch { return unavailable }
-    } else if (dependency.kind === 'document') {
-      const document = await ctx.db.get(dependency.documentId)
-      const folder = document && await ctx.db.get(document.folderId)
-      if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId
-        || !documentHasCurrentRevision(document, dependency.sourceRevision)) return unavailable
-    } else {
-      const folder = await ctx.db.get(dependency.folderId)
-      if (!folder || folder.userId !== userId) return unavailable
+  return await privacyRead(ctx, userId, ['response-state-body', response._id], { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }, async ctx => {
+    if (response.bodyAvailability === 'purged') return { bodyAvailability: 'purged' as const, reasonCode: 'evidence_unavailable' as const, purgedAt: response.bodyPurgedAt ?? response.invalidatedAt ?? response.acceptedAt }
+    const unavailable = { bodyAvailability: 'unavailable' as const, reasonCode: 'evidence_unavailable' as const }
+    if (response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined) return unavailable
+    if (!await responseActivityWithinBound(ctx, userId, response)) return unavailable
+    if (!await liveResponseAggregate(ctx, userId, response)) return unavailable
+    if (response.scopeKind === 'v2' && response.contextPins.kind === 'session' && response.contextPins.canvas) {
+      const thread = await ctx.db.get(response.contextPins.canvas.threadId)
+      if (thread && !await threadSourceAvailable(ctx, userId, thread)) return unavailable
     }
-  }
-  const body = await ctx.db.query('learnResponseBodies')
-    .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).unique()
-  if (!body || body.payloadDigest !== response.payloadDigest || await digest(body.payload) !== response.payloadDigest
-    || learnSerializedBytes(body.payload, LEARN_V2_RESPONSE_LIMITS.maxResponseBytes) !== body.payloadBytes) return unavailable
-  return { bodyAvailability: 'available' as const, payload: body.payload }
+    const links = await ctx.db.query('learnResponseEvidenceLinks')
+      .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).take(65)
+    if (links.length > 64 || (response.scopeKind === 'v2' && !links.length)) return unavailable
+    for (const link of links) {
+      if (link.invalidatedAt !== undefined || link.evidenceStatus !== 'available') return unavailable
+      const dependency = link.dependency
+      if (dependency.kind === 'snapshot') {
+        try {
+          const current = await snapshotDependency(ctx, userId, response.scopeKind === 'v2' ? response.learningVoidId : link.learningVoidId!, dependency.sourceSnapshotId, dependency.supportManifestDigest)
+          if (canonical(current) !== canonical(dependency)) return unavailable
+        } catch { return unavailable }
+      } else if (dependency.kind === 'document') {
+        const document = await ctx.db.get(dependency.documentId)
+        const folder = document && await ctx.db.get(document.folderId)
+        if (!document || document.userId !== userId || document.status !== 'success' || !folder || folder.userId !== userId
+          || !documentHasCurrentRevision(document, dependency.sourceRevision)) return unavailable
+      } else {
+        const folder = await ctx.db.get(dependency.folderId)
+        if (!folder || folder.userId !== userId) return unavailable
+      }
+    }
+    const body = await ctx.db.query('learnResponseBodies')
+      .withIndex('by_userId_and_submissionId', q => q.eq('userId', userId).eq('submissionId', response._id)).unique()
+    if (!body || body.payloadDigest !== response.payloadDigest || await digest(body.payload) !== response.payloadDigest
+      || learnSerializedBytes(body.payload, LEARN_V2_RESPONSE_LIMITS.maxResponseBytes) !== body.payloadBytes) return unavailable
+    return { bodyAvailability: 'available' as const, payload: body.payload }
+  })
 }
 
 export async function getLearnResponseStateForOwner(ctx: ReadCtx, userId: string, target: LearnResponseTarget): Promise<LearnV2ResponseState> {
+  ctx = createResponsePrivacyReadContext(ctx, userId).ctx
   const row = await requireOwnedResponseTarget(ctx, userId, target)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return disabledLearnV2Result()
   let work = null

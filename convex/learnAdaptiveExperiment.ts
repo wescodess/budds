@@ -218,7 +218,7 @@ async function hasExperimentSafetyPrerequisites(ctx: MutationCtx, thread: Doc<'l
   if (sourceState !== 'ready' || !activity || activity.activityClass !== 'factual'
     || !activity.learningVoidId || !activity.blueprintRevisionId || !activity.objectiveId || !activity.sessionContentId
     || activity.evidenceReferences.length < 1 || activity.evidenceReferences.length > 16) return false
-  const canvas = await loadReadyCanvas(ctx, thread.userId, thread._id)
+  const canvas = await loadReadyCanvas(ctx, thread.userId, thread._id, { includeSavedResponse: false })
   if (!canvas || (canvas.status !== 'ready' && canvas.status !== 'feedback')) return false
   for (const reference of activity.evidenceReferences) {
     const source = await ctx.db.get(reference.sourceSnapshotId)
