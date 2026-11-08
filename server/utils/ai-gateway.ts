@@ -389,6 +389,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     headers,
     signal: params.signal,
     body: requestBody,
+    ...(params.captureScoringProvenance ? { redirect: 'error' as const } : {}),
   })
 
   if (!response.ok) {

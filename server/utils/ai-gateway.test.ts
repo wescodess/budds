@@ -63,6 +63,16 @@ describe('generateCompletion', () => {
     )
   })
 
+  test.each([undefined, false, true])('A11 redirect policy applies only to scoring capture (%s)', async captureScoringProvenance => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify(minimalResponse)))
+    await generateCompletion({ ...baseParams, captureScoringProvenance })
+    const init = vi.mocked(fetch).mock.calls[0]![1]!
+    if (captureScoringProvenance) expect(init.redirect).toBe('error')
+    else expect(init).not.toHaveProperty('redirect')
+    expect(init.body).toBe(serializeCompletionRequest(baseParams))
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   test('the quiz byte selector matches the actual escaped wire body at 96000 bytes', async () => {
     const item = {
       id: 'wire-boundary', question: 'A question', referenceAnswer: 'The full reference', evidenceExcerpt: 'Evidence 🌱',

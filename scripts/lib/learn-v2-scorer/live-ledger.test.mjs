@@ -231,6 +231,39 @@ function syntheticKeys(t) {
   return () => { for (const key of keys) process.env[key] = 'local-synthetic-only' }
 }
 
+function nativeRedirect(url, request, mode, hops, finalResponse = { status: 400, body: 'Synthetic HTTP rejection' }) {
+  const status = Number(/^redirect-(\d+)/.exec(mode)?.[1] ?? 302)
+  const endpoint = new URL(url)
+  const targets = [endpoint.href, 'https://unapproved.invalid/redirect-target', 'https://also-unapproved.invalid/final-target']
+  return mockNativeFetch({ dispatch(options, handler) {
+    const hop = { origin: String(options.origin), path: options.path, method: options.method, body: '' }
+    hops.push(hop)
+    assert.ok(hops.length <= 21, 'Only the bounded native redirect loop may repeat')
+    const index = targets.indexOf(new URL(options.path, options.origin).href)
+    assert.ok(index >= 0, 'Only synthetic redirect endpoints are accepted')
+    queueMicrotask(async () => {
+      let aborted = false
+      handler.onConnect(error => { aborted = true; handler.onError(error) })
+      try {
+        const chunks = []
+        for await (const chunk of options.body ?? []) chunks.push(Buffer.from(chunk))
+        hop.body = Buffer.concat(chunks).toString('utf8')
+        const redirect = index < 2 || mode === 'redirect-loop'
+        const headers = mode.endsWith('no-location') ? []
+          : [Buffer.from('location'), Buffer.from(targets[mode === 'redirect-loop' ? 1 : Math.min(index + 1, 2)])]
+        handler.onHeaders(redirect ? status : mode.endsWith('503') ? 503 : finalResponse.status,
+          redirect ? headers : [], () => {}, '')
+        if (!aborted) {
+          handler.onData(Buffer.from(finalResponse.body))
+          handler.onComplete([])
+        }
+      }
+      catch (error) { handler.onError(error) }
+    })
+    return true
+  } })(url, request)
+}
+
 function syntheticHttp(t, setup, mode) {
   let responseMode = mode
   const resetKeys = syntheticKeys(t)
@@ -266,30 +299,8 @@ function syntheticHttp(t, setup, mode) {
     assert.equal(request.signal.aborted, false)
     calls.push({ url, signal: request.signal })
     if (responseMode.startsWith('redirect-')) {
-      const status = responseMode.includes('307') ? 307 : 302
-      const endpoint = new URL(url)
-      const destination = new URL('/synthetic-redirect-target', endpoint)
       const hops = calls.at(-1).hops = []
-      const native = mockNativeFetch({ dispatch(options, handler) {
-        assert.equal(String(options.origin), endpoint.origin)
-        assert.ok([endpoint.pathname, destination.pathname].includes(options.path))
-        hops.push({ method: options.method, path: options.path })
-        assert.ok(hops.length <= 21, 'Only the bounded native redirect loop may repeat')
-        queueMicrotask(() => {
-          let aborted = false
-          handler.onConnect(error => { aborted = true; handler.onError(error) })
-          const redirect = options.path === endpoint.pathname || responseMode === 'redirect-loop'
-          const headers = responseMode.endsWith('no-location') ? []
-            : [Buffer.from('location'), Buffer.from(destination.pathname)]
-          handler.onHeaders(redirect ? status : responseMode.endsWith('503') ? 503 : 400, redirect ? headers : [], () => {}, '')
-          if (!aborted) {
-            handler.onData(Buffer.from('Synthetic HTTP rejection'))
-            handler.onComplete([])
-          }
-        })
-        return true
-      } })
-      return native(url, request)
+      return nativeRedirect(url, request, responseMode, hops)
     }
     if (responseMode === 'network-loss') throw new TypeError('Synthetic connection lost after send')
     if (responseMode === 'abort') throw new DOMException('Synthetic abort after send', 'AbortError')
@@ -364,9 +375,8 @@ function syntheticHttp(t, setup, mode) {
 const transportOutcomes = [
   ['400', 'definitive_failure'], ['429', 'definitive_failure'], ['500', 'outcome_unknown'], ['503', 'outcome_unknown'],
   ['204', 'invalid_response'], ['205', 'invalid_response'],
-  ['redirect-302-to-400', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
-  ['redirect-307-to-400', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
-  ['redirect-302-no-location', { baseline: 'definitive_failure', direct: 'outcome_unknown' }],
+  ...[301, 302, 303, 307, 308].map(status => [`redirect-${status}-to-400`, 'outcome_unknown']),
+  ['redirect-302-no-location', 'outcome_unknown'],
   ['redirect-302-to-503', 'outcome_unknown'], ['redirect-loop', 'outcome_unknown'],
   ['late-400', 'definitive_failure'], ['classified-rejection', 'definitive_failure'],
   ['network-loss', 'outcome_unknown'], ['timeout', 'outcome_unknown'], ['abort', 'outcome_unknown'],
@@ -379,10 +389,9 @@ const transportOutcomes = [
   ['body-reset-400', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
   ['missing-key', 'not_dispatched'], ['pre-send-abort', 'not_dispatched'],
 ]
-for (const [mode, classification] of transportOutcomes) {
+for (const [mode, failure] of transportOutcomes) {
   test(`A9 transport table ${mode}: classification, replay and admission`, async t => {
     for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
-      const failure = typeof classification === 'string' ? classification : classification[role === 'baseline' ? 'baseline' : 'direct']
       const setup = await canary(t, role)
       const { state, approval, id, createRun, approve } = setup
       const before = calls.length
@@ -394,10 +403,12 @@ for (const [mode, classification] of transportOutcomes) {
       const summary = await dispatchLive(state.directory, id, approval)
       await rejectNextRequest.verifyCleanup()
       if (mode.startsWith('redirect-')) {
-        const hops = calls.at(-1).hops
-        const followed = role === 'baseline' && !mode.endsWith('no-location')
-        assert.equal(hops.length, mode === 'redirect-loop' && followed ? 21 : followed ? 2 : 1)
-        if (followed && mode !== 'redirect-loop') assert.equal(hops[1].method, mode.includes('307') ? 'POST' : 'GET')
+        const sent = calls.at(-1)
+        const endpoint = new URL(sent.url)
+        assert.deepEqual(sent.hops.map(hop => ({ origin: hop.origin, path: hop.path, method: hop.method })),
+          [{ origin: endpoint.origin, path: endpoint.pathname + endpoint.search, method: 'POST' }],
+        'One approved intent permits exactly one POST to its approved origin, without a redirect hop')
+        assert.equal(sent.hops[0].body, readJson(join(state.directory, `${id}.intent.json`)).payload.request.body)
       }
       const terminal = readJson(join(state.directory, `${id}.terminal.json`))
       const unknown = failure === 'outcome_unknown'
@@ -409,6 +420,7 @@ for (const [mode, classification] of transportOutcomes) {
       assert.equal(calls.length, before + Number(!notSent))
       assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + Number(!notSent)) * 100)
       const ledger = await openLiveLedger(globalDirectory)
+      assert.equal([...ledger.reservations.values()].filter(row => row.intentDigest === terminal.payload.intentDigest).length, 1)
       const charged = [...ledger.reservations].filter(([name]) => ledger.resolutions.get(name)?.status !== 'not_dispatched')
       assert.equal(charged.length, before + Number(!notSent))
       assert.equal(charged.reduce((total, [, row]) => total + row.reservationMicroUsd, 0), (before + Number(!notSent)) * 100)
@@ -433,6 +445,25 @@ for (const [mode, classification] of transportOutcomes) {
     })
   })
 }
+
+test('A11 non-scoring gateway calls preserve native redirect following', async t => {
+  syntheticKeys(t)
+  const { generateCompletion } = await import('../../../server/utils/ai-gateway.ts')
+  const response = { id: 'synthetic-completion', model: 'synthetic-model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: '{}' } }],
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }
+  for (const status of [301, 302, 303, 307, 308]) await t.test(String(status), async t => {
+    const hops = []
+    const fetchMock = mock.method(globalThis, 'fetch', (url, request) => nativeRedirect(url, request, `redirect-${status}`, hops, { status: 200, body: JSON.stringify(response) }))
+    t.after(() => fetchMock.mock.restore())
+    assert.deepEqual(await generateCompletion({ model: response.model, messages: [{ role: 'user', content: 'Synthetic redirect control' }] }), response)
+    assert.equal(hops.length, 3)
+    assert.deepEqual(hops.map(row => row.origin), ['https://gateway.ai.cloudflare.com', 'https://unapproved.invalid', 'https://also-unapproved.invalid'])
+    assert.deepEqual(hops.map(row => row.method), [301, 302, 303].includes(status) ? ['POST', 'GET', 'GET'] : ['POST', 'POST', 'POST'])
+    assert.ok(hops[0].body.length > 0)
+    assert.ok(hops.slice(1).every(row => row.body === ([301, 302, 303].includes(status) ? '' : hops[0].body)))
+  })
+})
 
 test('A10 cancellation failures and pending cleanup cannot delay or change a completed invalid response', async t => {
   syntheticKeys(t)

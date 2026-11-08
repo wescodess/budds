@@ -5,7 +5,7 @@ import { createLearnScorerRegistry, LEARN_MASTERY_IMPLEMENTATION_PINS, resolveMa
 import { isLearnScoringReceiptCommittable, learnScoringExecutionReceiptSchema } from '../../shared/learn-v2-measurement'
 import { deriveMastery, scoreCriteria } from '../../shared/learn-v2-mastery'
 import { baselineMasteryScoringArtifacts, buildBaselineMasteryScoringRequest, createLearnMasteryScorerService, scorerCanonicalJson, scorerDigest } from './learn-v2-mastery-scorer'
-import { serializeCompletionRequest, type GenerateParams, type GatewayGenerationMetadata } from './ai-gateway'
+import { generateCompletion, serializeCompletionRequest, type GenerateParams, type GatewayGenerationMetadata } from './ai-gateway'
 
 const definition = (configurationId = 'fixture.legacy.v1', requestedModel = 'fixture/old-model'): LearnScorerConfigurationDefinition => ({
   configurationId, configurationVersion: 'fixture.config.v1', kind: 'legacy_baseline', requestedModel, endpoint: null,
@@ -344,6 +344,27 @@ describe('recorded execution verification', () => {
     await expect(service.reconcile(prepared, result)).rejects.toThrow('unavailable')
     expect(infer).toHaveBeenCalledTimes(1)
     expect(lookup).not.toHaveBeenCalled()
+  })
+
+  test('A11 scoring redirect rejection stays unscored with no redispatch or metadata lookup', async () => {
+    const { registry, input, lookup, clock } = await setup()
+    vi.stubGlobal('useRuntimeConfig', () => ({ cloudflareAccountId: 'synthetic-account', cloudflareAiGatewayId: 'synthetic-gateway', openrouterApiKey: 'synthetic-only' }))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed', { cause: new Error('unexpected redirect') }))
+    try {
+      const service = createLearnMasteryScorerService(registry, { infer: generateCompletion, metadata: lookup }, clock)
+      const prepared = await service.prepare(input)
+      const result = await service.dispatch(prepared)
+      expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ method: 'POST', redirect: 'error' }))
+      expect(result.terminal).toEqual({ generationId: null, returnedModel: null, provenance: null, verdict: null, outputDigest: null, failure: 'outcome_unknown' })
+      expect(result.receipt.outcome).toBe('reconciliation_required')
+      expect(result.receipt.verdict).toBeUndefined()
+      expect(await service.isConsumable(prepared, result)).toBe(false)
+      await expect(service.dispatch(prepared)).rejects.toThrow('unavailable')
+      await expect(service.reconcile(prepared, result)).rejects.toThrow('unavailable')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(lookup).not.toHaveBeenCalled()
+    }
+    finally { fetchMock.mockRestore(); vi.unstubAllGlobals() }
   })
 
   test('expired leases, dispatch ceilings, private/oversized payloads and edited settings block I/O', async () => {
