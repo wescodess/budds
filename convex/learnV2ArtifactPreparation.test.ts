@@ -445,6 +445,18 @@ describe('in-transaction artifact preparation', () => {
 })
 
 
+async function fullLineageInventory(t: Store) {
+  return t.run(async ctx => {
+    const state = []
+    for (const table of ['learnAssessmentCatalogs', 'learnAssessmentCases', 'learnArtifactLineages', 'learnArtifactLineageOrigins', 'learnArtifactCaseBindings', 'learnArtifactValidations', 'learnArtifactSourceLinks'] as const) {
+      const rows = await ctx.db.query(table).withIndex('by_userId', q => q.eq('userId', userId)).take(4000)
+      expect(rows.length).toBeLessThan(4000)
+      state.push(rows)
+    }
+    return state
+  })
+}
+
 describe('round-2 producer budgets', { timeout: 30_000 }, () => {
   test.each(['Quiz', 'section_procedural', 'section_factual', 'section_conceptual', 'Flashcards', 'Flashcards_200', 'Audio Overview', 'document'] as const)('%s admits maximum sources and prepares the full output batch', async shape => {
     const f = await setup()
@@ -518,7 +530,7 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
       if (decision.status === 'rejected') expect(decision.reasonCode).toBe('lineage_unavailable')
       expect(sameTransaction.ranges).toBeLessThanOrEqual(3072)
       expect(sameTransaction.chargedBytes).toBeLessThan(8 * 1024 * 1024)
-      return { shape, inputs: refs.length, outputs: published.references.length, references: published.references, admission, preparation, publication, producer, sameTransaction, total: publication }
+      return { shape, inputs: refs.length, outputs: published.references.length, references: published.references, lineageIds: published.lineageIds, admission, preparation, publication, producer, sameTransaction, total: publication }
     })
     const links = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId', q => q.eq('userId', userId)).take(4000))
     expect(links).toHaveLength(count ? count * (2 + result.outputs) : 2)
@@ -537,6 +549,26 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
       expect(versionCardReads).toBe(section || shape.startsWith('Flashcards') ? 2 : 0)
       return { ...total.readUsage, ranges: total.indexRanges, versionCardReads }
     })
+    const beforeReplay = await fullLineageInventory(f.t)
+    const replay = await f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      expect(await isArtifactRegistrationRequired(total.admission.ctx)).toBe(true)
+      if (refs.length) expect(await admitArtifactInputs(total.admission.ctx, { references: refs })).toMatchObject({ status: 'admitted_registered' })
+      const producer = { chargedBytes: 0, ranges: 0 }
+      for (const id of [f.folderId, ...docs.slice(0, count)]) {
+        const row = await raw.db.get(id)
+        producer.ranges++
+        if (row) producer.chargedBytes += getDocumentSize(row) + 64
+      }
+      const prepared = await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: result.references.map(reference =>
+        member(reference.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'], reference.key)) })
+      expect(prepared.references).toEqual(result.references)
+      expect(prepared.lineageIds).toEqual(result.lineageIds)
+      return { ...total.readUsage, ranges: total.indexRanges, producer, preparation: { ...total.preparation.readUsage, ranges: total.preparation.indexRanges } }
+    })
+    expect(await fullLineageInventory(f.t)).toEqual(beforeReplay)
+    expect(replay.ranges).toBeLessThanOrEqual(3072)
+    expect(replay.chargedBytes).toBeLessThan(8 * 1024 * 1024)
     // Edit writers re-register a section alone; its components are admitted.
     const edit = !section ? undefined : await f.asOwner.run(async raw => {
       const reference = result.references.find(ref => ref.artifact.kind === 'section_block')!
@@ -546,8 +578,8 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
       await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [0, 1, 2, 3].map(index => member(reference.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'], `block-${index}`)) })
       return { ...total.readUsage, ranges: total.indexRanges }
     })
-    const { references: _references, ...metrics } = result
-    console.log(JSON.stringify({ ...metrics, later, edit }))
+    const { references: _references, lineageIds: _lineageIds, ...metrics } = result
+    console.log(JSON.stringify({ ...metrics, later, replay, edit }))
     if (edit) {
       expect(edit.ranges).toBeLessThanOrEqual(3072)
       expect(edit.chargedBytes).toBeLessThan(8 * 1024 * 1024)
@@ -1799,5 +1831,151 @@ describe('B2 fast-path dependency regressions', { timeout: 60_000 }, () => {
     const before = await inventory(f.t)
     await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.artifacts }))).rejects.toThrow('unavailable')
     expect(await inventory(f.t)).toEqual(before)
+  })
+})
+
+
+async function siblingOriginFixture() {
+  const f = await setup()
+  await registerSource(f, true)
+  const origin = await f.asOwner.run(async ctx => {
+    const section = await writeLinkedSection(ctx, f, { questions: 1, cards: 0, text: (kind, index) => `Origin ${kind} ${index}` })
+    return { ...section, registered: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.artifacts }) }
+  })
+  const outer = await f.asOwner.run(async ctx => {
+    const section = await writeLinkedSection(ctx, f, { questions: 1, cards: 0 })
+    const alternate = member({ kind: 'quiz_question', id: section.questions[0]! }, 'alternate')
+    alternate.origins = [{ reference: origin.registered.references.at(-1)!, transformation: 'copy' }]
+    return { ...section, registered: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...section.artifacts, alternate] }) }
+  })
+  return { f, origin, outer }
+}
+
+describe('shared active-lineage dependency admission', { timeout: 60_000 }, () => {
+  test.each(['invalidated', 'private_scoring'] as const)('newly declared origins reject a %s nested component through the shared rule', async condition => {
+    const { f, origin } = await siblingOriginFixture()
+    await f.t.run(ctx => ctx.db.patch(origin.registered.lineageIds[0]!, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: condition }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      const quiz = await writeQuiz(ctx, f, [{ question: 'Fresh derived output', answer: 'Fresh derived solution' }])
+      quiz.artifacts[0]!.origins = [{ reference: origin.registered.references.at(-1)!, transformation: 'summary' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['invalidated', 'deleted', 'stale'] as const)('a batch rejects an origin section with a %s linked question, matching preparation alone', async condition => {
+    const { f, origin, outer } = await siblingOriginFixture()
+    await f.t.run(async ctx => {
+      if (condition === 'invalidated') await ctx.db.patch(origin.registered.lineageIds[0]!, { invalidatedAt: 0 })
+      if (condition === 'deleted') await ctx.db.delete(origin.questions[0]!)
+      if (condition === 'stale') await ctx.db.patch(origin.questions[0]!, { question: 'Changed origin component' })
+    })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, outer.artifacts[0]!.artifact))).toMatchObject({ status: 'rejected' })
+    const before = await inventory(f.t)
+    const reason = condition === 'invalidated' ? 'Artifact lineage unavailable' : 'Artifact registration required'
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [outer.artifacts.at(-1)!] }))).rejects.toThrow(reason)
+    for (const artifacts of [outer.artifacts, [...outer.artifacts].reverse()]) {
+      await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts }))).rejects.toThrow(reason)
+      expect(await inventory(f.t)).toEqual(before)
+    }
+  })
+
+  test.each([false, true])('a stale nested component stays inadmissible when also prepared in the batch (first: %s)', async first => {
+    const { f, origin, outer } = await siblingOriginFixture()
+    await f.t.run(ctx => ctx.db.patch(origin.questions[0]!, { question: 'Pending origin component edit' }))
+    const before = await inventory(f.t)
+    const nested = origin.artifacts[0]!
+    const artifacts = first ? [nested, ...outer.artifacts] : [...outer.artifacts, nested]
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts }))).rejects.toThrow('Artifact registration required')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each([false, true])('healthy sibling origins prepare and replay without writes (nested in batch: %s)', async includeNested => {
+    const { f, origin, outer } = await siblingOriginFixture()
+    const artifacts = [...outer.artifacts, ...(includeNested ? [origin.artifacts[0]!] : [])]
+    const expectedIds = [...outer.registered.lineageIds.slice(0, 2), ...(includeNested ? [origin.registered.lineageIds[0]!] : [])]
+    const before = await inventory(f.t)
+    for (const members of [artifacts, artifacts, [...artifacts].reverse()]) {
+      const prepared = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: members }))
+      expect(prepared.lineageIds).toEqual(members === artifacts ? expectedIds : [...expectedIds].reverse())
+      expect(prepared.catalogRevision).toBe(outer.registered.catalogRevision)
+      expect(await inventory(f.t)).toEqual(before)
+    }
+  })
+
+  test('a sibling origin must be explicitly re-pinned before its recorded successor admits', async () => {
+    const { f, origin, outer } = await siblingOriginFixture()
+    await f.asOwner.run(async ctx => {
+      await ctx.db.patch(origin.sectionId, { title: 'Registered origin successor' })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [origin.artifacts.at(-1)!] })
+    })
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [outer.artifacts.at(-1)!] }))).rejects.toThrow('unavailable')
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: outer.artifacts }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(outer.artifacts[0]!.artifact, 'alternate')] }))
+    const repaired = await inventory(f.t)
+    expect(await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: outer.artifacts }))).toMatchObject({ lineageIds: outer.registered.lineageIds.slice(0, 2) })
+    expect(await inventory(f.t)).toEqual(repaired)
+  })
+
+  test('exhausting the cumulative budget during nested preparation rejects and rolls back the producer', async () => {
+    const { f, outer } = await siblingOriginFixture()
+    const before = await inventory(f.t)
+    let ranges = 0
+    await expect(f.asOwner.run(async raw => {
+      const total = createArtifactLineagePublicationContext(raw)
+      for (let i = 0; i < 1800; i++) await total.admission.ctx.db.get(f.folderId)
+      for (let i = 0; i < 1265; i++) await total.preparation.ctx.db.get(f.folderId)
+      await raw.db.patch(outer.quizId, { title: 'Must roll back' })
+      try { return await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: outer.artifacts }) }
+      finally { ranges = total.indexRanges }
+    })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
+    expect(ranges).toBe(3072)
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('repeated sibling origins share one bounded admission graph', async () => {
+    const { f, origin, outer } = await siblingOriginFixture()
+    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: Array.from({ length: 14 }, (_, index) => ({
+      ...member(outer.artifacts[0]!.artifact, `alias-${index}`), origins: [{ reference: origin.registered.references.at(-1)!, transformation: 'copy' as const }],
+    })) }))
+    const before = await inventory(f.t)
+    let normalizations = 0
+    await f.asOwner.run(async raw => {
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property === 'normalizeId' && typeof method === 'function') return (...args: unknown[]) => { normalizations++; return Reflect.apply(method, target, args) }
+        return typeof method === 'function' ? method.bind(target) : method
+      } })
+      await prepareAndRegisterInstructionalArtifacts({ ...raw, db }, { artifacts: [outer.artifacts[0]!] })
+    })
+    expect(normalizations).toBeLessThanOrEqual(48)
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['document', 'document_chunk'] as const)('re-index classification rejects a reserved case on an unpublished personal %s binding', async kind => {
+    const f = await setup()
+    const registered = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind, id: f.documentId }, kind === 'document_chunk' ? LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY : 'whole')] }))
+    const caseId = await f.t.run(async ctx => {
+      const pin = await normalizedInstructionalCaseFingerprints('Personal retained scenario', 'Personal retained solution')
+      const caseId = await ctx.db.insert('learnAssessmentCases', { ...base, ...pin, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, caseKey: 'personal.retained', usageClass: 'unknown' })
+      const id = registered.lineageIds[0]!
+      await ctx.db.insert('learnArtifactCaseBindings', { ...base, lineageId: id, caseId, ...pin, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION })
+      await ctx.db.patch(id, { publication: undefined, caseCount: 1 })
+      const row = (await ctx.db.get(id))!
+      const bindings = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(33)
+      const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(65)
+      const manifestDigest = await artifactManifestDigest(ctx, row, [], bindings, sources)
+      await ctx.db.patch(id, { manifestDigest })
+      await ctx.db.patch(row.validationId!, { manifestDigest })
+      await ctx.db.patch(f.documentId, { status: 'indexing' })
+      return caseId
+    })
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+    await f.t.run(ctx => ctx.db.patch(caseId, { reservedAt: 0 }))
+    await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+    await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
   })
 })

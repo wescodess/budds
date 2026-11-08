@@ -838,7 +838,7 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
   })
 }
 
-async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false, indexingDocument?: Id<'documents'>, repinOrigins = false) {
+async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false, indexingDocument?: Id<'documents'>) {
   const nodes = new Map<Id<'learnArtifactLineages'>, Lineage>()
   const heights = new Map<Id<'learnArtifactLineages'>, number>()
   const active = new Set<Id<'learnArtifactLineages'>>()
@@ -880,7 +880,7 @@ async function inspectGraph(scope: Invocation, userId: string, root: Lineage, ca
           || parent.classification !== origin.classification) unavailable()
         return parent
       })
-      height = Math.max(height, 1 + await visit(repinOrigins ? await activeOrigin(scope, userId, origin) : parent, depth + 1))
+      height = Math.max(height, 1 + await visit(parent, depth + 1))
     }
     active.delete(row._id)
     heights.set(row._id, height)
@@ -1113,16 +1113,31 @@ async function inputLineages(scope: Invocation, userId: string, artifact: LearnA
   })
 }
 
+async function admitActiveLineageDependencies(
+  scope: Invocation, userId: string, row: Lineage, catalogRevision: number, admissions: InputAdmissionGraph,
+  options: { stalePins?: boolean, indexingDocument?: Id<'documents'> },
+) {
+  const graph = await inspectGraph(scope, userId, row, catalogRevision, true, options.stalePins, options.indexingDocument)
+  if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
+  const reference = { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }
+  const nested = await inputReferences(scope, userId, reference, [{ dependencies: graph.dependencies,
+    origins: [...graph.nodes.values()].map(node => ({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })) }])
+  if (nested.ordinaryComponent) unavailable()
+  // Retained dependencies must already admit, even when a producer is also
+  // preparing their current content in this batch.
+  for (const child of nested.references) {
+    const admission = (await admitInput(scope, userId, { reference: child }, admissions)).result
+    if (admission.status !== 'admitted_registered') unavailable()
+  }
+}
+
 async function preparationLineages(scope: Invocation, userId: string, artifact: PreparationMember['artifact'], key: string, catalogRevision: number, admissions: InputAdmissionGraph) {
   for (const row of await inputLineages(scope, userId, artifact)) {
     await lineageValidation(scope, userId, row)
     // The requested predecessor's cases remain history under D2; its current
     // content, inherited provenance and registration are checked below.
     if (row.key === key) continue
-    const graph = await inspectGraph(scope, userId, row, catalogRevision, true, true, undefined, true)
-    if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
-    const content = await preparationContent(scope, userId, artifact)
-    await preparationSources(scope, userId, { artifact, key: row.key, sources: [], origins: [] }, content.projection, graph.dependencies, admissions)
+    await admitActiveLineageDependencies(scope, userId, row, catalogRevision, admissions, { stalePins: true })
   }
 }
 
@@ -1777,8 +1792,7 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
     if (origins.size > limits.maxOrigins) unavailable()
     for (const { row } of origins.values()) {
       if (row.classification !== 'teaching') throw new Error('Instructional reservation check rejected')
-      const graph = await inspectGraph(scope, userId, row, catalog.catalogRevision, true)
-      if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) throw new Error('Instructional reservation check rejected')
+      await admitActiveLineageDependencies(scope, userId, row, catalog.catalogRevision, admissions, {})
     }
     const semanticDecision = personal ? 'not_required' as const : await semanticCheck(content.projection, fingerprints)
     const retainedSources = previous ? await inheritedSources(scope, userId, previous) : []
@@ -1903,16 +1917,7 @@ async function personalWorkDocument(scope: Invocation, userId: string, documentI
     for (const row of await inputLineages(scope, userId, { kind: 'document', id: documentId })) {
       const catalog = await readCatalog(scope, userId)
       if (row.classification !== 'genuine_personal_work') restrictedLineage()
-      const graph = await inspectGraph(scope, userId, row, catalog.catalogRevision, true, false, documentId)
-      if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
-      const reference = { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }
-      const nested = await inputReferences(scope, userId, reference, [{ dependencies: graph.dependencies,
-        origins: [...graph.nodes.values()].map(node => ({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })) }])
-      if (nested.ordinaryComponent) unavailable()
-      for (const child of nested.references) {
-        const admission = (await admitInput(scope, userId, { reference: child }, admissions)).result
-        if (admission.status !== 'admitted_registered') unavailable()
-      }
+      await admitActiveLineageDependencies(scope, userId, row, catalog.catalogRevision, admissions, { indexingDocument: documentId })
     }
   }
   else {
