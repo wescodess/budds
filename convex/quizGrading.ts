@@ -389,7 +389,7 @@ export const requestGradingRetry = mutation({
       candidates.push(row)
     }
     if (candidates.length === 0) return { retried: 0 }
-    const retryAt = Math.max(scope.attempt.gradingNotBefore ?? 0, await quizGradingCooldownUntil(ctx),
+    const retryAt = Math.max(scope.attempt.gradingNotBefore ?? 0, await quizGradingCooldownUntil(ctx, undefined, false),
       await quizGradingBudgetRetryAt(ctx, userId), scope.attempt.gradingAdmittedAt === undefined ? await quizGradingAdmissionRetryAt(ctx, userId) : 0)
     if (retryAt > Date.now()) return { retried: 0 }
     if (await admitQuizGradingAttempt(ctx, attemptId, userId)) return { retried: 0 }

@@ -6,6 +6,7 @@ import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
 import { gradeAttempt as scheduledEntry } from './quizGrading'
+import { reserveQuizGradingDispatch } from './lib/quizGradingLimits'
 import { generateCompletion, serializeCompletionRequest, type GenerateParams, type GenerateResponse } from '../server/utils/ai-gateway'
 import { QUIZ_GRADER_POLICY, quizGradingRequestBytes, QUIZ_GRADING_MAX_REQUEST_BYTES, type QuizGradingInput } from '../server/utils/quiz-grading'
 
@@ -1133,7 +1134,7 @@ async function seedGradingCounter(fixture: Fixture, kind: 'admission' | 'dispatc
     userId: owner, route: `quiz-grading/${kind}`, count, windowStartedAt, expiresAt: windowStartedAt + duration,
   }))
 }
-const gradingCounters = (fixture: Fixture) => fixture.t.run(ctx => ctx.db.query('rateLimitBuckets').take(20))
+const gradingCounters = (fixture: Fixture) => fixture.t.run(ctx => ctx.db.query('rateLimitBuckets').take(128))
 
 describe('free Groq dispatch integration', () => {
   beforeEach(() => {
@@ -1209,17 +1210,18 @@ describe('free Groq dispatch integration', () => {
     expect((await assessments(fixture, pending.attemptId))[0]).toMatchObject({ status: 'available', attemptCount: 1 })
   })
 
-  test('immediate manual retry cannot bypass pacing or consume a manual cycle', async () => {
+  test('immediate manual retry queues behind pacing without consuming a manual cycle', async () => {
     const fixture = await createQuiz()
     const attemptId = await finish(fixture)
     vi.mocked(fetch).mockResolvedValueOnce(new Response('private', { status: 400 }))
     await runGrade(fixture, attemptId)
     const before = await gradingCounters(fixture)
-    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 0 })
+    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
+    await runGrade(fixture, attemptId)
+    expect(fetch).toHaveBeenCalledTimes(1)
     expect(await gradingCounters(fixture)).toEqual(before)
     expect((await assessments(fixture, attemptId))[0]!.manualRetryCount).toBeUndefined()
     vi.setSystemTime(NOW + 61_000)
-    expect(await fixture.user.mutation(api.quizGrading.requestGradingRetry, { attemptId })).toEqual({ retried: 1 })
     await runGrade(fixture, attemptId)
     expect(fetch).toHaveBeenCalledTimes(2)
     expect((await assessments(fixture, attemptId))[0]).toMatchObject({ status: 'available', manualRetryCount: 1 })
@@ -1228,7 +1230,12 @@ describe('free Groq dispatch integration', () => {
   test('the 24th shared Groq reservation is atomic and never consumes OpenRouter shared budget', async () => {
     const fixture = await createQuiz()
     const other = await anotherLearner(fixture)
-    await fixture.t.run(ctx => ctx.db.insert('rateLimitBuckets', { key: 'internal:quiz-grading:groq-dispatch-shared', route: 'quiz-grading/groq-dispatch-shared', userId: '', count: 23, windowStartedAt: 0, expiresAt: 86_400_000 }))
+    await fixture.t.run(async (ctx) => {
+      for (let slot = 0; slot < 23; slot++) await ctx.db.insert('rateLimitBuckets', {
+        key: `internal:quiz-grading:groq-dispatch-shared-${slot}`, route: 'quiz-grading/groq-dispatch-shared',
+        userId: '', count: 1, windowStartedAt: NOW, expiresAt: NOW + 86_400_000,
+      })
+    })
     const first = await finish(fixture)
     const second = await finish(other)
     await Promise.all([runGrade(fixture, first), runGrade(other, second)])
@@ -1238,8 +1245,34 @@ describe('free Groq dispatch integration', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
     const rows = (await Promise.all([assessments(fixture, first), assessments(other, second)])).flat()
     expect(rows.find(row => row.status === 'unavailable')).toMatchObject({ unavailableReason: 'over_budget', attemptCount: 0 })
-    expect((await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/groq-dispatch-shared')).toMatchObject({ count: 24, userId: '' })
+    const shared = (await gradingCounters(fixture)).filter(row => row.route === 'quiz-grading/groq-dispatch-shared')
+    expect(shared).toHaveLength(24)
+    expect(shared.every(row => row.count === 1 && row.userId === '')).toBe(true)
     expect((await gradingCounters(fixture)).find(row => row.route === 'quiz-grading/dispatch-shared')).toBeUndefined()
+  })
+
+  test('one learner cannot spend the shared rolling allowance or regain it at UTC midnight', async () => {
+    const fixture = await createQuiz()
+    const day = 86_400_000
+    const start = day - 13 * 61_000
+    for (let call = 0; call < 12; call++) {
+      vi.setSystemTime(start + call * 61_000)
+      expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(0)
+    }
+    vi.setSystemTime(day + 61_000)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(start + day)
+    for (let call = 0; call < 12; call++) {
+      vi.setSystemTime(day + (call + 1) * 61_000)
+      expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, OTHER.tokenIdentifier))).toBe(0)
+    }
+    vi.setSystemTime(start + day - 1)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, 'third-learner'))).toBe(start + day)
+    vi.setSystemTime(start + day)
+    expect(await fixture.t.run(ctx => reserveQuizGradingDispatch(ctx, USER.tokenIdentifier))).toBe(0)
+    const counters = await gradingCounters(fixture)
+    expect(counters.filter(row => row.route === 'quiz-grading/groq-dispatch-shared')).toHaveLength(24)
+    expect(counters.filter(row => row.route === 'quiz-grading/groq-dispatch-user' && row.userId === USER.tokenIdentifier)).toHaveLength(12)
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   test('long upstream floors settle the whole attempt and fence other learners and manual retries without budget burn', async () => {

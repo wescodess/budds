@@ -125,7 +125,7 @@ describe('QuizResultsView graded results', () => {
     expect(wrapper.text()).toContain('Points so far')
     expect(wrapper.get('[data-testid="quiz-score-value"]').text()).toBe('2/5')
     expect(wrapper.get('[data-testid="quiz-score-ring"]').classes()).toContain('stroke-muted-foreground')
-    expect(wrapper.text()).toContain('Checking 3 answers. Usually seconds, sometimes a few minutes. It keeps going if you leave.')
+    expect(wrapper.text()).toContain('Checking 3 answers. This can take several minutes. It keeps going if you leave.')
     const strip = cells(wrapper)
     expect(strip).toHaveLength(5)
     expect(strip[1].classes()).toContain('border-dashed')

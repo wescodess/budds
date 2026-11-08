@@ -11,11 +11,11 @@ const ADMISSION_LIMIT = 3
 const USER_DISPATCH_LIMIT = 25
 const SHARED_DISPATCH_LIMIT = 50
 const GROQ_SHARED_DISPATCH_LIMIT = 24
+const GROQ_USER_DISPATCH_LIMIT = 12
 const GROQ_DISPATCH_INTERVAL_MS = 61_000
 
-type Kind = 'admission' | 'dispatch-user' | 'dispatch-shared' | 'cooldown' | 'groq-dispatch-shared' | 'groq-cooldown' | 'groq-pacing'
-const sharedKind = () => quizGradingProvider() === 'groq' ? 'groq-dispatch-shared' as const : 'dispatch-shared' as const
-const sharedLimit = () => quizGradingProvider() === 'groq' ? GROQ_SHARED_DISPATCH_LIMIT : SHARED_DISPATCH_LIMIT
+type RollingKind = 'groq-dispatch-user' | 'groq-dispatch-shared'
+type Kind = 'admission' | 'dispatch-user' | 'dispatch-shared' | 'cooldown' | 'groq-cooldown' | 'groq-pacing' | `${RollingKind}-${number}`
 function key(kind: Kind, userId = '') {
   return `${INTERNAL_RATE_LIMIT_PREFIX}${kind}${userId ? `:${JSON.stringify(userId)}` : ''}`
 }
@@ -37,6 +37,31 @@ function blockedUntil(row: Doc<'rateLimitBuckets'> | null, limit: number) {
   return row && row.expiresAt > Date.now() && row.count >= limit ? row.expiresAt : 0
 }
 
+// Fixed, indexed slots bound both reads and storage, and keep each reservation
+// until its own 24-hour expiry. UTC midnight cannot refill either allowance.
+async function rollingWindow(ctx: MutationCtx, kind: RollingKind, limit: number, userId = '') {
+  const slots = await Promise.all(Array.from({ length: limit }, (_, index) => bucket(ctx, `${kind}-${index}`, userId)))
+  const freeSlot = slots.findIndex(row => !row || row.expiresAt <= Date.now())
+  return { kind, userId, slots, freeSlot, retryAt: freeSlot < 0 ? Math.min(...slots.map(row => row!.expiresAt)) : 0 }
+}
+async function reserveRollingSlot(ctx: MutationCtx, window: Awaited<ReturnType<typeof rollingWindow>>) {
+  const { kind, userId, slots, freeSlot } = window
+  if (freeSlot < 0) throw new Error('Quiz grading reservation unavailable')
+  const value = {
+    key: key(`${kind}-${freeSlot}`, userId), userId, route: `quiz-grading/${kind}`,
+    count: 1, windowStartedAt: Date.now(), expiresAt: Date.now() + DAY_MS,
+  }
+  const existing = slots[freeSlot]
+  if (existing) await ctx.db.replace(existing._id, value)
+  else await ctx.db.insert('rateLimitBuckets', value)
+}
+async function groqWindows(ctx: MutationCtx, userId: string) {
+  return Promise.all([
+    rollingWindow(ctx, 'groq-dispatch-user', GROQ_USER_DISPATCH_LIMIT, userId),
+    rollingWindow(ctx, 'groq-dispatch-shared', GROQ_SHARED_DISPATCH_LIMIT),
+  ])
+}
+
 export async function quizGradingAdmissionRetryAt(ctx: MutationCtx, userId: string) {
   return blockedUntil(await bucket(ctx, 'admission', userId), ADMISSION_LIMIT)
 }
@@ -51,9 +76,9 @@ export async function admitQuizGradingAttempt(ctx: MutationCtx, attemptId: Id<'q
   await ctx.db.patch(attemptId, { gradingAdmittedAt: Date.now() })
   return 0
 }
-export async function quizGradingCooldownUntil(ctx: MutationCtx, provider = quizGradingProvider()) {
+export async function quizGradingCooldownUntil(ctx: MutationCtx, provider = quizGradingProvider(), includePacing = true) {
   const existing = await bucket(ctx, provider === 'groq' ? 'groq-cooldown' : 'cooldown')
-  const pacing = provider === 'groq' ? await bucket(ctx, 'groq-pacing') : null
+  const pacing = provider === 'groq' && includePacing ? await bucket(ctx, 'groq-pacing') : null
   const until = Math.max(0, existing?.expiresAt ?? 0, pacing?.expiresAt ?? 0)
   return until > Date.now() ? until : 0
 }
@@ -67,23 +92,28 @@ export async function extendQuizGradingCooldown(ctx: MutationCtx, notBefore: num
 }
 export async function quizGradingBudgetRetryAt(ctx: MutationCtx, userId: string) {
   const learner = await bucket(ctx, 'dispatch-user', userId)
-  const shared = await bucket(ctx, sharedKind())
-  return Math.max(blockedUntil(learner, USER_DISPATCH_LIMIT), blockedUntil(shared, sharedLimit()))
+  const sharedRetryAt = quizGradingProvider() === 'groq'
+    ? Math.max(...(await groqWindows(ctx, userId)).map(window => window.retryAt))
+    : blockedUntil(await bucket(ctx, 'dispatch-shared'), SHARED_DISPATCH_LIMIT)
+  return Math.max(blockedUntil(learner, USER_DISPATCH_LIMIT), sharedRetryAt)
 }
 // The caller validates the complete, undispatched claim in this transaction.
 export async function reserveQuizGradingDispatch(ctx: MutationCtx, userId: string) {
   const learner = await bucket(ctx, 'dispatch-user', userId)
-  const kind = sharedKind()
-  const shared = await bucket(ctx, kind)
-  const retryAt = Math.max(blockedUntil(learner, USER_DISPATCH_LIMIT), blockedUntil(shared, sharedLimit()), await quizGradingCooldownUntil(ctx))
+  const isGroq = quizGradingProvider() === 'groq'
+  const windows = isGroq ? await groqWindows(ctx, userId) : []
+  const shared = isGroq ? null : await bucket(ctx, 'dispatch-shared')
+  const sharedRetryAt = isGroq ? Math.max(...windows.map(window => window.retryAt)) : blockedUntil(shared, SHARED_DISPATCH_LIMIT)
+  const retryAt = Math.max(blockedUntil(learner, USER_DISPATCH_LIMIT), sharedRetryAt, await quizGradingCooldownUntil(ctx))
   if (retryAt) return retryAt
   await increment(ctx, 'dispatch-user', userId, learner, DAY_MS)
-  await increment(ctx, kind, '', shared, DAY_MS)
-  if (quizGradingProvider() === 'groq') {
+  if (isGroq) {
+    for (const window of windows) await reserveRollingSlot(ctx, window)
     const pacing = await bucket(ctx, 'groq-pacing')
     const value = { key: key('groq-pacing'), userId: '', route: 'quiz-grading/groq-pacing', count: 0, windowStartedAt: Date.now(), expiresAt: Date.now() + GROQ_DISPATCH_INTERVAL_MS }
     if (pacing) await ctx.db.replace(pacing._id, value)
     else await ctx.db.insert('rateLimitBuckets', value)
   }
+  else await increment(ctx, 'dispatch-shared', '', shared, DAY_MS)
   return 0
 }

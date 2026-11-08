@@ -12,7 +12,7 @@ useHead({
   ],
 })
 
-const lastUpdated = '2026-04-12'
+const lastUpdated = '2026-11-08'
 </script>
 
 <template>
@@ -93,6 +93,7 @@ const lastUpdated = '2026-04-12'
           <li><strong>Google</strong> — authentication via Google OAuth.</li>
           <li><strong>Cloudflare</strong> — R2 object storage, AI Search retrieval index, and AI Gateway for routing LLM requests.</li>
           <li><strong>OpenRouter</strong> — routes requests to underlying large language model providers that generate answers, quizzes, and flash cards.</li>
+          <li><strong>Groq</strong> — when enabled for quiz grading, processes your submitted answers, question and reference text, grading instructions, and limited source excerpts. Budds requires zero data retention for this inference route.</li>
         </ul>
         <p>
           Each processor handles only the data required to deliver their part of the service and is bound by
