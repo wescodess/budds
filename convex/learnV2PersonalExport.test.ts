@@ -3,12 +3,47 @@ import { convexTest } from 'convex-test'
 import { afterEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
-import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
+import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example|personal-export' }
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
+
+test.each((['live', 'revoked', 'purged'] as const).flatMap(state => [4, undefined].map(confidence => [state, confidence] as const)))(
+  'direct export retains canonical confidence for %s responses with confidence=%s and no scored attempt', async (state, confidence) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_800_000_000_001)
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
+    await t.run(async ctx => {
+      await ctx.db.patch(f.rows.learnResponses, { confidence })
+      await ctx.db.patch(f.rows.learnAssessmentOpportunities, { phase: 'scoring_pending' })
+    })
+    if (state !== 'live') await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: identity.tokenIdentifier, sourceIdentityId: f.sourceIdentityId })
+    if (state === 'purged') await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const retained = await t.run(ctx => ctx.db.get(f.rows.learnResponses))
+    expect(retained).toMatchObject({ bodyAvailability: state === 'purged' ? 'purged' : 'available' })
+    expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', identity.tokenIdentifier)).collect())).toEqual([])
+    const owner = t.withIdentity(identity)
+    const authorizationId = await authorizeExport(owner)
+    const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learnResponses', paginationOpts: { cursor: null, numItems: 8 } })
+    expect(page.page).toHaveLength(1)
+    const row = page.page[0]!
+    expect(row).toMatchObject({ _id: f.rows.learnResponses, acceptedAt: f.base.createdAt,
+      assistance: f.assistanceSnapshot, validity: f.validitySnapshot,
+      bodyAvailability: state === 'live' ? 'available' : state === 'purged' ? 'purged' : 'unavailable',
+      currentEligibility: state === 'live' ? 'eligible' : 'excluded' })
+    if (confidence === undefined) expect(row).not.toHaveProperty('confidence')
+    else expect(row).toHaveProperty('confidence', retained?.confidence)
+    expect(JSON.stringify(row)).not.toContain(STORAGE_CANARIES.answer)
+    const bodies = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learnResponseBodies', paginationOpts: { cursor: null, numItems: 8 } })
+    if (state === 'live') expect(JSON.stringify(bodies.page)).toContain(STORAGE_CANARIES.answer)
+    else expect(JSON.stringify(bodies.page)).not.toContain(STORAGE_CANARIES.answer)
+    if (state === 'purged') expect(await t.run(ctx => ctx.db.get(f.rows.learnResponseBodies))).toBeNull()
+  },
+)
 
 test('withholds a legacy answer with missing pins through its normalized objective dependency before byte cleanup', async () => {
   vi.useFakeTimers()

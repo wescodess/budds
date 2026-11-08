@@ -118,6 +118,49 @@ describe('GET /api/export/me', () => {
     process.env.CONVEX_URL = 'https://test.convex.cloud'
   })
 
+  test.each((['live', 'revoked', 'purged'] as const).flatMap(state => [4, undefined].map(confidence => [state, confidence] as const)))(
+    'decoded ZIP retains canonical confidence for %s responses with confidence=%s and no scored attempt', async (state, confidence) => {
+      vi.useFakeTimers()
+      vi.setSystemTime(1_800_000_000_001)
+      vi.stubEnv('LEARN_V2_ENABLED', 'false')
+      const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
+      const identity = { tokenIdentifier: 'https://owner.example|zip-confidence' }
+      const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
+      await t.run(async ctx => {
+        await ctx.db.patch(f.rows.learnResponses, { confidence })
+        await ctx.db.patch(f.rows.learnAssessmentOpportunities, { phase: 'scoring_pending' })
+      })
+      if (state !== 'live') await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: identity.tokenIdentifier, sourceIdentityId: f.sourceIdentityId })
+      if (state === 'purged') await t.finishAllScheduledFunctions(vi.runAllTimers)
+      const retained = await t.run(ctx => ctx.db.get(f.rows.learnResponses))
+      expect(retained).toMatchObject({ bodyAvailability: state === 'purged' ? 'purged' : 'available' })
+      const owner = t.withIdentity(identity)
+      authorizeExportMock.mockImplementation(args => owner.mutation(api.dataExport.authorizePersonalExport, args))
+      getExportMetadataMock.mockImplementation(() => owner.query(api.dataExport.getExportMetadata, {}))
+      getUserDataPageMock.mockImplementation(args => owner.query(api.dataExport.getUserDataPage, args))
+      getAttemptAnswersPageMock.mockImplementation(args => owner.query(api.dataExport.getAttemptAnswersPage, args))
+      getCourseSourceDocsPageMock.mockImplementation(args => owner.query(api.dataExport.getCourseSourceDocsPage, args))
+      getDocumentDownloadUrlMock.mockResolvedValue(null)
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const rows = JSON.parse(strFromU8(entries['learnResponses.json']!)) as Array<Record<string, unknown>>
+      expect(rows).toHaveLength(1)
+      const row = rows[0]!
+      expect(row).toMatchObject({ _id: f.rows.learnResponses, acceptedAt: f.base.createdAt,
+        assistance: f.assistanceSnapshot, validity: f.validitySnapshot,
+        bodyAvailability: state === 'live' ? 'available' : state === 'purged' ? 'purged' : 'unavailable',
+        currentEligibility: state === 'live' ? 'eligible' : 'excluded' })
+      if (confidence === undefined) expect(row).not.toHaveProperty('confidence')
+      else expect(row).toHaveProperty('confidence', retained?.confidence)
+      expect(JSON.parse(strFromU8(entries['masteryAttempts.json']!))).toEqual([])
+      const authorizationId = await authorizeExport(owner)
+      const direct = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learnResponses', paginationOpts: { cursor: null, numItems: 8 } })
+      expect(rows).toEqual(direct.page)
+      if (state === 'live') expect(strFromU8(entries['learnResponseBodies.json']!)).toContain(STORAGE_CANARIES.answer)
+      else for (const [name, bytes] of Object.entries(entries)) if (name.endsWith('.json')) expect(strFromU8(bytes)).not.toContain(STORAGE_CANARIES.answer)
+      if (state === 'purged') expect(await t.run(ctx => ctx.db.get(f.rows.learnResponseBodies))).toBeNull()
+    },
+  )
+
   test.each(['normal', 'reduced', 'dense'] as const)('decoded complete ZIP bounds every page and preserves row order with %s budget', async mode => {
     vi.useFakeTimers()
     vi.setSystemTime(1_800_000_000_001)

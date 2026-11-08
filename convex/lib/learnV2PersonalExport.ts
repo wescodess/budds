@@ -86,7 +86,7 @@ export async function requirePersonalExportAuthorization(ctx: QueryCtx, userId: 
 }
 
 export const PERSONAL_METADATA = {
-  learnResponses: ['createdAt', 'learningVoidId', 'threadId', 'assessmentOpportunityId', 'responseSlotId', 'acceptedAt', 'responseContractVersion', 'responseContextVersion', 'flow', 'baselineEpoch', 'measurementContext', 'disclosurePolicyVersion', 'bodyAvailability', 'bodyUnavailableReason', 'bodyPurgedAt', 'currentEligibility', 'evidenceStatus'],
+  learnResponses: ['createdAt', 'learningVoidId', 'threadId', 'assessmentOpportunityId', 'responseSlotId', 'acceptedAt', 'confidence', 'responseContractVersion', 'responseContextVersion', 'flow', 'baselineEpoch', 'measurementContext', 'disclosurePolicyVersion', 'bodyAvailability', 'bodyUnavailableReason', 'bodyPurgedAt', 'currentEligibility', 'evidenceStatus'],
   learningVoids: ['folderId', 'title', 'goal', 'status', 'revision', 'createdAt', 'updatedAt'],
   learnBlueprints: ['learningVoidId', 'revision', 'createdAt'],
   learnBlueprintRevisions: ['learningVoidId', 'blueprintId', 'revision', 'recordRevision', 'status', 'createdAt', 'updatedAt'],
