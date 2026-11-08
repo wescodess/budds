@@ -274,6 +274,7 @@ describe('Canvas check', () => {
       await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-submit-error"]').exists()).toBe(true))
       expect(wrapper.get('[data-testid="learn-canvas-check-submit-error"]').text()).toContain('Your answer wasn’t submitted')
+      expect(wrapper.get('[data-testid="learn-canvas-check-submit"]').attributes('disabled')).toBeUndefined()
       await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
       await vi.waitFor(() => expect(accept).toHaveBeenCalledTimes(2))
       expect(acceptArgs(1).submission.idempotencyKey).toBe(acceptArgs(0).submission.idempotencyKey)
@@ -522,6 +523,16 @@ describe('Canvas check', () => {
       const request = learnAcceptResponseRequestSchema.parse(acceptPractice.mock.calls[0]![0])
       expect(request.response).toEqual({ target: { responseSlotId: 'slot_1' }, expectedRevision: 1, payload: { kind: 'text', text: 'Habitat sets the range.' } })
       await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-practice-saved"]').text()).toBe('Response submitted.'))
+    })
+
+    it('asks for a practice answer instead of sending an empty one', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check-practice-missing"]').text()).toBe('Write your answer before you submit.')
+      expect(acceptPractice).not.toHaveBeenCalled()
     })
 
     it('reuses the practice key on an ambiguous failure', async () => {

@@ -18,7 +18,7 @@ const { isOnline } = useOnlineStatus()
 const {
   view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
   invalidBySource, feedback, lesson, practice,
-  practiceAnswer, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
+  practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
   start, submit, retryScore, submitPractice, requestAssistance,
 } = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: props.binding, isOnline })
 
@@ -70,7 +70,7 @@ const submitFailureBody = computed(() => submitFailure.value === 'offline'
   ? 'You’re offline. It’s still here on this device. Submit again when you’re back online.'
   : 'It’s still here on this device.')
 
-const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })
+const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 const savedAtLabel = computed(() => receipt.value?.acceptedAt ? savedAtFormat.format(receipt.value.acceptedAt) : null)
 
 async function focusOn(target: Ref<HTMLElement | null>) {
@@ -154,7 +154,7 @@ function openPractice() {
           <p v-if="confidenceMissing" :id="`${id}-confidence-error`" data-testid="learn-canvas-check-confidence-error" class="mt-2 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Choose how sure you are.</p>
         </fieldset>
         <div class="mt-6 flex flex-wrap items-center gap-3">
-          <button type="button" data-testid="learn-canvas-check-submit" :disabled="busy" :class="primaryAction" @click="onSubmit">{{ busy ? 'Submitting…' : 'Submit answer' }}<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
+          <button type="button" data-testid="learn-canvas-check-submit" :aria-disabled="busy || undefined" :class="[primaryAction, busy && 'cursor-not-allowed opacity-50']" @click="onSubmit">{{ busy ? 'Submitting…' : 'Submit answer' }}<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
           <p class="font-inter text-xs font-medium text-muted-foreground">One answer. You can’t change it after you submit.</p>
         </div>
         <div v-if="submitFailure" role="alert" data-testid="learn-canvas-check-submit-error" class="mt-5 flex items-start gap-3 border-t border-border pt-4"><WifiOff v-if="submitFailure === 'offline'" class="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" /><CircleAlert v-else class="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" /><div class="min-w-0"><p class="font-medium text-foreground">Your answer wasn’t submitted</p><p class="mt-1 text-sm leading-6 text-muted-foreground">{{ submitFailureBody }}</p></div></div>
@@ -222,8 +222,9 @@ function openPractice() {
         <p v-if="assistanceDenied" role="alert" data-testid="learn-canvas-check-assistance-denied" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
         <template v-if="!practiceSaved">
           <label :for="`${id}-practice-answer`" class="mt-5 block text-sm font-medium text-foreground">Your practice answer</label>
-          <textarea :id="`${id}-practice-answer`" v-model="practiceAnswer" data-testid="learn-canvas-check-practice-answer" rows="3" maxlength="12000" :class="[fieldBase, 'min-h-24 border-input']" placeholder="Try it first. Hints are here if you want them." />
-          <div class="mt-4 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-practice-submit" :disabled="practiceBusy || !practiceAnswer.trim() || !isOnline" :class="primaryAction" @click="submitPractice">{{ practiceBusy ? 'Submitting…' : 'Submit response' }}</button></div>
+          <textarea :id="`${id}-practice-answer`" v-model="practiceAnswer" data-testid="learn-canvas-check-practice-answer" rows="3" maxlength="12000" :aria-invalid="practiceMissing || undefined" :aria-describedby="practiceMissing ? `${id}-practice-error` : undefined" :class="[fieldBase, 'min-h-24', practiceMissing ? 'border-destructive' : 'border-input']" placeholder="Try it first. Hints are here if you want them." />
+          <p v-if="practiceMissing" :id="`${id}-practice-error`" data-testid="learn-canvas-check-practice-missing" class="mt-2 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Write your answer before you submit.</p>
+          <div class="mt-4 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-practice-submit" :disabled="practiceBusy || !isOnline" :class="primaryAction" @click="submitPractice">{{ practiceBusy ? 'Submitting…' : 'Submit response' }}</button></div>
           <p v-if="practiceFailed" role="alert" data-testid="learn-canvas-check-practice-error" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Submission did not confirm. Your draft remains here. Retry submission to reconcile it.</p>
         </template>
         <p v-else role="status" data-tone="neutral" data-testid="learn-canvas-check-practice-saved" class="mt-5 text-sm font-medium text-foreground">Response submitted.</p>

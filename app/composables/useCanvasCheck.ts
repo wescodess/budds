@@ -240,6 +240,7 @@ export function useCanvasCheck(options: {
   }, { flush: 'post', immediate: true })
 
   const practiceAnswer = ref('')
+  const practiceMissing = ref(false)
   const practiceBusy = ref(false)
   const practiceFailed = ref(false)
   const practiceSaved = ref(false)
@@ -251,6 +252,7 @@ export function useCanvasCheck(options: {
   async function submitPractice() {
     const current = practice.value
     const text = practiceAnswer.value.trim()
+    practiceMissing.value = text.length === 0
     if (!current || !text || practiceBusy.value || practiceSaved.value || !options.isOnline.value) return
     if (text !== practicePayload) {
       practiceKey = commandKey('adaptive-canvas-check-practice')
@@ -292,7 +294,7 @@ export function useCanvasCheck(options: {
   return {
     view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
     canTeachSeparateCase, invalidBySource, feedback, lesson, practice,
-    practiceAnswer, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
+    practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
     start, submit, retryScore, submitPractice, requestAssistance,
   }
 }
