@@ -838,7 +838,7 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
   })
 }
 
-async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false, indexingDocument?: Id<'documents'>) {
+async function inspectGraph(scope: Invocation, userId: string, root: Lineage, catalogRevision: number, requirePublication: boolean, stalePins = false, indexingDocument?: Id<'documents'>, followOriginSuccessors = false) {
   const nodes = new Map<Id<'learnArtifactLineages'>, Lineage>()
   const heights = new Map<Id<'learnArtifactLineages'>, number>()
   const active = new Set<Id<'learnArtifactLineages'>>()
@@ -880,7 +880,7 @@ async function inspectGraph(scope: Invocation, userId: string, root: Lineage, ca
           || parent.classification !== origin.classification) unavailable()
         return parent
       })
-      height = Math.max(height, 1 + await visit(parent, depth + 1))
+      height = Math.max(height, 1 + await visit(followOriginSuccessors ? await activeOrigin(scope, userId, origin) : parent, depth + 1))
     }
     active.delete(row._id)
     heights.set(row._id, height)
@@ -1115,29 +1115,33 @@ async function inputLineages(scope: Invocation, userId: string, artifact: LearnA
 
 async function admitActiveLineageDependencies(
   scope: Invocation, userId: string, row: Lineage, catalogRevision: number, admissions: InputAdmissionGraph,
-  options: { stalePins?: boolean, indexingDocument?: Id<'documents'> },
+  options: { stalePins?: boolean, indexingDocument?: Id<'documents'>, siblingBatch?: ReadonlySet<string> },
 ) {
-  const graph = await inspectGraph(scope, userId, row, catalogRevision, true, options.stalePins, options.indexingDocument)
+  const graph = await inspectGraph(scope, userId, row, catalogRevision, true, options.stalePins, options.indexingDocument, options.siblingBatch !== undefined)
   if ([...graph.usage.values()].some(usage => usage === 'measurement_reserved')) restrictedLineage()
   const reference = { artifact: row.artifact, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }
   const nested = await inputReferences(scope, userId, reference, [{ dependencies: graph.dependencies,
     origins: [...graph.nodes.values()].map(node => ({ artifact: node.artifact, key: node.key, revision: node.revision, payloadDigest: node.payloadDigest })) }])
   if (nested.ordinaryComponent) unavailable()
-  // Retained dependencies must already admit, even when a producer is also
-  // preparing their current content in this batch.
-  for (const child of nested.references) {
+  const admit = async (child: LearnArtifactReference) => {
     const admission = (await admitInput(scope, userId, { reference: child }, admissions)).result
     if (admission.status !== 'admitted_registered') unavailable()
   }
+  // Retained origins and sources never receive the direct-component exemption.
+  for (const child of nested.retainedReferences) await admit(child)
+  for (const child of nested.currentComponents) {
+    if (options.siblingBatch?.has(canonicalJson(child.artifact))) continue
+    await admit(child)
+  }
 }
 
-async function preparationLineages(scope: Invocation, userId: string, artifact: PreparationMember['artifact'], key: string, catalogRevision: number, admissions: InputAdmissionGraph) {
+async function preparationLineages(scope: Invocation, userId: string, artifact: PreparationMember['artifact'], key: string, catalogRevision: number, admissions: InputAdmissionGraph, batch: ReadonlySet<string>) {
   for (const row of await inputLineages(scope, userId, artifact)) {
     await lineageValidation(scope, userId, row)
     // The requested predecessor's cases remain history under D2; its current
     // content, inherited provenance and registration are checked below.
     if (row.key === key) continue
-    await admitActiveLineageDependencies(scope, userId, row, catalogRevision, admissions, { stalePins: true })
+    await admitActiveLineageDependencies(scope, userId, row, catalogRevision, admissions, { stalePins: true, siblingBatch: batch })
   }
 }
 
@@ -1289,6 +1293,8 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
   const snapshots = new Set<Id<'learnSourceSnapshots'>>()
   const components = new Map<string, LearnArtifactReference['artifact']>()
   const references = new Map<string, LearnArtifactReference>()
+  const retainedReferences = new Map<string, LearnArtifactReference>()
+  const currentComponents: LearnArtifactReference[] = []
   const documentPins: Array<{ id: Id<'documents'>, revision: string, contentHash: string }> = []
   const roomCards = new Map<string, unknown[]>()
   let ordinaryComponent = false
@@ -1353,7 +1359,10 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
     else ordinaryComponent = true
   }
   for (const binding of bindings) {
-    for (const ref of binding.origins) if (!sameArtifact(ref.artifact)) references.set(canonicalJson(ref), ref)
+    for (const ref of binding.origins) if (!sameArtifact(ref.artifact)) {
+      references.set(canonicalJson(ref), ref)
+      retainedReferences.set(canonicalJson(ref), ref)
+    }
     for (const dependency of binding.dependencies) {
       if (dependency.kind === 'document') documents.add(dependency.documentId)
       if (dependency.kind === 'snapshot' || dependency.kind === 'excerpt') snapshots.add(dependency.sourceSnapshotId)
@@ -1385,8 +1394,10 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
     const payloadDigest = await artifactPayloadDigest(content.projection)
     const ref = { artifact, key: artifact.kind === 'document_chunk' ? LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY : 'whole', revision: content.revision ?? `sha256:${payloadDigest}`, payloadDigest }
     references.set(canonicalJson(ref), ref)
+    if (artifact.kind === 'document' || artifact.kind === 'document_chunk') retainedReferences.set(canonicalJson(ref), ref)
+    else currentComponents.push(ref)
   }
-  return { references: [...references.values()], ordinaryComponent, deckMismatch }
+  return { references: [...references.values()], retainedReferences: [...retainedReferences.values()], currentComponents, ordinaryComponent, deckMismatch }
 }
 
 async function inputAdmission(operation: () => Promise<LearnArtifactInputAdmissionResult>): Promise<LearnArtifactInputAdmissionResult> {
@@ -1774,7 +1785,7 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
       for (const text of caseTexts(content.projection)) fingerprints.push(await normalizedInstructionalCaseFingerprints(text.scenario, text.solution))
       if (collides(fingerprints)) throw new Error('Instructional reservation check rejected')
     }
-    if (!personal) await preparationLineages(scope, userId, member.artifact, member.key, catalog.catalogRevision, admissions)
+    if (!personal) await preparationLineages(scope, userId, member.artifact, member.key, catalog.catalogRevision, admissions, batch)
     const cases: CasePlan[] = []
     for (const pin of new Map(fingerprints.map(pin => [canonicalJson(pin), pin])).values()) {
       const key = canonicalJson(pin)

@@ -1904,22 +1904,6 @@ describe('shared active-lineage dependency admission', { timeout: 60_000 }, () =
     }
   })
 
-  test('a sibling origin must be explicitly re-pinned before its recorded successor admits', async () => {
-    const { f, origin, outer } = await siblingOriginFixture()
-    await f.asOwner.run(async ctx => {
-      await ctx.db.patch(origin.sectionId, { title: 'Registered origin successor' })
-      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [origin.artifacts.at(-1)!] })
-    })
-    const before = await inventory(f.t)
-    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [outer.artifacts.at(-1)!] }))).rejects.toThrow('unavailable')
-    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: outer.artifacts }))).rejects.toThrow('unavailable')
-    expect(await inventory(f.t)).toEqual(before)
-    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(outer.artifacts[0]!.artifact, 'alternate')] }))
-    const repaired = await inventory(f.t)
-    expect(await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: outer.artifacts }))).toMatchObject({ lineageIds: outer.registered.lineageIds.slice(0, 2) })
-    expect(await inventory(f.t)).toEqual(repaired)
-  })
-
   test('exhausting the cumulative budget during nested preparation rejects and rolls back the producer', async () => {
     const { f, outer } = await siblingOriginFixture()
     const before = await inventory(f.t)
@@ -1977,5 +1961,198 @@ describe('shared active-lineage dependency admission', { timeout: 60_000 }, () =
     await f.t.run(ctx => ctx.db.patch(caseId, { reservedAt: 0 }))
     await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
     await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
+  })
+})
+
+
+async function siblingRecoveryFixture() {
+  const f = await setup()
+  await registerSource(f, true)
+  const origin = await publishQuiz(f, [{ question: 'Recovery origin', answer: 'Recovery solution' }])
+  const copy = await f.asOwner.run(async ctx => {
+    const written = await writeQuiz(ctx, f, [{ question: 'Derived recovery task', answer: 'Derived recovery solution' }])
+    const artifacts = ['whole', 'alternate'].map(key => ({ ...member(written.artifacts[0]!.artifact, key),
+      origins: [{ reference: origin.references[0]!, transformation: 'copy' as const }],
+    }))
+    return { artifacts, registered: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts }) }
+  })
+  const successor = await f.asOwner.run(async ctx => {
+    await ctx.db.patch(quizArtifact(origin.references[0]!).id, { question: 'Recovery origin, revised' })
+    return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(quizArtifact(origin.references[0]!))] })
+  })
+  return { f, origin, copy, successor }
+}
+
+const recoveryPaths = ['explicit', 'whole', 'alternate', 'batch'] as const
+function recoverSiblingKeys(f: Fixture, artifacts: LearnArtifactPreparationArgs['artifacts'], path: typeof recoveryPaths[number]) {
+  return f.asOwner.run(ctx => path === 'explicit'
+    ? repinArtifactLineageDescendants(ctx, { artifacts: [artifacts[0]!.artifact] })
+    : prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: artifacts.filter(candidate => path === 'batch' || candidate.key === path).map(candidate => member(candidate.artifact, candidate.key)) }))
+}
+
+async function sectionSiblingFixture(retainComponent = false) {
+  const f = await setup()
+  await registerSource(f, true)
+  const section = await f.asOwner.run(async ctx => {
+    const written = await writeLinkedSection(ctx, f, { questions: 1, cards: 1, audio: true })
+    const components = written.artifacts.slice(0, -1)
+    const keys = Array.from({ length: 4 }, (_, index) => member({ kind: 'section_block', id: written.sectionId }, `block-${index}`))
+    const origin = retainComponent ? await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: components }) : undefined
+    const initialKeys = keys.map((candidate, index) => origin && index === 3 ? { ...candidate, origins: [{ reference: origin.references[0]!, transformation: 'copy' as const }] } : candidate)
+    return { ...written, components, keys, registered: await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...components, ...initialKeys] }) }
+  })
+  return { f, section }
+}
+
+async function editSectionComponent(ctx: RunCtx, artifact: LearnArtifactPreparationArgs['artifacts'][number]['artifact']) {
+  if (artifact.kind === 'quiz_question') await ctx.db.patch(artifact.id, { question: 'Edited sibling question' })
+  else if (artifact.kind === 'flashcard_version') {
+    const card = (await ctx.db.query('flashcardVersionCards').withIndex('by_versionId', q => q.eq('versionId', artifact.id)).take(1))[0]!
+    const live = (await ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', card.roomId)).take(1))[0]!
+    await ctx.db.patch(card._id, { definition: 'Repaired sibling definition' })
+    await ctx.db.patch(live._id, { definition: 'Repaired sibling definition' })
+  }
+  else if (artifact.kind === 'audio_overview') {
+    const overview = (await ctx.db.get(artifact.id))!
+    await ctx.db.patch(artifact.id, { turns: overview.turns.map(turn => ({ ...turn, text: 'Edited sibling Audio Overview' })) })
+  }
+  else throw new Error('Expected a linked section component')
+}
+
+describe('sibling inspection recovery and batch boundaries', { timeout: 60_000 }, () => {
+  test.each(recoveryPaths)('two derived keys recover through %s without rewriting inspected edges', async path => {
+    const { f, origin, copy, successor } = await siblingRecoveryFixture()
+    const before = await inventory(f.t)
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, copy.artifacts[0]!.artifact))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+    const recovered = await recoverSiblingKeys(f, copy.artifacts, path)
+    expect(recovered.lineageIds).toHaveLength(path === 'batch' || path === 'explicit' ? 2 : 1)
+    const after = await inventory(f.t)
+    expect(after.origins.filter(edge => copy.registered.lineageIds.includes(edge.lineageId))).toEqual(before.origins.filter(edge => copy.registered.lineageIds.includes(edge.lineageId)))
+    expect(after.origins.filter(edge => copy.registered.lineageIds.includes(edge.lineageId)).every(edge => edge.originLineageId === origin.lineageIds[0])).toBe(true)
+    expect(after.origins.filter(edge => recovered.lineageIds.includes(edge.lineageId)).every(edge => edge.originLineageId === successor.lineageIds[0])).toBe(true)
+    if (path === 'whole' || path === 'alternate') {
+      const untouched = copy.registered.lineageIds[path === 'whole' ? 1 : 0]!
+      expect(after.lineages.find(row => row._id === untouched)).toEqual(before.lineages.find(row => row._id === untouched))
+      expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, copy.artifacts[0]!.artifact))).toMatchObject({ status: 'rejected' })
+      await recoverSiblingKeys(f, copy.artifacts, path === 'whole' ? 'alternate' : 'whole')
+    }
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, copy.artifacts[0]!.artifact))).toMatchObject({ status: 'admitted_registered' })
+    const repaired = await inventory(f.t)
+    const replay = await recoverSiblingKeys(f, [...copy.artifacts].reverse(), 'batch')
+    expect(replay.lineageIds).toEqual(repaired.lineages.filter(row => row.artifact.id === copy.artifacts[0]!.artifact.id && row.nextId === undefined).sort((a, b) => a.key.localeCompare(b.key)).map(row => row._id))
+    expect(await inventory(f.t)).toEqual(repaired)
+  })
+
+  test.each(recoveryPaths.flatMap(path => (['invalidated', 'deleted', 'stale', 'private_scoring'] as const).map(condition => ({ path, condition }))))('$path recovery rejects an unhealthy $condition successor', async ({ path, condition }) => {
+    const { f, copy, successor } = await siblingRecoveryFixture()
+    await f.t.run(async ctx => {
+      if (condition === 'invalidated') await ctx.db.patch(successor.lineageIds[0]!, { invalidatedAt: 0 })
+      else if (condition === 'private_scoring') await ctx.db.patch(successor.lineageIds[0]!, { classification: condition })
+      else if (condition === 'deleted') await ctx.db.delete(quizArtifact(successor.references[0]!).id)
+      else await ctx.db.patch(quizArtifact(successor.references[0]!).id, { question: 'Unregistered successor edit' })
+    })
+    const before = await inventory(f.t)
+    await expect(recoverSiblingKeys(f, copy.artifacts, path)).rejects.toThrow()
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each((['quiz_question', 'flashcard_version', 'audio_overview'] as const).flatMap(kind => [false, true].map(first => ({ kind, first }))))('$kind edits register with all four section keys (component first: $first)', async ({ kind, first }) => {
+    const { f, section } = await sectionSiblingFixture()
+    const component = section.components.find(candidate => candidate.artifact.kind === kind)!
+    const before = await inventory(f.t)
+    const prepared = await f.asOwner.run(async ctx => {
+      await editSectionComponent(ctx, component.artifact)
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: first ? [component, ...section.keys] : [...section.keys, component] })
+    })
+    expect(prepared.lineageIds).toHaveLength(5)
+    const after = await inventory(f.t)
+    expect(after.catalogs[0]!.catalogRevision).toBe(before.catalogs[0]!.catalogRevision + 1)
+    for (const reference of prepared.references) expect(await f.asOwner.run(ctx => resolveArtifactLineageForOwner(ctx, userId, { reference }))).toMatchObject({ status: 'bound', instructionalRegistered: true })
+    expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, section.keys[0]!.artifact))).toMatchObject({ status: 'admitted_registered' })
+    const replay = await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...section.keys, component] }))
+    expect(new Set(replay.lineageIds)).toEqual(new Set(prepared.lineageIds))
+    expect(await inventory(f.t)).toEqual(after)
+  })
+
+  test.each(['quiz_question', 'flashcard_version', 'audio_overview'] as const)('an edited %s left outside the batch still rejects and rolls back', async kind => {
+    const { f, section } = await sectionSiblingFixture()
+    const component = section.components.find(candidate => candidate.artifact.kind === kind)!
+    const before = await inventory(f.t)
+    const stored = await f.t.run(ctx => ctx.db.get(component.artifact.id))
+    await expect(f.asOwner.run(async ctx => {
+      await editSectionComponent(ctx, component.artifact)
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.keys })
+    })).rejects.toThrow('Artifact registration required')
+    expect(await f.t.run(ctx => ctx.db.get(component.artifact.id))).toEqual(stored)
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each([false, true])('retained origins are never exempt even when also direct batch components (first: %s)', async first => {
+    const { f, section } = await sectionSiblingFixture(true)
+    const component = section.components[0]!
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      await editSectionComponent(ctx, component.artifact)
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: first ? [component, section.keys[0]!] : [section.keys[0]!, component] })
+    })).rejects.toThrow('Artifact registration required')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each(['invalidated', 'measurement', 'private_scoring', 'unknown'] as const)('a direct sibling binding that is %s never gets the component exemption', async condition => {
+    const { f, section } = await sectionSiblingFixture()
+    const siblingId = section.registered.lineageIds[4]!
+    await f.t.run(ctx => ctx.db.patch(siblingId, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: condition }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [...section.components, ...section.keys] }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test.each([false, true])('declared origins keep exact pins and no batch exemption (component first: %s)', async first => {
+    const { f, origin } = await siblingOriginFixture()
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      await ctx.db.patch(origin.questions[0]!, { question: 'Unregistered declared-origin component' })
+      const written = await writeQuiz(ctx, f, [{ question: 'New derived task', answer: 'New derived solution' }])
+      written.artifacts[0]!.origins = [{ reference: origin.registered.references.at(-1)!, transformation: 'copy' }]
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: first ? [origin.artifacts[0]!, ...written.artifacts] : [...written.artifacts, origin.artifacts[0]!] })
+    })).rejects.toThrow()
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('re-index inspection keeps exact retained-origin pins instead of following a successor', async () => {
+    const f = await setup()
+    const other = await registerDocument(f, 'reindex-origin')
+    const source = await registerDocument(f, 'reindex-origin-source')
+    const registered = await registerSource(f, true)
+    await f.t.run(async ctx => {
+      const origin = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'document').eq('artifact.id', other).eq('nextId', undefined)).take(1))[0]!
+      const id = registered.lineageIds[1]!
+      await ctx.db.insert('learnArtifactLineageOrigins', { ...base, lineageId: id, originLineageId: origin._id, originRevision: origin.revision,
+        originPayloadDigest: origin.payloadDigest, originManifestDigest: origin.manifestDigest, classification: origin.classification, transformation: 'import' })
+      await ctx.db.patch(id, { derivation: 'derived', authority: 'server_producer', originCount: 1 })
+      const row = (await ctx.db.get(id))!
+      const origins = await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(9)
+      const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', id)).take(65)
+      const manifestDigest = await artifactManifestDigest(ctx, row, origins, [], sources)
+      await ctx.db.patch(id, { manifestDigest })
+      await ctx.db.patch(row.validationId!, { manifestDigest })
+      await ctx.db.patch(f.documentId, { status: 'indexing' })
+    })
+    expect(await f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+    await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ ...member({ kind: 'document', id: other }), sources: [{ kind: 'document', documentId: source, sourceRevision: 'source.r1' }] }] }))
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => classifyPersonalWorkDocumentForOwner(ctx, userId, f.documentId))).rejects.toThrow('unavailable')
+    await expect(f.t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+
+  test('a new linked question outside the batch still requires registration', async () => {
+    const { f, section } = await sectionSiblingFixture()
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(async ctx => {
+      await ctx.db.insert('quizQuestions', { userId, quizId: section.quizId, order: 1, question: 'New unregistered component', correctAnswer: 'New solution', type: 'free-response', sourceDocumentId: f.documentId })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.keys })
+    })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
   })
 })
