@@ -570,6 +570,27 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId), state: 'independent' })
   })
 
+  test('replays a legacy mastery receipt after source purge digests its raw fingerprint', async () => {
+    vi.useFakeTimers()
+    try {
+      const { t, ids, args } = await fixture({ state: 'guided' })
+      const request = args('purged-legacy-replay', 80)
+      const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)
+      const raw = JSON.stringify({ command: 'submitMasteryAttempt', studySessionId: String(request.studySessionId),
+        expectedSessionRevision: request.expectedSessionRevision, expectedContentRevision: request.expectedContentRevision,
+        expectedPlanRecordRevision: request.expectedPlanRecordRevision, expectedBlueprintRecordRevision: request.expectedBlueprintRecordRevision,
+        response: request.response, confidence: request.confidence })
+      await t.run(ctx => ctx.db.patch(result.attemptId!, { requestFingerprint: raw }))
+      const source = (await t.run(ctx => ctx.db.get(ids.sourceId)))!
+      await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: request.tokenIdentifier, sourceIdentityId: source.sourceIdentityId })
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await t.run(ctx => ctx.db.get(result.attemptId!)))?.requestFingerprint).toMatch(/^sha256:/)
+      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)).resolves.toMatchObject({ attemptId: result.attemptId, scorePercent: 80 })
+      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...request, response: 'Changed work' })).rejects.toThrow('Idempotency key was already used for a different request')
+    }
+    finally { vi.useRealTimers() }
+  })
+
   test('appends one scoped before-and-after transition history row and replays it', async () => {
     const { t, ids, args } = await fixture({ state: 'guided' })
     const first = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('transition-history', 80))

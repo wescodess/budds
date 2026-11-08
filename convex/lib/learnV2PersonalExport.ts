@@ -1,5 +1,6 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { ConvexError } from 'convex/values'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, projectAttemptHistory } from '../../shared/learn-v2-assessment-disclosure'
 import { learnAssistanceSnapshotSchema, learnValiditySnapshotSchema } from '../../shared/learn-v2-responses'
@@ -82,7 +83,9 @@ export async function requirePersonalExportAuthorization(ctx: QueryCtx, userId: 
   if (!authorization || authorization.userId !== userId || authorization.policyVersion !== PERSONAL_EXPORT_POLICY
     || authorization.provenanceVersion !== PERSONAL_EXPORT_POLICY || authorization.status !== 'granted') throw new Error('Export authorization unavailable')
   const full = await inventoryDigest(ctx, userId)
-  if (authorization.projectionDigest !== full.digest && (!documentId || authorization.projectionDigest !== (await inventoryDigest(ctx, userId, documentId)).digest)) throw new Error('Export authorization unavailable')
+  if (authorization.projectionDigest !== full.digest && (!documentId || authorization.projectionDigest !== (await inventoryDigest(ctx, userId, documentId)).digest)) {
+    throw new ConvexError({ code: 'personal_export_inventory_changed', message: 'Export authorization unavailable' })
+  }
 }
 
 export const PERSONAL_METADATA = {
@@ -114,7 +117,7 @@ export const PERSONAL_METADATA = {
   learnLifecycleReceipts: ['learningVoidId', 'command', 'revision', 'status', 'blueprintRevisionId', 'createdAt'],
   learnPlanAuditEvents: ['learningVoidId', 'studyPlanRevisionId', 'studySessionId', 'reasonCode', 'createdAt'],
   learningThreads: ['learningVoidId', 'authorityKind', 'originalNeed', 'outcome', 'outcomeProvenance', 'intent', 'availableTime', 'evidenceState', 'lifecycle', 'revision', 'createdAt', 'updatedAt'],
-  learningThreadArtifacts: ['threadId', 'activityId', 'status', 'title', 'summary', 'createdAt', 'updatedAt'],
+  learningThreadArtifacts: ['threadId', 'activityId', 'artifactKind', 'status', 'title', 'summary', 'createdAt', 'updatedAt'],
   learningThreadContributions: ['threadId', 'sourceFeature', 'sourceIdentity', 'sourceRevision', 'contributionKind', 'sourceStatus', 'createdAt'],
   learnActivityDecisions: ['threadId', 'activityId', 'status', 'createdAt'],
   learnActivityEvidenceLinks: ['threadId', 'activityId', 'invalidatedAt', 'createdAt'],
@@ -180,6 +183,10 @@ export async function exportActivity(ctx: QueryCtx, userId: string, activity: Do
   const result = privateFields(activity, ['threadId', 'activityId', 'learningVoidId', 'blueprintRevisionId', 'objectiveId', 'sessionContentId', 'boundaryOrdinal', 'planRevision',
     'activityClass', 'status', 'submittedAt', 'submittedConfidence', 'masteryAttemptId', 'createdAt', 'updatedAt'])
   const available = await activityResponseAvailable(ctx, userId, activity)
+  if (activity.reflectionDecision) {
+    const { idempotencyKeyHash: _key, ...decision } = activity.reflectionDecision
+    result.reflectionDecision = decision
+  }
   if (available && activity.submittedResponse) {
     result.submittedResponse = activity.submittedResponse
     if (activity.activityClass === 'non_factual' && activity.decisionInputs.routerVersion === 'learn-adaptive.preparing-diagnostic.v1') result.diagnosticResponse = activity.submittedResponse

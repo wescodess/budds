@@ -1,4 +1,5 @@
 import { ConvexHttpClient } from 'convex/browser'
+import { ConvexError } from 'convex/values'
 import { Zip, ZipDeflate, ZipPassThrough } from 'fflate'
 import { PERSONAL_EXPORT_COLLECTIONS } from '../../../convex/lib/learnV2PersonalExportCollections'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../../shared/learn-v2-measurement-storage-manifest'
@@ -63,15 +64,30 @@ export default defineEventHandler(async (event) => {
   const client = new ConvexHttpClient(convexUrl)
   client.setAuth(token)
 
-  let authorization = await client.mutation(api.dataExport.authorizePersonalExport, {})
-  while (!authorization.done) {
-    const next = await client.mutation(api.dataExport.authorizePersonalExport, {
-      authorizationId: authorization.authorizationId, cursor: authorization.cursor ?? undefined,
-    })
-    if (!next.done && next.cursor === authorization.cursor) throw new Error('Export authorization did not advance')
-    authorization = next
+  const authorize = async () => {
+    let authorization = await client.mutation(api.dataExport.authorizePersonalExport, {})
+    while (!authorization.done) {
+      const next = await client.mutation(api.dataExport.authorizePersonalExport, {
+        authorizationId: authorization.authorizationId, cursor: authorization.cursor ?? undefined,
+      })
+      if (!next.done && next.cursor === authorization.cursor) throw new Error('Export authorization did not advance')
+      authorization = next
+    }
+    return authorization.authorizationId
   }
-  const authorizationId = authorization.authorizationId
+  let authorizationId = await authorize()
+  let reauthorizations = 0
+  const authorizedQuery = async <R>(read: (authorizationId: Id<'learnAssessmentExposures'>) => Promise<R>): Promise<R> => {
+    while (true) {
+      try { return await read(authorizationId) }
+      catch (error) {
+        if (!(error instanceof ConvexError) || typeof error.data !== 'object' || error.data === null
+          || !('code' in error.data) || error.data.code !== 'personal_export_inventory_changed' || reauthorizations >= 3) throw error
+        reauthorizations++
+        authorizationId = await authorize()
+      }
+    }
+  }
 
   let metadata
   try {
@@ -120,11 +136,11 @@ export default defineEventHandler(async (event) => {
     let cursor: string | null = null
 
     while (true) {
-      const result = await client.query(api.dataExport.getUserDataPage, {
+      const result = await authorizedQuery(authorizationId => client.query(api.dataExport.getUserDataPage, {
         collection,
         authorizationId,
         paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
-      }) as ExportPage
+      })) as ExportPage
 
       for (const row of result.page) yield row
       if (result.isDone) return
@@ -139,11 +155,11 @@ export default defineEventHandler(async (event) => {
     for await (const attempt of readCollection('quizAttempts')) {
       let cursor: string | null = null
       while (true) {
-        const result = await client.query(api.dataExport.getAttemptAnswersPage, {
+        const result = await authorizedQuery(authorizationId => client.query(api.dataExport.getAttemptAnswersPage, {
           attemptId: attempt._id as Id<'quizAttempts'>,
           authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
-        }) as ExportPage | null
+        })) as ExportPage | null
         if (!result) break
 
         for (const row of result.page) yield row
@@ -160,11 +176,11 @@ export default defineEventHandler(async (event) => {
     for await (const course of readCollection('courses')) {
       let cursor: string | null = null
       while (true) {
-        const result = await client.query(api.dataExport.getCourseSourceDocsPage, {
+        const result = await authorizedQuery(authorizationId => client.query(api.dataExport.getCourseSourceDocsPage, {
           courseId: course._id as Id<'courses'>,
           authorizationId,
           paginationOpts: { cursor, numItems: EXPORT_PAGE_SIZE },
-        }) as ExportPage | null
+        })) as ExportPage | null
         if (!result) break
 
         for (const row of result.page) yield row
@@ -211,15 +227,7 @@ export default defineEventHandler(async (event) => {
       return
     }
 
-    let urlInfo: { url: string | null, filename: string } | null
-
-    try {
-      urlInfo = await client.query(api.dataExport.getDocumentDownloadUrl, { documentId, authorizationId })
-    }
-    catch {
-      unresolvedDocuments.push(String(documentId))
-      return
-    }
+    const urlInfo = await authorizedQuery(authorizationId => client.query(api.dataExport.getDocumentDownloadUrl, { documentId, authorizationId }))
 
     if (!urlInfo?.url) {
       unresolvedDocuments.push(String(documentId))

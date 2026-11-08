@@ -98,12 +98,14 @@ async function purgeResponseSourceBatch(ctx: MutationCtx, userId: string, source
 export const purgeLegacyObjectiveCopies = internalMutation({
   args: { userId: v.string(), sourceSnapshotId: v.id('learnSourceSnapshots'), objectiveId: v.id('learnObjectives'), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const support = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', args.userId).eq('objectiveId', args.objectiveId).eq('sourceSnapshotId', args.sourceSnapshotId)).first()
     const objective = await ctx.db.get(args.objectiveId)
-    if (objective?.userId === args.userId) await ctx.db.patch(objective._id, { assessmentContract: undefined })
+    const backsObjective = !!support && support.coverage !== 'gap'
+    if (backsObjective && objective?.userId === args.userId) await ctx.db.patch(objective._id, { assessmentContract: undefined })
     const page = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', args.userId).eq('objectiveId', args.objectiveId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
     for (const attempt of page.page) {
       const ids = legacySourceIds(ctx, attempt.sourceSnapshotIdsJson)
-      if (!ids || ids.length === 0 || ids.includes(args.sourceSnapshotId)) await redactLegacyAttempt(ctx, attempt)
+      if (!ids || (backsObjective && ids.length === 0) || ids.includes(args.sourceSnapshotId)) await redactLegacyAttempt(ctx, attempt)
     }
     if (!page.isDone) await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacyObjectiveCopies, { ...args, cursor: page.continueCursor })
   },
@@ -163,9 +165,7 @@ export const purgeLegacySourceCopies = internalMutation({
       return
     }
     if (args.phase === 'plans') {
-      const page = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
-      for (const plan of page.page) await ctx.db.patch(plan._id, { inputSnapshot: undefined, resultSnapshot: undefined })
-      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'plan_receipts' : 'plans', cursor: page.isDone ? undefined : page.continueCursor })
+      await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: 'plan_receipts', cursor: undefined })
       return
     }
     const page = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })

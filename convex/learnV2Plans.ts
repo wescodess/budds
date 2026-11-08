@@ -6,6 +6,7 @@ import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/l
 import { LEARN_V2_SCHEDULER_VERSION, rescheduleStudySessions, scheduleStudyPlan, type SchedulingPriority, type StudyPlanSchedulingInput } from '../shared/learn-v2-scheduling'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MAX_OBJECTIVES = 15
@@ -68,7 +69,7 @@ async function requireLiveVoid(ctx: MutationCtx, userId: string, id: Id<'learnin
 async function replay(ctx: MutationCtx, userId: string, key: string, requestFingerprint: string) {
   const row = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', userId).eq('idempotencyKey', key)).unique()
   if (!row) return null
-  if (row.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+  if (!await matchesLegacyFingerprint(row.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveVoid(ctx, userId, row.learningVoidId)
   return JSON.parse(row.response) as Record<string, unknown>
 }

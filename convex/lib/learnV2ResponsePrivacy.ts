@@ -5,6 +5,11 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { documentHasCurrentRevision, documentMatchesSnapshot } from './learnV2BackingSource'
 import { privacyRead } from './learnV2PrivacyReadContext'
 
+const personalExportOwner = Symbol('personalExportResponseOwner')
+export function personalExportResponseContext(ctx: QueryCtx, userId: string): QueryCtx {
+  return new Proxy(ctx, { get: (target, property) => property === personalExportOwner ? userId : Reflect.get(target, property) })
+}
+
 export function canonicalPrivacyJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalPrivacyJson).join(',')}]`
   if (value !== null && typeof value === 'object') {
@@ -25,9 +30,14 @@ export async function digestLegacyFingerprint(value: string) {
   catch { return await privacyDigest(value) }
 }
 
+export async function matchesLegacyFingerprint(stored: string | undefined, request: string) {
+  return stored !== undefined && (stored === request || await digestLegacyFingerprint(stored) === await digestLegacyFingerprint(request))
+}
+
 export async function liveResponseAggregate(ctx: QueryCtx | MutationCtx, userId: string,
   row: { scopeKind: 'v2', learningVoidId: Id<'learningVoids'> } | { scopeKind: 'standalone', threadId: Id<'learningThreads'> }) {
-  return await privacyRead(ctx, userId, ['aggregate', row.scopeKind, row.scopeKind === 'v2' ? row.learningVoidId : row.threadId], false, async ctx => {
+  const retainedExport = Reflect.get(ctx, personalExportOwner) === userId
+  return await privacyRead(ctx, userId, ['aggregate', row.scopeKind, row.scopeKind === 'v2' ? row.learningVoidId : row.threadId, retainedExport], false, async ctx => {
     if (row.scopeKind === 'standalone') {
       const thread = await ctx.db.get(row.threadId)
       return !!thread && thread.userId === userId && thread.deletionStartedAt === undefined
@@ -35,7 +45,7 @@ export async function liveResponseAggregate(ctx: QueryCtx | MutationCtx, userId:
     }
     const aggregate = await ctx.db.get(row.learningVoidId)
     const folder = aggregate && await ctx.db.get(aggregate.folderId)
-    return !!aggregate && aggregate.userId === userId && aggregate.status !== 'archived' && !!folder && folder.userId === userId
+    return !!aggregate && aggregate.userId === userId && (retainedExport || aggregate.status !== 'archived') && !!folder && folder.userId === userId
   })
 }
 
@@ -223,9 +233,9 @@ export async function legacyResponseAvailable(ctx: QueryCtx | MutationCtx, userI
       const links = await ctx.db.query('learnObjectiveSources')
         .withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', attempt.objectiveId)).take(65)
       if (links.length > 64) return false
-      ids = links.map(link => link.sourceSnapshotId)
+      ids = links.filter(link => link.coverage !== 'gap').map(link => link.sourceSnapshotId)
     }
-    for (const id of ids) if (!await retainedSourceExcerpt(ctx, userId, id)) return false
+    for (const id of ids) if (!await sourceBodyAvailable(ctx, userId, id)) return false
     return true
   })
 }
@@ -241,7 +251,7 @@ async function activitySourceAvailable(ctx: QueryCtx | MutationCtx, userId: stri
     if (thread.learningVoidId && !await liveResponseAggregate(ctx, userId, { scopeKind: 'v2', learningVoidId: thread.learningVoidId })) return false
     if (activity.evidenceReferences.length > 64 || activity.decisionInputs.sourceInputs.length > 64) return false
     for (const reference of activity.evidenceReferences) {
-      if (!await retainedSourceExcerpt(ctx, userId, reference.sourceSnapshotId)) return false
+      if (!await sourceBodyAvailable(ctx, userId, reference.sourceSnapshotId)) return false
       const snapshot = (await ctx.db.get(reference.sourceSnapshotId))!
       if (snapshot.revision !== reference.sourceSnapshotRevision || (snapshot.recordRevision ?? 1) !== reference.sourceRecordRevision) return false
     }

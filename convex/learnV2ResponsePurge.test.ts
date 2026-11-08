@@ -80,7 +80,6 @@ test('revokes exports immediately and drains protected aliases, preserving unrel
   const legacyId = await t.run(async ctx => {
     await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId, sourceSnapshotId: f.sourceSnapshotId, coverage: 'strong' })
     await ctx.db.patch(f.scope.objectiveId, { assessmentContract: secret })
-    await ctx.db.patch(f.scope.contextPins.studyPlanRevisionId, { inputSnapshot: secret, resultSnapshot: secret })
     await ctx.db.insert('learnLifecycleReceipts', { userId: identity.tokenIdentifier, learningVoidId: f.learningVoidId,
       idempotencyKey: 'map-copy', command: 'replaceDraftMap', requestFingerprint: JSON.stringify({ candidate: secret }), revision: 1, createdAt: 1 })
     await ctx.db.insert('learnPlanCommandReceipts', { userId: identity.tokenIdentifier, learningVoidId: f.learningVoidId,
@@ -90,12 +89,14 @@ test('revokes exports immediately and drains protected aliases, preserving unrel
     await ctx.db.patch(f.scope.contextPins.sessionContentId, { assessmentRubricSnapshot: secret })
     await ctx.db.insert('sessionContentBlocks', { userId: identity.tokenIdentifier, sessionContentId: f.scope.contextPins.sessionContentId, order: 0, kind: 'independent_application', content: secret })
     await ctx.db.patch(f.activityId, { submittedResponse: secret, submittedConfidence: 4, canonicalInputSnapshot: secret,
+      recoveryFeedback: { templateVersion: 'learn-adaptive.feedback-templates.v1', template: 'provider_unavailable', message: secret },
       fallback: { ...(await ctx.db.get(f.activityId))!.fallback, body: secret } })
     await ctx.db.insert('learnActivityEvidenceLinks', { userId: identity.tokenIdentifier, threadId: f.threadId, activityId: f.activityId, sourceSnapshotId: f.sourceSnapshotId, boundaryOrdinal: 1, createdAt: 1 })
     await ctx.db.insert('learnJobs', { userId: identity.tokenIdentifier, learningVoidId: f.learningVoidId, type: 'calibration_scoring', status: 'succeeded', revision: 1, idempotencyKey: 'legacy-copy', requestFingerprint: JSON.stringify({ response: secret }), checkpoint: secret })
     const execution = (await ctx.db.get(f.rows.learnScoringExecutions))!
     const { _id: _executionId, _creationTime: _executionTime, ...fields } = execution
-    for (let index = 0; index < 9; index++) await ctx.db.insert('learnScoringExecutions', { ...fields, dispatchOrdinal: index + 2, frozenConfiguration: { digest: 'configuration-digest', snapshot: secret } })
+    for (let index = 0; index < 9; index++) await ctx.db.insert('learnScoringExecutions', { ...fields, dispatchOrdinal: index + 2, frozenConfiguration: { digest: 'configuration-digest', snapshot: secret },
+      verdict: { criterionResults: [{ key: secret, awarded: true }], misconceptionTags: [secret], scorePercent: 80, verdictDigest: 'digest', responseDigest: 'digest' } })
     return await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, objectiveId: f.scope.objectiveId,
       attemptedAt: 123, serverScorePercent: 80, confidence: 4, usedHint: true, usedReveal: false, result: 'passed', idempotencyKey: 'legacy-answer',
       response: secret, requestFingerprint: JSON.stringify({ response: secret }), rubricSnapshot: secret,
@@ -123,6 +124,8 @@ test('revokes exports immediately and drains protected aliases, preserving unrel
   }))
   expect(retained.attempt).toMatchObject({ serverScorePercent: 80, attemptedAt: 123, confidence: 4, usedHint: true, usedReveal: false, result: 'passed' })
   expect(retained.attempt?.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/)
+  expect(retained.activities).not.toHaveProperty('recoveryFeedback')
+  expect(retained.executions.every(row => row.verdict === undefined)).toBe(true)
   expect(retained.response).toMatchObject({ bodyAvailability: 'purged', currentEligibility: 'excluded' })
   expect(retained.bodies).toEqual([])
   expect(retained.executions).toHaveLength(10)

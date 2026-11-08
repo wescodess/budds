@@ -58,7 +58,10 @@ async function mapProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0
     const prerequisites = await ctx.db.query('learnObjectivePrerequisites')
       .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id))
       .take(MAX_OBJECTIVES + 1)
-    objectiveViews.push({ ...objective, sourceLinks: links, prerequisiteObjectiveIds: prerequisites.map(row => row.prerequisiteObjectiveId) })
+    objectiveViews.push({ ...objective, assessmentContract: objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : {
+      version: 'learn-v2.assessment.v1' as const, kind: 'bounded_rubric' as const, responseFormat: 'short_text' as const,
+      instructions: '', passingScorePercent: 80 as const, criteria: [],
+    }, sourceLinks: links, prerequisiteObjectiveIds: prerequisites.map(row => row.prerequisiteObjectiveId) })
   }
   return { blueprint, milestones, objectives: objectiveViews }
 }
@@ -158,8 +161,8 @@ function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCoun
   return voidRow.status
 }
 
-async function retainedAttempt(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, attempt: Doc<'masteryAttempts'>) {
-  const available = await legacyResponseAvailable(ctx, userId, attempt)
+async function retainedAttempt(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, attempt: Doc<'masteryAttempts'>, discloseBody: boolean) {
+  const available = discloseBody && await legacyResponseAvailable(ctx, userId, attempt)
   // Preserve the Journey history contract. These unread caches can contain
   // private locators, scorer inputs or copies of a revoked response body.
   const { response: _response, requestFingerprint: _requestFingerprint, rubricSnapshot: _rubricSnapshot,
@@ -186,16 +189,16 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   const retainedMastery = []
   for (const row of mastery) {
     const attempts = []
-    for (const attempt of row.attempts) attempts.push(await retainedAttempt(ctx, userId, attempt))
+    for (const attempt of row.attempts) attempts.push(await retainedAttempt(ctx, userId, attempt, voidRow.status !== 'archived'))
     retainedMastery.push({ ...row, attempts })
   }
   const retainedCalibration = []
-  for (const attempt of calibrationAttempts) retainedCalibration.push(await retainedAttempt(ctx, userId, attempt))
+  for (const attempt of calibrationAttempts) retainedCalibration.push(await retainedAttempt(ctx, userId, attempt, voidRow.status !== 'archived'))
   const availableSources = new Set(sources.items.filter(source => source.excerpt !== null).map(source => source._id))
   const calibrationItems = (map?.objectives ?? []).map(objective => {
     const supported = objective.sourceLinks.filter(link => link.coverage !== 'gap')
     const available = supported.every(link => availableSources.has(link.sourceSnapshotId))
-    const rubric = available && objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : null
+    const rubric = available && Array.isArray(objective.assessmentContract.criteria) && objective.assessmentContract.criteria.length ? objective.assessmentContract : null
     return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric?.instructions ?? null, rubric }
   })
   const safePlanRevision = (revision: Doc<'studyPlanRevisions'> | null) => revision && {

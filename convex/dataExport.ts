@@ -4,7 +4,7 @@ import { isLearnMeasurementCollection } from '../shared/learn-v2-measurement-sto
 import { exportMeasurementPage } from './lib/learnV2MeasurementExport'
 import { mutation, query } from './_generated/server'
 import { authorizePersonalExportPage, requirePersonalExportAuthorization, PERSONAL_METADATA, exportPersonalResponse, exportPersonalResponseBody, exportLegacyAttempt, exportActivity, exportThread, exportDecision } from './lib/learnV2PersonalExport'
-import { privateFields } from './lib/learnV2ResponsePrivacy'
+import { personalExportResponseContext, privateFields } from './lib/learnV2ResponsePrivacy'
 import { requireAuth } from './lib/auth'
 import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
@@ -68,7 +68,7 @@ export const getUserDataPage = query({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
+    ctx = createResponsePrivacyReadContext(personalExportResponseContext(ctx, userId), userId).ctx
     const paginationOpts = boundedPaginationOpts(args.paginationOpts)
     await requirePersonalExportAuthorization(ctx, userId, args.authorizationId)
 

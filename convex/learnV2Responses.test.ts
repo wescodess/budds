@@ -174,6 +174,25 @@ function accepted(result: LearnResponseReceipt) {
   return result
 }
 
+test.each([false, true])('slot delivery digest mismatch=%s controls acceptance', async mismatch => {
+  const f = await fixture()
+  const slot = (await f.t.run(ctx => ctx.db.get(f.target.responseSlotId)))!
+  if (mismatch) await f.t.run(ctx => ctx.db.patch(slot.deliveryExposureId, { projectionDigest: `sha256:${'b'.repeat(64)}` }))
+  const result = await f.owner.mutation(api.learnV2Responses.acceptResponse, f.request)
+  expect(result).toMatchObject(mismatch ? { kind: 'rejected', reasonCode: 'pins_mismatch' } : { kind: 'accepted' })
+})
+
+test.each(['units', 'different-units'])('numeric response unit %s must match the delivered measurement spec', async unit => {
+  const f = await fixture('measurement')
+  const opportunity = (await f.t.run(ctx => ctx.db.get(f.assessmentTarget.assessmentOpportunityId)))!
+  if (opportunity.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement')
+  const itemId = opportunity.assessmentPins.itemPins.itemId
+  await f.t.run(ctx => ctx.db.patch(itemId, { responseSpec: { kind: 'numeric', version: 'response.v1', unit: 'units' } }))
+  const submission = { ...f.submission, response: { ...f.submission.response, payload: { kind: 'numeric' as const, value: 42, unit } } }
+  const result = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission })
+  expect(result).toMatchObject(unit === 'units' ? { kind: 'accepted' } : { kind: 'rejected', reasonCode: 'invalid_payload' })
+})
+
 async function ledger(t: Awaited<ReturnType<typeof fixture>>['t']) {
   return await t.run(async ctx => ({ responses: await ctx.db.query('learnResponses').take(8), bodies: await ctx.db.query('learnResponseBodies').take(8),
     receipts: await ctx.db.query('learnResponseCommandReceipts').take(16), facts: await ctx.db.query('learnMeasurementReportFacts').take(8),

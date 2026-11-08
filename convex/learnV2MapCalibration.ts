@@ -9,7 +9,7 @@ import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '..
 import { deriveMastery } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
-import { digestLegacyFingerprint, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
+import { digestLegacyFingerprint, matchesLegacyFingerprint, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MIN_CALIBRATION_ITEMS = 3
@@ -123,7 +123,7 @@ async function lifecycleReplay(ctx: MutationCtx, userId: string, idempotencyKey:
   const receipt = await ctx.db.query('learnLifecycleReceipts')
     .withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', userId).eq('idempotencyKey', idempotencyKey)).unique()
   if (!receipt) return null
-  if (receipt.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+  if (!await matchesLegacyFingerprint(receipt.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveVoid(ctx, userId, receipt.learningVoidId)
   return receipt
 }

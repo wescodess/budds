@@ -1,11 +1,13 @@
 import { privacyDigest } from '../../../convex/lib/learnV2ResponsePrivacy'
+import { ConvexError } from 'convex/values'
+import { applyLearnMapEdit } from '../../../app/utils/learn-v2-map-editor'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
 import { api, internal } from '../../../convex/_generated/api'
 import schema from '../../../convex/schema'
 import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
-import { authorizeExport } from '../../../tests/fixtures/learn-v2-personal-export'
+import { authorizeExport, folderBackedExportFixture } from '../../../tests/fixtures/learn-v2-personal-export'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../../shared/learn-v2-measurement-report'
@@ -116,6 +118,174 @@ describe('GET /api/export/me', () => {
     fetchMock.mockReset()
     for (const key of Object.keys(recordedHeaders)) Reflect.deleteProperty(recordedHeaders, key)
     process.env.CONVEX_URL = 'https://test.convex.cloud'
+  })
+
+  test('the real map editor can clone and edit the server projection after contract purge', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const f = await folderBackedExportFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|editable-purged-contract')
+    await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: f.userId, enabled: true })
+    await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
+    await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+    const mission = await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoidId })
+    const assessmentContract = mission!.map!.objectives[0]!.assessmentContract
+    expect(assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    const candidate = { version: 'learn-v2.blueprint-candidate.v1' as const, generatorVersion: 'map-editor.v1',
+      milestones: [0, 1, 2].map(order => ({ key: `stage-${order}`, order, title: `Stage ${order}` })),
+      objectives: [0, 1, 2, 3, 4, 5].map(order => ({ key: `objective-${order}`, milestoneKey: `stage-${Math.floor(order / 2)}`,
+        order, title: 'Retained objective', capability: 'Apply the rule', estimatedMinutes: 25, depth: 'working' as const,
+        coverage: 'gap' as const, sourceSnapshotIds: [], gapSourceSnapshotIds: [], prerequisiteObjectiveKeys: [], assessmentContract })) }
+    expect(() => applyLearnMapEdit(candidate, { kind: 'move_objective', objectiveKey: 'objective-0', direction: 'down' }, {})).not.toThrow()
+  })
+
+  test('ZIP resumes the same cursor after unrelated content invalidates authorization without losing or repeating entries', async () => {
+    vi.useFakeTimers()
+    const f = await folderBackedExportFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-changing-inventory')
+    const ids = await f.t.run(async ctx => {
+      const conversationId = await ctx.db.insert('conversations', { userId: f.userId, folderId: f.folderId, title: 'Own conversation' })
+      const ids = []
+      for (let index = 0; index < 17; index++) ids.push(await ctx.db.insert('messages', { userId: f.userId, conversationId, role: 'user', content: `Retained entry ${index}` }))
+      return ids
+    })
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    let changed = false
+    getUserDataPageMock.mockImplementation(async args => {
+      if (args.collection === 'messages' && args.paginationOpts.cursor !== null && !changed) {
+        changed = true
+        await f.owner.mutation(api.folders.createFolder, { name: 'Created during export' })
+      }
+      return await f.owner.query(api.dataExport.getUserDataPage, args)
+    })
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    const messages = JSON.parse(strFromU8(entries['messages.json']!)) as Array<Record<string, unknown>>
+    expect(messages.map(row => row._id)).toEqual(ids)
+    expect(new Set(messages.map(row => row._id)).size).toBe(17)
+    const calls = getUserDataPageMock.mock.calls.filter(([args]) => args.collection === 'messages').map(([args]) => args)
+    expect(calls).toHaveLength(4)
+    expect(calls[1].paginationOpts.cursor).toBe(calls[2].paginationOpts.cursor)
+    expect(calls[1].authorizationId).not.toBe(calls[2].authorizationId)
+    expect(authorizeExportMock).toHaveBeenCalledTimes(2)
+  })
+
+  test.each(['tombstone', 'revoked_grant', 'continuous_inventory'] as const)('ZIP aborts safely for %s without an unbounded authorization retry', async mode => {
+    vi.useFakeTimers()
+    const f = await folderBackedExportFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-authorization-failure')
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    let attempts = 0
+    getUserDataPageMock.mockImplementation(async args => {
+      if (args.collection === 'messages') {
+        attempts++
+        if (attempts > 8) throw new Error('Test retry ceiling exceeded')
+        if (mode === 'tombstone') await f.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: f.userId })
+        else if (mode === 'revoked_grant') await f.t.run(ctx => ctx.db.patch(args.authorizationId, { status: 'requested_denied' }))
+        else await f.owner.mutation(api.folders.createFolder, { name: `Concurrent folder ${attempts}` })
+      }
+      return await f.owner.query(api.dataExport.getUserDataPage, args)
+    })
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    await expect(handler(makeEvent('fixture-jwt'))).rejects.toThrow(mode === 'tombstone' ? 'Account deletion is in progress' : /authorization/)
+    expect(attempts).toBe(mode === 'continuous_inventory' ? 4 : 1)
+    expect(authorizeExportMock).toHaveBeenCalledTimes(mode === 'continuous_inventory' ? 4 : 1)
+  })
+
+  test.each(['answers', 'course_sources', 'download'] as const)('ZIP reauthorizes inventory changes before retrying %s', async kind => {
+    mockExportData({ userId: 'owner', quizAttempts: kind === 'answers' ? [{ _id: 'attempt' }] : [],
+      courses: kind === 'course_sources' ? [{ _id: 'course' }] : [], documents: kind === 'download' ? [{ _id: 'doc', fileId: 'file', filename: 'own.txt' }] : [] })
+    const query = kind === 'answers' ? getAttemptAnswersPageMock : kind === 'course_sources' ? getCourseSourceDocsPageMock : getDocumentDownloadUrlMock
+    query.mockRejectedValueOnce(new ConvexError({ code: 'personal_export_inventory_changed' }))
+      .mockResolvedValue(kind === 'download' ? { url: null, filename: 'own.txt' } : { page: [{ _id: 'child' }], isDone: true, continueCursor: '' })
+    const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(authorizeExportMock).toHaveBeenCalledTimes(2)
+    if (kind !== 'download') expect(JSON.parse(strFromU8(entries[kind === 'answers' ? 'attemptAnswers.json' : 'courseSourceDocs.json']!))).toEqual([{ _id: 'child' }])
+  })
+
+  test.each([
+    new ConvexError(null), new ConvexError('Authorization failed'), new ConvexError({ code: 'permission_denied' }),
+    Object.assign(new Error('Untrusted inventory error'), { data: { code: 'personal_export_inventory_changed' } }),
+  ])('ZIP does not renew an unrelated or untrusted authorization failure: %s', async error => {
+    mockExportData({ userId: 'owner', documents: [] })
+    getUserDataPageMock.mockRejectedValueOnce(error)
+    await expect(handler(makeEvent('fixture-jwt'))).rejects.toBe(error)
+    expect(authorizeExportMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('ZIP aborts if renewing an inventory-lapsed authorization fails', async () => {
+    mockExportData({ userId: 'owner', documents: [] })
+    getUserDataPageMock.mockRejectedValueOnce(new ConvexError({ code: 'personal_export_inventory_changed' }))
+    authorizeExportMock.mockReset().mockResolvedValueOnce({ authorizationId: 'initial-authorization', done: true, cursor: null })
+      .mockRejectedValueOnce(new Error('Account deletion is in progress'))
+    await expect(handler(makeEvent('fixture-jwt'))).rejects.toThrow('Account deletion is in progress')
+    expect(authorizeExportMock).toHaveBeenCalledTimes(2)
+  })
+
+  test('ZIP and direct pages retain reflection decisions and artifact kinds without private receipt keys', async () => {
+    const f = await folderBackedExportFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-retained-metadata')
+    const decision = { version: 'learn-adaptive.reflection-decision.v1' as const, outcome: 'accepted' as const,
+      nextMove: 'Try the next activity', decisionRevision: 2, decidedAt: f.base.createdAt }
+    await f.t.run(async ctx => {
+      await ctx.db.patch(f.activityId, { reflectionDecision: { ...decision, idempotencyKeyHash: 'private-reflection-receipt-key' } })
+      await ctx.db.insert('learningThreadArtifacts', { userId: f.userId, threadId: f.threadId, activityId: f.activityId,
+        artifactKind: 'note', revision: 1, title: 'Own note', summary: 'Retained work', status: 'saved', createdAt: f.base.createdAt, updatedAt: f.base.createdAt })
+    })
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+    const authorizationId = await authorizeExport(f.owner)
+    for (const collection of ['learningThreadActivities', 'learningThreadArtifacts'] as const) {
+      const rows = JSON.parse(strFromU8(entries[`${collection}.json`]!))
+      const direct = await f.owner.query(api.dataExport.getUserDataPage, { collection, authorizationId, paginationOpts: { cursor: null, numItems: 8 } })
+      expect(rows).toEqual(direct.page)
+      expect(rows).toMatchObject(collection === 'learningThreadActivities' ? [{ reflectionDecision: decision }] : [{ artifactKind: 'note' }])
+      expect(JSON.stringify(rows)).not.toContain('private-reflection-receipt-key')
+    }
+  })
+
+  test.each([false, true])('ZIP retains folder-backed canonical and legacy work with archived=%s, then denies real source loss', async archived => {
+    vi.useFakeTimers()
+    vi.stubEnv('LEARN_V2_ENABLED', 'true')
+    const f = await folderBackedExportFixture(convexTest(schema, import.meta.glob('../../../convex/**/*.ts')), 'https://owner.example|zip-retained-archive')
+    await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: f.userId, enabled: true })
+    if (archived) await f.owner.mutation(api.learnV2Lifecycle.transitionLearningVoid, { learningVoidId: f.learningVoidId, expectedRevision: 1, status: 'archived', idempotencyKey: 'archive-export' })
+    const product = await f.owner.query(api.learnV2Responses.getResponseState, { version: 'learn-v2.public-api.v1',
+      target: { assessmentOpportunityId: f.rows.learnAssessmentOpportunities } })
+    expect(product).toMatchObject({ work: { body: { bodyAvailability: archived ? 'unavailable' : 'available' } } })
+    if (archived) expect(JSON.stringify(product)).not.toContain(STORAGE_CANARIES.answer)
+    vi.stubEnv('LEARN_V2_ENABLED', 'false')
+    authorizeExportMock.mockImplementation(args => f.owner.mutation(api.dataExport.authorizePersonalExport, args))
+    getExportMetadataMock.mockImplementation(() => f.owner.query(api.dataExport.getExportMetadata, {}))
+    getUserDataPageMock.mockImplementation(args => f.owner.query(api.dataExport.getUserDataPage, args))
+    getAttemptAnswersPageMock.mockImplementation(args => f.owner.query(api.dataExport.getAttemptAnswersPage, args))
+    getCourseSourceDocsPageMock.mockImplementation(args => f.owner.query(api.dataExport.getCourseSourceDocsPage, args))
+    getDocumentDownloadUrlMock.mockResolvedValue(null)
+    for (const revoked of [false, true]) {
+      if (revoked) await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
+      const entries = unzipSync(await handler(makeEvent('fixture-jwt')))
+      const attempts = JSON.parse(strFromU8(entries['masteryAttempts.json']!))
+      expect(attempts[0]).toMatchObject({ _id: f.attemptId, confidence: 4, bodyAvailability: revoked ? 'unavailable' : 'available' })
+      if (revoked) {
+        for (const file of ['masteryAttempts.json', 'learnResponseBodies.json']) {
+          expect(strFromU8(entries[file]!)).not.toContain(f.answer)
+          expect(strFromU8(entries[file]!)).not.toContain(STORAGE_CANARIES.answer)
+        }
+      }
+      else {
+        expect(attempts[0]).toHaveProperty('response', f.answer)
+        expect(strFromU8(entries['learnResponseBodies.json']!)).toContain(STORAGE_CANARIES.answer)
+        expect(JSON.parse(strFromU8(entries['learnResponses.json']!))).toMatchObject([{ bodyAvailability: 'available', currentEligibility: 'eligible', evidenceStatus: 'available' }])
+      }
+    }
   })
 
   test.each((['live', 'revoked', 'purged'] as const).flatMap(state => [4, undefined].map(confidence => [state, confidence] as const)))(
