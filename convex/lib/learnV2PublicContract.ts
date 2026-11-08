@@ -13,6 +13,9 @@ import {
 } from '../../shared/learn-v2-delayed-check'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_PUBLIC_FEEDBACK_CODES,
+  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
+  learnPostSealTeachingReferenceSchema, learnAuthorizePracticeAssistanceSchema,
+  type learnPostSealTeachingSchema, type learnPracticeAssistanceAuthorizationSchema,
   type learnAttemptHistorySchema, type learnDeliveredAssessmentSchema,
 } from '../../shared/learn-v2-assessment-disclosure'
 import {
@@ -181,6 +184,30 @@ export const assistanceAuthorizationValidator = v.union(
     assessmentOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()) }),
 )
 
+export const postSealTeachingArgs = {
+  version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
+}
+export const postSealTeachingReferenceSchema = learnPostSealTeachingReferenceSchema
+export const authorizePracticeAssistanceArgs = {
+  ...postSealTeachingArgs, target: v.object({ responseSlotId: v.id('learnResponseSlots') }), expectedRevision: v.number(),
+  kind: literals(['hint', 'worked_example']), idempotencyKey: v.string(),
+}
+export const authorizePracticeAssistanceSchema = learnAuthorizePracticeAssistanceSchema
+const teachingCitations = v.array(v.object({ sourceRef: v.string(), label: v.string() }))
+export const postSealTeachingValidator = v.union(
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('available'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
+    feedback: v.union(v.object({ text: v.string(), citations: teachingCitations }), v.null()),
+    lesson: v.union(v.object({ paragraphs: v.array(v.string()), citations: teachingCitations }), v.null()),
+    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), prompt: v.string() }), v.null()) }),
+) satisfies Validator<z.infer<typeof learnPostSealTeachingSchema>, 'required', string>
+export const practiceAssistanceAuthorizationValidator = v.union(
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('authorized'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
+    target: v.object({ responseSlotId: v.id('learnResponseSlots') }), revision: v.number(), authorizationId: v.id('learnAssessmentExposures'), deliveredAt: v.number(),
+    content: v.object({ kind: literals(['hint', 'worked_example']), text: v.string() }) }),
+) satisfies Validator<z.infer<typeof learnPracticeAssistanceAuthorizationSchema>, 'required', string>
+
 export const requestReportArgs = {
   version: v.literal(LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION), viewerGrantId: v.id('learnMeasurementReportViewerGrants'),
   idempotencyKey: v.string(), enrollmentStartAt: v.number(), enrollmentEndAt: v.number(), cutoff: v.number(),
@@ -243,6 +270,8 @@ export type LearnV2AssessmentDelivery = Infer<typeof assessmentDeliveryValidator
 export type LearnV2AssessmentState = Infer<typeof assessmentStateValidator>
 export type LearnV2SubmissionScore = Infer<typeof scoreMasterySubmissionValidator>
 export type LearnV2AssistanceAuthorization = Infer<typeof assistanceAuthorizationValidator>
+export type LearnV2PostSealTeaching = Infer<typeof postSealTeachingValidator>
+export type LearnV2PracticeAssistanceAuthorization = Infer<typeof practiceAssistanceAuthorizationValidator>
 export type LearnV2ReportRequest = Infer<typeof requestReportValidator>
 export type LearnV2Report = Infer<typeof reportValidator>
 export type LearnV2ReportCells = Infer<typeof reportCellsValidator>

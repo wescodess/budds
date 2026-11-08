@@ -96,6 +96,13 @@ export const learnResponseTargetSchema = z.union([
   z.strictObject({ assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>() }),
   z.strictObject({ responseSlotId: learnIdSchema<'learnResponseSlots'>() }),
 ])
+export const learnPracticeAssistanceTargetSchema = z.strictObject({ responseSlotId: learnIdSchema<'learnResponseSlots'>() })
+export const learnPostSealPracticeBindingSchema = z.strictObject({
+  assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), submissionId: learnIdSchema<'learnResponses'>(),
+  target: learnPracticeAssistanceTargetSchema, revision: learnRevisionSchema, stage: z.literal('practice'), owned: z.boolean(),
+  caseRelation: z.enum(['separate_case', 'check_case', 'sibling_form', 'unknown']),
+  reservedCase: z.enum(['yes', 'no', 'unknown']),
+})
 export const learnResponseStageSchema = z.enum(['retrieval', 'prediction', 'practice', 'teach_back', 'diagnostic'])
 export const learnResponseDeliveryPinsSchema = z.strictObject({
   version: z.literal(LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION), confidenceRequested: z.boolean(),
