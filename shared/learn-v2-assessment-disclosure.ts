@@ -203,17 +203,20 @@ export function projectPostSealTeaching(input: unknown, context: LearnPostSealTe
   const value = parseLearnContract(learnPostSealTeachingContextSchema, context)
   const denied = postSealTeachingDenial(value)
   if (denied) return unavailableLearnPostSealTeaching(denied)
-  const source = parseLearnContract(learnPostSealTeachingSourceSchema, input)
-  const lifecycle = value.disclosure.lifecycle
-  if (source.assessmentOpportunityId !== lifecycle.assessmentOpportunityId || source.submissionId !== lifecycle.submissionId) return unavailableLearnPostSealTeaching('disclosure_unknown')
-  const feedbackAllowed = value.validScore && value.capabilities.canReadFeedback && lifecycle.authoritativeAttemptId !== null
-    && ['scored_pass', 'scored_fail'].includes(lifecycle.phase)
-  return parseLearnContract(learnPostSealTeachingSchema, {
-    version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: lifecycle.assessmentOpportunityId,
-    feedback: feedbackAllowed ? source.feedback : null,
-    lesson: feedbackAllowed && lifecycle.phase === 'scored_fail' ? source.lesson : null,
-    practice: source.practice && canReadPostSealPractice(value, source.practice.responseSlotId, source.practice.revision) ? source.practice : null,
-  })
+  try {
+    const source = parseLearnContract(learnPostSealTeachingSourceSchema, input)
+    const lifecycle = value.disclosure.lifecycle
+    if (source.assessmentOpportunityId !== lifecycle.assessmentOpportunityId || source.submissionId !== lifecycle.submissionId) return unavailableLearnPostSealTeaching('disclosure_unknown')
+    const feedbackAllowed = value.validScore && value.capabilities.canReadFeedback && lifecycle.authoritativeAttemptId !== null
+      && ['scored_pass', 'scored_fail'].includes(lifecycle.phase)
+    return parseLearnContract(learnPostSealTeachingSchema, {
+      version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: lifecycle.assessmentOpportunityId,
+      feedback: feedbackAllowed ? source.feedback : null,
+      lesson: feedbackAllowed && lifecycle.phase === 'scored_fail' ? source.lesson : null,
+      practice: source.practice && canReadPostSealPractice(value, source.practice.responseSlotId, source.practice.revision) ? source.practice : null,
+    })
+  }
+  catch { return unavailableLearnPostSealTeaching('disclosure_unknown') }
 }
 
 export function projectPracticeAssistanceAuthorization(input: unknown, request: z.infer<typeof learnAuthorizePracticeAssistanceSchema>, context: LearnPostSealTeachingContext): LearnPracticeAssistanceAuthorization {
@@ -225,12 +228,15 @@ export function projectPracticeAssistanceAuthorization(input: unknown, request: 
   if (denied) return deny(denied)
   if (command.assessmentOpportunityId !== value.disclosure.lifecycle.assessmentOpportunityId
     || !canReadPostSealPractice(value, command.target.responseSlotId, command.expectedRevision)) return deny('disclosure_unknown')
-  const saved = parseLearnContract(learnPracticeAssistanceReceiptSchema, input)
-  if (JSON.stringify(saved.request) !== JSON.stringify(command)) return deny('disclosure_unknown')
-  const receipt = saved.result
-  if (receipt.status !== 'authorized') return receipt
-  if (receipt.assessmentOpportunityId !== command.assessmentOpportunityId || receipt.target.responseSlotId !== command.target.responseSlotId
-    || receipt.revision !== command.expectedRevision || receipt.content.kind !== command.kind
-    || receipt.deliveredAt < value.disclosure.lifecycle.acceptedAt!) return deny('disclosure_unknown')
-  return receipt
+  try {
+    const saved = parseLearnContract(learnPracticeAssistanceReceiptSchema, input)
+    if (JSON.stringify(saved.request) !== JSON.stringify(command)) return deny('disclosure_unknown')
+    const receipt = saved.result
+    if (receipt.status !== 'authorized') return receipt
+    if (receipt.assessmentOpportunityId !== command.assessmentOpportunityId || receipt.target.responseSlotId !== command.target.responseSlotId
+      || receipt.revision !== command.expectedRevision || receipt.content.kind !== command.kind
+      || receipt.deliveredAt < value.disclosure.lifecycle.acceptedAt!) return deny('disclosure_unknown')
+    return receipt
+  }
+  catch { return deny('disclosure_unknown') }
 }

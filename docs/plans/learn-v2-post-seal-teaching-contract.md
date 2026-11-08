@@ -72,6 +72,8 @@ Preparing, ready, open, cancelled, abandoned and invalid-without-acceptance stat
 
 `projectPostSealTeaching` and `projectPracticeAssistanceAuthorization` freeze these gates for the runtime implementation. Their context is internal server-derived authority, not public arguments. Publication approval means the content has passed the shared disclosure/lineage boundary: no reserved solution, check case, sibling form or private scoring material. Unknown publication, case relation, reservation, ownership, pins or grant remains unavailable. `sourceRef` is a public opaque citation reference; it is not a private source/excerpt ID, locator, URL authorization or access grant. Reads and authorization replay recheck current access/evidence and publication authority.
 
+After authority checks, any stored source/receipt or final-envelope validation failure, including byte ceilings and withheld fields, returns `unavailable`/`denied` with `disclosure_unknown` and no partial content; malformed public arguments and server context continue to throw.
+
 Every return object is allowlisted. Neither successful nor unavailable results can carry score percentages, thresholds, criteria, rubric keys/descriptions/snapshots, weights, per-criterion verdicts, scorer rationale, model confidence/details, answer keys, reference solutions, item/family/case IDs, private source identifiers/locators, or provider payloads. Structural schemas cannot prove arbitrary prose is safe; the runtime publication and lineage checks must establish that before supplying the source DTO. ADR-0009's provenance and T0 restrictions still apply; this contract adds no generation or provenance-policy change.
 
 ## Practice assistance and replay

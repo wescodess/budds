@@ -11,7 +11,7 @@ import {
 } from './lib/learnV2PublicContract'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
-  learnPostSealTeachingSchema, type learnPostSealTeachingSourceSchema, learnAuthorizePracticeAssistanceSchema, type learnPostSealTeachingReferenceSchema,
+  learnPostSealTeachingSchema, learnPostSealTeachingSourceSchema, learnAuthorizePracticeAssistanceSchema, type learnPostSealTeachingReferenceSchema,
   learnPracticeAssistanceAuthorizationSchema, projectPostSealTeaching, projectPracticeAssistanceAuthorization,
   type LearnPostSealTeachingContext,
 } from '../shared/learn-v2-assessment-disclosure'
@@ -19,7 +19,7 @@ import {
   LEARN_V2_ASSESSMENT_PHASES, LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_DELAYED_CHECK_VERSION, learnAssessmentLifecycleSchema,
   type LearnAssessmentPhase,
 } from '../shared/learn-v2-delayed-check'
-import { learnIdSchema, learnPostSealPracticeBindingSchema, parseLearnContract } from '../shared/learn-v2-responses'
+import { LEARN_V2_RESPONSE_LIMITS, learnIdSchema, learnPostSealPracticeBindingSchema, learnSerializedBytes, parseLearnContract } from '../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import type { z } from 'zod'
@@ -326,6 +326,74 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     for (let replay = 0; replay < 2; replay++) expect(await f.t.mutation(authorizeDeniedProjection, {})).toEqual({
       version, status: 'denied', reasonCode,
     })
+  })
+})
+
+describe('stored post-seal payload failures', () => {
+  test.each(['feedback', 'lesson', 'practice'] as const)('malformed stored %s closes the whole read even when withheld', async field => {
+    const f = await fixture()
+    if (field === 'feedback') f.setPhase('scoring_pending')
+    else if (field === 'lesson') f.setPhase('scored_pass')
+    else f.context.capabilities.canTeachSeparateCase = false
+    Reflect.set(f.source, field, field === 'feedback' ? { text: 'MALFORMED_CANARY', citations: [] }
+      : field === 'lesson' ? { paragraphs: [], citations: [] } : { ...f.source.practice, revision: 0 })
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
+      version, status: 'unavailable', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test('an oversized stored envelope closes the whole read', async () => {
+    const f = await fixture()
+    f.setPhase('scoring_pending')
+    f.source.lesson!.paragraphs = Array(8).fill('x'.repeat(12000))
+    expect(learnPostSealTeachingSourceSchema.safeParse(f.source).success).toBe(true)
+    expect(() => learnSerializedBytes(f.source)).toThrow('byte ceiling')
+    expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  })
+
+  test('a valid stored source whose final output exceeds the envelope ceiling closes the read', async () => {
+    const f = await fixture()
+    const paragraphs = Array(5).fill('x'.repeat(12000))
+    f.source.lesson!.paragraphs = paragraphs
+    paragraphs.push('x'.repeat(LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes - learnSerializedBytes(f.source) - 3))
+    expect(learnSerializedBytes(f.source)).toBe(LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes)
+    expect(parseLearnContract(learnPostSealTeachingSourceSchema, f.source)).toEqual(f.source)
+    const output = { ...f.reference, status: 'available', feedback: f.source.feedback, lesson: f.source.lesson, practice: f.source.practice }
+    expect(() => learnSerializedBytes(output)).toThrow('byte ceiling')
+    expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  })
+
+  test.each(['request', 'result', 'oversized'] as const)('a malformed saved receipt %s returns a closed denial', async field => {
+    const f = await fixture()
+    if (field === 'request') f.savedRequest.expectedRevision = 0
+    else if (field === 'result') f.authorization.content.text = ''
+    else Reflect.set(f.authorization, 'providerResponse', 'x'.repeat(LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes))
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.mutation(authorizeProjection, {})).toEqual({
+      version, status: 'denied', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test('authority and practice binding deny before touching stored payloads', async () => {
+    const f = await fixture()
+    const touched = vi.fn(() => [])
+    const stored = new Proxy({}, { ownKeys: touched })
+    f.context.disclosure.owned = false
+    expect(projectPostSealTeaching(stored, f.context)).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+    expect(projectPracticeAssistanceAuthorization(stored, f.request, f.context)).toEqual({ version, status: 'denied', reasonCode: 'unavailable' })
+    f.context.disclosure.owned = true
+    f.context.practiceBinding!.revision = 2
+    expect(projectPracticeAssistanceAuthorization(stored, f.request, f.context)).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
+    expect(touched).not.toHaveBeenCalled()
+  })
+
+  test('malformed public arguments and server context keep throwing', async () => {
+    const f = await fixture()
+    f.request.expectedRevision = 0
+    expect(() => projectPracticeAssistanceAuthorization(null, f.request, f.context)).toThrow()
+    f.request.expectedRevision = 1
+    Reflect.set(f.context, 'validScore', 'invalid')
+    expect(() => projectPostSealTeaching(null, f.context)).toThrow()
+    expect(() => projectPracticeAssistanceAuthorization(null, f.request, f.context)).toThrow()
   })
 })
 
