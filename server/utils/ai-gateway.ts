@@ -55,7 +55,7 @@ async function readBoundedResponseText(response: Response, maximumBytes: number)
         if (done) break
         total += value.byteLength
         if (total > maximumBytes) {
-          await reader.cancel()
+          void reader.cancel().catch(() => undefined)
           throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
         }
         text += decoder.decode(value, { stream: true })
@@ -367,6 +367,11 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   if (params.maxRequestBytes !== undefined && new TextEncoder().encode(requestBody).byteLength > params.maxRequestBytes) {
     throw providerError({ statusCode: 413, message: 'AI Gateway request exceeded the byte limit' }, 'not_dispatched')
   }
+  const maximumBytes = params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+    throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
+  }
+  if (params.signal?.aborted) throw providerError({ statusCode: 499, message: 'AI Gateway request aborted before send' }, 'not_dispatched')
   const response = await fetch(url, {
     method: 'POST',
     headers,
@@ -374,16 +379,21 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     body: requestBody,
   })
 
-  const responseText = await readBoundedResponseText(response, params.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES)
   if (!response.ok) {
-    const error = params.redactUpstreamErrorBody ? 'Upstream provider request failed' : responseText
+    // The HTTP status is already known. Error-body loss or size limits cannot
+    // turn a possible execution into a known failure, or the reverse.
+    const failure = response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'
+    const fallback = 'Upstream provider request failed'
+    const error = params.redactUpstreamErrorBody ? fallback : await readBoundedResponseText(response, maximumBytes).catch(() => fallback)
+    if (params.redactUpstreamErrorBody) void response.body?.cancel().catch(() => undefined)
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
     const retryAfter = response.headers?.get?.('retry-after')
     const delay = retryAfter ? (/^\d+(?:\.\d+)?$/.test(retryAfter.trim()) ? Number(retryAfter) * 1_000 : Date.parse(retryAfter) - Date.now()) : NaN
-    throw Object.assign(providerError(options, response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'),
+    throw Object.assign(providerError(options, failure),
       Number.isFinite(delay) ? { retryAfterMs: Math.max(0, delay) } : {})
   }
 
+  const responseText = await readBoundedResponseText(response, maximumBytes)
   let parsed: unknown
   try {
     parsed = JSON.parse(responseText)

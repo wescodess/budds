@@ -259,7 +259,7 @@ export async function evaluate(state, item, intent, raw, terminalAt) {
     result = await baselineExecution({ adapter, blind: item.blind, saved, registry: state.registry, startedAt: intent.startedAt, terminalAt, raw })
   }
   else result = parseIndependent(adapter, item.blind, raw)
-  if (terminalAt >= intent.deadline && result.status !== 'definitive_failure') result = { ...result, status: 'ambiguous', scorePercent: null, criteria: null }
+  if (terminalAt >= intent.deadline && result.status !== 'definitive_failure' && raw.failure !== 'invalid_response') result = { ...result, status: 'ambiguous', scorePercent: null, criteria: null }
   return { ...result, weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) }
 }
 

@@ -129,7 +129,7 @@ export async function reconcileBaselineExecution({ adapter, blind, saved, regist
 
 export function parseIndependent(adapter, blind, raw) {
   const unavailable = status => ({ status, scorePercent: null, criteria: null, identity: null, usage: null })
-  if (raw.failure) return unavailable(raw.failure === 'outcome_unknown' ? 'ambiguous' : raw.failure)
+  if (raw.failure) return unavailable(raw.failure === 'outcome_unknown' ? 'ambiguous' : raw.failure === 'invalid_response' ? 'malformed' : raw.failure)
   try {
     assert.ok(Buffer.byteLength(canonical(raw)) <= LIMITS.maxResponseBytes)
     if (raw.model !== adapter.model) return unavailable('mismatched')
@@ -177,6 +177,8 @@ export function parseIndependent(adapter, blind, raw) {
 }
 
 async function boundedResponse(response) {
+  const invalid = () => Object.assign(new Error('Invalid or oversized provider response'), { aiGatewayFailureKind: 'invalid_response' })
+  if (Number(response.headers.get('content-length')) > LIMITS.maxResponseBytes) throw invalid()
   const reader = response.body?.getReader()
   if (!reader) throw new Error('Response body unavailable')
   const chunks = []
@@ -186,16 +188,22 @@ async function boundedResponse(response) {
       const { done, value } = await reader.read()
       if (done) break
       size += value.byteLength
-      if (size > LIMITS.maxResponseBytes) { await reader.cancel(); throw new Error('Response exceeded byte limit') }
+      if (size > LIMITS.maxResponseBytes) { void reader.cancel().catch(() => undefined); throw invalid() }
       chunks.push(Buffer.from(value))
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      assert.ok(body !== null && typeof body === 'object' && !Array.isArray(body))
+      return body
+    }
+    catch { throw invalid() }
   }
   finally { reader.releaseLock() }
 }
 
 // Called only after the runner's signed owner/cost admission and durable intent.
 export async function liveInfer(adapter, request, signal, baselineRequest) {
+  if (signal.aborted) return { failure: 'not_dispatched' }
   if (adapter.role === 'baseline') return generateCompletion({ ...baselineRequest, signal })
   const key = process.env[adapter.role === 'claude' ? 'ANTHROPIC_API_KEY' : 'GEMINI_API_KEY']
   if (!key) return { failure: 'not_dispatched' }

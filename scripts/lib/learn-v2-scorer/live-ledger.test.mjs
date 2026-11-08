@@ -47,6 +47,7 @@ let afterIntent = null
 let beforeBaselineTransport = null
 let realAdapters = false
 let preparationFailure = null
+let abortBeforeSend = false
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
@@ -109,7 +110,7 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
     } } : {}) })
   },
   async liveInfer(adapter, request, signal, baselineRequest) {
-    if (realAdapters) return adapters.liveInfer(adapter, request, signal, baselineRequest)
+    if (realAdapters) return adapters.liveInfer(adapter, request, abortBeforeSend ? AbortSignal.abort() : signal, baselineRequest)
     calls.push({ adapter: adapter.id, requestDigest: artifacts.hash(request) })
     const body = JSON.parse(request.body)
     const payload = adapter.role === 'gemini' ? body.input[0].content[0].text : body.messages.find(row => row.role === 'user').content
@@ -162,6 +163,7 @@ async function workspace(t, approvalDurationMs = 600000) {
   beforeBaselineTransport = null
   realAdapters = false
   preparationFailure = null
+  abortBeforeSend = false
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
   inventory.epoch = 'approval-contract.v1'
@@ -227,9 +229,10 @@ function syntheticHttp(t, setup, mode) {
     }
   })
   realAdapters = true
+  abortBeforeSend = mode === 'pre-send-abort'
   const timeouts = []
   const setTimer = globalThis.setTimeout
-  if (mode === 'timeout') {
+  if (['timeout', 'response-timeout'].includes(mode)) {
     const timerMock = mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
       if (delay > 0 && delay <= 90_000) timeouts.push(() => callback(...args))
       return setTimer(callback, delay, ...args)
@@ -254,17 +257,72 @@ function syntheticHttp(t, setup, mode) {
         for (const timeout of timeouts) timeout()
       }, 0)
     })
+    const status = /(?:^|-)([2345]\d\d)$/.exec(responseMode)?.[1] ?? '400'
+    if (responseMode === 'response-timeout' || responseMode.startsWith('body-')) {
+      let sentChunk = false
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (!sentChunk) {
+            sentChunk = true
+            controller.enqueue(new TextEncoder().encode('{'))
+            return
+          }
+          if (responseMode === 'response-timeout') {
+            request.signal.addEventListener('abort', () => controller.error(new DOMException('Synthetic body timeout', 'AbortError')), { once: true })
+            setTimer(() => {
+              setup.setClock(intent.deadline)
+              assert.ok(timeouts.length > 0)
+              for (const timeout of timeouts) timeout()
+            }, 0)
+          }
+          else controller.error(responseMode === 'body-abort-200'
+            ? new DOMException('Synthetic body abort', 'AbortError')
+            : Object.assign(new TypeError('Synthetic body reset'), { code: 'ECONNRESET' }))
+        },
+      }), { status: responseMode === 'response-timeout' ? 200 : Number(status) })
+    }
+    if (responseMode.includes('malformed-200')) {
+      if (responseMode.startsWith('late-')) setup.setClock(intent.deadline + 1)
+      return new Response('{', { status: 200 })
+    }
+    if (responseMode === 'null-200') return new Response('null', { status: 200 })
+    if (responseMode === 'array-200') return new Response('[]', { status: 200 })
+    if (responseMode === 'primitive-200') return new Response('"synthetic"', { status: 200 })
+    if (responseMode === 'oversized-cancel-200') return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(contract.LIMITS.maxResponseBytes + 1)) },
+      cancel() { throw new Error('Synthetic cleanup failure after the size limit') },
+    }), { status: 200 })
+    if (responseMode.startsWith('oversized-')) return new Response('x'.repeat(contract.LIMITS.maxResponseBytes + 1), { status: Number(status) })
+    if (responseMode === 'declared-oversized-200') return new Response('{}', {
+      status: 200, headers: { 'content-length': String(contract.LIMITS.maxResponseBytes + 1) },
+    })
+    if (responseMode === '500' || responseMode === '302') return new Response('Synthetic HTTP rejection', { status: Number(responseMode) })
     return new Response('Synthetic HTTP rejection', { status: 400 })
   })
   t.after(() => fetchMock.mock.restore())
   return () => {
     responseMode = '400'
+    abortBeforeSend = false
     for (const key of keys) process.env[key] = 'local-synthetic-only'
   }
 }
 
-for (const mode of ['400', 'late-400', 'classified-rejection', 'network-loss', 'timeout', 'abort', 'missing-key']) {
-  test(`A8 real transport ${mode}: classification, replay and admission`, async t => {
+// One executable contract for all adapters. Only the synthetic HTTP boundary
+// is replaced; capture, sealing, replay, reconciliation and admission are real.
+const transportOutcomes = [
+  ['400', 'definitive_failure'], ['500', 'outcome_unknown'], ['302', 'definitive_failure'],
+  ['late-400', 'definitive_failure'], ['classified-rejection', 'definitive_failure'],
+  ['network-loss', 'outcome_unknown'], ['timeout', 'outcome_unknown'], ['abort', 'outcome_unknown'],
+  ['response-timeout', 'outcome_unknown'], ['body-reset-200', 'outcome_unknown'], ['body-abort-200', 'outcome_unknown'],
+  ['malformed-200', 'invalid_response'], ['late-malformed-200', 'invalid_response'], ['null-200', 'invalid_response'],
+  ['array-200', 'invalid_response'], ['primitive-200', 'invalid_response'],
+  ['oversized-200', 'invalid_response'], ['declared-oversized-200', 'invalid_response'], ['oversized-cancel-200', 'invalid_response'],
+  ['oversized-400', 'definitive_failure'], ['oversized-500', 'outcome_unknown'],
+  ['body-reset-400', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
+  ['missing-key', 'not_dispatched'], ['pre-send-abort', 'not_dispatched'],
+]
+for (const [mode, failure] of transportOutcomes) {
+  test(`A9 transport table ${mode}: classification, replay and admission`, async t => {
     for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
       const setup = await canary(t, role)
       const { state, approval, id, createRun, approve } = setup
@@ -276,14 +334,18 @@ for (const mode of ['400', 'late-400', 'classified-rejection', 'network-loss', '
       }
       const summary = await dispatchLive(state.directory, id, approval)
       const terminal = readJson(join(state.directory, `${id}.terminal.json`))
-      const unknown = ['network-loss', 'timeout', 'abort'].includes(mode)
-      const notSent = mode === 'missing-key'
-      assert.deepEqual(terminal.payload.raw, { failure: notSent ? 'not_dispatched' : unknown ? 'outcome_unknown' : 'definitive_failure' })
-      assert.equal(terminal.payload.result.status, notSent ? 'not_dispatched' : unknown ? 'ambiguous' : 'definitive_failure')
+      const unknown = failure === 'outcome_unknown'
+      const notSent = failure === 'not_dispatched'
+      assert.deepEqual(terminal.payload.raw, { failure })
+      assert.equal(terminal.payload.result.status, unknown ? 'ambiguous' : failure === 'invalid_response' ? 'malformed' : failure)
       assert.equal(summary.ambiguous, Number(unknown))
+      assert.equal(summary.dispatched, before + Number(!notSent))
       assert.equal(calls.length, before + Number(!notSent))
       assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + Number(!notSent)) * 100)
       const ledger = await openLiveLedger(globalDirectory)
+      const charged = [...ledger.reservations].filter(([name]) => ledger.resolutions.get(name)?.status !== 'not_dispatched')
+      assert.equal(charged.length, before + Number(!notSent))
+      assert.equal(charged.reduce((total, [, row]) => total + row.reservationMicroUsd, 0), (before + Number(!notSent)) * 100)
       assert.equal(unresolvedLiveDispatches(ledger).length, Number(unknown))
       if (!unknown) assert.equal([...ledger.resolutions.values()].find(row => row.intentDigest === terminal.payload.intentDigest).status, notSent ? 'not_dispatched' : 'failed')
       assert.equal((await replay(state.directory)).digest, summary.digest, 'Sealed classification must reproduce exactly')
@@ -370,6 +432,25 @@ test('A8 pre-send records reject impossible timestamps and unknown reasons befor
     await assert.rejects(reconcileLive(state.directory, id, approval), /Invalid not-dispatched record/)
     assert.equal(calls.length, 0)
   })
+})
+
+test('A9 pre-send cancellation requires the signed approval bound even with an unexpired lease', async t => {
+  const setup = await canary(t, 'baseline', 1_000)
+  const { state, approval, id } = setup
+  syntheticHttp(t, setup, '400')
+  process.env.OPENROUTER_API_KEY = process.env.NUXT_OPENROUTER_API_KEY = ''
+  earlyFailures.add('sealed_verdict')
+  await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+  earlyFailures.clear()
+  const intent = readJson(join(state.directory, `${id}.intent.json`)).payload
+  assert.ok(intent.approval.validUntil < intent.deadline)
+  rewrite(join(state.directory, `${id}.not-dispatched.json`), value => {
+    value.payload.checkedAt = intent.approval.validUntil
+  })
+  await assert.rejects(openLiveLedger(globalDirectory), /Invalid not-dispatched record/)
+  await assert.rejects(replay(state.directory), /Invalid not-dispatched record/)
+  await assert.rejects(reconcileLive(state.directory, id, approval), /Invalid not-dispatched record/)
+  assert.equal(calls.length, 0)
 })
 
 function advanceRevision() {
