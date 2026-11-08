@@ -10,16 +10,16 @@ import {
   type LearnV2PostSealTeaching, type LearnV2PracticeAssistanceAuthorization,
 } from './lib/learnV2PublicContract'
 import {
-  LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION,
+  LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
   learnPostSealTeachingSchema, type learnPostSealTeachingSourceSchema, learnAuthorizePracticeAssistanceSchema, type learnPostSealTeachingReferenceSchema,
   learnPracticeAssistanceAuthorizationSchema, projectPostSealTeaching, projectPracticeAssistanceAuthorization,
   type LearnPostSealTeachingContext,
 } from '../shared/learn-v2-assessment-disclosure'
 import {
-  LEARN_V2_ASSESSMENT_PHASES, LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_DELAYED_CHECK_VERSION,
+  LEARN_V2_ASSESSMENT_PHASES, LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_DELAYED_CHECK_VERSION, learnAssessmentLifecycleSchema,
   type LearnAssessmentPhase,
 } from '../shared/learn-v2-delayed-check'
-import { learnIdSchema, parseLearnContract } from '../shared/learn-v2-responses'
+import { learnIdSchema, learnPostSealPracticeBindingSchema, parseLearnContract } from '../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import type { z } from 'zod'
@@ -36,6 +36,9 @@ const readProjection = makeFunctionReference<'query'>('postSealContractFixture:r
 const authorizeProjection = makeFunctionReference<'mutation'>('postSealContractFixture:authorize')
 const rawRead = makeFunctionReference<'query'>('postSealContractFixture:rawRead')
 const rawAuthorization = makeFunctionReference<'mutation'>('postSealContractFixture:rawAuthorization')
+const rawUnavailableRead = makeFunctionReference<'query'>('postSealContractFixture:rawUnavailableRead')
+const rawDeniedAuthorization = makeFunctionReference<'mutation'>('postSealContractFixture:rawDeniedAuthorization')
+const authorizeDeniedProjection = makeFunctionReference<'mutation'>('postSealContractFixture:authorizeDenied')
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
 
@@ -50,6 +53,10 @@ async function fixture() {
       handler: () => projectPracticeAssistanceAuthorization({ request: savedRequest, result: authorization }, request, context) }),
     rawRead: queryGeneric({ args: {}, returns: postSealTeachingValidator, handler: () => teaching }),
     rawAuthorization: mutationGeneric({ args: {}, returns: practiceAssistanceAuthorizationValidator, handler: () => authorization }),
+    rawUnavailableRead: queryGeneric({ args: {}, returns: postSealTeachingValidator, handler: () => unavailableTeaching }),
+    rawDeniedAuthorization: mutationGeneric({ args: {}, returns: practiceAssistanceAuthorizationValidator, handler: () => deniedAuthorization }),
+    authorizeDenied: mutationGeneric({ args: {}, returns: practiceAssistanceAuthorizationValidator,
+      handler: () => projectPracticeAssistanceAuthorization({ request: savedRequest, result: deniedAuthorization }, request, context) }),
   }) })
   for (const identity of [OWNER, FOREIGN]) {
     await t.withIdentity(identity).mutation(api.users.upsertUser, {})
@@ -65,7 +72,7 @@ async function fixture() {
   const reference = { version, assessmentOpportunityId: f.rows.learnAssessmentOpportunities }
   const target = { responseSlotId: f.rows.learnResponseSlots }
   const request: z.infer<typeof learnAuthorizePracticeAssistanceSchema> = { ...reference, target, expectedRevision: 1, kind: 'hint', idempotencyKey: key }
-  const savedRequest = { ...request }
+  const savedRequest = structuredClone(request)
   const citations = [{ sourceRef: 'source_public_1', label: 'Accepted source' }]
   const source: z.infer<typeof learnPostSealTeachingSourceSchema> = { assessmentOpportunityId: reference.assessmentOpportunityId, submissionId: f.rows.learnResponses,
     feedback: { text: 'FEEDBACK_CANARY', citations }, lesson: { paragraphs: ['LESSON_CANARY'], citations },
@@ -73,6 +80,8 @@ async function fixture() {
   const authorization: LearnV2PracticeAssistanceAuthorization = { ...reference, status: 'authorized', target, revision: 1,
     authorizationId: f.rows.learnAssessmentExposures, deliveredAt: f.base.createdAt + 1, content: { kind: 'hint', text: 'HINT_CANARY' } }
   const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice }
+  const unavailableTeaching: LearnV2PostSealTeaching = { version, status: 'unavailable', reasonCode: 'disabled' }
+  const deniedAuthorization: LearnV2PracticeAssistanceAuthorization = { version, status: 'denied', reasonCode: 'disabled' }
   function setPhase(phase: LearnAssessmentPhase, mask = 31, validScore = true) {
     const sealed = sealedPhases.includes(phase)
     context = {
@@ -93,7 +102,7 @@ async function fixture() {
     return context
   }
   setPhase('scored_fail')
-  return { t, f, reference, target, source, request, savedRequest, authorization, teaching, setPhase,
+  return { t, f, reference, target, source, request, savedRequest, authorization, teaching, unavailableTeaching, deniedAuthorization, setPhase,
     get context() { return context } }
 }
 
@@ -141,6 +150,64 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     lifecycle.phase = 'invalid'; lifecycle.submissionId = null; lifecycle.acceptedAt = null; lifecycle.authoritativeAttemptId = null
     expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode: 'not_sealed' })
     expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'not_sealed' })
+  })
+
+  test('accepted invalid lifecycle retaining an authoritative attempt releases no feedback or lesson', async () => {
+    const f = await fixture()
+    const lifecycle = f.context.disclosure.lifecycle
+    lifecycle.phase = 'invalid'
+    expect(lifecycle.authoritativeAttemptId).not.toBeNull()
+    expect(f.context.validScore).toBe(true)
+    expect(f.context.capabilities.canReadFeedback).toBe(true)
+    expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(true)
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
+      ...f.reference, status: 'available', feedback: null, lesson: null, practice: f.source.practice,
+    })
+  })
+
+  test.each(['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required'] as const)('the %s lifecycle rejects a retained authoritative attempt', async phase => {
+    const f = await fixture()
+    f.context.disclosure.lifecycle.phase = phase
+    expect(learnAssessmentLifecycleSchema.safeParse(f.context.disclosure.lifecycle).success).toBe(false)
+    await expect(f.t.query(readProjection, {})).rejects.toThrow()
+    await expect(f.t.mutation(authorizeProjection, {})).rejects.toThrow()
+  })
+
+  test.each(['submissionId', 'acceptedAt'] as const)('accepted invalid lifecycle cannot lose only %s', async field => {
+    const f = await fixture()
+    const lifecycle = f.setPhase('invalid').disclosure.lifecycle
+    lifecycle[field] = null
+    expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(false)
+    await expect(f.t.query(readProjection, {})).rejects.toThrow()
+    await expect(f.t.mutation(authorizeProjection, {})).rejects.toThrow()
+  })
+
+  test.each(['preparing', 'ready', 'test_open', 'cancelled', 'abandoned'] as const)('the %s lifecycle cannot retain a sealed submission', async phase => {
+    const f = await fixture()
+    const lifecycle = f.setPhase('submitted_sealed').disclosure.lifecycle
+    lifecycle.phase = phase
+    expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(false)
+    await expect(f.t.query(readProjection, {})).rejects.toThrow()
+    await expect(f.t.mutation(authorizeProjection, {})).rejects.toThrow()
+  })
+
+  test.each(['scored_pass', 'scored_fail'] as const)('the %s lifecycle requires an authoritative attempt', async phase => {
+    const f = await fixture()
+    const lifecycle = f.setPhase(phase).disclosure.lifecycle
+    lifecycle.authoritativeAttemptId = null
+    expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(false)
+    await expect(f.t.query(readProjection, {})).rejects.toThrow()
+  })
+
+  test('accepted invalid lifecycle without its delivery grant remains not sealed on read and replay', async () => {
+    const f = await fixture()
+    const lifecycle = f.setPhase('invalid').disclosure.lifecycle
+    lifecycle.deliveryGrantId = null
+    expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(true)
+    for (let replay = 0; replay < 2; replay++) {
+      expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode: 'not_sealed' })
+      expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'not_sealed' })
+    }
   })
 
   test.each(['owned', 'accessAvailable', 'evidenceAvailable', 'pinsMatch'] as const)('rechecks %s before read and authorization replay', async field => {
@@ -191,6 +258,14 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     expect((await f.t.mutation(authorizeProjection, {})).status).toBe('denied')
   })
 
+  test.each(['retrieval', 'prediction', 'teach_back', 'diagnostic'])('a %s response slot cannot supply practice authority', async stage => {
+    const f = await fixture()
+    Reflect.set(f.context.practiceBinding!, 'stage', stage)
+    expect(learnPostSealPracticeBindingSchema.safeParse(f.context.practiceBinding).success).toBe(false)
+    await expect(f.t.query(readProjection, {})).rejects.toThrow()
+    await expect(f.t.mutation(authorizeProjection, {})).rejects.toThrow()
+  })
+
   test.each(['hint', 'worked_example'] as const)('%s is released only by its matching immutable authorization receipt', async kind => {
     const f = await fixture()
     f.setPhase('scoring_pending')
@@ -214,6 +289,43 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     Reflect.set(f.authorization, field, field === 'target' ? { responseSlotId: 'wrong' }
       : field === 'content' ? { kind: 'worked_example', text: 'WRONG_HELP' } : field === 'revision' ? 2 : 'wrong')
     expect((await f.t.mutation(authorizeProjection, {})).status).toBe('denied')
+  })
+
+  test('a consistent request and receipt for another check cannot use this check authority', async () => {
+    const f = await fixture()
+    const other = await f.t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
+    const otherOpportunityId = other.rows.learnAssessmentOpportunities
+    f.request.assessmentOpportunityId = otherOpportunityId
+    f.savedRequest.assessmentOpportunityId = otherOpportunityId
+    f.authorization.assessmentOpportunityId = otherOpportunityId
+    expect(f.request).toEqual(f.savedRequest)
+    expect(f.authorization.assessmentOpportunityId).toBe(f.request.assessmentOpportunityId)
+    expect(f.context.disclosure.lifecycle.assessmentOpportunityId).toBe(f.reference.assessmentOpportunityId)
+    expect(f.context.practiceBinding!.assessmentOpportunityId).toBe(f.reference.assessmentOpportunityId)
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.mutation(authorizeProjection, {})).toEqual({
+      version, status: 'denied', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test.each(['expectedRevision', 'kind', 'target'] as const)('saved request must match its %s as well as its key', async field => {
+    const f = await fixture()
+    expect(f.savedRequest.target).not.toBe(f.request.target)
+    const request = structuredClone(f.request)
+    Reflect.set(f.savedRequest, field, field === 'expectedRevision' ? 2 : field === 'kind' ? 'worked_example' : { responseSlotId: 'other-slot' })
+    expect(f.savedRequest.idempotencyKey).toBe(f.request.idempotencyKey)
+    expect(f.request).toEqual(request)
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.mutation(authorizeProjection, {})).toEqual({
+      version, status: 'denied', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test.each(LEARN_V2_POST_SEAL_TEACHING_REASONS)('saved %s denial replays its reason without acknowledging content', async reasonCode => {
+    const f = await fixture()
+    f.deniedAuthorization.reasonCode = reasonCode
+    expect(learnPracticeAssistanceAuthorizationSchema.safeParse(f.deniedAuthorization).success).toBe(true)
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.mutation(authorizeDeniedProjection, {})).toEqual({
+      version, status: 'denied', reasonCode,
+    })
   })
 })
 
@@ -281,6 +393,20 @@ describe('strict post-seal public validators', () => {
     for (const canary of Object.values(STORAGE_CANARIES)) {
       expect(JSON.stringify(await f.t.query(rawRead, {}))).not.toContain(canary)
       expect(JSON.stringify(await f.t.mutation(rawAuthorization, {}))).not.toContain(canary)
+    }
+  })
+
+  test.each(forbidden.flatMap(field => ['unavailable', 'denied'].map(status => ({ field, status }))))('Convex rejects $field on the $status variant', async ({ field, status }) => {
+    const f = await fixture()
+    if (status === 'unavailable') {
+      expect(await f.t.query(rawUnavailableRead, {})).toEqual(disabled)
+      Reflect.set(f.unavailableTeaching, field, 'FORBIDDEN_CANARY')
+      await expect(f.t.query(rawUnavailableRead, {})).rejects.toThrow()
+    }
+    else {
+      expect(await f.t.mutation(rawDeniedAuthorization, {})).toEqual(denied)
+      Reflect.set(f.deniedAuthorization, field, 'FORBIDDEN_CANARY')
+      await expect(f.t.mutation(rawDeniedAuthorization, {})).rejects.toThrow()
     }
   })
 
