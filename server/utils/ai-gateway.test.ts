@@ -6,7 +6,7 @@ vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
 )
 vi.stubGlobal('fetch', vi.fn())
 
-const { generateCompletion, generateCompletionStream, serializeCompletionRequest } = await import('./ai-gateway')
+const { generateCompletion, generateCompletionStream, serializeCompletionRequest, classifyAiGatewayFailure } = await import('./ai-gateway')
 const { gradeQuizAnswers, quizGradingRequest, QUIZ_GRADER_POLICY } = await import('./quiz-grading')
 
 const validConfig = {
@@ -61,6 +61,16 @@ describe('generateCompletion', () => {
       'https://gateway.ai.cloudflare.com/v1/test-account/test-gateway/openrouter/v1/chat/completions',
       expect.objectContaining({ method: 'POST' }),
     )
+  })
+
+  test.each([undefined, false, true])('A11 redirect policy applies only to scoring capture (%s)', async captureScoringProvenance => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify(minimalResponse)))
+    await generateCompletion({ ...baseParams, captureScoringProvenance })
+    const init = vi.mocked(fetch).mock.calls[0]![1]!
+    if (captureScoringProvenance) expect(init.redirect).toBe('error')
+    else expect(init).not.toHaveProperty('redirect')
+    expect(init.body).toBe(serializeCompletionRequest(baseParams))
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   test('the quiz byte selector matches the actual escaped wire body at 96000 bytes', async () => {
@@ -255,6 +265,115 @@ describe('generateCompletion', () => {
   test('keeps a gateway 5xx outcome ambiguous to prevent automatic duplicate dispatch', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response('Upstream timeout', { status: 504 }))
     await expect(generateCompletion(baseParams)).rejects.toMatchObject({ aiGatewayFailureKind: 'outcome_unknown' })
+  })
+
+  test.each([400, 429, 500, 302].flatMap(status => ['ordinary', 'oversized', 'declared-oversized', 'reset', 'abort', 'timeout']
+    .flatMap(body => [false, true].map(redact => ({ status, body, redact })))))('HTTP $status decides the failure despite a $body error body (redacted=$redact)', async ({ status, body, redact }) => {
+    const secret = 'PRIVATE_ERROR_BODY'
+    const response = ['reset', 'abort', 'timeout'].includes(body)
+      ? new Response(new ReadableStream({ start(controller) {
+        controller.error(body === 'reset' ? new TypeError(secret) : new DOMException(secret, body === 'abort' ? 'AbortError' : 'TimeoutError'))
+      } }), { status, headers: { 'retry-after': '2' } })
+      : new Response(body === 'oversized' ? secret.repeat(10) : secret, { status,
+          headers: { 'retry-after': '2', ...(body === 'declared-oversized' ? { 'content-length': '1000' } : {}) } })
+    vi.mocked(fetch).mockResolvedValueOnce(response)
+    const error = await generateCompletion({ ...baseParams, maxResponseBytes: 32, redactUpstreamErrorBody: redact }).catch(error => error)
+    expect(error).toMatchObject({ statusCode: status, aiGatewayFailureKind: status >= 500 ? 'outcome_unknown' : 'definitive_failure', retryAfterMs: 2_000 })
+    expect(error.message).toBe(`AI Gateway error: ${!redact && body === 'ordinary' ? secret : 'Upstream provider request failed'}`)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['reset', 'abort', 'timeout'])('an interrupted successful body (%s) remains unknown', async mode => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) {
+      controller.error(mode === 'reset' ? new TypeError('Synthetic reset') : new DOMException('Synthetic interruption', mode === 'abort' ? 'AbortError' : 'TimeoutError'))
+    } })))
+    const error = await generateCompletion(baseParams).catch(error => error)
+    expect(classifyAiGatewayFailure(error)).toBe('outcome_unknown')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  test('an oversized successful body stays invalid even when cancelling its reader fails', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(33)) },
+      cancel() { throw new Error('Synthetic cancellation loss') },
+    })))
+    await expect(generateCompletion({ ...baseParams, maxResponseBytes: 32 })).rejects.toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+  })
+
+  test('an oversized successful body does not wait for reader cancellation', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(33)) },
+      cancel() { return new Promise(() => {}) },
+    })))
+    const error = await Promise.race([
+      generateCompletion({ ...baseParams, maxResponseBytes: 32 }).catch(error => error),
+      new Promise(resolve => setTimeout(() => resolve(null), 50)),
+    ])
+    expect(error).toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+  })
+
+  test.each([204, 205])('an empty HTTP %s completion is an invalid response', async status => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(null, { status }))
+    await expect(generateCompletion(baseParams)).rejects.toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+  })
+
+  test.each([true, false].flatMap(declared => ['resolve', 'throw', 'reject', 'pending'].map(cleanup => ({ declared, cleanup }))))('closes an unread oversized body (declared=$declared, cleanup=$cleanup) without changing the failure', async ({ declared, cleanup }) => {
+    let cancelled = 0
+    const body = new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(33)) },
+      cancel() {
+        cancelled++
+        if (cleanup === 'throw') throw new Error('Synthetic cancellation throw')
+        if (cleanup === 'reject') return Promise.reject(new Error('Synthetic cancellation rejection'))
+        if (cleanup === 'pending') return new Promise(() => {})
+      },
+    })
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(body, { headers: declared ? { 'content-length': '33' } : {} }))
+    const error = await Promise.race([
+      generateCompletion({ ...baseParams, maxResponseBytes: 32 }).catch(error => error),
+      new Promise(resolve => setTimeout(() => resolve(null), 50)),
+    ])
+    expect(error).toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+    expect(cancelled).toBe(1)
+    expect(body.locked).toBe(false)
+    const reader = body.getReader()
+    try { expect((await reader.read()).done).toBe(true) }
+    finally { reader.releaseLock() }
+  })
+
+  test('does not cancel or alter a fully consumed successful completion', async () => {
+    const cancel = vi.fn()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(JSON.stringify(minimalResponse))); controller.close() },
+      cancel,
+    })))
+    await expect(generateCompletion(baseParams)).resolves.toEqual(minimalResponse)
+    expect(cancel).not.toHaveBeenCalled()
+  })
+
+  test('disposes the error body without changing a stream caller\'s invalid byte-limit failure', async () => {
+    const cancel = vi.fn()
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { status: 429 }))
+    await expect(generateCompletionStream({ ...baseParams, maxResponseBytes: 0 })).rejects.toMatchObject({
+      message: 'Invalid AI Gateway response byte limit', aiGatewayFailureKind: 'not_dispatched',
+    })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  test.each([0, -1, NaN, 1.5])('an invalid response limit (%s) is refused before send', async maxResponseBytes => {
+    await expect(generateCompletion({ ...baseParams, maxResponseBytes })).rejects.toMatchObject({ aiGatewayFailureKind: 'not_dispatched' })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('an already aborted completion is refused before send', async () => {
+    await expect(generateCompletion({ ...baseParams, signal: AbortSignal.abort() })).rejects.toMatchObject({ aiGatewayFailureKind: 'not_dispatched' })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test.each([undefined, null, '', '   '])('B1 scoring HTTP 200 without a usable generation ID (%s) is invalid', async id => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ ...minimalResponse, id })))
+    await expect(generateCompletion({ ...baseParams, captureScoringProvenance: true })).rejects.toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   test('rejects an oversized provider response before JSON parsing', async () => {

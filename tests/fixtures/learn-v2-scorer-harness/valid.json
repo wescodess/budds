@@ -1,0 +1,6 @@
+{
+  "version": "learn-v2.fixture-transport.v1",
+  "default": "valid",
+  "reservationMicroUsd": 100,
+  "outcomes": {}
+}
