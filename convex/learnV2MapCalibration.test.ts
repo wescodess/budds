@@ -80,7 +80,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     await f.t.mutation(internal.learnV2Retention.purgeLegacyObjectiveCopies, { userId: identity.tokenIdentifier,
       sourceSnapshotId: f.sourceSnapshotId, objectiveId: f.objectives[0]! })
     if (legacy) await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: 'Legacy rubric cache' }))
-    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[0]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
     await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
       expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'missing-contract' })).rejects.toThrow('Blueprint assessment contract is invalid')
   })
@@ -120,13 +120,13 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         await ctx.db.patch(f.objectives[0]!, { coverage: 'gap', gapReason: 'This source does not support the objective.' })
         return documentId
       })
-      expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[1]?.assessmentContract).toEqual(assessment)
+      expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[1]).not.toHaveProperty('assessmentContract')
       await f.owner.mutation(api.documents.deleteDocument, { id: documentId })
       await f.t.finishAllScheduledFunctions(vi.runAllTimers)
       expect((await f.t.run(ctx => ctx.db.get(f.objectives[0]!)))?.assessmentContract).toEqual(assessment)
       expect((await f.t.run(ctx => ctx.db.get(f.objectives[1]!)))?.assessmentContract).toBeUndefined()
       const mission = await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id })
-      expect(mission?.map?.objectives[1]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+      expect(mission?.map?.objectives[1]).not.toHaveProperty('assessmentContract')
       await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
         expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'reject-missing-contract' })).rejects.toThrow('Blueprint objective evidence is unavailable')
     }

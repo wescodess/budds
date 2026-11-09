@@ -19,13 +19,15 @@ const MAX_AVAILABILITY_WINDOWS = 28
 const MAX_BLACKOUT_DATES = 90
 const MAX_REVIEW_INTERVALS = 4
 const schedulingReceipt = v.object({
-  _id: v.optional(v.union(v.id('studyPlanRevisions'), v.id('studySessions'))), status: v.optional(disclosureLiterals(['draft', 'accepted', 'missed'])),
+  _id: v.optional(v.union(v.id('studyPlanRevisions'), v.id('studySessions'))), status: v.optional(disclosureLiterals(['draft', 'accepted', 'missed', 'unavailable'])),
+  reasonCode: v.optional(v.literal('evidence_unavailable')),
   revision: v.optional(v.number()), recordRevision: v.optional(v.number()), feasibility: v.optional(disclosureLiterals(['feasible', 'infeasible'])),
   schedulerVersion: v.optional(v.string()), reasonCodes: v.optional(v.array(v.string())), parentRevisionId: v.optional(v.id('studyPlanRevisions')),
   voidStatus: v.optional(v.literal('scheduled')), sessionCount: v.optional(v.number()), missedSessionIds: v.optional(v.array(v.id('studySessions'))),
   successorPlanRevisionId: v.optional(v.id('studyPlanRevisions')), changedSessionIds: v.optional(v.array(v.string())), preservedSessionIds: v.optional(v.array(v.string())),
 })
 const schedulingReceiptSchema = z.union([
+  z.object({ status: z.literal('unavailable'), reasonCode: z.literal('evidence_unavailable') }),
   z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('draft'), revision: z.number().int().positive(), recordRevision: z.number().int().positive(),
     feasibility: z.enum(['feasible', 'infeasible']), schedulerVersion: z.literal(LEARN_V2_SCHEDULER_VERSION).optional(),
     reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8).optional(), parentRevisionId: learnIdSchema<'studyPlanRevisions'>().optional() }),

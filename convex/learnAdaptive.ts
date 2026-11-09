@@ -1273,7 +1273,7 @@ export const getThread = query({
     if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) return null
-    return await privacyRead(ctx, userId, ['thread-projection', thread._id], unavailableThreadProjection(thread, owner._id), async ctx => await projectThread(ctx, userId, thread))
+    return await privacyRead<Awaited<ReturnType<typeof projectThread>>>(ctx, userId, ['thread-projection', thread._id], unavailableThreadProjection(thread, owner._id), async ctx => await projectThread(ctx, userId, thread))
   },
 })
 

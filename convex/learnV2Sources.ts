@@ -1,4 +1,4 @@
-import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { z } from 'zod'
@@ -538,8 +538,8 @@ export const listSourceReview = query({
     }
     const page = []
     for (const { source, identity, reviewedObjectives } of metadata) {
-      const available = teachingAllowed && await canReadSourceEvidence(ctx, source)
-        && await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted: true })
+      const available = await privacyRead(ctx, userId, ['source-review-available', source._id], false,
+        async scoped => teachingAllowed && await sourceBodyAvailable(scoped, userId, source._id, { allowUnaccepted: true }))
       const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
       const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
         && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())

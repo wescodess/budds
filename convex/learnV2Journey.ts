@@ -4,12 +4,12 @@ import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
-import { retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
-import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { retainedSourceExcerpt, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
+import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import {
-  attemptSummary, blueprintSummary, canReadAssessmentTeaching, canReadSourceEvidence, disclosureLiterals, mapSummary, masterySummary,
+  attemptSummary, blueprintSummary, canReadAssessmentTeaching, disclosureLiterals, mapSummary, masterySummary,
   milestoneSummary, planRootSummary, planSummary, projectAttempt, projectCalibrationDelivery, projectFields,
-  projectObjective, projectPlan, sessionSummary, sourceLinkSummary, voidSummary,
+  projectObjective, projectPlan, projectUnavailableAttempt, sessionSummary, sourceLinkSummary, voidSummary,
 } from './lib/learnV2AssessmentDisclosure'
 import { assessmentDeliveryValidator } from './lib/learnV2PublicContract'
 import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
@@ -104,7 +104,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
   for (const source of rows) {
     const status = source.effectiveStatus ?? source.status
     const identity = await ctx.db.get(source.sourceIdentityId)
-    const available = teachingAllowed && await canReadSourceEvidence(ctx, source)
+    const available = teachingAllowed && await sourceBodyAvailable(ctx, userId, source._id)
     const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id) : null
     items.push({
       _id: source._id,
@@ -181,19 +181,27 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   for (const objective of map?.objectives ?? []) {
     const record = (await getScopedMasteryRecord(ctx, userId, blueprint!._id, objective._id)).record
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
-    mastery.push({ objectiveId: objective._id, record: record ? projectFields(masterySummary.fields, record) : null, attempts: await Promise.all(attempts.map(row => projectAttempt(ctx, row))) })
+    mastery.push({ objectiveId: objective._id, record: record ? projectFields(masterySummary.fields, record) : null, attempts })
   }
+  const discloseBody = voidRow.status !== 'archived'
+  const readAttempt = (row: Doc<'masteryAttempts'>) => privacyRead(ctx, userId, ['journey-attempt', row._id], projectUnavailableAttempt(row),
+    scoped => projectAttempt(scoped, row, discloseBody))
+  const projectedMastery = []
+  for (const row of mastery) projectedMastery.push({ ...row, attempts: await Promise.all(row.attempts.map(readAttempt)) })
+  const projectedCalibration = await Promise.all(calibrationAttempts.map(readAttempt))
   const calibrationItems = []
   for (const objective of map?.objectives ?? []) {
-    const stored = await ctx.db.get(objective._id)
-    const assessment = stored ? await projectCalibrationDelivery(ctx, stored, voidRow._id) : null
+    const assessment = await privacyRead<Awaited<ReturnType<typeof projectCalibrationDelivery>>>(ctx, userId, ['journey-calibration', objective._id], null, async scoped => {
+      const stored = await scoped.db.get(objective._id)
+      return stored ? await projectCalibrationDelivery(scoped, stored, voidRow._id) : null
+    })
     calibrationItems.push({ objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: assessment?.prompt ?? null, assessment })
   }
   return { folder: { _id: folder._id, name: folder.name }, learningVoid: projectFields(voidSummary.fields, voidRow),
     currentBlueprint: blueprint ? projectFields(blueprintSummary.fields, blueprint) : null, generation,
     nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map,
-    calibration: { attempts: await Promise.all(calibrationAttempts.map(row => projectAttempt(ctx, row))), items: calibrationItems,
-      completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery }
+    calibration: { attempts: projectedCalibration, items: calibrationItems,
+      completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery: projectedMastery }
 }
 
 const nextActionValidator = disclosureLiterals(['source_selection', 'source_review', 'blueprint_generation', 'map_review', 'calibration', 'plan_preview', 'plan_acceptance', 'mastery', 'study_session', 'draft', 'sourcing', 'plan_review', 'scheduled', 'active', 'completed', 'paused', 'needs_attention', 'failed', 'archived'])

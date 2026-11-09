@@ -316,7 +316,22 @@ export async function canReadAssessmentTeaching(ctx: ReadCtx, learningVoidId: Id
   return true
 }
 
-export async function projectAttempt(ctx: ReadCtx, row: Doc<'masteryAttempts'>) {
+export function projectUnavailableAttempt(row: Doc<'masteryAttempts'>) {
+  const safe = projectFields(attemptSummary.fields, row)
+  delete safe.response
+  delete safe.work
+  if (row.assessmentOpportunityId) {
+    delete safe.serverScorePercent
+    delete safe.masteryStateAfter
+  }
+  if (row.response || row.submissionId) {
+    safe.bodyAvailability = 'unavailable'
+    safe.bodyUnavailableReason = 'evidence_unavailable'
+  }
+  return safe
+}
+
+export async function projectAttempt(ctx: ReadCtx, row: Doc<'masteryAttempts'>, discloseBody = true) {
   const userId = await requireAuth(ctx)
   if (row.userId !== userId) throw new Error('Assessment history is unavailable')
   const safe = projectFields(attemptSummary.fields, row)
@@ -329,6 +344,7 @@ export async function projectAttempt(ctx: ReadCtx, row: Doc<'masteryAttempts'>) 
       delete safe.masteryStateAfter
     }
   }
+  if (!discloseBody) return { ...safe, bodyAvailability: 'unavailable' as const, bodyUnavailableReason: 'evidence_unavailable' as const }
   if (row.submissionId) {
     const submission = await ctx.db.get(row.submissionId)
     const context = row.assessmentOpportunityId ? await resolveAssessmentDisclosureContext(ctx, row.assessmentOpportunityId) : null
