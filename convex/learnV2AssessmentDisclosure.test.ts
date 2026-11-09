@@ -155,6 +155,54 @@ function assertNoPrivateFields(value: unknown) {
 }
 
 describe('registered assessment disclosure inventory', () => {
+  test.each(states.flatMap(state => (['folder_document', 'user_url'] as const).map(origin => ({ state, origin }))))('$state: $origin source names follow check state independently of evidence text', async ({ state, origin }) => {
+    const s = await fixture(state)
+    const title = origin === 'folder_document' ? 'Orbital mechanics.md' : 'Orbital mechanics reference'
+    await s.t.run(async ctx => {
+      await ctx.db.patch(s.f.documentId, { filename: title })
+      await ctx.db.patch(s.f.sourceIdentityId, { origin, title: origin === 'folder_document' ? undefined : title, folderDocumentId: origin === 'folder_document' ? s.f.documentId : undefined })
+    })
+    const expected = ['sealed_pending', 'scored', 'replaced'].includes(state) ? title : null
+    const review = await s.asOwner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
+    const journey = await s.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
+    expect(review.page[0]?.identity.title).toBe(expected)
+    expect(journey?.sources.items[0]?.title).toBe(expected)
+    expect(review.page[0]).not.toHaveProperty('filename')
+    expect(review.page[0]).not.toHaveProperty('objectKey')
+    if (expected === null) {
+      expect(review.page[0]).toMatchObject({ excerpt: null, identity: { publisherDomain: null } })
+      expect(journey?.sources.items[0]).toMatchObject({ excerpt: null, publicLocator: null })
+    }
+  })
+
+  test('ordinary unprepared folder evidence keeps its filename without disclosing a body', async () => {
+    const s = await fixture()
+    await s.t.run(async ctx => {
+      await ctx.db.delete(s.f.rows.learnAssessmentOpportunities)
+      await ctx.db.patch(s.f.documentId, { filename: 'Unprepared orbital mechanics.md' })
+      await ctx.db.patch(s.f.sourceSnapshotId, { status: 'candidate', effectiveStatus: 'candidate', rightsStatus: 'unknown', fetchedAt: undefined })
+    })
+    const review = await s.asOwner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
+    const journey = await s.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
+    expect(review.page[0]).toMatchObject({ identity: { title: 'Unprepared orbital mechanics.md' }, excerpt: null, rights: { access: 'evidence_unavailable' } })
+    expect(journey?.sources.items[0]).toMatchObject({ title: 'Unprepared orbital mechanics.md', excerpt: null })
+  })
+
+  test.each(['foreign', 'missing', 'tombstoned'] as const)('a %s source cannot use a stale owner label as a filename fallback', async failure => {
+    const s = await fixture()
+    await s.t.run(async ctx => {
+      await ctx.db.delete(s.f.rows.learnAssessmentOpportunities)
+      await ctx.db.patch(s.f.sourceIdentityId, { title: 'Stale owned label' })
+      if (failure === 'foreign') await ctx.db.patch(s.f.documentId, { userId: foreign.tokenIdentifier, filename: 'Foreign document.md' })
+      if (failure === 'missing') await ctx.db.delete(s.f.documentId)
+      if (failure === 'tombstoned') await ctx.db.patch(s.f.sourceIdentityId, { tombstonedAt: Date.now() })
+    })
+    const review = await s.asOwner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
+    const journey = await s.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
+    expect(review.page[0]?.identity.title).toBeNull()
+    expect(journey?.sources.items[0]?.title).toBeNull()
+  })
+
   test('each declared C4.1 read and alias has a registered response-matrix driver', () => {
     expect(reads.map(([name]) => name).sort()).toEqual(ASSESSMENT_DISCLOSURE_READS.map(([name]) => name).sort())
   })

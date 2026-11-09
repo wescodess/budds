@@ -6,7 +6,7 @@ import { learnIdSchema } from '../shared/learn-v2-responses'
 import { isLearnV2TransitionAllowed, type SourceState } from '../shared/learn-v2-contract'
 import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
 import { internal } from './_generated/api'
-import { canReadAssessmentTeaching, canReadSourceEvidence, disclosureLiterals, pageFields } from './lib/learnV2AssessmentDisclosure'
+import { canReadAssessmentTeaching, canReadSourceEvidence, disclosureLiterals, pageFields, readSourceReviewTitle } from './lib/learnV2AssessmentDisclosure'
 import type { Doc, Id } from './_generated/dataModel'
 import { retainedSourceExcerpt, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
 import { documentMatchesSnapshot } from './lib/learnV2BackingSource'
@@ -485,7 +485,7 @@ export const listSources = query({
 })
 
 // Owner-only projection for source-review cards. It deliberately omits
-// canonical/private URLs, object keys, filenames, and identity keys. A
+// canonical/private URLs, object keys, and identity keys. A
 // rights-permitted text excerpt is returned only for learner review.
 export const listSourceReview = query({
   args: {
@@ -538,6 +538,7 @@ export const listSourceReview = query({
     }
     const page = []
     for (const { source, identity, reviewedObjectives } of metadata) {
+      const title = await readSourceReviewTitle(ctx, userId, source, identity, teachingAllowed)
       const available = await privacyRead(ctx, userId, ['source-review-available', source._id], false,
         async scoped => teachingAllowed && await sourceBodyAvailable(scoped, userId, source._id, { allowUnaccepted: true }))
       const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
@@ -550,7 +551,7 @@ export const listSourceReview = query({
         ...sourceView(source, available),
         identity: {
           origin: identity.origin,
-          title: available ? reviewTitle(identity.title) : null,
+          title,
           publisherDomain: available ? reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl) : null,
         },
         retrieval: {

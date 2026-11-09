@@ -16,6 +16,7 @@ import { adaptiveActivityFallbackForReason } from '../../shared/learn-adaptive-a
 import { adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from '../../shared/learn-adaptive-controls'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../../shared/adaptive-v2-pilot-policy'
+import { privacyRead } from './learnV2PrivacyReadContext'
 
 type ReadCtx = QueryCtx | MutationCtx
 export const disclosureLiterals = <const T extends string>(values: readonly T[]) => v.union(...values.map(value => v.literal(value)))
@@ -161,6 +162,20 @@ export async function canReadSourceEvidence(ctx: ReadCtx, source: Doc<'learnSour
       || source.contentHash !== document.contentHash || source.sourceRevision !== document.sourceRevision) return false
   }
   return true
+}
+
+export async function readSourceReviewTitle(ctx: ReadCtx, userId: string, source: Doc<'learnSourceSnapshots'>, identity: Doc<'learnSourceIdentities'> | null, teachingAllowed: boolean): Promise<string | null> {
+  if (!teachingAllowed || source.userId !== userId || !identity || identity._id !== source.sourceIdentityId
+    || identity.userId !== userId || identity.learningVoidId !== source.learningVoidId || identity.tombstonedAt !== undefined) return null
+  return await privacyRead(ctx, userId, ['source-review-title', source._id], null, async scoped => {
+    let title = identity.title
+    if (identity.origin === 'folder_document') {
+      const document = identity.folderDocumentId ? await scoped.db.get(identity.folderDocumentId) : null
+      if (!document || document.userId !== userId || (await scoped.db.get(document.folderId))?.userId !== userId) return null
+      title = document.filename
+    }
+    return title?.replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 300) || null
+  })
 }
 
 async function sourceAvailable(ctx: ReadCtx, userId: string, id: Id<'learnSourceSnapshots'>, voidId: Id<'learningVoids'>) {

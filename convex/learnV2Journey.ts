@@ -9,7 +9,7 @@ import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2Priv
 import {
   attemptSummary, blueprintSummary, canReadAssessmentTeaching, disclosureLiterals, mapSummary, masterySummary,
   milestoneSummary, planRootSummary, planSummary, projectAttempt, projectCalibrationDelivery, projectFields,
-  projectObjective, projectPlan, projectUnavailableAttempt, sessionSummary, sourceLinkSummary, voidSummary,
+  projectObjective, projectPlan, projectUnavailableAttempt, readSourceReviewTitle, sessionSummary, sourceLinkSummary, voidSummary,
 } from './lib/learnV2AssessmentDisclosure'
 import { assessmentDeliveryValidator } from './lib/learnV2PublicContract'
 import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
@@ -104,6 +104,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
   for (const source of rows) {
     const status = source.effectiveStatus ?? source.status
     const identity = await ctx.db.get(source.sourceIdentityId)
+    const title = await readSourceReviewTitle(ctx, userId, source, identity, teachingAllowed)
     const available = teachingAllowed && await sourceBodyAvailable(ctx, userId, source._id)
     const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id) : null
     items.push({
@@ -114,7 +115,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
       recordRevision: source.recordRevision ?? 1,
       publicLocator: available ? sanitizePublicSourceLocator(source.publicLocator) ?? null : null,
       origin: identity?.origin ?? null,
-      title: available ? identity?.title ?? null : null,
+      title,
       retrievedAt: source.fetchedAt ?? null,
       excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: sanitizePublicSourceLocator(excerpt.locator) ?? null, text: excerpt.excerpt } : null,
       mappedObjectives: mappedBySource.get(String(source._id)) ?? [],
