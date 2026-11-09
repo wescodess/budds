@@ -242,6 +242,15 @@ describe('Canvas check', () => {
       expect(accept).not.toHaveBeenCalled()
     })
 
+    it('marks every confidence choice when confidence is missing', async () => {
+      const wrapper = await mountCheck()
+      const borders = () => [1, 2, 3, 4, 5].map(value => wrapper.get(`[data-testid="learn-canvas-check-confidence-${value}"]`).element.nextElementSibling!.classList)
+      expect(borders().every(list => list.contains('border-input') && !list.contains('border-destructive'))).toBe(true)
+      await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
+      await flushPromises()
+      expect(borders().every(list => list.contains('border-destructive') && !list.contains('border-input'))).toBe(true)
+    })
+
     it('maps a server confidence rejection to the same field error and rotates the key', async () => {
       accept.mockResolvedValueOnce(rejectedReceipt('confidence_required'))
       const wrapper = await mountCheck()
@@ -738,6 +747,32 @@ describe('Canvas check', () => {
       const wrapper = await mountCheck()
       await wrapper.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
       expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true)
+    })
+
+    it.each([
+      ['no lesson in the teaching read', () => teachingAvailable({ lesson: null, practice: null })],
+      ['no teaching at all', () => teachingUnavailable('unavailable')],
+    ])('offers Back to Today on the result card with %s', async (_name, teaching) => {
+      teachingData.value = teaching()
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const wrapper = await mountCheck()
+      const leave = wrapper.get('[data-testid="learn-canvas-check-receipt"] [data-testid="learn-canvas-check-leave"]')
+      expect(leave.text()).toBe('Back to Today')
+      await leave.trigger('click')
+      expect(wrapper.emitted('leave')).toHaveLength(1)
+    })
+
+    it('keeps Back to Today off the result card while a lesson exists or the read is pending', async () => {
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const wrapper = await mountCheck()
+      const onCard = () => wrapper.find('[data-testid="learn-canvas-check-receipt"] [data-testid="learn-canvas-check-leave"]').exists()
+      expect(onCard()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-lesson"] [data-testid="learn-canvas-check-leave"]').text()).toBe('Back to Today')
+      teachingData.value = null
+      await nextTick()
+      expect(onCard()).toBe(false)
     })
 
     it('ignores teaching fields passed on the binding', async () => {

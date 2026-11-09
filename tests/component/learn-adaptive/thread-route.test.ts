@@ -660,6 +660,89 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    it('puts the check directly under the header and brings the tools back below it', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment('test_open')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const check = wrapper.get('[data-testid="learn-canvas-check"]').element
+      checkState.value = assessment('scoring_pending', 'submission_1')
+      await nextTick()
+      await nextTick()
+      const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
+      const header = shell.get('header')
+      const frame = shell.get('[data-testid="learn-adaptive-canvas-frame"]').element
+      expect(wrapper.get('[data-testid="learn-canvas-check"]').element).toBe(check)
+      expect(header.element.nextElementSibling).toBe(frame)
+      expect(header.findAll('p')).toHaveLength(1)
+      expect(header.find('button').exists()).toBe(false)
+      const belowCheck = ['[data-testid="learn-thread-goal"]', '[data-testid="learn-thread-unresolved"]', '[data-testid="learn-evidence-open"]', '[data-testid="learn-memory-open"]', '[data-testid="learn-thread-resume-context"]', '#learn-thread-next-title', '[data-testid="learn-thread-contributions"]', '#learn-thread-history-title']
+      let previous: Element = frame
+      for (const selector of belowCheck) {
+        const element = shell.get(selector).element
+        expect(previous.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+        previous = element
+      }
+      expect(shell.html()).not.toMatch(/\border-(?:first|last|none|\d)/)
+      wrapper.unmount()
+    })
+
+    it('renders the check on the page with the approved header', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment('scored_fail', 'submission_1')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
+      expect(shell.get('[data-testid="learn-adaptive-canvas-frame"]').classes()).toEqual([])
+      const eyebrow = shell.get('header p')
+      expect(eyebrow.text()).toBe('Void · understand')
+      expect(eyebrow.classes()).toEqual(expect.arrayContaining(['font-inter', 'text-xs', 'font-medium', 'text-muted-foreground']))
+      expect(eyebrow.classes()).not.toContain('uppercase')
+      expect(eyebrow.classes()).not.toContain('text-primary')
+      expect(shell.get('h1').classes()).toEqual(expect.arrayContaining(['text-2xl', 'sm:text-3xl']))
+      expect(shell.get('h1').classes()).not.toContain('text-3xl')
+      expect(shell.get('[data-testid="learn-memory-open"]').element.parentElement?.classList).toContain('[&_:is(a,button)]:text-foreground')
+      wrapper.unmount()
+    })
+
+    it('keeps the activity surface when a recovery state replaces the check', async () => {
+      const Page = await import(path)
+      projection.value = { ...missionThread(), thread: { ...missionThread().thread, evidenceState: 'stale' } }
+      canvas.value = checkCanvas()
+      checkState.value = assessment('scoring_pending', 'submission_1')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.find('[data-testid="learn-current-source-recovery"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="learn-adaptive-canvas-frame"]').classes()).toEqual(expect.arrayContaining(['mt-6', 'rounded-xl', 'p-4', 'bg-[var(--learn-activity-surface)]']))
+      wrapper.unmount()
+    })
+
+    it('keeps an ordinary thread in its existing order and styling', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas(null)
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
+      const header = shell.get('header')
+      const frame = shell.get('[data-testid="learn-adaptive-canvas-frame"]')
+      expect(shell.classes()).toContain('py-8')
+      expect(header.find('[data-testid="learn-thread-goal"]').exists()).toBe(true)
+      expect(header.find('[data-testid="learn-thread-unresolved"]').exists()).toBe(true)
+      expect(header.find('[data-testid="learn-evidence-open"]').exists()).toBe(true)
+      expect(header.find('[data-testid="learn-memory-open"]').exists()).toBe(true)
+      expect(header.element.nextElementSibling).toBe(shell.get('[data-testid="learn-thread-resume-context"]').element)
+      for (const selector of ['[data-testid="learn-thread-resume-context"]', '#learn-thread-next-title', '[data-testid="learn-thread-contributions"]']) {
+        expect(shell.get(selector).element.compareDocumentPosition(frame.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      }
+      expect(shell.get('#learn-thread-history-title').element.compareDocumentPosition(frame.element) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
+      expect(frame.classes()).toEqual(expect.arrayContaining(['mt-6', 'rounded-xl', 'p-4', 'bg-[var(--learn-activity-surface)]']))
+      expect(shell.get('header p').classes()).toEqual(expect.arrayContaining(['uppercase', 'tracking-wide', 'text-primary']))
+      expect(shell.get('h1').classes()).toContain('text-3xl')
+      expect(shell.get('[data-testid="learn-memory-open"]').element.parentElement?.className).not.toContain('text-foreground')
+      wrapper.unmount()
+    })
+
     it('leaves a mission without a check unchanged and reads no assessment state', async () => {
       const Page = await import(path)
       projection.value = missionThread()

@@ -17,7 +17,7 @@ const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElemen
 const { isOnline } = useOnlineStatus()
 const {
   view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
-  invalidBySource, feedback, lesson, practice,
+  invalidBySource, feedback, lesson, lessonUnavailable, practice,
   practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
   start, submit, retryScore, submitPractice, requestAssistance,
 } = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: props.binding, isOnline })
@@ -34,7 +34,7 @@ const primaryAction = 'inline-flex min-h-11 items-center justify-center gap-2 ro
 const secondaryAction = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 const textLink = 'inline-flex min-h-11 items-center gap-1 rounded-sm text-sm font-medium text-foreground underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 const fieldBase = 'mt-2 w-full rounded-lg border bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-const card = 'mt-6 first:mt-0 rounded-xl border border-border bg-card p-4 sm:p-6'
+const card = 'mt-6 rounded-xl border border-border bg-card p-4 sm:p-6'
 const citationBadge = 'mx-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground align-baseline transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 const sourceBadge = 'inline-flex h-5 min-w-5 items-center justify-center rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground'
 const attention = 'text-[var(--learn-attention)]'
@@ -108,7 +108,7 @@ function openPractice() {
       <p class="font-inter text-xs font-medium text-muted-foreground">{{ view.kind === 'open' ? 'Check' : 'Void' }} · {{ intent }}</p>
       <h1 id="learn-canvas-title" class="mt-2 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl">{{ outcome }}</h1>
     </header>
-    <p v-if="view.kind === 'open'" class="mt-3 first:mt-0 flex items-start gap-2 text-sm leading-6 text-muted-foreground"><Lock class="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /><span>Hints, examples, sources and chat come back after you submit.</span></p>
+    <p v-if="view.kind === 'open'" class="mt-3 flex items-start gap-2 text-sm leading-6 text-muted-foreground"><Lock class="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /><span>Hints, examples, sources and chat come back after you submit.</span></p>
 
     <div v-if="view.kind === 'loading'" data-testid="learn-canvas-check-loading" :class="card" role="status" aria-live="polite">
       <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
@@ -146,7 +146,7 @@ function openPractice() {
           <div class="mt-3 grid grid-cols-5 gap-2">
             <label v-for="value in [1, 2, 3, 4, 5]" :key="value" class="cursor-pointer">
               <input ref="confidenceChoices" v-model.number="confidence" type="radio" :name="`${id}-confidence`" :value="value" :data-testid="`learn-canvas-check-confidence-${value}`" class="peer sr-only">
-              <span class="flex min-h-11 items-center justify-center rounded-lg border border-input bg-background text-sm font-medium text-muted-foreground peer-checked:border-primary peer-checked:bg-primary/15 peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:border-primary">{{ value }}<span class="sr-only"> out of 5{{ value === 1 ? ', guessing' : value === 5 ? ', certain' : '' }}</span></span>
+              <span :class="['flex min-h-11 items-center justify-center rounded-lg border bg-background text-sm font-medium text-muted-foreground peer-checked:border-primary peer-checked:bg-primary/15 peer-checked:text-foreground peer-focus-visible:ring-2 peer-focus-visible:ring-ring hover:border-primary', confidenceMissing ? 'border-destructive' : 'border-input']">{{ value }}<span class="sr-only"> out of 5{{ value === 1 ? ', guessing' : value === 5 ? ', certain' : '' }}</span></span>
             </label>
           </div>
           <div class="mt-1.5 flex justify-between font-inter text-xs font-medium text-muted-foreground" aria-hidden="true"><span>Guessing</span><span>Certain</span></div>
@@ -190,6 +190,7 @@ function openPractice() {
           </template>
         </div>
         <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('leave')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
+        <div v-if="lessonUnavailable" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button></div>
       </section>
 
       <section v-if="lesson" data-testid="learn-canvas-check-lesson" :aria-labelledby="`${id}-lesson`" :class="card">

@@ -163,6 +163,10 @@ export function useCanvasCheck(options: {
     const current = view.value
     return current.kind === 'receipt' && current.receipt === 'not_yet' ? teaching.value?.lesson ?? null : null
   })
+  const lessonUnavailable = computed(() => {
+    const current = view.value
+    return current.kind === 'receipt' && current.receipt === 'not_yet' && teachingQuery.data.value !== null && !lesson.value
+  })
   const practice = computed(() => canTeachSeparateCase.value ? teaching.value?.practice ?? null : null)
 
   async function start() {
@@ -321,7 +325,7 @@ export function useCanvasCheck(options: {
 
   return {
     view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
-    canTeachSeparateCase, invalidBySource, feedback, lesson, practice,
+    canTeachSeparateCase, invalidBySource, feedback, lesson, lessonUnavailable, practice,
     practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
     start, submit, retryScore, submitPractice, requestAssistance,
   }
