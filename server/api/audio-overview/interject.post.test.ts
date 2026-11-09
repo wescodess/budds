@@ -1,5 +1,11 @@
+// These transport tests isolate admission; help-admission.test.ts exercises the real boundary.
+import { getFunctionName, type FunctionReference } from 'convex/server'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
+const mockAuthorizeHelp = vi.hoisted(() => vi.fn())
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => mockAuthorizeHelp }))
+
+const mockTeachingScope = vi.hoisted(() => vi.fn())
 const mockMutation = vi.fn()
 const mockQuery = vi.fn()
 const mockSetAuth = vi.fn()
@@ -35,7 +41,7 @@ vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth = mockSetAuth
     mutation = mockMutation
-    query = mockQuery
+    query(reference: FunctionReference<'query'>, args: unknown) { return getFunctionName(reference) === 'documents:getTeachingScope' ? mockTeachingScope() : mockQuery(reference, args) }
   },
 }))
 
@@ -82,6 +88,8 @@ function overview() {
 
 describe('POST /api/audio-overview/interject authority', () => {
   beforeEach(() => {
+    mockAuthorizeHelp.mockReset().mockResolvedValue(undefined)
+    mockTeachingScope.mockReset().mockResolvedValue(['1', '2'].map((suffix, index) => ({ documentId: `doc_${suffix}`, folderId: 'folder_1', filename: `source-${suffix}.txt`, contentHash: (index ? 'b' : 'a').repeat(64), sourceRevision: `sha256:${(index ? 'b' : 'a').repeat(64)}` })))
     mockMutation.mockReset()
     mockQuery.mockReset()
     mockResolveTtsEngine.mockReset()
@@ -120,7 +128,6 @@ describe('POST /api/audio-overview/interject authority', () => {
       overviewId: 'overview_1',
       insertedAfterTurnIndex: 0,
       question: 'What is ATP?',
-      model: 'attacker/unbounded-model',
     })
     mockQuery.mockResolvedValueOnce(overview())
     const error = await (handler(makeEvent()) as Promise<any>).catch(reason => reason)
@@ -132,6 +139,56 @@ describe('POST /api/audio-overview/interject authority', () => {
     expect(globalThis.generateCompletion).not.toHaveBeenCalled()
     expect(mockResolveTtsEngine).not.toHaveBeenCalled()
     expect(mockSynthesizeTurn).not.toHaveBeenCalled()
+  })
+
+  test.each([
+    { lineage: { classification: 'private_scoring' } },
+    { sources: [{ answerKey: 'private scoring canary' }] },
+    { question: { text: 'Question', fallback: { measurementItemId: 'reserved' } } },
+    { model: 'client-selected-model' },
+  ])('rejects an alias or nested input before creating work: %j', async extra => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId: 'overview_v2', insertedAfterTurnIndex: 0, question: 'Own question', ...extra })
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('rejects a protected frozen source before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId: 'overview_v2', insertedAfterTurnIndex: 0, question: 'Own question' })
+    mockQuery.mockResolvedValue({ _id: 'overview_v2', episodeId: 'episode_v2', title: 'Gravity', status: 'ready' })
+    mockMutation.mockResolvedValueOnce({ duplicate: false, interjectionId: 'interjection_v2', jobId: 'job_v2', status: 'reserved', sources: [{ sourceId: 'gravity', documentId: 'doc_1', contentHash: 'a'.repeat(64), revision: `sha256:${'a'.repeat(64)}` }] })
+      .mockResolvedValueOnce({ claimed: true, status: 'scripting' })
+    mockTeachingScope.mockRejectedValue(new Error('Teaching input is unavailable'))
+    mockMutation.mockResolvedValue(null)
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(mockSynthesizeTurn).not.toHaveBeenCalled()
+    expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockAuthorizeHelp.mock.invocationCallOrder[0]).toBeLessThan(mockTeachingScope.mock.invocationCallOrder[0]!)
+  })
+
+  test('help denial precedes overview and frozen-lineage reads', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId: 'overview_v2', insertedAfterTurnIndex: 0, question: 'Own question' })
+    mockAuthorizeHelp.mockRejectedValue(Object.assign(new Error('Forbidden'), { statusCode: 403 }))
+    await expect(handler(makeEvent())).rejects.toMatchObject({ statusCode: 403 })
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(mockTeachingScope).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
+
+  test('a redacted ready replay returns no answer or media URL', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId: 'overview_v2', insertedAfterTurnIndex: 0, question: 'Own question' })
+    mockQuery.mockResolvedValueOnce({ _id: 'overview_v2', episodeId: 'episode_v2', title: 'Gravity', status: 'ready' })
+      .mockResolvedValueOnce({ _id: 'interjection_v2', status: 'ready', answerAvailability: 'unavailable', utterances: [], artifact: null })
+    mockMutation.mockResolvedValueOnce({ duplicate: true, interjectionId: 'interjection_v2', jobId: 'job_v2', status: 'ready', sources: [] })
+    await expect(handler(makeEvent())).rejects.toMatchObject({ statusCode: 403 })
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
   })
 
   test('[P0] v2 uses only its frozen Source Manifest and the authenticated managed Worker renderer', async () => {
@@ -554,7 +611,7 @@ describe('POST /api/audio-overview/interject authority', () => {
     expect(deletePayload).toMatchObject({ jobId: 'job_v2', interjectionId: 'interjection_v2' })
     expect(mockMutation).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
       interjectionId: 'interjection_v2',
-      error: 'connection reset after upload',
+      error: 'Audio interjection generation failed',
     }))
   })
 })

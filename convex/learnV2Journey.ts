@@ -1,11 +1,18 @@
-import { v } from 'convex/values'
+import { v, type Infer } from 'convex/values'
 import { query } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
-import { legacyResponseAvailable, retainedPlanCache, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
-import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { retainedSourceExcerpt, sourceBodyAvailable } from './lib/learnV2ResponsePrivacy'
+import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
+import {
+  attemptSummary, blueprintSummary, canReadAssessmentTeaching, disclosureLiterals, mapSummary, masterySummary,
+  milestoneSummary, planRootSummary, planSummary, projectAttempt, projectCalibrationDelivery, projectFields,
+  projectObjective, projectPlan, projectUnavailableAttempt, readSourceReviewTitle, sessionSummary, sourceLinkSummary, voidSummary,
+} from './lib/learnV2AssessmentDisclosure'
+import { assessmentDeliveryValidator } from './lib/learnV2PublicContract'
+import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
 
 const MAX_VOIDS = 32
 const MAX_SOURCES = 64
@@ -58,16 +65,15 @@ async function mapProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0
     const prerequisites = await ctx.db.query('learnObjectivePrerequisites')
       .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id))
       .take(MAX_OBJECTIVES + 1)
-    objectiveViews.push({ ...objective, assessmentContract: objective.assessmentContract && typeof objective.assessmentContract === 'object' ? objective.assessmentContract : {
-      version: 'learn-v2.assessment.v1' as const, kind: 'bounded_rubric' as const, responseFormat: 'short_text' as const,
-      instructions: '', passingScorePercent: 80 as const, criteria: [],
-    }, sourceLinks: links, prerequisiteObjectiveIds: prerequisites.map(row => row.prerequisiteObjectiveId) })
+    if (prerequisites.length > MAX_OBJECTIVES) throw new Error('Learn V2 prerequisites exceed their bounded contract')
+    objectiveViews.push({ ...projectObjective(objective, blueprint.recordRevision), sourceLinks: links.map(row => projectFields(sourceLinkSummary.fields, row)), prerequisiteObjectiveIds: prerequisites.map(row => row.prerequisiteObjectiveId) })
   }
-  return { blueprint, milestones, objectives: objectiveViews }
+  return { blueprint: projectFields(blueprintSummary.fields, blueprint), milestones: milestones.map(row => projectFields(milestoneSummary.fields, row)), objectives: objectiveViews }
 }
 
 async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null, summaryOnly = false) {
   if (!blueprint) return { items: [], counts: { total: 0, accepted: 0, evaluated: 0, rejected: 0, unavailable: 0, pending: 0 } }
+  const teachingAllowed = await canReadAssessmentTeaching(ctx, blueprint.learningVoidId)
   const rows = await ctx.db.query('learnSourceSnapshots')
     .withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id))
     .take(MAX_SOURCES + 1)
@@ -98,18 +104,20 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
   for (const source of rows) {
     const status = source.effectiveStatus ?? source.status
     const identity = await ctx.db.get(source.sourceIdentityId)
-    const excerpt = await retainedSourceExcerpt(ctx, userId, source._id)
+    const title = await readSourceReviewTitle(ctx, userId, source, identity, teachingAllowed)
+    const available = teachingAllowed && await sourceBodyAvailable(ctx, userId, source._id)
+    const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id) : null
     items.push({
       _id: source._id,
       sourceIdentityId: source.sourceIdentityId,
       status: source.status,
       effectiveStatus: status,
       recordRevision: source.recordRevision ?? 1,
-      publicLocator: source.publicLocator ?? null,
+      publicLocator: available ? sanitizePublicSourceLocator(source.publicLocator) ?? null : null,
       origin: identity?.origin ?? null,
-      title: identity?.title ?? null,
+      title,
       retrievedAt: source.fetchedAt ?? null,
-      excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: excerpt.locator, text: excerpt.excerpt } : null,
+      excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: sanitizePublicSourceLocator(excerpt.locator) ?? null, text: excerpt.excerpt } : null,
       mappedObjectives: mappedBySource.get(String(source._id)) ?? [],
       rightsStatus: source.rightsStatus ?? null,
       conflictStatus: source.conflictStatus ?? null,
@@ -129,7 +137,9 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const accepted = root.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : revisions.find(row => row.status === 'accepted') ?? null
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
-  return { root, preview, accepted, sessions }
+  if (accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
+  return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview) : null,
+    accepted: accepted ? projectPlan(accepted) : null, sessions: sessions.map(row => projectFields(sessionSummary.fields, row)) }
 }
 
 async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {
@@ -149,7 +159,7 @@ async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearn
   }
 }
 
-function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCounts: Awaited<ReturnType<typeof sourceProjection>>, plan: Awaited<ReturnType<typeof planProjection>>) {
+function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCounts: Awaited<ReturnType<typeof sourceProjection>>, plan: Awaited<ReturnType<typeof planProjection>>): Infer<typeof nextActionValidator> {
   if (voidRow.status === 'draft' || voidRow.status === 'sourcing') return 'source_selection'
   if (voidRow.status === 'source_review' && sourceCounts.counts.accepted === 0) return 'source_review'
   if (voidRow.status === 'source_review') return 'blueprint_generation'
@@ -159,18 +169,6 @@ function nextAction(voidRow: VoidRow, blueprint: BlueprintRow | null, sourceCoun
   if (voidRow.status === 'plan_review') return 'plan_acceptance'
   if (voidRow.status === 'scheduled' || voidRow.status === 'active') return plan.sessions.some(row => row.status === 'in_progress') ? 'mastery' : 'study_session'
   return voidRow.status
-}
-
-async function retainedAttempt(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, attempt: Doc<'masteryAttempts'>, discloseBody: boolean) {
-  const available = discloseBody && await legacyResponseAvailable(ctx, userId, attempt)
-  // Preserve the Journey history contract. These unread caches can contain
-  // private locators, scorer inputs or copies of a revoked response body.
-  const { response: _response, requestFingerprint: _requestFingerprint, rubricSnapshot: _rubricSnapshot,
-    criterionResultsJson: _criterionResultsJson, misconceptionTagsJson: _misconceptionTagsJson,
-    feedbackProjectionJson: _feedbackProjectionJson, contentRevisionPinsJson: _contentRevisionPinsJson,
-    sourceSnapshotIdsJson: _sourceSnapshotIdsJson, verifierVersionsJson: _verifierVersionsJson, ...metadata } = attempt
-  return { ...metadata, ...(available ? { response: attempt.response, bodyAvailability: 'available' as const }
-    : { bodyAvailability: 'unavailable' as const, bodyUnavailableReason: 'evidence_unavailable' as const }) }
 }
 
 async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, voidRow: VoidRow, folder: Doc<'folders'>) {
@@ -184,33 +182,52 @@ async function journey(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], use
   for (const objective of map?.objectives ?? []) {
     const record = (await getScopedMasteryRecord(ctx, userId, blueprint!._id, objective._id)).record
     const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint!._id).eq('objectiveId', objective._id)).order('desc').take(MAX_ATTEMPTS_PER_OBJECTIVE)
-    mastery.push({ objectiveId: objective._id, record, attempts })
+    mastery.push({ objectiveId: objective._id, record: record ? projectFields(masterySummary.fields, record) : null, attempts })
   }
-  const retainedMastery = []
-  for (const row of mastery) {
-    const attempts = []
-    for (const attempt of row.attempts) attempts.push(await retainedAttempt(ctx, userId, attempt, voidRow.status !== 'archived'))
-    retainedMastery.push({ ...row, attempts })
+  const discloseBody = voidRow.status !== 'archived'
+  const readAttempt = (row: Doc<'masteryAttempts'>) => privacyRead(ctx, userId, ['journey-attempt', row._id], projectUnavailableAttempt(row),
+    scoped => projectAttempt(scoped, row, discloseBody))
+  const projectedMastery = []
+  for (const row of mastery) projectedMastery.push({ ...row, attempts: await Promise.all(row.attempts.map(readAttempt)) })
+  const projectedCalibration = await Promise.all(calibrationAttempts.map(readAttempt))
+  const calibrationItems = []
+  for (const objective of map?.objectives ?? []) {
+    const assessment = await privacyRead<Awaited<ReturnType<typeof projectCalibrationDelivery>>>(ctx, userId, ['journey-calibration', objective._id], null, async scoped => {
+      const stored = await scoped.db.get(objective._id)
+      return stored ? await projectCalibrationDelivery(scoped, stored, voidRow._id) : null
+    })
+    calibrationItems.push({ objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: assessment?.prompt ?? null, assessment })
   }
-  const retainedCalibration = []
-  for (const attempt of calibrationAttempts) retainedCalibration.push(await retainedAttempt(ctx, userId, attempt, voidRow.status !== 'archived'))
-  const availableSources = new Set(sources.items.filter(source => source.excerpt !== null).map(source => source._id))
-  const calibrationItems = (map?.objectives ?? []).map(objective => {
-    const supported = objective.sourceLinks.filter(link => link.coverage !== 'gap')
-    const available = supported.every(link => availableSources.has(link.sourceSnapshotId))
-    const rubric = available && Array.isArray(objective.assessmentContract.criteria) && objective.assessmentContract.criteria.length ? objective.assessmentContract : null
-    return { objectiveId: objective._id, title: objective.title, capability: objective.capability, prompt: rubric?.instructions ?? null, rubric }
-  })
-  const safePlanRevision = (revision: Doc<'studyPlanRevisions'> | null) => revision && {
-    ...revision, inputSnapshot: retainedPlanCache(revision.inputSnapshot, 'input'), resultSnapshot: retainedPlanCache(revision.resultSnapshot, 'result'),
-  }
-  return { folder, learningVoid: voidRow, currentBlueprint: blueprint, generation, nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map,
-    calibration: { attempts: retainedCalibration, items: calibrationItems, completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 },
-    plan: { ...plan, preview: safePlanRevision(plan.preview), accepted: safePlanRevision(plan.accepted) }, mastery: retainedMastery }
+  return { folder: { _id: folder._id, name: folder.name }, learningVoid: projectFields(voidSummary.fields, voidRow),
+    currentBlueprint: blueprint ? projectFields(blueprintSummary.fields, blueprint) : null, generation,
+    nextAction: nextAction(voidRow, blueprint, sources, plan), sources, map,
+    calibration: { attempts: projectedCalibration, items: calibrationItems,
+      completed: voidRow.status !== 'calibration' && calibrationAttempts.length >= 3 }, plan, mastery: projectedMastery }
 }
+
+const nextActionValidator = disclosureLiterals(['source_selection', 'source_review', 'blueprint_generation', 'map_review', 'calibration', 'plan_preview', 'plan_acceptance', 'mastery', 'study_session', 'draft', 'sourcing', 'plan_review', 'scheduled', 'active', 'completed', 'paused', 'needs_attention', 'failed', 'archived'])
+const sourceState = disclosureLiterals(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable'])
+const journeyValidator = v.object({
+  folder: v.object({ _id: v.id('folders'), name: v.string() }), learningVoid: voidSummary,
+  currentBlueprint: v.union(blueprintSummary, v.null()),
+  generation: v.union(v.object({ status: v.string(), attempts: v.number(), terminalReason: v.union(v.string(), v.null()), updatedAt: v.number() }), v.null()),
+  nextAction: nextActionValidator,
+  sources: v.object({ items: v.array(v.object({ _id: v.id('learnSourceSnapshots'), sourceIdentityId: v.id('learnSourceIdentities'), status: sourceState,
+    effectiveStatus: sourceState, recordRevision: v.number(), publicLocator: v.union(v.string(), v.null()), origin: v.union(v.string(), v.null()), title: v.union(v.string(), v.null()),
+    retrievedAt: v.union(v.number(), v.null()), excerpt: v.union(v.object({ locator: v.union(v.string(), v.null()), text: v.string() }), v.null()),
+    mappedObjectives: v.array(v.object({ objectiveId: v.id('learnObjectives'), title: v.string(), coverage: disclosureLiterals(['strong', 'partial', 'gap']) })),
+    rightsStatus: v.union(v.string(), v.null()), conflictStatus: v.union(v.string(), v.null()) })),
+  counts: v.object({ total: v.number(), accepted: v.number(), evaluated: v.number(), rejected: v.number(), unavailable: v.number(), pending: v.number() }) }),
+  map: v.union(mapSummary, v.null()), calibration: v.object({ attempts: v.array(attemptSummary), completed: v.boolean(),
+    items: v.array(v.object({ objectiveId: v.id('learnObjectives'), title: v.string(), capability: v.string(), prompt: v.union(v.string(), v.null()), assessment: v.union(assessmentDeliveryValidator, v.null()) })) }),
+  plan: v.object({ root: v.union(planRootSummary, v.null()), preview: v.union(planSummary, v.null()), accepted: v.union(planSummary, v.null()), sessions: v.array(sessionSummary) }),
+  mastery: v.array(v.object({ objectiveId: v.id('learnObjectives'), record: v.union(masterySummary, v.null()), attempts: v.array(attemptSummary) })),
+})
 
 export const listHub = query({
   args: {},
+  returns: v.object({ items: v.array(v.object({ _id: v.id('learningVoids'), title: v.string(), status: voidSummary.fields.status,
+    revision: v.number(), folderId: v.id('folders'), blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()), nextAction: nextActionValidator, nextScheduledAt: v.union(v.number(), v.null()) })) }),
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     ctx = createResponsePrivacyReadContext(ctx, userId).ctx
@@ -231,6 +248,7 @@ export const listHub = query({
 
 export const getMission = query({
   args: { learningVoidId: v.union(v.id('learningVoids'), v.null()) },
+  returns: v.union(journeyValidator, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     ctx = createResponsePrivacyReadContext(ctx, userId).ctx
@@ -242,6 +260,7 @@ export const getMission = query({
 
 export const getCurrentMission = query({
   args: {},
+  returns: v.union(journeyValidator, v.null()),
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     ctx = createResponsePrivacyReadContext(ctx, userId).ctx
@@ -258,6 +277,10 @@ export const getCurrentMission = query({
  * reconstructing authoritative revisions from content fragments. */
 export const getSessionCandidate = query({
   args: { learningVoidId: v.id('learningVoids'), studySessionId: v.id('studySessions') },
+  returns: v.union(v.object({ status: sessionSummary.fields.status, studySessionId: v.id('studySessions'), sessionRevision: v.number(),
+    scheduledStartAt: v.number(), scheduledEndAt: v.optional(v.number()), timezone: v.optional(v.string()),
+    objective: v.object({ title: v.string(), capability: v.optional(v.string()), estimatedMinutes: v.union(v.number(), v.null()) }),
+    plan: v.object({ recordRevision: v.number() }), blueprint: v.object({ recordRevision: v.number() }), content: v.union(v.object({ revision: v.number() }), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const owned = await ownedVoid(ctx, userId, args.learningVoidId)

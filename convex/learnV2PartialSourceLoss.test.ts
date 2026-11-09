@@ -178,15 +178,15 @@ describe('objective with several supporting sources', () => {
     expect((await f.t.run(ctx => ctx.db.get(saved.attemptId)))?.sourceSnapshotIdsJson).toBe(JSON.stringify([f.ids.folder.snapshot]))
   })
 
-  test('the Journey map keeps the rubric while support survives and returns its safe shape after the last source', async () => {
+  test('the Journey map withholds the rubric before and after source loss', async () => {
     const f = await seed()
     const args = { learningVoidId: f.ids.learningVoidId }
     await f.remove('folder')
     await f.settle()
-    expect((await f.owner.query(api.learnV2Journey.getMission, args))?.map?.objectives[0]?.assessmentContract).toEqual(rubric)
+    expect((await f.owner.query(api.learnV2Journey.getMission, args))?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
     await f.remove('url')
     await f.settle()
-    expect((await f.owner.query(api.learnV2Journey.getMission, args))?.map?.objectives[0]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    expect((await f.owner.query(api.learnV2Journey.getMission, args))?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
   })
 })
 
@@ -202,7 +202,7 @@ describe('last supporting source', () => {
     await f.remove(second)
     await f.settle()
     expect(await f.contract()).toBeUndefined()
-    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.ids.learningVoidId }))?.map?.objectives[0]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.ids.learningVoidId }))?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
     await expect(f.t.query(internal.learnV2Mastery.getMasteryScoringInput, started.request)).rejects.toThrow('Started session rubric is unavailable')
     await expect(f.t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, { tokenIdentifier: userId, blueprintRevisionId: f.ids.blueprintRevisionId, objectiveId: f.ids.objectiveId, expectedBlueprintRecordRevision: 4, expectedVoidRevision: 5, response: 'Answer.', confidence: 3, usedHint: false, usedReveal: false, idempotencyKey: 'after-last' })).rejects.toThrow('Calibration evidence is unavailable')
     expect((await f.t.run(ctx => ctx.db.get(generation.jobId)))).toMatchObject({ status: 'blocked', terminalReason: 'evidence_unavailable' })

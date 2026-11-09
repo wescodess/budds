@@ -280,8 +280,10 @@ async function createReadyOverview(t: ReturnType<typeof convexTest>, user: typeo
   const asUser = t.withIdentity(user)
   const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
   const turns = await sampleTurns(t)
+  const documentId = await t.run(ctx => ctx.db.insert('documents', { userId: user.tokenIdentifier, folderId, filename: 'ordinary.txt', fileSize: 1, status: 'success' }))
   const { overviewId } = await createWithTurns(t, asUser, {
     folderId,
+    sourceDocumentIds: [documentId],
     title: 'Photosynthesis — a conversation',
     turns,
     voiceProfile: VOICE,

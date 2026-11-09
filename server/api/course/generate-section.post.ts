@@ -1,3 +1,4 @@
+import { assertTeachingCommand, loadTeachingScope } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -56,6 +57,8 @@ export default defineEventHandler(async (event) => {
     taskId?: string
   }>(event)
 
+  assertTeachingCommand(body, { courseId: 'string', sectionId: 'string', taskId: 'string' })
+
   if (!body?.courseId?.trim() || !body?.sectionId?.trim()) {
     throw createError({ statusCode: 400, message: 'courseId and sectionId are required' })
   }
@@ -64,6 +67,8 @@ export default defineEventHandler(async (event) => {
   const sectionId = body.sectionId as Id<'courseSections'>
   const taskId = body.taskId as Id<'tasks'> | undefined
   const convexClient = makeConvexClient(event)
+
+  const teachingScope = await loadTeachingScope(convexClient, { courseId })
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -113,6 +118,7 @@ export default defineEventHandler(async (event) => {
           .filter((id): id is Id<'documents'> => Boolean(id))
 
         const results = await searchDocuments({
+          teachingScope,
           query: `${section.title} ${course.title}`,
           userId,
           folderId,
@@ -128,6 +134,7 @@ export default defineEventHandler(async (event) => {
 
       if (chunks.length < 3 && docIds.length > 0) {
         const broadResults = await searchDocuments({
+          teachingScope,
           query: `${section.title} ${course.title}`,
           userId,
           max_num_results: 30,
@@ -289,6 +296,7 @@ export default defineEventHandler(async (event) => {
 
     const result = await convexClient.mutation(api.courseSections.finalizeSectionGeneration, {
       sectionId,
+      sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
       textContent: textResult || undefined,
       quizData: quizResult || undefined,
       flashcardData: flashcardResult || undefined,

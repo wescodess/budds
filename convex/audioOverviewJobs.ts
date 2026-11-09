@@ -1,3 +1,4 @@
+import { assertAudioJobSources, teachingDocuments } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, internalQuery, mutation, query } from './_generated/server'
@@ -175,6 +176,7 @@ export const request = mutation({
       if (!equalConstantTime(existing.capabilityHash, verifiedCapabilityHash)) {
         throw new Error('Idempotency capability mismatch')
       }
+      await assertAudioJobSources(ctx, existing, true)
       const task = await ctx.db.get(existing.taskId)
       if (!task) throw new Error('Existing audio overview task is unavailable')
       const frozen = task.audioOverviewRequest
@@ -265,6 +267,8 @@ export const request = mutation({
       throw new Error('Audio overview request exceeds the per-job budget')
     }
     const reservation = await reserveAudioOverviewTask(ctx, userId, args)
+    const reservedTask = await ctx.db.get(reservation.taskId)
+    await teachingDocuments(ctx, userId, reservedTask?.audioOverviewRequest?.documents.map(document => String(document.documentId)) ?? [])
     const now = Date.now()
     const jobId = await ctx.db.insert('audioOverviewJobs', {
       userId,
@@ -313,6 +317,7 @@ export const adoptLegacyRequest = mutation({
       if (existing.userId !== userId || !equalConstantTime(existing.capabilityHash, verifiedCapabilityHash)) {
         throw new Error('Legacy audio overview job not found')
       }
+      await assertAudioJobSources(ctx, existing, true)
       const task = await ctx.db.get(existing.taskId)
       const quotaDate = task?.audioOverviewRequest?.quotaDate ?? new Date().toISOString().slice(0, 10)
       const user = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
@@ -337,6 +342,7 @@ export const adoptLegacyRequest = mutation({
     if (!hasAuthoritativeFrozenSources(task)) {
       throw new Error('Legacy audio overview source has no authoritative immutable revision')
     }
+    await teachingDocuments(ctx, userId, task.audioOverviewRequest.documents.map(document => String(document.documentId)))
     const now = Date.now()
     const reservedMicrousd = reserveAudioOverviewBudgetMicrousd(task.audioOverviewRequest.preferences.lengthMinutes)
     if (reservedMicrousd > AUDIO_OVERVIEW_MAX_JOB_BUDGET_MICRO_USD) {
@@ -383,6 +389,7 @@ export const claimProviderBudget = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const task = await ctx.db.get(job.taskId)
     if (!task || task.status === 'failed' || task.status === 'cancelled'
       || job.status === 'failed' || job.status === 'cancelled') {
@@ -459,6 +466,7 @@ export const getStepContext = query({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string(), turnOrder: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const task = await ctx.db.get(job.taskId)
     if (!task || task.userId !== job.userId || task.folderId !== job.folderId || !task.audioOverviewRequest) {
       throw new Error('Audio overview task is unavailable')
@@ -477,6 +485,7 @@ export const getAlignmentContext = query({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string(), turnOrder: v.number() },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const turn = await ctx.db
       .query('audioOverviewJobTurns')
       .withIndex('by_jobId_and_order', q => q.eq('jobId', job._id).eq('order', args.turnOrder))
@@ -516,6 +525,7 @@ export const beginScriptGeneration = mutation({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string() },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const task = await ctx.db.get(job.taskId)
     if (!isActiveTask(task) || job.status === 'cancelled') return { proceed: false as const, cancelled: true as const }
     if (job.totalTurns !== undefined) return { proceed: false as const, completed: true as const }
@@ -607,6 +617,7 @@ export const getTurnUploadContext = internalQuery({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const turn = await ctx.db
       .query('audioOverviewJobTurns')
       .withIndex('by_jobId_and_order', q => q.eq('jobId', job._id).eq('order', args.turnOrder))
@@ -638,6 +649,7 @@ export const completeVerifiedTurn = internalMutation({
   handler: async (ctx, args) => {
     validateTiming(args.durationMs, args.wordTimings)
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const task = await ctx.db.get(job.taskId)
     const turn = await ctx.db
       .query('audioOverviewJobTurns')

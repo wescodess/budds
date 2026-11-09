@@ -1,3 +1,4 @@
+import { assertAudioTeaching } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -79,6 +80,7 @@ export const getCourseScopedOverview = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const turnUrls: (string | null)[] = []
     for (const turn of overview.turns) {
       turnUrls.push(await ctx.storage.getUrl(turn.audioFileId))
@@ -120,11 +122,17 @@ export const listByFolder = query({
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
-      .collect()
+      .take(101)
 
+    if (allRows.length > 100) throw new Error('Teaching input is unavailable')
     const rows = allRows.filter((r) => r.courseScoped !== true)
 
-    return rows.map((row) => ({
+    const admitted = []
+    for (const row of rows) {
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map((row) => ({
       _id: row._id,
       _creationTime: row._creationTime,
       title: row.title,
@@ -152,9 +160,13 @@ export const listByRoom = query({
       .order('desc')
       .take(100)
 
-    return rows
-      .filter(row => row.courseScoped !== true)
-      .map(row => ({
+    const admitted = []
+    for (const row of rows) {
+      if (row.courseScoped === true) continue
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map(row => ({
         _id: row._id,
         _creationTime: row._creationTime,
         title: row.title,
@@ -177,6 +189,7 @@ export const getWithTurns = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     return overview
   },
 })
@@ -189,6 +202,7 @@ export const getTurnUrls = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))
@@ -353,6 +367,7 @@ export const publishOverview = mutation({
     if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
     if (overview.status !== 'ready') throw new Error('Audio overview is not ready to share')
 
+    await assertAudioTeaching(ctx, overview, true)
     if (overview.shareToken) {
       return { token: overview.shareToken, publishedAt: overview.publishedAt ?? Date.now() }
     }
@@ -405,6 +420,7 @@ export const getByShareToken = query({
       sourceFilenames.push(doc?.filename ?? 'Source')
     }
 
+    await assertAudioTeaching(ctx, overview, false)
     return {
       title: overview.title,
       turns: overview.turns.map(t => ({
@@ -436,6 +452,7 @@ export const getTurnUrlsByShareToken = query({
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
 
+    await assertAudioTeaching(ctx, overview, false)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))

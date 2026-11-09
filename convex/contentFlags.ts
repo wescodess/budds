@@ -1,3 +1,4 @@
+import { assertTeachingInputs, assertRoomTeaching, publishContainingSections, publishCorrectedCardRoom } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
@@ -17,6 +18,7 @@ export const flagQuizQuestion = mutation({
     const trimmedAnswer = args.correctedAnswer.trim()
     if (trimmedAnswer.length === 0) throw new Error('Corrected answer required')
 
+    await assertTeachingInputs(ctx, userId, [{ kind: 'quiz_question', id: args.questionId }])
     await ctx.db.patch(args.questionId, {
       flagged: true,
       ...((question.flagged ? question.correctedAnswer : question.correctAnswer) !== trimmedAnswer
@@ -27,6 +29,7 @@ export const flagQuizQuestion = mutation({
       flaggedAt: Date.now(),
     })
 
+    await publishContainingSections(ctx, userId, question.quizId, [{ artifact: { kind: 'quiz_question', id: args.questionId }, key: 'whole' }])
     return { success: true }
   },
 })
@@ -41,6 +44,7 @@ export const unflagQuizQuestion = mutation({
     const question = await ctx.db.get(args.questionId)
     if (!question || question.userId !== userId) throw new Error('Question not found')
 
+    await assertTeachingInputs(ctx, userId, [{ kind: 'quiz_question', id: args.questionId }])
     await ctx.db.patch(args.questionId, {
       flagged: undefined,
       correctedAnswer: undefined,
@@ -48,6 +52,7 @@ export const unflagQuizQuestion = mutation({
       flaggedAt: undefined,
     })
 
+    await publishContainingSections(ctx, userId, question.quizId, [{ artifact: { kind: 'quiz_question', id: args.questionId }, key: 'whole' }])
     return { success: true }
   },
 })
@@ -66,6 +71,7 @@ export const flagFlashcard = mutation({
     const trimmedDef = args.correctedDefinition.trim()
     if (trimmedDef.length === 0) throw new Error('Corrected definition required')
 
+    await assertRoomTeaching(ctx, userId, card.roomId)
     await ctx.db.patch(args.cardId, {
       flagged: true,
       correctedDefinition: trimmedDef,
@@ -83,6 +89,7 @@ export const flagFlashcard = mutation({
       })
     }
 
+    await publishCorrectedCardRoom(ctx, userId, card.roomId)
     return { success: true }
   },
 })
@@ -97,6 +104,7 @@ export const unflagFlashcard = mutation({
     const card = await ctx.db.get(args.cardId)
     if (!card || card.userId !== userId) throw new Error('Card not found')
 
+    await assertRoomTeaching(ctx, userId, card.roomId)
     await ctx.db.patch(args.cardId, {
       flagged: undefined,
       correctedDefinition: undefined,
@@ -114,6 +122,7 @@ export const unflagFlashcard = mutation({
       })
     }
 
+    await publishCorrectedCardRoom(ctx, userId, card.roomId)
     return { success: true }
   },
 })

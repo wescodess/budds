@@ -1,3 +1,4 @@
+import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -139,6 +140,7 @@ export const reserve = mutation({
     const userId = await requireAuth(ctx)
     const overview = await ctx.db.get(args.audioOverviewId)
     if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
+    await assertAudioTeaching(ctx, overview)
     if (overview.status !== 'ready' || !overview.episodeId || !overview.finalArtifactId) {
       throw new Error('Version 2 Audio Overview is not ready')
     }
@@ -170,6 +172,7 @@ export const reserve = mutation({
         .eq('idempotencyKey', args.idempotencyKey))
       .unique()
     if (existing) {
+      if (['rendering', 'ready'].includes(existing.status)) await assertInterjectionTeaching(ctx, userId, existing)
       if (existing.question !== question) throw new Error('Interjection idempotency key was already used')
       return {
         duplicate: true,
@@ -251,6 +254,9 @@ export const claimScripting = mutation({
     requireAudioOverviewOrchestrationCredential(args.orchestrationToken)
     const userId = await requireAuth(ctx)
     const interjection = await requireOwnedInterjection(ctx, args.interjectionId, userId)
+    const parent = await ctx.db.get(interjection.audioOverviewId)
+    if (!parent || parent.userId !== userId) throw new Error('Audio overview not found')
+    await assertAudioTeaching(ctx, parent)
     if (interjection.status !== 'reserved') {
       return { claimed: false, status: interjection.status }
     }
@@ -275,6 +281,9 @@ export const startRendering = mutation({
     requireAudioOverviewOrchestrationCredential(args.orchestrationToken)
     const userId = await requireAuth(ctx)
     const interjection = await requireOwnedInterjection(ctx, args.interjectionId, userId)
+    const parent = await ctx.db.get(interjection.audioOverviewId)
+    if (!parent || parent.userId !== userId) throw new Error('Audio overview not found')
+    await assertAudioTeaching(ctx, parent)
     if (interjection.status === 'cancelled' || interjection.status === 'deleting') throw new Error('Interjection was cancelled')
     if (interjection.status === 'failed') throw new Error('Interjection has failed')
     if (interjection.status === 'ready') throw new Error('Interjection is already ready')
@@ -348,6 +357,7 @@ export const startRendering = mutation({
           || row.claimText !== normalized[index]!.claimText)) {
         throw new Error('Interjection rendering was already started with a different Dialogue Script')
       }
+      await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection_v2', id: interjection._id }, key: 'whole' }])
       return { duplicate: true, status: interjection.status }
     }
 
@@ -383,6 +393,7 @@ export const startRendering = mutation({
       }
     }
     await ctx.db.patch(interjection._id, { status: 'rendering', utteranceCount: normalized.length, updatedAt: now })
+    await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection_v2', id: interjection._id }, key: 'whole' }])
     return { duplicate: false, status: 'rendering' as const }
   },
 })
@@ -394,6 +405,7 @@ export const claimRenderingAttempt = mutation({
     requireAudioOverviewOrchestrationCredential(args.orchestrationToken)
     const userId = await requireAuth(ctx)
     const interjection = await requireOwnedInterjection(ctx, args.interjectionId, userId)
+    await assertInterjectionTeaching(ctx, userId, interjection)
     if (interjection.status !== 'rendering' || interjection.renderAttemptedAt !== undefined) {
       return { claimed: false, status: interjection.status, claimedAt: interjection.renderAttemptedAt }
     }
@@ -449,6 +461,7 @@ export const publish = mutation({
     if (interjection.status === 'cancelled' || interjection.status === 'deleting') throw new Error('Interjection was cancelled')
     if (interjection.status === 'failed') throw new Error('Interjection has failed')
     if (interjection.renderAttemptedAt === undefined) throw new Error('Interjection render attempt was not claimed')
+    await assertInterjectionTeaching(ctx, userId, interjection)
     const expectedKey = `audio-overviews/jobs/${interjection.jobId}/interjections/${interjection._id}.wav`
     const checksum = args.artifact.checksumSha256.trim().toLowerCase()
     if (args.artifact.objectKey !== expectedKey) throw new Error('Invalid private R2 object key')
@@ -468,6 +481,7 @@ export const publish = mutation({
       if (!existing || existing.objectKey !== expectedKey || existing.checksumSha256 !== checksum) {
         throw new Error('Interjection was already published with different evidence')
       }
+      await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection_v2', id: interjection._id }, key: 'whole' }])
       return {
         duplicate: true,
         artifactId: existing._id,
@@ -506,19 +520,20 @@ export const publish = mutation({
       updatedAt: now,
       completedAt: now,
     })
+    await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection_v2', id: interjection._id }, key: 'whole' }])
     return { duplicate: false, artifactId, estimatedCostMicrousd }
   },
 })
 
-async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterjectionsV2'>) {
-  const utterances = await ctx.db
+async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterjectionsV2'>, answerAvailable: boolean) {
+  const utterances = answerAvailable ? await ctx.db
     .query('audioOverviewInterjectionUtterances')
     .withIndex('by_interjectionId_and_order', q => q.eq('interjectionId', interjection._id))
-    .take(MAX_UTTERANCES + 1)
-  const links = await ctx.db
+    .take(MAX_UTTERANCES + 1) : []
+  const links = answerAvailable ? await ctx.db
     .query('audioOverviewInterjectionSources')
     .withIndex('by_interjectionId', q => q.eq('interjectionId', interjection._id))
-    .take(MAX_UTTERANCES * MAX_SOURCES_PER_UTTERANCE + 1)
+    .take(MAX_UTTERANCES * MAX_SOURCES_PER_UTTERANCE + 1) : []
   const sourceIdsByUtterance = new Map<string, string[]>()
   for (const link of links) {
     const entry = await ctx.db.get(link.manifestEntryId)
@@ -526,9 +541,18 @@ async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterje
     const key = String(link.utteranceId)
     sourceIdsByUtterance.set(key, [...(sourceIdsByUtterance.get(key) ?? []), entry.sourceId])
   }
-  const artifact = interjection.artifactId ? await ctx.db.get(interjection.artifactId) : null
+  const artifact = answerAvailable && interjection.artifactId ? await ctx.db.get(interjection.artifactId) : null
   return {
-    ...interjection,
+    _id: interjection._id, _creationTime: interjection._creationTime, userId: interjection.userId,
+    audioOverviewId: interjection.audioOverviewId, episodeId: interjection.episodeId, jobId: interjection.jobId,
+    sourceManifestId: interjection.sourceManifestId, insertedAfterTurnIndex: interjection.insertedAfterTurnIndex,
+    idempotencyKey: interjection.idempotencyKey,
+    error: interjection.error && (['Interjection scripting attempt expired', 'Interjection render attempt expired'].includes(interjection.error) ? interjection.error : 'Interjection is unavailable'),
+    question: interjection.question, status: interjection.status, model: interjection.model,
+    audioProfileId: interjection.audioProfileId, audioProfileVersion: interjection.audioProfileVersion, renderer: interjection.renderer,
+    hostAVoice: interjection.hostAVoice, hostBVoice: interjection.hostBVoice,
+    createdAt: interjection.createdAt, updatedAt: interjection.updatedAt, completedAt: interjection.completedAt,
+    answerAvailability: answerAvailable ? 'available' as const : 'unavailable' as const,
     utterances: utterances.map(row => ({
       utteranceId: row._id,
       order: row.order,
@@ -554,7 +578,7 @@ export const getForOwner = query({
     if (!userId) return null
     const interjection = await ctx.db.get(args.interjectionId)
     if (!interjection || interjection.userId !== userId) return null
-    return await projection(ctx, interjection)
+    return await projection(ctx, interjection, await interjectionAnswerAvailable(ctx, userId, interjection))
   },
 })
 
@@ -565,6 +589,7 @@ export const resolveMediaForOwner = query({
     if (!userId) return null
     const interjection = await ctx.db.get(args.interjectionId)
     if (!interjection || interjection.userId !== userId || interjection.status !== 'ready' || !interjection.artifactId) return null
+    await assertInterjectionTeaching(ctx, userId, interjection)
     const artifact = await ctx.db.get(interjection.artifactId)
     if (!artifact
       || artifact.userId !== userId

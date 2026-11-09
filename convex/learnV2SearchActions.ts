@@ -5,6 +5,7 @@ import type { Id } from './_generated/dataModel'
 import { internal } from './_generated/api'
 import { action, internalAction, type ActionCtx } from './_generated/server'
 import { admitLearnV2PublicQuery } from '../server/utils/learn-v2-public-query'
+import { admitActionHelp } from './lib/learnV2HelpActions'
 import {
   readTavilyFreeConfig,
   searchTavilyFree,
@@ -75,6 +76,9 @@ export async function orchestratePublicSearch(
 
   const query = admitLearnV2PublicQuery(args.query)
   validateIdempotencyKey(args.idempotencyKey)
+  const authorizeHelp = () => admitActionHelp(ctx, { kind: 'search', scope: { references: [{ kind: 'learning_void', id: args.learningVoidId }] } }, args.idempotencyKey)
+  const help = await authorizeHelp()
+  if (help.status === 'denied') return { ok: false, ...help, results: [] }
   const idempotencyKeyHash = await digest({ idempotencyKey: args.idempotencyKey })
   const queryDigest = await digest({ query })
   const requestFingerprint = await digest({
@@ -175,6 +179,14 @@ export async function orchestratePublicSearch(
     return { ok: false, status: 'released', reason: 'public_search_unavailable', results: [] }
   }
 
+  const beforeDispatch = await authorizeHelp()
+  if (beforeDispatch.status === 'denied') {
+    await ctx.runMutation(internal.learnV2Search.releasePreDispatch, {
+      tokenIdentifier: identity.tokenIdentifier, reservationId, executionToken, expectedRevision: reservationRevision,
+      outcomeCode: 'help_admission_denied', openCircuit: false,
+    })
+    return { ok: false, ...beforeDispatch, results: [] }
+  }
   let dispatch: Record<string, unknown>
   try {
     dispatch = await ctx.runMutation(internal.learnV2Search.authorizeDispatch, {
@@ -242,6 +254,8 @@ export async function orchestratePublicSearch(
     return { ok: false, status: 'reserved', reconciliationRequired: true, reason: 'public_search_unavailable', results: [] }
   }
 
+  const beforeReturn = await authorizeHelp()
+  if (beforeReturn.status === 'denied') return { ok: false, ...beforeReturn, results: [] }
   return {
     ok: true,
     status: 'consumed',

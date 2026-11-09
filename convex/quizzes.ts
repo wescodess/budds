@@ -1,3 +1,4 @@
+import { teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertQuizTeaching, teachingDocuments, publishTeaching, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
 import { internal } from './_generated/api'
@@ -40,14 +41,20 @@ const settingsValidator = v.object({
   immediateFeedback: v.boolean(),
 })
 
-async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
+async function requireOwnedQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
   if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
   return quiz
 }
 
-async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>) {
-  const quiz = await requireQuiz(ctx, quizId, userId)
+async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
+  const quiz = await requireOwnedQuiz(ctx, quizId, userId)
+  await assertQuizTeaching(ctx, userId, quizId)
+  return quiz
+}
+
+async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>, questionId?: Id<'quizQuestions'>) {
+  const quiz = await requireOwnedQuiz(ctx, quizId, userId)
   const gradingEnabled = isQuizGradingEnabled()
   // Stored rubric work keeps its parent fence when new grading is switched off.
   const storedRubric = !gradingEnabled && attemptId
@@ -57,6 +64,8 @@ async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>,
   if ((gradingEnabled || storedRubric) && !await isQuizGradingParentEligible(ctx, quiz)) {
     throw new Error('Course quiz is unavailable for grading')
   }
+  if (questionId) await assertTeachingInputs(ctx, userId, [{ kind: 'quiz_question', id: questionId }])
+  else await assertQuizTeaching(ctx, userId, quizId)
   return quiz
 }
 
@@ -184,6 +193,8 @@ export const createWithQuestions = mutation({
     difficulty: v.optional(v.string()),
     language: v.optional(v.string()),
     creationMethod: v.optional(v.union(v.literal('manual'), v.literal('auto_generated'))),
+    requestedQuestionCount: v.optional(v.number()),
+    sourcePins: v.optional(teachingSourcePinsValidator),
     questions: v.array(questionInput),
     courseScoped: v.optional(v.boolean()),
   },
@@ -194,6 +205,9 @@ export const createWithQuestions = mutation({
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
 
+    if (args.requestedQuestionCount !== undefined && (!Number.isInteger(args.requestedQuestionCount) || args.requestedQuestionCount < 1 || args.requestedQuestionCount > 50 || args.questions.length > args.requestedQuestionCount)) throw new Error('Quiz exceeds the requested publication size')
+    await teachingDocuments(ctx, userId, args.questions.flatMap(q => q.sourceDocumentId ? [q.sourceDocumentId] : []))
+    const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const trimmedTitle = args.title.trim().slice(0, 120) || 'Quiz'
 
     const quizId = await ctx.db.insert('quizzes', {
@@ -236,6 +250,8 @@ export const createWithQuestions = mutation({
       })
     }
 
+    const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
+    await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole', sources })))
     return { quizId }
   },
 })
@@ -254,6 +270,9 @@ export const createCourseScopedQuiz = internalMutation({
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== args.userId || course.folderId !== args.folderId || course.status === 'deleting') throw new Error('Course not found')
+    if (await requireAuth(ctx) !== course.userId) throw new Error('Learn access denied')
+    const userId = course.userId
+    await teachingDocuments(ctx, userId, args.questions.flatMap(q => q.sourceDocumentId ? [q.sourceDocumentId] : []))
     const quizId = await ctx.db.insert('quizzes', {
       userId: course.userId,
       folderId: course.folderId,
@@ -290,6 +309,8 @@ export const createCourseScopedQuiz = internalMutation({
       })
     }
 
+    const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
+    await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole' })))
     return { quizId }
   },
 })
@@ -317,26 +338,16 @@ export const listByFolder = query({
       .sort((a, b) => b._creationTime - a._creationTime)
       .slice(0, MAX_QUIZZES_PER_FOLDER)
 
-    return await Promise.all(
-      rows.map(async (row) => {
-        const questions = await ctx.db
-          .query('quizQuestions')
-          .withIndex('by_quizId', (q) => q.eq('quizId', row._id))
-          .take(MAX_QUIZ_QUESTIONS)
-        return {
-          _id: row._id,
-          folderId: row.folderId,
-          _creationTime: row._creationTime,
-          title: row.title,
-          status: row.status,
-          score: row.score,
-          completedAt: row.completedAt,
-          questionCount: questions.length,
-          latestAttemptStatus: row.latestAttemptStatus,
-          difficulty: row.difficulty,
-        }
-      }),
-    )
+    const result = []
+    for (const row of rows) {
+      let questions
+      try { questions = await assertQuizTeaching(ctx, userId, row._id) }
+      catch { continue }
+      result.push({ _id: row._id, folderId: row.folderId, _creationTime: row._creationTime, title: row.title,
+        status: row.status, score: row.score, completedAt: row.completedAt, questionCount: questions.length,
+        latestAttemptStatus: row.latestAttemptStatus, difficulty: row.difficulty })
+    }
+    return result
   },
 })
 
@@ -354,6 +365,7 @@ export const getWithQuestions = query({
       .withIndex('by_quizId', (q) => q.eq('quizId', quiz._id))
       .take(MAX_QUIZ_QUESTIONS)
 
+    await assertTeachingInputs(ctx, userId, questions.map(question => ({ kind: 'quiz_question', id: question._id })))
     questions.sort((a, b) => a.order - b.order)
 
     return { quiz, questions: questions.map(projectLearnerQuizQuestion) }
@@ -370,7 +382,7 @@ export const updateQuiz = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    await requireQuiz(ctx, args.quizId, userId)
+    await requireOwnedQuiz(ctx, args.quizId, userId)
 
     const patch: Record<string, unknown> = {}
     if (args.title !== undefined) {
@@ -439,6 +451,7 @@ export const addQuestion = mutation({
 
     await ctx.db.patch(args.quizId, { questionCount: existing.length + 1 })
 
+    await publishContainingSections(ctx, userId, args.quizId, [{ artifact: { kind: 'quiz_question', id: questionId }, key: 'whole' }])
     return { questionId }
   },
 })
@@ -503,6 +516,7 @@ export const updateQuestion = mutation({
     }
 
     await ctx.db.patch(args.questionId, patch)
+    await publishContainingSections(ctx, userId, existing.quizId, [{ artifact: { kind: 'quiz_question', id: args.questionId }, key: 'whole' }])
     return projectLearnerQuizQuestion((await ctx.db.get(args.questionId))!)
   },
 })
@@ -514,7 +528,7 @@ export const deleteQuestion = mutation({
 
     const question = await ctx.db.get(args.questionId)
     if (!question || question.userId !== userId) throw new Error('Question not found')
-    await requireQuiz(ctx, question.quizId, userId)
+    await requireOwnedQuiz(ctx, question.quizId, userId)
 
     const quizId = question.quizId
     await ctx.db.delete(args.questionId)
@@ -532,6 +546,7 @@ export const deleteQuestion = mutation({
     }
 
     await ctx.db.patch(quizId, { questionCount: remaining.length })
+    await publishContainingSections(ctx, userId, quizId, remaining.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole' })))
   },
 })
 
@@ -636,7 +651,7 @@ export const submitAnswer = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id, args.questionId)
 
     const question = await ctx.db.get(args.questionId)
     if (!question) throw new Error('Question not found')
@@ -851,6 +866,7 @@ export const getAttemptResults = query({
 
     const quiz = await ctx.db.get(attempt.quizId)
     if (!quiz || quiz.deletedAt !== undefined) return null
+    await assertQuizTeaching(ctx, userId, attempt.quizId)
     const eligibleQuestionIds = attempt.gradingQuestionIds ? new Set(attempt.gradingQuestionIds) : undefined
 
     const questions = await ctx.db
@@ -978,6 +994,7 @@ export const getQuizHistory = query({
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) return []
 
+    await assertQuizTeaching(ctx, userId, args.quizId)
     const attempts = await ctx.db
       .query('quizAttempts')
       .withIndex('by_userId_and_quizId', q =>
@@ -1108,6 +1125,7 @@ export const listAttempts = query({
     const quiz = await ctx.db.get(args.quizId)
     if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) return []
 
+    await assertQuizTeaching(ctx, userId, args.quizId)
     const attempts = await ctx.db
       .query('quizAttempts')
       .withIndex('by_userId_and_quizId', (q) =>

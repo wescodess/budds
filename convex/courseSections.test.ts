@@ -1376,7 +1376,7 @@ describe('courseSections internal mutations', () => {
     const t = convexTest(schema, modules)
     const { sections } = await seedCourseWithSections(t)
 
-    await t.mutation(internal.courseSections.markReady, {
+    await t.withIdentity(USER_A).mutation(internal.courseSections.markReady, {
       sectionId: sections[0]._id,
       contentBlocks: [
         { type: 'text', content: 'hello', order: 0 },
@@ -1406,7 +1406,7 @@ describe('courseSections internal mutations', () => {
     const t = convexTest(schema, modules)
     const { sections } = await seedCourseWithSections(t)
 
-    const result = await t.query(internal.courseSections.getForGeneration, {
+    const result = await t.withIdentity(USER_A).query(internal.courseSections.getForGeneration, {
       sectionId: sections[0]._id,
     })
 

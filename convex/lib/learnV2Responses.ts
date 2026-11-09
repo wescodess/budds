@@ -613,7 +613,7 @@ export async function terminalizeLearnResponseForOwner(ctx: MutationCtx, userId:
   return { version: LEARN_V2_PUBLIC_API_VERSION, status: 'terminal', target: result.target, revision: result.revision, reason: result.reasonCode, terminalizedAt: result.terminalizedAt }
 }
 
-export async function authorizeLearnResponseAssistanceForOwner(ctx: MutationCtx, userId: string, input: z.infer<typeof authorizeAssistanceSchema>): Promise<LearnV2AssistanceAuthorization> {
+export async function prepareLearnResponseAssistanceForOwner(ctx: MutationCtx, userId: string, input: z.infer<typeof authorizeAssistanceSchema>) {
   const request = parsePublicLearnRequest(authorizeAssistanceSchema, input)
   const deny = (reasonCode: 'disabled' | 'unavailable' | 'test_open' | 'disclosure_unknown'): LearnV2AssistanceAuthorization => ({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'denied', reasonCode })
   const row = request.assessmentOpportunityId ? await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId }) : null
@@ -631,23 +631,31 @@ export async function authorizeLearnResponseAssistanceForOwner(ctx: MutationCtx,
   } catch { return deny('unavailable') }
   const denied = !row.submissionId && isLearnAssessmentTestOnly(parseLearnContract(learnAssessmentPurposeSchema, row.purpose))
   if (!row.submissionId && row.phase !== 'test_open') return deny('unavailable')
-  const receiptHash = await digest(['assistance', row._id, request.idempotencyKey, request.kind, row.submissionId ? 'sealed' : 'open'])
-  const existing = await ctx.db.query('learnAssessmentExposures')
-    .withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', receiptHash)).unique()
-  if (existing) return denied ? deny('test_open') : { version: LEARN_V2_PUBLIC_API_VERSION, status: 'authorized', authorizationId: existing._id, assessmentOpportunityId: row._id }
-  const now = Date.now()
-  const id = await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
-    ...anchors(row), blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId, assessmentOpportunityId: row._id,
-    ...(row.contextPins.kind === 'session' ? { studySessionId: row.contextPins.studySessionId } : {}),
-    purpose: denied ? 'assistance_requested_denied' : 'teaching', status: denied ? 'requested_denied' : 'granted',
-    projectionDigest: await digest({ kind: request.kind, opportunity: row._id }), deliveryReceiptHash: receiptHash, serverTime: now,
-    policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, provenanceVersion: 'learn-v2.assistance-authorization.v1' })
-  if (!denied && !row.submissionId && row.contextPins.kind === 'session') {
-    const session = (await ctx.db.get(row.contextPins.studySessionId))!
-    await ctx.db.patch(session._id, { assistanceRevision: (session.assistanceRevision ?? 0) + 1,
-      ...(request.kind === 'reveal' ? { answerRevealedAt: session.answerRevealedAt ?? now } : { substantiveHintUsedAt: session.substantiveHintUsedAt ?? now }) })
+  const commit = async (): Promise<LearnV2AssistanceAuthorization> => {
+    const receiptHash = await digest(['assistance', row._id, request.idempotencyKey, request.kind, row.submissionId ? 'sealed' : 'open'])
+    const existing = await ctx.db.query('learnAssessmentExposures')
+      .withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', receiptHash)).unique()
+    if (existing) return denied ? deny('test_open') : { version: LEARN_V2_PUBLIC_API_VERSION, status: 'authorized', authorizationId: existing._id, assessmentOpportunityId: row._id }
+    const now = Date.now()
+    const id = await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
+      ...anchors(row), blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId, assessmentOpportunityId: row._id,
+      ...(row.contextPins.kind === 'session' ? { studySessionId: row.contextPins.studySessionId } : {}),
+      purpose: denied ? 'assistance_requested_denied' : 'teaching', status: denied ? 'requested_denied' : 'granted',
+      projectionDigest: await digest({ kind: request.kind, opportunity: row._id }), deliveryReceiptHash: receiptHash, serverTime: now,
+      policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, provenanceVersion: 'learn-v2.assistance-authorization.v1' })
+    if (!denied && !row.submissionId && row.contextPins.kind === 'session') {
+      const session = (await ctx.db.get(row.contextPins.studySessionId))!
+      await ctx.db.patch(session._id, { assistanceRevision: (session.assistanceRevision ?? 0) + 1,
+        ...(request.kind === 'reveal' ? { answerRevealedAt: session.answerRevealedAt ?? now } : { substantiveHintUsedAt: session.substantiveHintUsedAt ?? now }) })
+    }
+    return denied ? deny('test_open') : { version: LEARN_V2_PUBLIC_API_VERSION, status: 'authorized', authorizationId: id, assessmentOpportunityId: row._id }
   }
-  return denied ? deny('test_open') : { version: LEARN_V2_PUBLIC_API_VERSION, status: 'authorized', authorizationId: id, assessmentOpportunityId: row._id }
+  return { row, request, denied, commit }
+}
+
+export async function authorizeLearnResponseAssistanceForOwner(ctx: MutationCtx, userId: string, input: z.infer<typeof authorizeAssistanceSchema>): Promise<LearnV2AssistanceAuthorization> {
+  const prepared = await prepareLearnResponseAssistanceForOwner(ctx, userId, input)
+  return 'status' in prepared ? prepared : await prepared.commit()
 }
 
 const integrityInputSchema = z.strictObject({ submissionId: learnIdSchema<'learnResponses'>(),

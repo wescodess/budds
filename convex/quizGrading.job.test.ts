@@ -417,7 +417,8 @@ describe('course parent grading fence', () => {
     await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, userId: OTHER.tokenIdentifier })).rejects.toThrow('Course not found')
     await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, folderId: otherFolder })).rejects.toThrow('Course not found')
     expect(await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))).toEqual(before)
-    const { quizId } = await fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, input)
+    await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, input)).rejects.toThrow('Unauthenticated')
+    const { quizId } = await fixture.user.mutation(internal.quizzes.createCourseScopedQuiz, input)
     expect(await fixture.t.run(ctx => ctx.db.get(quizId))).toMatchObject({
       courseId: fixture.courseId, courseScoped: true, userId: USER.tokenIdentifier, folderId: fixture.folderId,
     })
@@ -1453,13 +1454,14 @@ describe('Stage B folder ownership and deletion phases', () => {
     await expect(fixture.user.mutation(api.quizzes.submitAttempt, { quizId: fixture.quizId, answers: [] })).rejects.toThrow(/unavailable/)
   })
 
-  test('legacy flag-off acceptance retains its behavior on an orphaned folder', async () => {
+  test('legacy flag-off acceptance rejects an orphaned folder without creating grading state', async () => {
     vi.stubEnv('QUIZ_GRADING_MODE', 'off')
     const fixture = await createQuiz()
     const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
     await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
-    const attemptId = await finish(fixture, undefined, 'submitAttempt')
-    expect((await assessments(fixture, attemptId))[0]!.rubricVersion).toBe('quiz.free_response_assessment.v1')
+    await expect(finish(fixture, undefined, 'submitAttempt')).rejects.toThrow('Teaching input is unavailable')
+    expect(await fixture.t.run(ctx => ctx.db.query('quizAttempts').withIndex('by_quizId', q => q.eq('quizId', fixture.quizId)).take(1))).toEqual([])
+    expect(await fixture.t.run(ctx => ctx.db.query('quizAnswerAssessments').take(1))).toEqual([])
     expect(await gradingCounters(fixture)).toEqual([])
   })
 })

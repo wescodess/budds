@@ -1,3 +1,4 @@
+import { assertAudioJobSources, assertAudioTeaching, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -239,6 +240,7 @@ export const createPlan = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
       throw new Error('Audio overview job is terminal')
     }
@@ -621,7 +623,8 @@ export const createPlan = mutation({
 export const getForWorkflow = query({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string() },
   handler: async (ctx, args) => {
-    await requireCapability(ctx, args.jobId, args.capability)
+    const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const manifest = await ctx.db
       .query('audioOverviewSourceManifests')
       .withIndex('by_jobId', q => q.eq('jobId', args.jobId))
@@ -871,6 +874,7 @@ export const getPlaybackForOwner = query({
     if (!userId) return null
     const overview = await ctx.db.get(args.overviewId)
     if (!overview || overview.userId !== userId) return null
+    await assertAudioTeaching(ctx, overview, true)
     return await loadPlaybackProjection(ctx, overview)
   },
 })
@@ -889,6 +893,7 @@ export const getPlaybackByShareToken = query({
     if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
+    await assertAudioTeaching(ctx, overview, false)
     const projection = await loadPlaybackProjection(ctx, overview)
     if (!projection) return null
     return {
@@ -953,6 +958,7 @@ export const resolveMediaForOwner = query({
       || overview.userId !== userId
       || overview.status !== 'ready'
       || overview.finalArtifactId !== artifact._id) return null
+    await assertAudioTeaching(ctx, overview, true)
     return mediaMetadata(artifact)
   },
 })
@@ -971,6 +977,7 @@ export const resolveMediaByShareToken = query({
       || !overview.episodeId
       || !overview.finalArtifactId) return null
     if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
+    await assertAudioTeaching(ctx, overview, false)
     const artifact = await ctx.db.get(overview.finalArtifactId)
     if (!isPublishedFinalArtifact(artifact)
       || artifact.userId !== overview.userId
@@ -998,6 +1005,7 @@ export const recordSceneEvaluation = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
       throw new Error('Audio overview job is terminal')
     }
@@ -1237,6 +1245,7 @@ export const publishFinalArtifact = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'failed' || job.status === 'cancelled') throw new Error('Audio overview job is terminal')
     const episode = await ctx.db
       .query('audioOverviewEpisodes')
@@ -1261,6 +1270,7 @@ export const publishFinalArtifact = mutation({
         .unique()
       if (!alignment) throw new Error('Published audio overview alignment is unavailable')
       const overviewId = await completePublication(ctx, job, episode, existingFinal, alignment._id)
+      await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overviewId }, key: 'whole' }], { kind: 'audio_job', id: job._id })
       return { duplicate: true, overviewId, episodeId: episode._id, artifactId: existingFinal._id, alignmentId: alignment._id }
     }
     if (job.status === 'completed') throw new Error('Completed audio overview job has no published artifact')
@@ -1335,6 +1345,7 @@ export const publishFinalArtifact = mutation({
     const artifact = await ctx.db.get(artifactId)
     if (!artifact) throw new Error('Published audio artifact is unavailable')
     const overviewId = await completePublication(ctx, job, episode, artifact, alignmentId)
+    await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overviewId }, key: 'whole' }], { kind: 'audio_job', id: job._id })
     return { duplicate: false, overviewId, episodeId: episode._id, artifactId, alignmentId }
   },
 })
@@ -1348,6 +1359,7 @@ export const appendAlignmentSegments = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')
@@ -1432,10 +1444,15 @@ export const completeAlignment = mutation({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string(), alignmentId: v.id('audioOverviewAlignments') },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')
     }
+    const episode = await ctx.db.get(alignment.episodeId)
+    const overview = episode?.compatibilityOverviewId && await ctx.db.get(episode.compatibilityOverviewId)
+    if (!overview || overview.userId !== job.userId) throw new Error('Audio overview is unavailable')
+    await assertAudioTeaching(ctx, overview, false)
     if (alignment.status === 'ready') return { duplicate: true }
     if (alignment.status === 'failed') throw new Error('Failed alignment cannot become ready')
     if (alignment.segmentCount < 1) throw new Error('Cannot complete an empty alignment')
@@ -1463,6 +1480,7 @@ export const completeAlignment = mutation({
     }
     const now = Date.now()
     await ctx.db.patch(alignment._id, { status: 'ready', error: undefined, updatedAt: now, completedAt: now })
+    await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overview._id }, key: 'whole' }], { kind: 'audio_job', id: job._id })
     return { duplicate: false }
   },
 })
@@ -1502,6 +1520,7 @@ export const listAlignmentSegments = query({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')

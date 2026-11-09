@@ -1,3 +1,6 @@
+import { makeConvexClient } from '../../utils/convex-client'
+import type { Id } from '../../../convex/_generated/dataModel'
+import { assertTeachingCommand, loadTeachingScope, TeachingSourceError } from '../../utils/teaching-source-scope'
 const TOPIC_EXTRACTION_QUERY = 'main topics, themes, and key concepts'
 
 export default defineEventHandler(async (event) => {
@@ -8,11 +11,18 @@ export default defineEventHandler(async (event) => {
     resourceIds?: string[]
   }>(event)
 
+  assertTeachingCommand(body, { folderId: 'string', resourceIds: 'strings' })
+
   if (!body?.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
 
+  const convexClient = makeConvexClient(event)
+  if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
+  const teachingScope = await loadTeachingScope(convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+
   const searchResults = await searchDocuments({
+          teachingScope,
     query: TOPIC_EXTRACTION_QUERY,
     userId,
     folderId: body.folderId,
@@ -24,7 +34,7 @@ export default defineEventHandler(async (event) => {
 
   if (chunks.length < 2) {
     try {
-      const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 40_000 })
+      const folderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 40_000 })
       if (folderDocs.length > 0) {
         chunks = folderDocs.map((doc) => ({
           id: doc.key,
@@ -40,6 +50,7 @@ export default defineEventHandler(async (event) => {
       }
     }
     catch (error) {
+      if (error instanceof TeachingSourceError) throw error
       console.error('[quiz/topics] Failed to fetch folder docs fallback:', error)
     }
   }

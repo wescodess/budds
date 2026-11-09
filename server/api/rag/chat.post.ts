@@ -5,6 +5,8 @@ import type { ChatMessage } from '../../utils/ai-gateway'
 import type { AISearchChunk } from '../../utils/ai-search'
 import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
+import type { LearnHelpReference } from '../../../convex/lib/learnV2HelpContract'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
@@ -102,6 +104,13 @@ export default defineEventHandler(async (event) => {
   const hasScope = Boolean(
     (body.scope?.folderIds?.length ?? 0) > 0 || (body.scope?.fileIds?.length ?? 0) > 0,
   )
+  const references: LearnHelpReference[] = hasScope
+    ? [...(body.scope?.folderIds ?? []).map(id => ({ kind: 'folder' as const, id: id as Id<'folders'> })),
+        ...(body.scope?.fileIds ?? []).map(id => ({ kind: 'document' as const, id: id as Id<'documents'> }))]
+    : [{ kind: 'folder', id: body.folderId as Id<'folders'> }]
+  // Unbound client history may originate outside the selected scope.
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: body.history?.length ? null : { references } })
+  await authorizeHelp()
   let scopedDocumentIds: Set<string> | null = hasScope ? new Set() : null
   let scopedDocuments: Array<{
     documentId: string
@@ -136,10 +145,12 @@ export default defineEventHandler(async (event) => {
     }))
   }
 
+  await authorizeHelp()
   const searchResults = await searchDocuments({
     query: body.query,
     userId,
     ...(hasScope ? {} : { folderId: body.folderId }),
+    filterDocIds: scopedDocumentIds ? [...scopedDocumentIds] : undefined,
     max_num_results: body.max_num_results ?? 50,
     score_threshold: body.score_threshold ?? 0.05,
   })
@@ -174,6 +185,7 @@ export default defineEventHandler(async (event) => {
         : []
 
       if (missingExplicitDocuments.length > 0) {
+        await authorizeHelp()
         try {
           const explicitFolderDocs = await fetchFolderDocs({
             userId,
@@ -186,8 +198,8 @@ export default defineEventHandler(async (event) => {
               ...explicitFolderDocs.map((doc) => folderDocToChunk(doc, userId)),
             ]
           }
-        } catch (error) {
-          console.error('[rag/chat] Failed to fetch explicit scoped docs:', error)
+        } catch {
+          console.error('[rag/chat] Explicit scoped document retrieval failed')
         }
       }
 
@@ -196,14 +208,15 @@ export default defineEventHandler(async (event) => {
     else {
       let scopedFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
       if (scopedDocuments.length > 0) {
+        await authorizeHelp()
         try {
           scopedFolderDocs = await fetchFolderDocs({
             userId,
             documents: scopedDocuments,
             maxChars: 80_000,
           })
-        } catch (error) {
-          console.error('[rag/chat] Failed to fetch scoped docs fallback:', error)
+        } catch {
+          console.error('[rag/chat] Scoped document retrieval failed')
         }
       }
 
@@ -211,6 +224,7 @@ export default defineEventHandler(async (event) => {
         citationChunks = scopedFolderDocs.map((doc) => folderDocToChunk(doc, userId))
         context = buildFolderDocContext(scopedFolderDocs)
       } else if (chunks.length < 8 && summarizationIntent) {
+        await authorizeHelp()
         const deepSearch = await searchDocuments({
           query: body.query,
           userId,
@@ -228,11 +242,12 @@ export default defineEventHandler(async (event) => {
       }
     }
   } else if (needsFallback) {
+    await authorizeHelp()
     let rawFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
     try {
       rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
-    } catch (error) {
-      console.error('[rag/chat] Failed to fetch folder docs fallback:', error)
+    } catch {
+      console.error('[rag/chat] Folder document retrieval failed')
     }
     const folderDocs = scopedDocumentIds
       ? rawFolderDocs.filter((d) => scopedDocumentIds!.has(d.documentId))
@@ -242,6 +257,7 @@ export default defineEventHandler(async (event) => {
       context = buildFolderDocContext(folderDocs)
     }
     else if (chunks.length < 8 && summarizationIntent) {
+      await authorizeHelp()
       const deepSearch = await searchDocuments({
         query: body.query,
         userId,
@@ -291,20 +307,25 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
+    redactUpstreamErrorBody: true,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }
 
   if (body.stream) {
+    await authorizeHelp()
     let stream: ReadableStream
     try {
       stream = await generateCompletionStream({ model: body.model, ...completionParams, stream: true })
-    } catch (err) {
+    } catch {
       if (body.model !== SERVER_DEFAULT_MODEL) {
+        await authorizeHelp()
         modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
-        stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true })
+        stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true }).catch(() => {
+          throw createError({ statusCode: 502, message: 'Help generation unavailable' })
+        })
       } else {
-        throw err
+        throw createError({ statusCode: 502, message: 'Help generation unavailable' })
       }
     }
 
@@ -316,6 +337,12 @@ export default defineEventHandler(async (event) => {
 
     const transformedStream = new ReadableStream({
       async start(controller) {
+        try { await authorizeHelp() }
+        catch (error) {
+          await stream.cancel().catch(() => {})
+          controller.error(error)
+          return
+        }
         if (fallbackEvent) controller.enqueue(encoder.encode(fallbackEvent))
         controller.enqueue(encoder.encode(sourcesEvent))
         const reader = stream.getReader()
@@ -326,8 +353,8 @@ export default defineEventHandler(async (event) => {
             controller.enqueue(value)
           }
           controller.close()
-        } catch (err) {
-          controller.error(err)
+        } catch {
+          controller.error(createError({ statusCode: 502, message: 'Help stream unavailable' }))
         }
       },
     })
@@ -340,10 +367,12 @@ export default defineEventHandler(async (event) => {
   }
 
   let completion: Awaited<ReturnType<typeof generateCompletion>>
+  await authorizeHelp()
   try {
     completion = await generateCompletion({ model: body.model, ...completionParams })
   } catch (err) {
     if (body.model !== SERVER_DEFAULT_MODEL) {
+      await authorizeHelp()
       modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
       completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })
     } else {
@@ -351,6 +380,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  await authorizeHelp()
   return {
     answer: completion.choices[0]?.message?.content ?? '',
     model: completion.model,

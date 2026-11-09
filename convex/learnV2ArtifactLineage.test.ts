@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
-import { convexTest } from 'convex-test'
-import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
+import { convexTest, type TestConvex } from 'convex-test'
+import { makeFunctionReference, type WithoutSystemFields, type FunctionReference, type FunctionArgs, type FunctionReturnType } from 'convex/server'
 import { getDocumentSize, v, type Value } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -658,7 +658,29 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
 }
 
 type MatrixFixture = Awaited<ReturnType<typeof prepareMatrix>>
-type TestStore = ReturnType<typeof convexTest>
+type TestStore = TestConvex<typeof schema>
+
+// These pin fixtures deliberately have unpublished synthetic bindings. Build
+// ordinary unenrolled input for consumer probes, then restore those bindings
+// before asserting their original graph/pin policy. The real guards still run.
+async function ordinaryConsumerFixture<T>(t: TestStore, operation: (ctx: MutationCtx) => Promise<T>): Promise<T> {
+  return t.withIdentity(owner).run(async ctx => {
+    const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).unique()
+    expect(catalog?.measurementCapability?.enabled).not.toBe(true)
+    const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(201)
+    if (rows.length > 200) throw new Error('Fixture exceeds ordinary consumer bound')
+    for (const row of rows) await ctx.db.patch(row._id, { nextId: row._id })
+    try { return await operation(ctx) }
+    finally { for (const row of rows) if (await ctx.db.get(row._id)) await ctx.db.patch(row._id, { nextId: row.nextId }) }
+  })
+}
+function consumerQuery<F extends FunctionReference<'query', 'public' | 'internal'>>(t: TestStore, reference: F, args: FunctionArgs<F>): Promise<FunctionReturnType<F>> {
+  return ordinaryConsumerFixture(t, ctx => ctx.runQuery(reference, args))
+}
+function consumerMutation<F extends FunctionReference<'mutation', 'public' | 'internal'>>(t: TestStore, reference: F, args: FunctionArgs<F>): Promise<FunctionReturnType<F>> {
+  return ordinaryConsumerFixture(t, ctx => ctx.runMutation(reference, args))
+}
+
 type Revocation = { name: string, kinds?: readonly ArtifactKind[], apply: (t: TestStore, f: MatrixFixture) => Promise<unknown> }
 const documentKinds = ['document', 'document_chunk'] as const
 const voidKinds = ['session_block', 'learner_artifact', 'measurement_item', 'scoring_spec'] as const
@@ -667,11 +689,11 @@ const measurementKinds = ['measurement_item', 'scoring_spec'] as const
 const benignUpdates: Revocation[] = [
   { name: 'document indexJobId only (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', indexJobId: 'new-index-job' }) },
   { name: 'document filename (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentFilename, { id: f.documentId, filename: 'renamed.txt' }) },
-  { name: 'section completion (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.completeSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 4, quizTotal: 5 }) },
-  { name: 'section offline availability (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
-  { name: 'Audio Overview publication (real)', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
-  { name: 'flashcard room rename (real)', kinds: ['flashcard_version'], apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Renamed room' }) },
-  { name: 'quiz rename (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Renamed quiz' }) },
+  { name: 'section completion (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.completeSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 4, quizTotal: 5 }) },
+  { name: 'section offline availability (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
+  { name: 'Audio Overview publication (real)', kinds: ['audio_overview'], apply: (t, f) => consumerMutation(t, api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'flashcard room rename (real)', kinds: ['flashcard_version'], apply: (t, f) => consumerMutation(t, api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Renamed room' }) },
+  { name: 'quiz rename (real)', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Renamed quiz' }) },
   { name: 'session start (real)', kinds: ['session_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.sessionId, expectedSessionRevision: 1, expectedContentRevision: 1, idempotencyKey: 'lineage-benign-start' }) },
   { name: 'thread pause (real)', kinds: ['learner_artifact'], apply: (t, f) => t.withIdentity(owner).mutation(api.learnAdaptive.leaveThread, { threadId: f.threadId, expectedRevision: 1, idempotencyKey: 'lineage-benign-pause' }) },
   // These immutable/dormant records have no operational-update command.
@@ -717,23 +739,23 @@ const artifactRevocations: Revocation[] = [
   { name: 'plan_superseded', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.planId, { status: 'superseded' })) },
   { name: 'plan_pointer_replaced', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.studyPlanId, { activeRevisionId: undefined })) },
   { name: 'blueprint_superseded', kinds: ['session_block', ...measurementKinds], apply: (t, f) => t.run(ctx => ctx.db.patch(f.blueprintRevisionId, { status: 'superseded' })) },
-  { name: 'quiz_deleted_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuiz, { quizId: f.quizId }) },
-  { name: 'question_deleted_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuestion, { questionId: f.questionId }) },
-  { name: 'question_payload_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'A different question?' }) },
-  { name: 'question_answer_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, correctAnswer: 'Three' }) },
-  { name: 'question_correction_changed_real', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Three', correctedExplanation: 'Revised explanation' }) },
+  { name: 'quiz_deleted_real', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.deleteQuiz, { quizId: f.quizId }) },
+  { name: 'question_deleted_real', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.deleteQuestion, { questionId: f.questionId }) },
+  { name: 'question_payload_changed_real', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.updateQuestion, { questionId: f.questionId, question: 'A different question?' }) },
+  { name: 'question_answer_changed_real', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.updateQuestion, { questionId: f.questionId, correctAnswer: 'Three' }) },
+  { name: 'question_correction_changed_real', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Three', correctedExplanation: 'Revised explanation' }) },
   { name: 'quiz_failed', kinds: ['quiz_question'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.quizId, { status: 'failed' })) },
   { name: 'quiz_tombstone_zero', kinds: ['quiz_question'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.quizId, { deletedAt: 0 })) },
   { name: 'course_deleting_real', kinds: ['quiz_question', 'section_block'], apply: (t, f) => t.mutation(internal.courseDeletion.start, { courseId: f.courseId, userId: owner.tokenIdentifier }) },
   { name: 'course_failed_real', kinds: ['quiz_question', 'section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courses.markFailed, { courseId: f.courseId }) },
   { name: 'section_failed_real', kinds: ['section_block'], apply: (t, f) => t.mutation(internal.courseSections.markSectionFailed, { sectionId: f.sectionId }) },
-  { name: 'section_payload_changed_real', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'Changed section' }) },
+  { name: 'section_payload_changed_real', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'Changed section' }) },
   { name: 'section_blocks_changed', kinds: ['section_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'text', content: 'Revised teaching body', order: 0 }] })) },
-  { name: 'flashcard_room_deleted_real', kinds: ['flashcard_version'], apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId }) },
+  { name: 'flashcard_room_deleted_real', kinds: ['flashcard_version'], apply: (t, f) => consumerMutation(t, api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId }) },
   { name: 'flashcard_room_missing', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.delete(f.flashcardRoomId)) },
   { name: 'flashcard_payload_changed', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.cardId, { definition: 'Replaced version content' })) },
   { name: 'flashcard_prompt_changed', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.versionId, { prompt: 'Revised prompt' })) },
-  { name: 'audio_deleting_real', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.deleteOverview, { id: f.overviewId }) },
+  { name: 'audio_deleting_real', kinds: ['audio_overview'], apply: (t, f) => consumerMutation(t, api.audioOverviews.deleteOverview, { id: f.overviewId }) },
   { name: 'audio_failed', kinds: ['audio_overview'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.overviewId, { status: 'failed' })) },
   { name: 'audio_room_deleted_real', kinds: ['audio_overview'], apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviewRooms.remove, { roomId: f.audioRoomId }) },
   { name: 'audio_room_missing', kinds: ['audio_overview'], apply: (t, f) => t.run(ctx => ctx.db.delete(f.audioRoomId)) },
@@ -989,7 +1011,7 @@ const v2AudioRevocations: { name: string, apply: (t: TestStore, f: AudioFixture)
   { name: 'media_foreign', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { userId: foreign.tokenIdentifier })) },
   { name: 'media_object_replaced', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { objectKey: 'replaced.wav' })) },
   { name: 'media_hash_replaced', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { checksumSha256: 'f'.repeat(64) })) },
-  { name: 'delete_overview_real', apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.deleteOverview, { id: f.overviewId }) },
+  { name: 'delete_overview_real', apply: (t, f) => consumerMutation(t, api.audioOverviews.deleteOverview, { id: f.overviewId }) },
 ]
 
 describe('A3 revocation matrix: V2 Audio Overview backing episode and media', () => {
@@ -997,7 +1019,7 @@ describe('A3 revocation matrix: V2 Audio Overview backing episode and media', ()
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => prepareV2Audio(ctx))
     const copy = await matrixControl(t, f)
-    await t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId })
+    await consumerMutation(t, api.audioOverviews.publishOverview, { id: f.overviewId })
     await t.run(async ctx => {
       await ctx.db.patch(f.episodeId, { updatedAt: 123, publishedAt: 124 })
       await ctx.db.patch(f.mediaId, { createdAt: 123, publishedAt: 124 })
@@ -1264,35 +1286,35 @@ async function readConsumerContent(t: TestStore, f: MatrixFixture) {
     }
     case 'document': case 'document_chunk': return consumerContent(await t.query(internal.documents.getDocument, { id: f.documentId }))
     case 'quiz_question': {
-      const result = await asOwner.query(api.quizzes.getWithQuestions, { id: f.quizId })
+      const result = await consumerQuery(t, api.quizzes.getWithQuestions, { id: f.quizId })
       expect(result).not.toBeNull()
       return consumerContent(result!.questions.find(q => q._id === f.questionId))
     }
     case 'section_block': {
-      const section = await asOwner.query(api.courseSections.get, { id: f.sectionId })
+      const section = await consumerQuery(t, api.courseSections.get, { id: f.sectionId })
       expect(section).not.toBeNull()
       expect(await asOwner.query(api.courses.get, { id: f.courseId })).not.toBeNull()
       const links = []
       for (const block of section!.contentBlocks) {
         if (!block.entityId || block.type === 'text') continue
         if (block.type === 'quiz') {
-          const data = await asOwner.query(api.quizzes.getWithQuestions, { id: block.entityId as Id<'quizzes'> })
+          const data = await consumerQuery(t, api.quizzes.getWithQuestions, { id: block.entityId as Id<'quizzes'> })
           links.push(data?.questions)
         }
         else if (block.type === 'flashcard') {
-          const data = await asOwner.query(api.flashcardRooms.getRoom, { roomId: block.entityId as Id<'flashcardRooms'> })
+          const data = await consumerQuery(t, api.flashcardRooms.getRoom, { roomId: block.entityId as Id<'flashcardRooms'> })
           links.push(data?.cards)
         }
-        else links.push(await asOwner.query(api.audioOverviews.getCourseScopedOverview, { id: block.entityId as Id<'audioOverviews'> }))
+        else links.push(await consumerQuery(t, api.audioOverviews.getCourseScopedOverview, { id: block.entityId as Id<'audioOverviews'> }))
       }
       return consumerContent({ section, links })
     }
     case 'flashcard_version': {
-      const data = await asOwner.query(api.flashcardRooms.getRoomVersion, { versionId: f.versionId })
+      const data = await consumerQuery(t, api.flashcardRooms.getRoomVersion, { versionId: f.versionId })
       expect(data).not.toBeNull()
       return consumerContent({ version: withoutLabels(data!.version), cards: data!.cards })
     }
-    case 'audio_overview': return consumerContent(await asOwner.query(api.audioOverviews.getWithTurns, { id: f.overviewId }))
+    case 'audio_overview': return consumerContent(await consumerQuery(t, api.audioOverviews.getWithTurns, { id: f.overviewId }))
     case 'learner_artifact': {
       const data = await asOwner.query(api.learnAdaptive.listThreadArtifacts, { threadId: f.threadId })
       const artifact = data.find(a => a.id === f.learnerArtifactId)
@@ -1327,12 +1349,12 @@ const differentialEdits: Revocation[] = [
   { name: 'document revision (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', sourceRevision: 'source.r2' }) },
   { name: 'document hash (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', contentHash: 'a'.repeat(64) }) },
   { name: 'document object (real)', kinds: documentKinds, apply: (t, f) => t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', r2Key: 'replaced/document' }) },
-  { name: 'question edit (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Two plus two?', correctAnswer: 'Four', explanation: 'Addition' }) },
-  { name: 'question correction (real)', kinds: ['quiz_question'], apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected answer', correctedExplanation: 'Corrected explanation' }) },
-  { name: 'section blocks (real)', kinds: ['section_block'], apply: (t, f) => t.mutation(internal.courseSections.markReady, { sectionId: f.sectionId, contentBlocks: [{ type: 'text', order: 0, content: 'Replacement teaching' }] }) },
-  { name: 'section generation (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.finalizeSectionGeneration, { sectionId: f.sectionId, textContent: 'New generated section', quizData: { title: 'Embedded Quiz', questions: [{ order: 0, type: 'free-response', question: 'Generated question', correctAnswer: 'Generated answer' }] }, flashcardData: { title: 'Embedded cards', cards: [{ term: 'Generated term', definition: 'Generated definition' }] } }) },
-  { name: 'section title (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'New instructional heading' }) },
-  { name: 'section knowledge type (real)', kinds: ['section_block'], apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.updateKnowledgeType, { sectionId: f.sectionId, knowledgeType: 'conceptual' }) },
+  { name: 'question edit (real)', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Two plus two?', correctAnswer: 'Four', explanation: 'Addition' }) },
+  { name: 'question correction (real)', kinds: ['quiz_question'], apply: (t, f) => consumerMutation(t, api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected answer', correctedExplanation: 'Corrected explanation' }) },
+  { name: 'section blocks (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, internal.courseSections.markReady, { sectionId: f.sectionId, contentBlocks: [{ type: 'text', order: 0, content: 'Replacement teaching' }] }) },
+  { name: 'section generation (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.finalizeSectionGeneration, { sectionId: f.sectionId, textContent: 'New generated section', quizData: { title: 'Embedded Quiz', questions: [{ order: 0, type: 'free-response', question: 'Generated question', correctAnswer: 'Generated answer' }] }, flashcardData: { title: 'Embedded cards', cards: [{ term: 'Generated term', definition: 'Generated definition' }] } }) },
+  { name: 'section title (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'New instructional heading' }) },
+  { name: 'section knowledge type (real)', kinds: ['section_block'], apply: (t, f) => consumerMutation(t, api.courseSections.updateKnowledgeType, { sectionId: f.sectionId, knowledgeType: 'conceptual' }) },
   { name: 'block edit (injected immutable row)', kinds: ['session_block'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.blockId, { content: 'A different explanation' })) },
   { name: 'version card edit (injected immutable row)', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.patch(f.cardId, { term: 'New term', definition: 'New definition' })) },
   { name: 'version card addition (injected immutable row)', kinds: ['flashcard_version'], apply: (t, f) => t.run(ctx => ctx.db.insert('flashcardVersionCards', { userId: owner.tokenIdentifier, versionId: f.versionId, roomId: f.flashcardRoomId, displayOrder: 1, term: 'Second', definition: 'Card' })) },
@@ -1376,34 +1398,34 @@ async function prepareLinkedSection(t: TestStore, corrected = false) {
     return { ...f, activeCardId }
   })
   if (corrected) {
-    await t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Correction' })
-    await t.withIdentity(owner).mutation(api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Correction' })
+    await consumerMutation(t, api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Correction' })
+    await consumerMutation(t, api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Correction' })
   }
   return repinContent(t, f)
 }
 type LinkedSection = Awaited<ReturnType<typeof prepareLinkedSection>>
 const linkedSectionChanges: Array<{ name: string, corrected?: boolean, changes: boolean, apply: (t: TestStore, f: LinkedSection) => Promise<unknown> }> = [
-  { name: 'Quiz addition', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'New embedded question?', correctAnswer: 'New answer' }) },
-  { name: 'Quiz edit', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Changed question', correctAnswer: 'Changed answer' }) },
-  { name: 'Quiz correction', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected', correctedExplanation: 'Corrected reasoning' }) },
-  { name: 'Quiz uncorrection', corrected: true, changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.unflagQuizQuestion, { questionId: f.questionId }) },
-  { name: 'Quiz removal', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.deleteQuestion, { questionId: f.questionId }) },
-  { name: 'card addition', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' }) },
-  { name: 'card edit', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.updateCard, { cardId: f.activeCardId, term: 'Changed term', definition: 'Changed definition' }) },
-  { name: 'card correction', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Corrected definition' }) },
-  { name: 'card uncorrection', corrected: true, changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.contentFlags.unflagFlashcard, { cardId: f.activeCardId }) },
-  { name: 'card removal', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.deleteCard, { cardId: f.activeCardId }) },
-  { name: 'card generation', changes: true, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'Generated definition' }] }) },
+  { name: 'Quiz addition', changes: true, apply: (t, f) => consumerMutation(t, api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'New embedded question?', correctAnswer: 'New answer' }) },
+  { name: 'Quiz edit', changes: true, apply: (t, f) => consumerMutation(t, api.quizzes.updateQuestion, { questionId: f.questionId, question: 'Changed question', correctAnswer: 'Changed answer' }) },
+  { name: 'Quiz correction', changes: true, apply: (t, f) => consumerMutation(t, api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected', correctedExplanation: 'Corrected reasoning' }) },
+  { name: 'Quiz uncorrection', corrected: true, changes: true, apply: (t, f) => consumerMutation(t, api.contentFlags.unflagQuizQuestion, { questionId: f.questionId }) },
+  { name: 'Quiz removal', changes: true, apply: (t, f) => consumerMutation(t, api.quizzes.deleteQuestion, { questionId: f.questionId }) },
+  { name: 'card addition', changes: true, apply: (t, f) => consumerMutation(t, api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' }) },
+  { name: 'card edit', changes: true, apply: (t, f) => consumerMutation(t, api.flashcardRooms.updateCard, { cardId: f.activeCardId, term: 'Changed term', definition: 'Changed definition' }) },
+  { name: 'card correction', changes: true, apply: (t, f) => consumerMutation(t, api.contentFlags.flagFlashcard, { cardId: f.activeCardId, correctedDefinition: 'Corrected definition' }) },
+  { name: 'card uncorrection', corrected: true, changes: true, apply: (t, f) => consumerMutation(t, api.contentFlags.unflagFlashcard, { cardId: f.activeCardId }) },
+  { name: 'card removal', changes: true, apply: (t, f) => consumerMutation(t, api.flashcardRooms.deleteCard, { cardId: f.activeCardId }) },
+  { name: 'card generation', changes: true, apply: (t, f) => consumerMutation(t, api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'Generated definition' }] }) },
   { name: 'version restore', changes: true, apply: async (t, f) => {
     await t.run(ctx => ctx.db.patch(f.flashcardRoomId, { activeVersionId: undefined }))
-    return t.withIdentity(owner).mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
+    return consumerMutation(t, api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
   } },
-  { name: 'Quiz rename', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Organizational label' }) },
-  { name: 'room rename', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Organizational label' }) },
-  { name: 'share publication', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
-  { name: 'section review', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.reviewSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 1, quizTotal: 1 }) },
+  { name: 'Quiz rename', changes: false, apply: (t, f) => consumerMutation(t, api.quizzes.updateQuiz, { quizId: f.quizId, title: 'Organizational label' }) },
+  { name: 'room rename', changes: false, apply: (t, f) => consumerMutation(t, api.flashcardRooms.renameRoom, { roomId: f.flashcardRoomId, title: 'Organizational label' }) },
+  { name: 'share publication', changes: false, apply: (t, f) => consumerMutation(t, api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'section review', changes: false, apply: (t, f) => consumerMutation(t, api.courseSections.reviewSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 1, quizTotal: 1 }) },
   { name: 'course pace', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courses.updatePace, { courseId: f.courseId, pace: 'relaxed' }) },
-  { name: 'offline availability', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
+  { name: 'offline availability', changes: false, apply: (t, f) => consumerMutation(t, api.courseSections.setOfflineAvailable, { sectionId: f.sectionId, offlineAvailable: true }) },
   { name: 'linked audio content (retired writer injected)', changes: true, apply: (t, f) => t.run(ctx => ctx.db.patch(f.overviewId, { title: 'New audio teaching' })) },
 ]
 describe('A5 linked section consumer differential', () => {
@@ -1416,9 +1438,9 @@ describe('A5 linked section consumer differential', () => {
   test('card reorder follows both online display order and offline payload', async () => {
     const t = convexTest(schema, modules)
     let f = await prepareLinkedSection(t)
-    const { cardId } = await t.withIdentity(owner).mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' })
+    const { cardId } = await consumerMutation(t, api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Second', definition: 'Another card' })
     f = await repinContent(t, f)
-    await expectDifferential(t, f, () => t.withIdentity(owner).mutation(api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId,
+    await expectDifferential(t, f, () => consumerMutation(t, api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId,
       order: [{ cardId: f.activeCardId, displayOrder: 1 }, { cardId, displayOrder: 0 }] }), true)
   })
 })
@@ -1450,14 +1472,25 @@ async function preparePlaybackDifferential(t: TestStore, ready = true) {
     return { ...f, jobId: e.jobId, sourceManifestId: e.sourceManifestId, outlineId: e.outlineId, claimLedgerId: e.claimLedgerId,
       entryId, objectiveId, outlineSourceId, claimId, claimSourceId, sceneId, utteranceId, utteranceSourceId, utteranceClaimId, alignmentId }
   })
-  await t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+  await t.run(async ctx => {
+    const job = (await ctx.db.get(f.jobId))!
+    const episode = (await ctx.db.get(f.episodeId))!
+    const entries = await ctx.db.query('audioOverviewSourceManifestEntries').withIndex('by_manifestId_and_order', q => q.eq('manifestId', episode.sourceManifestId)).take(50)
+    const documents = []
+    for (const entry of entries) {
+      const document = (await ctx.db.get(entry.documentId))!
+      documents.push({ documentId: document._id, folderId: document.folderId, filename: document.filename, r2Key: document.r2Key, sourceRevision: document.sourceRevision, contentHash: document.contentHash })
+    }
+    await ctx.db.patch(job.taskId, { audioOverviewRequest: { scope: { mode: 'explicit', documentIds: documents.map(document => document.documentId) }, documents, preferences: { lengthMinutes: 5, complexity: 'beginner' }, voiceProfile: { hostA: 'asteria', hostB: 'orion' }, quotaDate: '2026-09-03' } })
+  })
+  await consumerMutation(t, api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
     segments: [{ utteranceId: f.utteranceId, wordIndex: 0, word: 'One', startMs: 0, endMs: 4 }] })
-  if (ready) await t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+  if (ready) await consumerMutation(t, api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
   return repinContent(t, f)
 }
 type PlaybackFixture = Awaited<ReturnType<typeof preparePlaybackDifferential>>
 async function readPlaybackContent(t: TestStore, f: PlaybackFixture) {
-  const playback = await t.withIdentity(owner).query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId })
+  const playback = await consumerQuery(t, api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId })
   expect(playback).not.toBeNull()
   // Alignment status/count and publication/model diagnostics are not teaching.
   const { alignment: _alignment, ...content } = playback!
@@ -1475,7 +1508,10 @@ const playbackEdits: Array<{ name: string, changes?: boolean, pending?: boolean,
   { name: 'claim source link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.claimSourceId)) },
   { name: 'source manifest revision', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sourceManifestId, { revision: 'manifest.r2' })) },
   { name: 'source manifest hash', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sourceManifestId, { contentHash: 'b'.repeat(64) })) },
-  { name: 'source entry content', apply: (t, f) => t.run(ctx => ctx.db.patch(f.entryId, { displayReference: 'Revised source reference', revision: 'source.r2', contentHash: 'b'.repeat(64) })) },
+  { name: 'source entry content', apply: (t, f) => t.run(async ctx => {
+    await ctx.db.patch(f.documentId, { sourceRevision: 'source.r2', contentHash: 'b'.repeat(64) })
+    await ctx.db.patch(f.entryId, { displayReference: 'Revised source reference', revision: 'source.r2', contentHash: 'b'.repeat(64) })
+  }) },
   { name: 'scene teaching', apply: (t, f) => t.run(ctx => ctx.db.patch(f.sceneId, { title: 'Second scene', narrativePurpose: 'Apply the rule', durationMs: 9 })) },
   { name: 'utterance source link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.utteranceSourceId)) },
   { name: 'utterance claim link', apply: (t, f) => t.run(ctx => ctx.db.delete(f.utteranceClaimId)) },
@@ -1490,19 +1526,19 @@ const playbackEdits: Array<{ name: string, changes?: boolean, pending?: boolean,
   { name: 'final media object', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { objectKey: 'audio/replaced.wav' })) },
   { name: 'final media content', apply: (t, f) => t.run(ctx => ctx.db.patch(f.mediaId, { checksumSha256: 'b'.repeat(64), durationMs: 9 })) },
   { name: 'episode teaching', apply: (t, f) => t.run(ctx => ctx.db.patch(f.episodeId, { title: 'Different episode heading', hostAName: 'Ada' })) },
-  { name: 'completeAlignment (real)', pending: true, apply: (t, f) => t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId }) },
+  { name: 'completeAlignment (real)', pending: true, apply: (t, f) => consumerMutation(t, api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId }) },
   { name: 'append and completeAlignment (real)', pending: true, apply: async (t, f) => {
-    await t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+    await consumerMutation(t, api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
       segments: [{ utteranceId: f.utteranceId, wordIndex: 1, word: 'Two', startMs: 5, endMs: 9 }] })
-    return t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+    return consumerMutation(t, api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
   } },
-  { name: 'pending alignment append (real)', pending: true, changes: false, apply: (t, f) => t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
+  { name: 'pending alignment append (real)', pending: true, changes: false, apply: (t, f) => consumerMutation(t, api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId,
     segments: [{ utteranceId: f.utteranceId, wordIndex: 1, word: 'Two', startMs: 5, endMs: 9 }] }) },
-  { name: 'pending alignment failure (real)', pending: true, changes: false, apply: (t, f) => t.mutation(api.audioOverviewV2.failAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId, error: 'Alignment unavailable' }) },
-  { name: 'publishOverview (real)', changes: false, apply: (t, f) => t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId }) },
+  { name: 'pending alignment failure (real)', pending: true, changes: false, apply: (t, f) => consumerMutation(t, api.audioOverviewV2.failAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId, error: 'Alignment unavailable' }) },
+  { name: 'publishOverview (real)', changes: false, apply: (t, f) => consumerMutation(t, api.audioOverviews.publishOverview, { id: f.overviewId }) },
   { name: 'publish and unpublish (real)', changes: false, apply: async (t, f) => {
-    await t.withIdentity(owner).mutation(api.audioOverviews.publishOverview, { id: f.overviewId })
-    return t.withIdentity(owner).mutation(api.audioOverviews.unpublishOverview, { id: f.overviewId })
+    await consumerMutation(t, api.audioOverviews.publishOverview, { id: f.overviewId })
+    return consumerMutation(t, api.audioOverviews.unpublishOverview, { id: f.overviewId })
   } },
   { name: 'alignment confidence and diagnostics', changes: false, apply: (t, f) => t.run(async (ctx: MutationCtx) => {
     const segment = (await ctx.db.query('audioOverviewAlignmentSegments').withIndex('by_alignmentId_and_utteranceId_and_wordIndex', q => q.eq('alignmentId', f.alignmentId)).first())!
@@ -1578,15 +1614,14 @@ describe('A5 historical flashcard version consumer differential', () => {
   test.each(['createCard', 'updateCard', 'deleteCard', 'reorderCards', 'generateRoomCards', 'restoreRoomVersion'] as const)('%s (real) leaves the historical payload bound', async command => {
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => prepareMatrix(ctx, 'flashcard_version'))
-    const asOwner = t.withIdentity(owner)
-    const { cardId } = await asOwner.mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Active term', definition: 'Active definition' })
+    const { cardId } = await consumerMutation(t, api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Active term', definition: 'Active definition' })
     await expectDifferential(t, f, async () => {
-      if (command === 'createCard') return asOwner.mutation(api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Another', definition: 'Another definition' })
-      if (command === 'updateCard') return asOwner.mutation(api.flashcardRooms.updateCard, { cardId, term: 'Edited', definition: 'Edited definition' })
-      if (command === 'deleteCard') return asOwner.mutation(api.flashcardRooms.deleteCard, { cardId })
-      if (command === 'reorderCards') return asOwner.mutation(api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId, order: [{ cardId, displayOrder: 0 }] })
-      if (command === 'generateRoomCards') return asOwner.mutation(api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'New version' }] })
-      return asOwner.mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
+      if (command === 'createCard') return consumerMutation(t, api.flashcardRooms.createCard, { roomId: f.flashcardRoomId, term: 'Another', definition: 'Another definition' })
+      if (command === 'updateCard') return consumerMutation(t, api.flashcardRooms.updateCard, { cardId, term: 'Edited', definition: 'Edited definition' })
+      if (command === 'deleteCard') return consumerMutation(t, api.flashcardRooms.deleteCard, { cardId })
+      if (command === 'reorderCards') return consumerMutation(t, api.flashcardRooms.reorderCards, { roomId: f.flashcardRoomId, order: [{ cardId, displayOrder: 0 }] })
+      if (command === 'generateRoomCards') return consumerMutation(t, api.flashcardRooms.generateRoomCards, { roomId: f.flashcardRoomId, origin: 'manual', cards: [{ term: 'Generated', definition: 'New version' }] })
+      return consumerMutation(t, api.flashcardRooms.restoreRoomVersion, { roomId: f.flashcardRoomId, versionId: f.versionId })
     }, false)
   })
 })
@@ -1595,8 +1630,10 @@ describe('A5 linked-content read budget', () => {
   test('oversized embedded Quiz reads fail closed before exhausting 4 MiB', async () => {
     const t = convexTest(schema, modules)
     const f = await prepareLinkedSection(t)
-    for (let i = 0; i < 5; i++) await t.withIdentity(owner).mutation(api.quizzes.addQuestion, { quizId: f.quizId,
-      type: 'free-response', questionText: `${i}${'x'.repeat(850_000)}`, correctAnswer: 'Answer' })
+    await t.run(async ctx => {
+      for (let i = 0; i < 5; i++) await ctx.db.insert('quizQuestions', { userId: owner.tokenIdentifier, quizId: f.quizId,
+        order: i + 1, type: 'free-response', question: `${i}${'x'.repeat(850_000)}`, correctAnswer: 'Answer' })
+    })
     for (const mode of ['resolve', 'register'] as const) {
       const result = await tracedLookup(t, f, mode)
       expect(result.status).toBe('unavailable')
@@ -1628,7 +1665,7 @@ describe('A5 consumer payload equivalence and read limits', () => {
   test('V2 pin equals the owner playback teaching payload with its ownership identity', async () => {
     const t = convexTest(schema, modules)
     const f = await preparePlaybackDifferential(t)
-    const playback = (await t.withIdentity(owner).query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId }))!
+    const playback = (await consumerQuery(t, api.audioOverviewV2.getPlaybackForOwner, { overviewId: f.overviewId }))!
     const { overviewId, model: _model, publishedAt: _publishedAt, alignment: _alignment, ...teaching } = playback
     const projection = await t.run(async ctx => audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
     expect(projection.payload).toEqual({ id: overviewId, userId: owner.tokenIdentifier, ...teaching })
@@ -1636,17 +1673,16 @@ describe('A5 consumer payload equivalence and read limits', () => {
   test('real Quiz addition changes offline teaching, including at the 50-question cache boundary', async () => {
     const t = convexTest(schema, modules)
     let f = await prepareLinkedSection(t)
-    const asOwner = t.withIdentity(owner)
-    const before = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
-    await asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Second question', correctAnswer: 'Second answer' })
-    const after = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    const before = await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    await consumerMutation(t, api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Second question', correctAnswer: 'Second answer' })
+    const after = await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
     expect(after).not.toEqual(before)
     expect(after!.contentBlocks.find(b => b.type === 'quiz')!.quizData!.questions).toHaveLength(2)
-    for (let i = 2; i < 50; i++) await asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: `Question ${i}`, correctAnswer: `Answer ${i}` })
+    for (let i = 2; i < 50; i++) await consumerMutation(t, api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: `Question ${i}`, correctAnswer: `Answer ${i}` })
     f = await repinContent(t, f)
-    const fullCache = await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
-    await expectDifferential(t, f, () => asOwner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Online question 51', correctAnswer: 'Online answer 51' }), true)
-    expect(await asOwner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toEqual(fullCache)
+    const fullCache = await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })
+    await expectDifferential(t, f, () => consumerMutation(t, api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Online question 51', correctAnswer: 'Online answer 51' }), true)
+    expect(await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toEqual(fullCache)
   })
   test.each(['Quiz', 'flashcard room'] as const)('%s child overflow stays unavailable', async aggregate => {
     const t = convexTest(schema, modules)
@@ -1679,9 +1715,9 @@ describe('A5 section audio consumer boundary', () => {
       await ctx.db.patch(row._id, { contentBlocks: row.contentBlocks.map(block => block.type === 'audio' ? { ...block, entityId: audio.overviewId } : block) })
     })
     section = await repinContent(t, section)
-    const before = await t.withIdentity(owner).query(api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })
-    await expectDifferential(t, section, () => t.mutation(api.audioOverviewV2.completeAlignment, { jobId: audio.jobId, capability: alignmentCapability, alignmentId: audio.alignmentId }), false)
-    expect(await t.withIdentity(owner).query(api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })).toEqual(before)
+    const before = await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })
+    await expectDifferential(t, section, () => consumerMutation(t, api.audioOverviewV2.completeAlignment, { jobId: audio.jobId, capability: alignmentCapability, alignmentId: audio.alignmentId }), false)
+    expect(await consumerQuery(t, api.courseSections.getOfflineCachePayload, { sectionId: section.sectionId })).toEqual(before)
     expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: audio.reference })).toMatchObject({ status: 'unavailable' })
   })
 })
@@ -1691,14 +1727,13 @@ describe.each(['quiz_question', 'section_block'] as const)('A5 %s Quiz operation
     vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const f = kind === 'section_block' ? await prepareLinkedSection(t) : await t.run(ctx => prepareMatrix(ctx, kind))
-    const asOwner = t.withIdentity(owner)
     await expectDifferential(t, f, async () => {
-      if (command === 'submitAttempt') return asOwner.mutation(api.quizzes.submitAttempt, { quizId: f.quizId, answers: [{ questionId: f.questionId, response: 'Two' }] })
-      const started = await asOwner.mutation(api.quizzes.startAttempt, { quizId: f.quizId, settings: { shuffleQuestions: false, showAllQuestions: true, immediateFeedback: true } })
+      if (command === 'submitAttempt') return consumerMutation(t, api.quizzes.submitAttempt, { quizId: f.quizId, answers: [{ questionId: f.questionId, response: 'Two' }] })
+      const started = await consumerMutation(t, api.quizzes.startAttempt, { quizId: f.quizId, settings: { shuffleQuestions: false, showAllQuestions: true, immediateFeedback: true } })
       if (command === 'startAttempt') return started
-      if (command === 'completeAttempt') return asOwner.mutation(api.quizzes.completeAttempt, { attemptId: started.attemptId })
-      if (command === 'abandonAttempt') return asOwner.mutation(api.quizzes.abandonAttempt, { attemptId: started.attemptId })
-      return asOwner.mutation(api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [{ questionId: f.questionId, userAnswer: 'Two' }] })
+      if (command === 'completeAttempt') return consumerMutation(t, api.quizzes.completeAttempt, { attemptId: started.attemptId })
+      if (command === 'abandonAttempt') return consumerMutation(t, api.quizzes.abandonAttempt, { attemptId: started.attemptId })
+      return consumerMutation(t, api.quizzes.submitAllAnswers, { attemptId: started.attemptId, answers: [{ questionId: f.questionId, userAnswer: 'Two' }] })
     }, false)
   })
 })
@@ -1709,9 +1744,9 @@ describe('A5 linked aggregate revocation', () => {
     const t = convexTest(schema, modules)
     const f = await prepareLinkedSection(t)
     const copy = await matrixControl(t, f)
-    if (change === 'Quiz tombstone') await t.withIdentity(owner).mutation(api.quizzes.deleteQuiz, { quizId: f.quizId })
-    if (change === 'card room deletion') await t.withIdentity(owner).mutation(api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId })
-    if (change === 'Audio Overview deletion') await t.withIdentity(owner).mutation(api.audioOverviews.deleteOverview, { id: f.overviewId })
+    if (change === 'Quiz tombstone') await consumerMutation(t, api.quizzes.deleteQuiz, { quizId: f.quizId })
+    if (change === 'card room deletion') await consumerMutation(t, api.flashcardRooms.deleteRoom, { roomId: f.flashcardRoomId })
+    if (change === 'Audio Overview deletion') await consumerMutation(t, api.audioOverviews.deleteOverview, { id: f.overviewId })
     if (change === 'audio room deletion') await t.run(ctx => ctx.db.delete(f.audioRoomId))
     if (change === 'audio conversation archive (injected marker)') await t.run(ctx => ctx.db.patch(f.conversationId, { archivedAt: 0 }))
     await expectMatrixRevoked(t, f, copy)
@@ -1933,7 +1968,7 @@ describe('B1 atomic batch registration', () => {
 })
 
 describe.each(documentKinds)('B1 folder moves preserve %s lineage', kind => {
-  test('a real move and indexing completion preserve a registered document and its summary', async () => {
+  test('a real move denies unregistered indexing provenance while a completed fixture preserves its content pin', async () => {
     vi.useFakeTimers()
     const t = convexTest(schema, modules)
     const f = await t.run(ctx => prepareMatrix(ctx, kind, 'document'))
@@ -1943,7 +1978,8 @@ describe.each(documentKinds)('B1 folder moves preserve %s lineage', kind => {
     const destinationFolderId = await t.run(ctx => ctx.db.insert('folders', { userId: owner.tokenIdentifier, name: 'Destination', documentCount: 0 }))
     await t.withIdentity(owner).mutation(api.documents.moveDocument, { id: f.documentId, destinationFolderId })
     for (const target of [f, summary]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'unavailable' })
-    expect(await t.mutation(internal.documents.finalizeDocumentIndexing, { id: f.documentId, expectedFolderId: destinationFolderId, expectedR2Key: 'owned/source.r1', status: 'success' })).toBe(true)
+    await expect(t.mutation(internal.documents.finalizeDocumentIndexing, { id: f.documentId, expectedFolderId: destinationFolderId, expectedR2Key: 'owned/source.r1', status: 'success' })).rejects.toThrow('Artifact lineage unavailable')
+    await t.run(ctx => ctx.db.patch(f.documentId, { status: 'success' }))
     expect(await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))).toBe(f.reference.payloadDigest)
     for (const target of [f, summary]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound', instructionalRegistered: true })
   })
@@ -1953,7 +1989,8 @@ describe.each(documentKinds)('B1 folder moves preserve %s lineage', kind => {
     const f = await t.run(ctx => prepareMatrix(ctx, kind))
     const destinationFolderId = await t.run(ctx => ctx.db.insert('folders', { userId: owner.tokenIdentifier, name: 'Destination', documentCount: 0 }))
     await t.withIdentity(owner).mutation(api.documents.moveDocument, { id: f.documentId, destinationFolderId })
-    await t.mutation(internal.documents.finalizeDocumentIndexing, { id: f.documentId, expectedFolderId: destinationFolderId, expectedR2Key: 'owned/source.r1', status: 'success' })
+    await expect(t.mutation(internal.documents.finalizeDocumentIndexing, { id: f.documentId, expectedFolderId: destinationFolderId, expectedR2Key: 'owned/source.r1', status: 'success' })).rejects.toThrow('Artifact lineage unavailable')
+    await t.run(ctx => ctx.db.patch(f.documentId, { status: 'success' }))
     await t.run(async ctx => {
       if (state === 'deleted') await ctx.db.delete(destinationFolderId)
       else await ctx.db.patch(destinationFolderId, { userId: foreign.tokenIdentifier })
@@ -3159,27 +3196,32 @@ describe('Stage B Audio alignment succession', () => {
   test('completeAlignment registers a new revision while retaining the published case and source bindings', async () => {
     const t = convexTest(schema, modules)
     const f = await preparePlaybackDifferential(t, false)
-    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
-    await t.withIdentity(owner).run(async ctx => {
+    const published = await t.withIdentity(owner).run(async ctx => {
+      // Replace the deliberately unpublished pin fixture with a real enrolled publication.
+      const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(100)
+      for (const row of rows) await ctx.db.delete(row._id)
+      await ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
       const documents = await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(10)
-      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.map(document => ({ artifact: { kind: 'document' as const, id: document._id }, key: 'whole', origins: [], sources: [] })) })
-      await ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 })
-      await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(f), expectedCatalogRevision: 1 })
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.flatMap(document => [
+        { artifact: { kind: 'document' as const, id: document._id }, key: 'whole', origins: [], sources: [] },
+        { artifact: { kind: 'document_chunk' as const, id: document._id }, key: 'chunk-set', origins: [], sources: [] },
+      ]) })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', origins: [], sources: [] }] })
     })
-    const next = await t.withIdentity(owner).run(async ctx => {
-      await ctx.runMutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
-      const payloadDigest = await artifactPayloadDigest(await audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
-      const replacement = await replacementLineage(ctx, f, payloadDigest)
-      const reference = { ...replacement.reference, revision: `sha256:${payloadDigest}` }
-      await ctx.db.patch(replacement.lineageId, reference)
-      const sealed = await resealed(ctx, { ...replacement, reference })
-      await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(sealed))
-      return sealed
-    })
-    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: next.reference }))).toMatchObject({ status: 'admitted_registered' })
-    expect(await t.run(ctx => ctx.db.get(f.lineageId))).toHaveProperty('nextId', next.lineageId)
-    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: f.reference }))).toMatchObject({ status: 'unavailable' })
-    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: next.reference }))).toMatchObject({ cases: [{ caseId: f.caseId }] })
+    const before = await t.run(async ctx => ({
+      cases: await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', published.lineageIds[0]!)).take(32),
+      sources: await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', published.lineageIds[0]!)).take(64),
+    }))
+    await t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+    const next = (await t.run(ctx => ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'audio_overview').eq('artifact.id', f.overviewId).eq('nextId', undefined)).unique()))!
+    const reference = { artifact: next.artifact, key: next.key, revision: next.revision, payloadDigest: next.payloadDigest }
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'admitted_registered' })
+    expect(await t.run(ctx => ctx.db.get(published.lineageIds[0]!))).toHaveProperty('nextId', next._id)
+    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: published.references[0]! }))).toMatchObject({ status: 'unavailable' })
+    const cases = await t.run(ctx => ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next._id)).take(32))
+    const sources = await t.run(ctx => ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next._id)).take(64))
+    expect(cases.map(row => row.caseId)).toEqual(before.cases.map(row => row.caseId))
+    expect(sources.map(row => row.dependency)).toEqual(before.sources.map(row => row.dependency))
   })
 })
 

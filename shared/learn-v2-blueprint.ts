@@ -96,7 +96,7 @@ function unique(values: string[], label: string) {
   if (new Set(values).size !== values.length) throw new Error(`${label} must not contain duplicates`)
 }
 
-function assessment(value: unknown, objectiveKey: string): LearnV2AssessmentContract {
+export function validateLearnV2AssessmentContract(value: unknown, objectiveKey: string): LearnV2AssessmentContract {
   const item = record(value, `Assessment ${objectiveKey}`)
   exactKeys(item, ['version', 'kind', 'responseFormat', 'instructions', 'passingScorePercent', 'criteria'], [], `Assessment ${objectiveKey}`)
   if (item.version !== LEARN_V2_ASSESSMENT_VERSION) throw new Error(`Assessment ${objectiveKey} has an unsupported version`)
@@ -235,7 +235,7 @@ export function validateLearnV2BlueprintCandidate(
       sourceSnapshotIds,
       gapSourceSnapshotIds,
       prerequisiteObjectiveKeys,
-      assessmentContract: assessment(item.assessmentContract, objectiveKey),
+      assessmentContract: validateLearnV2AssessmentContract(item.assessmentContract, objectiveKey),
     }
   })
   unique(objectives.map(item => item.key), 'Objective keys')

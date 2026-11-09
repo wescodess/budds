@@ -202,6 +202,14 @@ test.each(['response_state', 'diagnostic', 'source_review'] as const)('%s bounds
   const f = path === 'diagnostic' ? await activityResponseFixture(store, 'https://owner.example|privacy-companion', 'legacy')
     : await privacyHistoryFixture(store, 'https://owner.example|privacy-companion')
   const blueprintRevisionId = path === 'source_review' ? (await store.run(ctx => ctx.db.get(f.sourceSnapshotId!)))!.blueprintRevisionId! : null
+  if (path === 'source_review') await store.run(async ctx => {
+    // This budget control exercises ordinary review. The backing-response
+    // fixture's incomplete assessment pins would independently deny replay.
+    const source = (await ctx.db.get(f.sourceSnapshotId!))!
+    const opportunities = await ctx.db.query('learnAssessmentOpportunities')
+      .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', f.userId).eq('learningVoidId', source.learningVoidId)).take(8)
+    for (const opportunity of opportunities) await ctx.db.delete(opportunity._id)
+  })
   const read = async (ctx: import('./_generated/server').QueryCtx) => {
     if (path === 'diagnostic') return await invokePrivacyQuery(getDiagnosticCanvas, ctx, { threadId: f.threadId })
     if (path === 'response_state') return await invokePrivacyQuery(getResponseState, ctx, { version: LEARN_V2_PUBLIC_API_VERSION, target: f.target! })

@@ -1,3 +1,4 @@
+import { assertTeachingCommand, loadTeachingScope } from '../../utils/teaching-source-scope'
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { H3Event } from "h3";
@@ -293,12 +294,14 @@ async function startDeterministicWorkflow(
 export default defineEventHandler(async (event) => {
   const userId = getConvexTokenIdentifier(event);
   const body = await readBody<AudioOverviewRequestBody>(event);
+  assertTeachingCommand(body, { taskId: 'string', folderId: 'string', roomId: 'string', scope: 'object', preferences: 'object', voiceProfile: 'object', hostNames: 'object', idempotencyKey: 'string' });
   const convexClient = makeConvexClient(event);
   if (!convexClient)
     throw createError({
       statusCode: 500,
       message: "Convex client unavailable",
     });
+  if (body?.folderId) await loadTeachingScope(convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.scope?.mode === 'explicit' ? body.scope.documentIds as Id<'documents'>[] : undefined });
   const config = useRuntimeConfig(event);
   const jobSecret = readConfiguredRuntimeValue(
     config.audioOverviewJobSecret,

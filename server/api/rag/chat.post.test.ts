@@ -1,4 +1,7 @@
+// These transport tests isolate admission; help-admission.test.ts exercises the real boundary.
 import { vi, describe, test, expect, beforeEach } from 'vitest'
+
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {} }))
 
 const mockConvexQuery = vi.fn()
 

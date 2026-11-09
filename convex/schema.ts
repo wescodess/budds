@@ -993,6 +993,7 @@ export default defineSchema({
     .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
+    taskId: v.optional(v.id('tasks')),
     audioOverviewId: v.id('audioOverviews'),
     userId: v.string(),
     insertedAfterTurnIndex: v.number(),
@@ -1830,6 +1831,7 @@ export default defineSchema({
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_phase', ['userId', 'phase'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])

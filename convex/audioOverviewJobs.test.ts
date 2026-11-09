@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { enrollProducer, protectProducerArtifact } from '../tests/fixtures/learn-v2-producer-lineage'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -756,4 +757,35 @@ describe('audioOverviewJobs stale reconciliation', () => {
         .collect())).resolves.toEqual([])
     },
   )
+})
+
+
+describe('Audio job lineage isolation', () => {
+  test.each(['measurement', 'private_scoring', 'unknown'] as const)('rejects %s sources before reservation or provider access', async classification => {
+    const f = await setup()
+    await enrollProducer(f.t, USER.tokenIdentifier, [f.documentId])
+    const accepted = await f.asUser.mutation(api.audioOverviewJobs.request, f.request)
+    const upload = await f.t.run(async ctx => {
+      const storageId = await ctx.storage.store(new Blob(['owned audio'], { type: 'audio/wav' }))
+      const claimId = await ctx.db.insert('audioOverviewUploadClaims', { userId: USER.tokenIdentifier, taskId: accepted.taskId, nonce: 'lineage-test-claim', storageId, expiresAt: Date.now() + 60_000 })
+      return { storageId, claimId }
+    })
+    await protectProducerArtifact(f.t, USER.tokenIdentifier, { kind: 'document_chunk', id: f.documentId }, classification)
+    const quota = await f.asUser.query(api.users.getDailyQuota, {})
+    const args = { jobId: accepted.jobId, capability: f.capability }
+    for (const work of [
+      () => f.asUser.mutation(api.audioOverviewJobs.request, f.request),
+      () => f.asUser.mutation(api.audioOverviewJobs.adoptLegacyRequest, { taskId: accepted.taskId, idempotencyKey: f.request.idempotencyKey, capability: f.capability }),
+      () => f.t.query(api.audioOverviewJobs.getStepContext, args),
+      () => f.t.query(api.audioOverviewJobs.getAlignmentContext, { ...args, turnOrder: 0 }),
+      () => f.t.mutation(api.audioOverviewJobs.beginScriptGeneration, args),
+      () => f.t.mutation(api.audioOverviewJobs.claimProviderBudget, { ...args, kind: 'entailment-fallback' }),
+      () => f.t.query(internal.audioOverviewJobs.getTurnUploadContext, { ...args, ...upload, turnOrder: 0 }),
+      () => f.t.mutation(internal.audioOverviewJobs.completeVerifiedTurn, { ...args, ...upload, turnOrder: 0, durationMs: 1_000 }),
+    ]) await expect(work()).rejects.toThrow('Teaching input is unavailable')
+    expect(await f.asUser.query(api.users.getDailyQuota, {})).toEqual(quota)
+    expect((await f.t.run(ctx => ctx.db.get(accepted.jobId)))?.scriptAttemptId).toBeUndefined()
+    expect((await f.t.run(ctx => ctx.db.get(upload.claimId)))?.consumedAt).toBeUndefined()
+    expect(await f.t.run(ctx => ctx.storage.getUrl(upload.storageId))).toBeTruthy()
+  })
 })
