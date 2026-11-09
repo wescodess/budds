@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -118,7 +119,7 @@ describe('initial clarification authority', () => {
     expect(durable.thread).toMatchObject({ originalNeed: thread.originalNeed, outcome: answer, outcomeProvenance: 'clarification', initialDecision: { status: 'answered', answer } })
     expect(JSON.stringify(durable.receipts)).not.toContain(answer)
     expect(JSON.stringify(durable.events)).not.toContain(answer)
-    await expect(owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [expect.objectContaining({ initialDecision: expect.objectContaining({ status: 'answered', answer }) })] })
+    await expect(owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [expect.objectContaining({ initialDecision: expect.objectContaining({ status: 'answered', answer }) })] })
     await t.run(ctx => ctx.db.patch(thread.id, { revision: 5, updatedAt: 5 }))
     expect(await owner.mutation(api.learnAdaptiveClarifications.resolveClarification, args)).toEqual(resolved)
     await expect(owner.mutation(api.learnAdaptiveClarifications.prepareInitialDecision, { threadId: thread.id, expectedRevision: 5, idempotencyKey: 'prepare-again-key-001' })).rejects.toThrow(/already prepared/i)

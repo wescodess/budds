@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|journey-owner', name: 'Journey Owner' }
@@ -10,6 +11,7 @@ const other = { tokenIdentifier: 'https://auth.example.com|journey-other', name:
 
 const previousGate = process.env.LEARN_V2_ENABLED
 afterEach(() => {
+  vi.useRealTimers()
   if (previousGate === undefined) delete process.env.LEARN_V2_ENABLED
   else process.env.LEARN_V2_ENABLED = previousGate
 })
@@ -26,6 +28,41 @@ async function setup() {
 }
 
 describe('Learn V2 public journey read model', () => {
+  test('keeps live canonical answer history and denies its purged body before alias cleanup', async () => {
+    vi.useFakeTimers()
+    const { t, asOwner } = await setup()
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const attemptId = await t.run(async ctx => {
+      await ctx.db.patch(f.scope.blueprintRevisionId, { status: 'accepted' })
+      await ctx.db.patch(f.learningVoidId, { activeBlueprintRevisionId: f.scope.blueprintRevisionId })
+      await ctx.db.patch(f.scope.objectiveId, { assessmentContract: { version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text',
+        instructions: 'Existing editable calibration instructions.', passingScorePercent: 80, criteria: [{ key: 'correct', description: 'Existing public criterion.', weightPercent: 100 }] } })
+      return await ctx.db.insert('masteryAttempts', { userId: owner.tokenIdentifier, blueprintRevisionId: f.scope.blueprintRevisionId,
+        objectiveId: f.scope.objectiveId, submissionId: f.rows.learnResponses, kind: 'calibration', attemptedAt: 123,
+        idempotencyKey: 'canonical-history', response: STORAGE_CANARIES.answer, confidence: 3, serverScorePercent: 80,
+        usedHint: false, usedReveal: false, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1',
+        rubricSnapshot: STORAGE_CANARIES.rubric, contentRevisionPinsJson: STORAGE_CANARIES.locator })
+    })
+    const args = { learningVoidId: f.learningVoidId }
+    const live = await asOwner.query(api.learnV2Journey.getMission, args)
+    // A contract with no supported sources has no revoked dependency.
+    expect(live?.calibration.items[0]?.rubric).toEqual(live?.map?.objectives[0]?.assessmentContract)
+    expect(live?.calibration.items[0]?.prompt).toBe('Existing editable calibration instructions.')
+    expect(live?.calibration.attempts[0]).toMatchObject({ _id: attemptId, response: STORAGE_CANARIES.answer,
+      submissionId: f.rows.learnResponses, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1', bodyAvailability: 'available' })
+    expect(live?.mastery[0]?.attempts[0]).toEqual(live?.calibration.attempts[0])
+    expect(JSON.stringify(live)).not.toContain(STORAGE_CANARIES.rubric)
+    expect(JSON.stringify(live)).not.toContain(STORAGE_CANARIES.locator)
+    await t.mutation(internal.learnV2Retention.purgeResponseCopies, { userId: owner.tokenIdentifier, submissionId: f.rows.learnResponses })
+    expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ response: STORAGE_CANARIES.answer })
+    const purged = await asOwner.query(api.learnV2Journey.getMission, args)
+    expect(purged?.calibration.attempts[0]).toMatchObject({ _id: attemptId, serverScorePercent: 80, confidence: 3,
+      attemptedAt: 123, rubricVersion: 'rubric.v1', scorerVersion: 'scorer.v1', bodyAvailability: 'unavailable' })
+    expect(purged?.calibration.attempts[0]).not.toHaveProperty('response')
+    expect(purged?.mastery[0]?.attempts[0]).not.toHaveProperty('response')
+    expect(JSON.stringify(purged)).not.toContain(STORAGE_CANARIES.answer)
+  })
+
   test('returns bounded hub and current mission projections for the owner', async () => {
     const setupResult = await setup()
     await expect(setupResult.asOwner.query(api.learnV2Journey.listHub, {})).resolves.toMatchObject({ items: [{ _id: setupResult.learningVoid._id, title: 'Journey mission', status: 'draft', nextAction: 'source_selection' }] })

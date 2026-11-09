@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
 import { withArtifactLineageInvocation, copyArtifactLineageValue, type ArtifactLineageInvocation as Invocation } from './learnV2ArtifactLineageInvocation'
 import { rejectAccountDeletion } from './accountDeletionTombstone'
+import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
 import { liveEvidenceState } from '../learnAdaptiveRecovery'
 import type { artifactSourceDependencyValidator } from './learnV2ArtifactLineageContract'
@@ -712,10 +713,7 @@ async function sourceAvailable(scope: Invocation, userId: string, source: Depend
       const document = await liveDocument(scope, userId, identity.folderDocumentId, indexingDocument)
       // Mirrors learnV2Sources.prepareFetchedSourceForReview and learnAdaptive.loadContributionSource. Compare
       // every current pin, even when the document is still marked successful.
-      if ((!document.sourceRevision && !document.contentHash)
-        || document.sourceRevision?.trim() !== snapshot.sourceRevision
-        || document.contentHash?.trim().toLowerCase() !== snapshot.contentHash
-        || document.r2Key?.trim() !== snapshot.objectKey) return false
+      if (!documentMatchesSnapshot(document, snapshot)) return false
     }
     else if (identity.origin === 'folder_document') return false
     if (source.kind === 'snapshot') return true

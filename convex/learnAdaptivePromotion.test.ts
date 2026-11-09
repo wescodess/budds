@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -135,17 +136,17 @@ test('promotion proposal export is owner scoped and thread deletion drains it', 
   await owner.mutation(api.learnAdaptive.requestPromotion, {
     threadId, kind: 'review', artifactId, expectedRevision: 3, idempotencyKey: 'promotion-export-0001',
   })
-  const page = await owner.query(api.dataExport.getUserDataPage, {
+  const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learningThreadPromotionProposals', paginationOpts: { cursor: null, numItems: 8 },
   })
   expect(page.page).toMatchObject([{ threadId, kind: 'review', artifactId }])
-  expect((await other.query(api.dataExport.getUserDataPage, {
+  expect((await other.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(other),
     collection: 'learningThreadPromotionProposals', paginationOpts: { cursor: null, numItems: 8 },
   })).page).toEqual([])
   await owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId })
   await t.finishAllScheduledFunctions(vi.runAllTimers)
   expect(await owner.query(api.learnAdaptive.listPromotionProposals, { threadId })).toEqual([])
-  expect((await owner.query(api.dataExport.getUserDataPage, {
+  expect((await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learningThreadPromotionProposals', paginationOpts: { cursor: null, numItems: 8 },
   })).page).toEqual([])
 })

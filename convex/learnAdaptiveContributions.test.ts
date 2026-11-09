@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -43,7 +44,7 @@ test('a source-attributed contribution can be retried and exported without priva
   const listed = await owner.query(api.learnAdaptive.listThreadContributions, { threadId, paginationOpts })
   expect(listed.page).toHaveLength(1)
   expect(JSON.stringify(listed.page)).not.toContain('Private biology notes')
-  const exported = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
+  const exported = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
   expect(exported.page).toHaveLength(1)
   expect(exported.page[0]).toMatchObject({ sourceFeature: 'chat', contributionKind: 'context', sourceIdentity: sourceId })
   expect(JSON.stringify(exported.page)).not.toContain('Private biology notes')
@@ -143,7 +144,7 @@ test('a source-attributed contribution can be retried and exported without priva
     paginationOpts: { numItems: 10, cursor: null },
   })).page).toContainEqual(expect.objectContaining({ classification: 'accepted_evidence', evidenceIntegrity: 'unavailable' }))
   await t.mutation(internal.learnV2Retention.purgeFolderDocumentSources, { userId: identity.tokenIdentifier, documentId })
-  const afterPurge = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
+  const afterPurge = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
   type ExportedContribution = Extract<(typeof afterPurge.page)[number], { sourceFeature: string }>
   const documentRows = afterPurge.page.filter((row): row is ExportedContribution => 'sourceFeature' in row && row.sourceFeature === 'documents')
   expect(documentRows).toHaveLength(2)
@@ -160,10 +161,10 @@ test('a source-attributed contribution can be retried and exported without priva
       idempotencyKey: `paged-message-${index}-0001`,
     })).toMatchObject({ kind: 'recorded' })
   }
-  const firstPage = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
+  const firstPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: null } })
   expect(firstPage.page).toHaveLength(8)
   expect(firstPage.isDone).toBe(false)
-  const secondPage = await owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: firstPage.continueCursor } })
+  const secondPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreadContributions', paginationOpts: { numItems: 100, cursor: firstPage.continueCursor } })
   expect(secondPage.page).toHaveLength(5)
   expect(secondPage.isDone).toBe(true)
   const listPage = await owner.query(api.learnAdaptive.listThreadContributions, { threadId, paginationOpts: { numItems: 8, cursor: null } })

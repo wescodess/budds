@@ -5,6 +5,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { isLearnV2TransitionAllowed } from '../shared/learn-v2-contract'
 import { cloneBlueprintChildren } from './lib/learnV2BlueprintClone'
+import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 
 const voidStatus = v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived'))
 const blueprintStatus = v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded'))
@@ -40,7 +41,7 @@ async function replayOrReject(ctx: MutationCtx, userId: string, idempotencyKey: 
   const stored = await ctx.db.query('learnLifecycleReceipts')
     .withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', userId).eq('idempotencyKey', idempotencyKey)).unique()
   if (!stored) return null
-  if (stored.requestFingerprint !== requestFingerprint) throw new Error('Idempotency key was already used for a different request')
+  if (!await matchesLegacyFingerprint(stored.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveOwnedVoid(ctx, userId, stored.learningVoidId)
   return stored
 }

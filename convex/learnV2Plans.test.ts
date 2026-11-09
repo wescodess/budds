@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
@@ -8,6 +8,7 @@ import { masteryScopeKey } from './lib/learnV2MasteryScope'
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|plan-owner', name: 'Plan Owner' }
+afterEach(() => vi.useRealTimers())
 
 async function setupPlan() {
   process.env.LEARN_V2_ENABLED = 'true'
@@ -30,7 +31,7 @@ async function setupPlan() {
     userId: identity.tokenIdentifier, blueprintRevisionId: blueprint!._id,
     objectiveId: objectiveIds[1]!, prerequisiteObjectiveId: objectiveIds[0]!,
   }))
-  return { t, owner, learningVoid: learningVoid!, blueprint: blueprint!, objectiveIds }
+  return { t, owner, folderId, learningVoid: learningVoid!, blueprint: blueprint!, objectiveIds }
 }
 
 function input() {
@@ -43,6 +44,53 @@ function input() {
 }
 
 describe('Learn V2 study-plan preview and acceptance', () => {
+  test.each(['draft', 'accepted'] as const)('source purge preserves %s scheduling snapshots, projection, acceptance and reflow', async state => {
+    vi.useFakeTimers()
+    vi.setSystemTime(Date.parse('2030-09-01T12:00:00Z'))
+    const { t, owner, folderId, learningVoid, blueprint, objectiveIds } = await setupPlan()
+    const request = { learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, expectedVoidRevision: 5,
+      expectedBlueprintRecordRevision: 4, idempotencyKey: 'preserved-preview', schedulingInput: input() }
+    const preview = await owner.mutation(api.learnV2Plans.createPlanPreview, request)
+    const accept = { studyPlanRevisionId: preview._id as Id<'studyPlanRevisions'>, expectedVoidRevision: 5,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'preserved-accept' }
+    if (state === 'accepted') {
+      await owner.mutation(api.learnV2Plans.acceptPlanPreview, accept)
+      await t.run(async ctx => {
+        const jobs = await ctx.db.query('learnJobs').withIndex('by_userId_and_learningVoidId_and_type', q => q.eq('userId', identity.tokenIdentifier).eq('learningVoidId', learningVoid._id)).take(8)
+        for (const job of jobs) await ctx.db.patch(job._id, { status: 'cancelled' })
+      })
+    }
+    const before = (await t.run(ctx => ctx.db.get(accept.studyPlanRevisionId)))!
+    const documentId = await t.run(async ctx => {
+      const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId,
+        filename: 'backing.txt', fileSize: 1, status: 'success', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId: identity.tokenIdentifier, learningVoidId: learningVoid._id,
+        origin: 'folder_document', externalKey: String(documentId), folderDocumentId: documentId })
+      const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId: identity.tokenIdentifier, sourceIdentityId,
+        learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, revision: 1, recordRevision: 1,
+        status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'unknown', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, createdAt: Date.now() })
+      await ctx.db.insert('learnObjectiveSources', { userId: identity.tokenIdentifier, objectiveId: objectiveIds[0]!, sourceSnapshotId, coverage: 'strong' })
+      return documentId
+    })
+    await owner.mutation(api.documents.deleteDocument, { id: documentId })
+    await t.finishAllScheduledFunctions(vi.runAllTimers)
+    const after = (await t.run(ctx => ctx.db.get(accept.studyPlanRevisionId)))!
+    expect(after.inputSnapshot).toBe(before.inputSnapshot)
+    expect(after.resultSnapshot).toBe(before.resultSnapshot)
+    await expect(owner.mutation(api.learnV2Plans.createPlanPreview, request)).resolves.toMatchObject({ status: 'unavailable', reasonCode: 'evidence_unavailable' })
+    await expect(owner.mutation(api.learnV2Plans.createPlanPreview, { ...request, schedulingInput: { ...input(), sessionMinutes: 45 } })).rejects.toThrow('Idempotency key was already used for a different request')
+    await expect(owner.mutation(api.learnV2Lifecycle.createLearningVoid, { folderId, title: 'Plan me', idempotencyKey: 'void' })).resolves.toMatchObject({ _id: learningVoid._id })
+    const mission = await owner.query(api.learnV2Journey.getMission, { learningVoidId: learningVoid._id })
+    expect(JSON.parse((state === 'draft' ? mission?.plan.preview : mission?.plan.accepted)!.inputSnapshot!)).toMatchObject({ startLocalDate: input().startLocalDate })
+    if (state === 'draft') await expect(owner.mutation(api.learnV2Plans.acceptPlanPreview, accept)).resolves.toMatchObject({ status: 'accepted' })
+    const active = (await t.run(ctx => ctx.db.get(accept.studyPlanRevisionId)))!
+    await expect(owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: active._id,
+      expectedPlanRecordRevision: active.recordRevision!, idempotencyKey: 'preserved-reflow' })).resolves.toHaveProperty('successorPlanRevisionId')
+    const reflowed = await owner.query(api.learnV2Journey.getMission, { learningVoidId: learningVoid._id })
+    expect(reflowed?.plan.accepted?._id).not.toBe(active._id)
+    expect(JSON.parse(reflowed!.plan.accepted!.inputSnapshot!)).toMatchObject({ startLocalDate: input().startLocalDate })
+  })
+
   test('uses the active Blueprint pointer instead of a newer draft revision', async () => {
     const setup = await setupPlan()
     await setup.t.run(async (ctx) => {

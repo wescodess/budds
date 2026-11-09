@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import { ADAPTIVE_ACTIVATION_CONFIGURATION } from '../shared/adaptive-activation-approval'
@@ -81,7 +82,7 @@ test('revocation survives invalid approval, selects named fallback, and preserve
   await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
   await expect(owner.query(api.learnAdaptiveAccess.adaptiveStatus, {})).resolves.toMatchObject({ kind: 'denied', fallbackRoute: { name: 'app-learn', href: '/app/learn?legacy=v2' } })
   await expect(owner.query(api.learnAdaptive.getThread, { threadId })).rejects.toThrow(/denied/)
-  await expect(owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [{ _id: threadId, originalNeed: 'Keep my work through rollback', revision: 1, lifecycle: 'ready' }] })
+  await expect(owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [{ _id: threadId, originalNeed: 'Keep my work through rollback', revision: 1, lifecycle: 'ready' }] })
   process.env.LEARN_V2_ENABLED = 'false'
   await expect(owner.query(api.learnAdaptiveAccess.adaptiveStatus, {})).resolves.toMatchObject({ kind: 'denied', fallbackRoute: { name: 'index', href: '/' } })
 })

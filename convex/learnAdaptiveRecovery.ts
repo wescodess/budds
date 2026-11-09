@@ -1,3 +1,4 @@
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -7,6 +8,7 @@ import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
+import { activityResponseAvailable } from './lib/learnV2ResponsePrivacy'
 
 const DIAGNOSTIC_ROUTER_VERSION = 'learn-adaptive.preparing-diagnostic.v1'
 
@@ -171,6 +173,7 @@ export const getDiagnosticCanvas = query({
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
+    ctx = createResponsePrivacyReadContext(ctx, userId).ctx
     const thread = await ctx.db.get(args.threadId)
     if (!thread || thread.userId !== userId || thread.authorityKind !== 'standalone' || thread.deletionStartedAt !== undefined) return null
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
@@ -191,7 +194,8 @@ export const getDiagnosticCanvas = query({
           evidenceReady: evidenceState === 'ready', sourceCount: 0, currentTime: thread.availableTime,
           selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
           purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
-        response: activity.submittedResponse ?? null, fallback: activity.fallback, requiredAction: activity.requiredAction } }
+        response: await activityResponseAvailable(ctx, userId, activity) ? activity.submittedResponse ?? null : null,
+        fallback: activity.fallback, requiredAction: activity.requiredAction } }
   },
 })
 

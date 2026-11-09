@@ -1,3 +1,4 @@
+import { createResponsePrivacyReadContext, privacyRead, responsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Id } from './_generated/dataModel'
@@ -15,6 +16,7 @@ import { liveEvidenceState } from './learnAdaptiveRecovery'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivityPrimitive } from '../shared/learn-adaptive-activity-registry'
 import { decodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
+import { activityResponseAvailable, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -210,7 +212,8 @@ export const attachReadySession = mutation({
   },
 })
 
-export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
+export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, options: { includeSavedResponse?: boolean } = {}) {
+    ctx = responsePrivacyReadContext(ctx, userId)
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     const thread = await ctx.db.get(threadId)
     if (!owner || !thread || thread.userId !== userId || thread.authorityKind !== 'v2_mission' || thread.deletionStartedAt !== undefined || !thread.currentActivityId) return null
@@ -241,18 +244,30 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       generationInputs: activity.generationInputs, decisionInputs: activity.decisionInputs,
       replacesActivityId: activity.replacesActivityId, canonicalInputSnapshot: activity.canonicalInputSnapshot, inputDigest: activity.inputDigest,
     })
-    const evidence = activity.evidenceReferences.length > 0 && activity.generationInputs.sessionContentRevision !== null
-      ? await loadAdaptiveClaimProjection(ctx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: activity.generationInputs.sessionContentRevision, evidenceReferences: activity.evidenceReferences })
-      : null
-    const contentEvidenceReady = await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id)
+    const folder = await ctx.db.get(learningVoid.folderId)
+    const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
     const scoredAttempt = activity.masteryAttemptId && await ctx.db.get(activity.masteryAttemptId)
+    const selectedOverride = await ctx.db.query('learnActivityOverrides')
+      .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
+      .order('desc').first()
+    const evidence = activity.evidenceReferences.length > 0 && activity.generationInputs.sessionContentRevision !== null
+      ? await privacyRead(ctx, userId, ['canvas-evidence', activity._id], null, async ctx => await loadAdaptiveClaimProjection(ctx, { userId, historical: false, sessionContentId: content._id, sessionContentRevision: activity.generationInputs.sessionContentRevision!, evidenceReferences: activity.evidenceReferences }))
+      : null
+    const contentEvidenceReady = await privacyRead(ctx, userId, ['canvas-content', content._id], false, async ctx => await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id))
+    const sourceReady = await privacyRead(ctx, userId, ['canvas-scope', thread._id], false, async ctx => (await liveEvidenceState(ctx, thread)) === 'ready')
+    let bodyAuthority = sourceReady && learningVoid.status !== 'archived' && folder?.userId === userId
+      && contentEvidenceReady && activity.evidenceReferences.length > 0 && activity.evidenceReferences.length <= 64
+    if (bodyAuthority) for (const reference of activity.evidenceReferences) {
+      if (!await retainedSourceExcerpt(ctx, userId, reference.sourceSnapshotId)) { bodyAuthority = false; break }
+    }
+    const savedBodyAvailable = options.includeSavedResponse !== false && bodyAuthority && await activityResponseAvailable(ctx, userId, activity)
     const completedFeedback = activity.status === 'feedback' && session.status === 'completed' && scoredAttempt
       && scoredAttempt.userId === userId && scoredAttempt.studySessionId === session._id
       && scoredAttempt.sessionContentId === content._id && scoredAttempt.blueprintRevisionId === blueprint._id
       && scoredAttempt.objectiveId === objective._id && scoredAttempt.contentRevision === content.revision
       && session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision
     const current = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id && blueprint.status === 'accepted' && content.status === 'published'
-      && contentEvidenceReady
+      && bodyAuthority
       && activity.sessionContentId === content._id && activity.objectiveId === objective._id
       && activity.blueprintRevisionId === blueprint._id && plan.blueprintRecordRevision === blueprint.recordRevision
       && session.studyPlanRevisionId === plan._id && content.studyPlanRevisionId === plan._id
@@ -260,7 +275,6 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
       && learningVoid.activeBlueprintRevisionId === blueprint._id
       && (session.status === 'ready' || session.status === 'in_progress' || Boolean(completedFeedback))
       && (session.status !== 'in_progress' || session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision)
-    const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
     const prompt = blocks.length <= 16 ? blocks.find(block => block.kind === 'independent_application')?.content : undefined
     const status = !current || !replay.ok || evidence?.integrityState !== 'accepted' || !prompt?.trim()
       ? 'blocked' as const
@@ -273,10 +287,6 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
           : thread.evidenceState === 'preparing' ? 'preparing'
           : thread.evidenceState === 'blocked' || evidence?.integrityState === 'insufficient' || evidence?.integrityState === 'conflicting' ? 'blocked'
             : !current ? 'stale' : 'blocked'
-    const selectedOverride = await ctx.db.query('learnActivityOverrides')
-      .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
-      .order('desc').first()
-    const sourceReady = (await liveEvidenceState(ctx, thread)) === 'ready'
     return {
       status, ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision },
       recoveryState: status === 'blocked' ? recoveryState : null,
@@ -295,13 +305,13 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
           selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
           purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         primitive: status !== 'blocked' && replay.ok ? activity.primitivePlan[0] : null,
-        fallback: activity.fallback, requiredAction: activity.requiredAction },
+        fallback: bodyAuthority ? activity.fallback : { ...activity.fallback, title: 'Evidence unavailable', body: '', primaryAction: { type: 'continue_safe' as const, label: 'Continue' } }, requiredAction: activity.requiredAction },
       session: { studySessionId: session._id, revision: session.revision, contentRevision: content.revision,
         planRecordRevision: plan.recordRevision, blueprintRecordRevision: blueprint.recordRevision,
         scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt ?? null,
         timezone: session.timezone ?? plan.timezone ?? 'UTC' },
       responsePrompt: status === 'blocked' ? null : prompt ?? null,
-      savedResponse: activity.submittedResponse !== undefined && activity.submittedConfidence !== undefined
+      savedResponse: savedBodyAvailable && activity.submittedResponse !== undefined && activity.submittedConfidence !== undefined
         ? { response: activity.submittedResponse, confidence: activity.submittedConfidence }
         : null,
     }
@@ -309,7 +319,10 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
 
 export const getCanvas = query({
   args: { threadId: v.id('learningThreads') },
-  handler: async (ctx, args) => await loadReadyCanvas(ctx, await requireAdaptiveQueryAccess(ctx), args.threadId),
+  handler: async (ctx, args) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    return await loadReadyCanvas(createResponsePrivacyReadContext(ctx, userId).ctx, userId, args.threadId)
+  },
 })
 
 const renderFailureReasonValidator = v.union(

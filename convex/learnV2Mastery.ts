@@ -19,6 +19,7 @@ import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai
 import { buildBaselineMasteryScoringPayload, buildBaselineMasteryScoringRequest, parseBaselineMasteryScoringResponse } from '../server/utils/learn-v2-mastery-scorer'
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
+import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision, validateAdaptiveProviderPayload } from '../shared/adaptive-v2-pilot-policy'
 import {
@@ -147,7 +148,7 @@ export async function preserveAdaptiveProductReservationOnDeletion(ctx: Mutation
 function requestFingerprintPayload(args: AttemptRequest) { return { command: 'submitMasteryAttempt', studySessionId: String(args.studySessionId), expectedSessionRevision: args.expectedSessionRevision, expectedContentRevision: args.expectedContentRevision, expectedPlanRecordRevision: args.expectedPlanRecordRevision, expectedBlueprintRecordRevision: args.expectedBlueprintRecordRevision, response: args.response, confidence: args.confidence } }
 function legacyRequestFingerprint(args: AttemptRequest) { return JSON.stringify(requestFingerprintPayload(args)) }
 async function requestFingerprints(args: AttemptRequest) { return { digest: await digest(requestFingerprintPayload(args)), legacy: legacyRequestFingerprint(args) } }
-function fingerprintMatches(stored: string | undefined, fingerprints: Awaited<ReturnType<typeof requestFingerprints>>) { return stored === fingerprints.digest || stored === fingerprints.legacy }
+async function fingerprintMatches(stored: string | undefined, fingerprints: Awaited<ReturnType<typeof requestFingerprints>>) { return stored === fingerprints.digest || await matchesLegacyFingerprint(stored, fingerprints.legacy) }
 function validText(value: string, label: string, max: number) { if (!value.trim() || value.length > max) throw new Error(`${label} is invalid`) }
 function validateAttemptRequest(args: AttemptRequest) {
   validText(args.idempotencyKey, 'Idempotency key', 128); validText(args.response, 'Response', MAX_RESPONSE)
@@ -592,7 +593,7 @@ export const beginMasteryScoring = internalMutation({
     const attempt = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     const existing = await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (attempt) {
-      if (!fingerprintMatches(attempt.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
+      if (!await fingerprintMatches(attempt.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       if (args.adaptiveAdmission) {
         const activity = existing && await adaptiveLinkedReplayAuthority(ctx, args.tokenIdentifier, args.adaptiveAdmission, existing)
         if (!activity || !existing || existing.type !== SCORING_JOB_TYPE
@@ -606,7 +607,7 @@ export const beginMasteryScoring = internalMutation({
     }
     const now = Date.now()
     if (existing) {
-      if (existing.type !== SCORING_JOB_TYPE || !fingerprintMatches(existing.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
+      if (existing.type !== SCORING_JOB_TYPE || !await fingerprintMatches(existing.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       if (args.adaptiveAdmission) {
         adaptiveActivity = await adaptiveLinkedReplayAuthority(ctx, args.tokenIdentifier, args.adaptiveAdmission, existing) ?? undefined
         if (!adaptiveActivity) return { kind: 'denied' as const, code: 'adaptive_activity_authority_unavailable' as const, message: 'Adaptive scoring is unavailable.', retryable: false }
@@ -843,7 +844,7 @@ export const getMasteryScoringInput = internalQuery({
     const fingerprints = await requestFingerprints(args)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (!fingerprintMatches(prior.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
+      if (!await fingerprintMatches(prior.requestFingerprint, fingerprints)) throw new Error('Idempotency key was already used for a different request')
       const record = prior.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId)).record : null
       return { kind: 'replay' as const, attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: record?.lastAttemptId === prior._id ? record.nextReviewAt ?? null : null, feedback: feedback(prior) }
     }
@@ -1066,11 +1067,11 @@ export const recordMasteryAttempt = internalMutation({
     const requestFingerprintValue = await requestFingerprints(args)
     if ((args.scoringJobId === undefined) !== (args.scoringLeaseToken === undefined)) throw new Error('Mastery scoring command is invalid')
     const scoringJob = args.scoringJobId && await ctx.db.get(args.scoringJobId)
-    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== SCORING_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || !fingerprintMatches(scoringJob.requestFingerprint, requestFingerprintValue))) throw new Error('Mastery scoring command is invalid')
+    if (args.scoringJobId && (!scoringJob || scoringJob.userId !== args.tokenIdentifier || scoringJob.type !== SCORING_JOB_TYPE || scoringJob.status !== 'running' || scoringJob.leaseToken !== args.scoringLeaseToken || !await fingerprintMatches(scoringJob.requestFingerprint, requestFingerprintValue))) throw new Error('Mastery scoring command is invalid')
     if (scoringJob && (!args.scoredSourceSnapshotIds?.length || !args.scoredContentRevisionPins?.length)) throw new Error('Mastery scoring evidence pins are unavailable')
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
-      if (!fingerprintMatches(prior.requestFingerprint, requestFingerprintValue)) throw new Error('Idempotency key was already used for a different request')
+      if (!await fingerprintMatches(prior.requestFingerprint, requestFingerprintValue)) throw new Error('Idempotency key was already used for a different request')
       const currentRecord = prior.blueprintRevisionId ? (await getScopedMasteryRecord(ctx, args.tokenIdentifier, prior.blueprintRevisionId, prior.objectiveId)).record : null
       return { attemptId: prior._id, scorePercent: prior.serverScorePercent, state: prior.result, nextReviewAt: currentRecord?.lastAttemptId === prior._id ? currentRecord.nextReviewAt ?? null : null, feedback: feedback(prior), replayed: true }
     }

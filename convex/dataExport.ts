@@ -1,98 +1,20 @@
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
-import { LEARN_MEASUREMENT_COLLECTIONS, isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
+import { isLearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { exportMeasurementPage } from './lib/learnV2MeasurementExport'
-import { query } from './_generated/server'
+import { mutation, query } from './_generated/server'
+import { authorizePersonalExportPage, requirePersonalExportAuthorization, PERSONAL_METADATA, exportPersonalResponse, exportPersonalResponseBody, exportLegacyAttempt, exportActivity, exportThread, exportDecision } from './lib/learnV2PersonalExport'
+import { personalExportResponseContext, privateFields } from './lib/learnV2ResponsePrivacy'
 import { requireAuth } from './lib/auth'
-import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../shared/adaptive-learn-storage-manifest'
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
+import { personalResponsePage } from './lib/learnV2PersonalExportPage'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
 const MAX_EXPORT_PAGE_SIZE = 8
-const [learningThreadContributionsCollection, learningThreadsCollection, learningThreadActivitiesCollection, learningThreadArtifactsCollection, learnActivityEvidenceLinksCollection, learnActivityDecisionsCollection, learnActivityEventsCollection, learnActivityCommandReceiptsCollection, learnAdaptiveThreadDeletionJobsCollection, learnActivityOverridesCollection, learningThreadPreferencesCollection, learningThreadPromotionProposalsCollection, learnAdaptiveExperimentAssignmentsCollection] = ADAPTIVE_LEARN_EXPORT_COLLECTIONS
 
-function redactAdaptivePrimitiveSources(primitive: { props: unknown } & Record<string, unknown>) {
-  if (!primitive.props || typeof primitive.props !== 'object' || Array.isArray(primitive.props)) return primitive
-  const props = primitive.props as Record<string, unknown>
-  const sourceRefs = Array.isArray(props.sourceRefs) ? props.sourceRefs.map(() => '[redacted]') : undefined
-  const sources = Array.isArray(props.sources)
-    ? props.sources.map((source) => source && typeof source === 'object' && !Array.isArray(source)
-      ? { ...(source as Record<string, unknown>), sourceRef: '[redacted]' }
-      : source)
-    : undefined
-  return {
-    ...primitive,
-    props: {
-      ...props,
-      ...(sourceRefs ? { sourceRefs } : {}),
-      ...(sources ? { sources } : {}),
-    },
-  }
-}
-
-const exportCollectionValidator = v.union(
-  ...LEARN_MEASUREMENT_COLLECTIONS.map(table => v.literal(table)),
-  v.literal('folders'),
-  v.literal('documents'),
-  v.literal('conversations'),
-  v.literal('messages'),
-  v.literal('quizzes'),
-  v.literal('quizQuestions'),
-  v.literal('quizAttempts'),
-  v.literal('quizAnswerAssessments'),
-  v.literal('flashcardSets'),
-  v.literal('flashcards'),
-  v.literal('flashcardRooms'),
-  v.literal('flashcardRoomCards'),
-  v.literal('flashcardRoomVersions'),
-  v.literal('flashcardVersionCards'),
-  v.literal('courses'),
-  v.literal('courseSections'),
-  v.literal('learnProfile'),
-  v.literal('tasks'),
-  v.literal('reviewItems'),
-  v.literal('reviewSessions'),
-  v.literal('calendarConnections'),
-  v.literal('calendarEvents'),
-  v.literal('audioOverviewJobs'),
-  v.literal('audioOverviewSourceManifests'),
-  v.literal('audioOverviewSourceManifestEntries'),
-  v.literal('audioOverviewOutlines'),
-  v.literal('audioOverviewLearningObjectives'),
-  v.literal('audioOverviewOutlineSources'),
-  v.literal('audioOverviewClaimLedgers'),
-  v.literal('audioOverviewClaims'),
-  v.literal('audioOverviewClaimSources'),
-  v.literal('audioOverviewEpisodes'),
-  v.literal('audioOverviewScenes'),
-  v.literal('audioOverviewUtterances'),
-  v.literal('audioOverviewUtteranceSources'),
-  v.literal('audioOverviewUtteranceClaims'),
-  v.literal('audioOverviewAudioArtifacts'),
-  v.literal('audioOverviewSceneQualityGates'),
-  v.literal('audioOverviewAlignments'),
-  v.literal('audioOverviewAlignmentSegments'),
-  v.literal('audioOverviewJobTurns'),
-  v.literal('audioOverviews'),
-  v.literal('audioOverviewInterjections'),
-  v.literal('audioOverviewInterjectionsV2'),
-  v.literal('audioOverviewInterjectionUtterances'),
-  v.literal('audioOverviewInterjectionSources'),
-  v.literal(learningThreadsCollection),
-  v.literal(learningThreadContributionsCollection),
-  v.literal(learningThreadActivitiesCollection),
-  v.literal(learningThreadArtifactsCollection),
-  v.literal(learnActivityEvidenceLinksCollection),
-  v.literal(learnActivityDecisionsCollection),
-  v.literal(learnActivityEventsCollection),
-  v.literal(learnActivityCommandReceiptsCollection),
-  v.literal(learnAdaptiveThreadDeletionJobsCollection),
-  v.literal(learnActivityOverridesCollection),
-  v.literal(learningThreadPreferencesCollection),
-  v.literal(learningThreadPromotionProposalsCollection),
-  v.literal(learnAdaptiveExperimentAssignmentsCollection),
-  v.literal('learningVoids'), v.literal('learnBlueprints'), v.literal('learnBlueprintRevisions'), v.literal('learnMilestones'), v.literal('learnObjectives'), v.literal('learnObjectivePrerequisites'), v.literal('learnSourceIdentities'), v.literal('learnSourceSnapshots'), v.literal('learnSourceFetchLeases'), v.literal('learnSourceFetchRateEvents'), v.literal('learnMasteryScoringRateEvents'), v.literal('learnSourceCommandReceipts'), v.literal('learnFolderSourceManifests'), v.literal('learnFolderSourceManifestFolders'), v.literal('learnFolderSourceManifestEntries'), v.literal('learnSourceExcerpts'), v.literal('learnObjectiveSources'), v.literal('learnClaimSupports'), v.literal('masteryAttempts'), v.literal('masteryRecords'), v.literal('studyPlans'), v.literal('studyPlanRevisions'), v.literal('studySessions'), v.literal('studySessionRetrievalObjectives'), v.literal('sessionContent'), v.literal('sessionContentBlocks'), v.literal('sessionContentClaims'), v.literal('calendarProjections'), v.literal('calendarReconciliationProposals'), v.literal('calendarWebhookReceipts'), v.literal('calendarWatchChannels'), v.literal('reminderPolicies'), v.literal('searchQuotaBuckets'), v.literal('searchReservations'), v.literal('learnJobs'), v.literal('learnLifecycleReceipts'), v.literal('learnPlanCommandReceipts'), v.literal('learnPlanAuditEvents'),
-)
+const exportCollectionValidator = v.union(...PERSONAL_EXPORT_COLLECTIONS.map(table => v.literal(table)))
 
 function boundedPaginationOpts(paginationOpts: { numItems: number, cursor: string | null }) {
   return {
@@ -132,16 +54,47 @@ export const getExportMetadata = query({
   },
 })
 
+export const authorizePersonalExport = mutation({
+  args: { authorizationId: v.optional(v.id('learnAssessmentExposures')), cursor: v.optional(v.string()), documentId: v.optional(v.id('documents')) },
+  returns: v.object({ authorizationId: v.id('learnAssessmentExposures'), cursor: v.union(v.string(), v.null()), done: v.boolean() }),
+  handler: async (ctx, args) => await authorizePersonalExportPage(ctx, await requireAuth(ctx), args),
+})
+
 export const getUserDataPage = query({
   args: {
     collection: exportCollectionValidator,
     paginationOpts: paginationOptsValidator,
+    authorizationId: v.optional(v.id('learnAssessmentExposures')),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
+    ctx = createResponsePrivacyReadContext(personalExportResponseContext(ctx, userId), userId).ctx
     const paginationOpts = boundedPaginationOpts(args.paginationOpts)
+    await requirePersonalExportAuthorization(ctx, userId, args.authorizationId)
 
-    if (isLearnMeasurementCollection(args.collection)) return await exportMeasurementPage(ctx, userId, args.collection, paginationOpts)
+    if (args.collection === 'masteryAttempts') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportLegacyAttempt(ctx, userId, row))
+    if (args.collection === 'learningThreadActivities') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportActivity(ctx, userId, row))
+    if (args.collection === 'learnResponses') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportPersonalResponse(ctx, userId, row))
+    if (args.collection === 'learnResponseBodies') return await personalResponsePage(ctx, userId, args.collection, paginationOpts, row => exportPersonalResponseBody(ctx, userId, row))
+    if (isLearnMeasurementCollection(args.collection)) {
+      const result = await exportMeasurementPage(ctx, userId, args.collection, paginationOpts)
+      if (args.collection === 'learnAssessmentExposures') result.page = result.page.filter(row => row.assessmentOpportunityId !== undefined || row.policyVersion !== 'learn-v2.personal-export.v1')
+      return result
+    }
+    if (args.collection === 'learningThreads') {
+      const result = await ctx.db.query('learningThreads').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      return { ...result, page: result.page.map(exportThread) }
+    }
+    if (args.collection === 'learnActivityDecisions') {
+      const result = await ctx.db.query('learnActivityDecisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      return { ...result, page: result.page.map(exportDecision) }
+    }
+    if (args.collection in PERSONAL_METADATA) {
+      const collection = args.collection as keyof typeof PERSONAL_METADATA
+      const result = await ctx.db.query(collection).withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      return { ...result, page: result.page.map(row => ({ ...privateFields(row, PERSONAL_METADATA[collection]),
+        ...(collection === 'learningThreadArtifacts' && 'status' in row && row.status === 'deleted' ? { title: '[deleted]', summary: '' } : {}) })) }
+    }
 
     switch (args.collection) {
       case 'folders':
@@ -246,38 +199,6 @@ export const getUserDataPage = query({
         return await ctx.db.query('audioOverviewInterjectionUtterances').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'audioOverviewInterjectionSources':
         return await ctx.db.query('audioOverviewInterjectionSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'learningThreads':
-        return await ctx.db.query('learningThreads').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'learningThreadActivities': {
-        const result = await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return {
-          ...result,
-          page: result.page.map(({ canonicalInputSnapshot: _snapshot, inputDigest: _digest, scoringJobId: _scoringJobId, masteryAttemptId: _masteryAttemptId, submittedResponse: _submittedResponse, submittedConfidence: _submittedConfidence, evidenceReferences, generationInputs, decisionInputs, primitivePlan, reflectionDecision, ...row }) => ({
-            ...row,
-            ...(reflectionDecision ? { reflectionDecision: {
-              version: reflectionDecision.version, outcome: reflectionDecision.outcome, nextMove: reflectionDecision.nextMove,
-              decisionRevision: reflectionDecision.decisionRevision, decidedAt: reflectionDecision.decidedAt,
-            } } : {}),
-            ...(row.activityClass === 'non_factual'
-              && row.activityId === `diagnostic:${String(row.threadId)}`
-              && decisionInputs.routerVersion === 'learn-adaptive.preparing-diagnostic.v1'
-              && primitivePlan.length === 1 && primitivePlan[0]?.type === 'diagnostic_prompt'
-              && primitivePlan[0].action === 'submit_response'
-              && row.evaluationContract.kind === 'learner_response'
-              && row.learningVoidId === null && row.blueprintRevisionId === null && row.sessionContentId === null
-              && row.objectiveId === null && evidenceReferences.length === 0
-              && !_scoringJobId && !_masteryAttemptId && _submittedResponse
-              ? { diagnosticResponse: _submittedResponse } : {}),
-            primitivePlan: primitivePlan.map(redactAdaptivePrimitiveSources),
-            evidenceReferences: evidenceReferences.map(({ claimId: _claim, supportId: _support, sourceSnapshotId: _source, ...reference }) => reference),
-            generationInputs: { sessionContentRevision: generationInputs.sessionContentRevision, generatorVersion: generationInputs.generatorVersion },
-            decisionInputs: {
-              ...decisionInputs,
-              sourceInputs: decisionInputs.sourceInputs.map(({ sourceSnapshotId: _sourceSnapshotId, ...sourceInput }) => sourceInput),
-            },
-          })),
-        }
-      }
       case 'learningThreadArtifacts': {
         const result = await ctx.db.query('learningThreadArtifacts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return { ...result, page: result.page.map(({ r2ObjectKey: _r2ObjectKey, ...artifact }) => artifact.status === 'deleted'
@@ -300,17 +221,6 @@ export const getUserDataPage = query({
         return await ctx.db.query('learningThreadPreferences').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learningThreadPromotionProposals':
         return await ctx.db.query('learningThreadPromotionProposals').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'learnActivityDecisions': {
-        const result = await ctx.db.query('learnActivityDecisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-        return { ...result, page: result.page.map(({ inputSnapshot: _snapshot, idempotencyKeyHash: _keyHash, overrideApplication, ...decision }) => ({
-          ...decision,
-          ...(overrideApplication ? { overrideApplication: {
-            version: overrideApplication.version, option: overrideApplication.option,
-            outcome: overrideApplication.outcome, applicationReason: overrideApplication.applicationReason,
-            effectiveAvailableTime: overrideApplication.effectiveAvailableTime,
-          } } : {}),
-        })) }
-      }
       case 'learnActivityEvents': {
         const result = await ctx.db.query('learnActivityEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
         return { ...result, page: result.page.map(({ dedupeKeyHash: _dedupeKeyHash, ...event }) => event) }
@@ -348,7 +258,6 @@ export const getUserDataPage = query({
       case 'learnSourceExcerpts': { const result = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sourceSnapshotId: _sourceSnapshotId, locator: _locator, privateLocator: _privateLocator, excerpt: _excerpt, ...row }) => row) } }
       case 'learnObjectiveSources': return await ctx.db.query('learnObjectiveSources').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'learnClaimSupports': { const result = await ctx.db.query('learnClaimSupports').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ sessionContentClaimId: _claimId, sourceExcerptId: _excerptId, ...row }) => row) } }
-      case 'masteryAttempts': { const result = await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ measurementStorage: _measurementStorage, scoringBinding: _scoringBinding, assessmentPins: _assessmentPins, requestedScorerModel: _requestedScorerModel, returnedScorerModel: _returnedScorerModel, idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, response: _response, criterionResultsJson: _criterionResults, misconceptionTagsJson: _misconceptions, feedbackProjectionJson: _feedbackProjection, rubricSnapshot: _rubricSnapshot, scorerModel: _scorerModel, verifierVersionsJson: _verifierPins, sourceSnapshotIdsJson: _sourcePins, studySessionId: _sessionId, sessionContentId: _contentId, studyPlanRevisionId: _planId, blueprintRevisionId: _blueprintId, objectiveId: _objectiveId, ...row }) => row) } }
       case 'masteryRecords': return await ctx.db.query('masteryRecords').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'studyPlans': return await ctx.db.query('studyPlans').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'studyPlanRevisions': return await ctx.db.query('studyPlanRevisions').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
@@ -444,11 +353,13 @@ export const getAttemptAnswersPage = query({
   args: {
     attemptId: v.id('quizAttempts'),
     paginationOpts: paginationOptsValidator,
+    authorizationId: v.optional(v.id('learnAssessmentExposures')),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const attempt = await ctx.db.get('quizAttempts', args.attemptId)
     if (!attempt || attempt.userId !== userId) return null
+    await requirePersonalExportAuthorization(ctx, userId, args.authorizationId)
 
     return await ctx.db
       .query('attemptAnswers')
@@ -461,11 +372,13 @@ export const getCourseSourceDocsPage = query({
   args: {
     courseId: v.id('courses'),
     paginationOpts: paginationOptsValidator,
+    authorizationId: v.optional(v.id('learnAssessmentExposures')),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const course = await ctx.db.get('courses', args.courseId)
     if (!course || course.userId !== userId) return null
+    await requirePersonalExportAuthorization(ctx, userId, args.authorizationId)
 
     return await ctx.db
       .query('courseSourceDocs')
@@ -475,11 +388,14 @@ export const getCourseSourceDocsPage = query({
 })
 
 export const getDocumentDownloadUrl = query({
-  args: { documentId: v.id('documents') },
+  args: { documentId: v.id('documents'), authorizationId: v.optional(v.id('learnAssessmentExposures')) },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const doc = await ctx.db.get('documents', args.documentId)
     if (!doc || doc.userId !== userId) return null
+    await requirePersonalExportAuthorization(ctx, userId, args.authorizationId, doc._id)
+    const folder = await ctx.db.get(doc.folderId)
+    if (doc.status !== 'success' || !folder || folder.userId !== userId) return null
 
     const url = doc.fileId ? await ctx.storage.getUrl(doc.fileId) : null
     return { url, filename: doc.filename }

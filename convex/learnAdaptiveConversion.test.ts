@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -280,7 +281,7 @@ test('source purge keeps safe origin while removing the protected document point
   if (created.kind !== 'ok') throw new Error('Expected activity')
   await t.mutation(internal.learnV2Retention.purgeFolderDocumentSources, { userId: ownerId, documentId })
   const activity = await t.run(ctx => ctx.db.get(created.value.activityDocumentId))
-  const exportPage = await owner.query(api.dataExport.getUserDataPage, {
+  const exportPage = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
     collection: 'learningThreadActivities', paginationOpts: { numItems: 20, cursor: null },
   })
   const protectedText = JSON.stringify([activity, exportPage])
