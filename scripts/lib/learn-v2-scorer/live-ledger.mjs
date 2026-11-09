@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readdirSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
-import { exactKeys, hash, readJson, seal, unseal, exists, VERSION } from './artifacts.mjs'
+import { exactKeys, hash, readJson, seal, unseal, exists, VERSION, isOsMetadataFile } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
 import { liveOutcome, openRun, openRecoveryRun } from './run-state.mjs'
 import { requestPinsDigest } from './adapters.mjs'
@@ -41,7 +41,7 @@ function usage(ledger, state, approvalDigest, adapter) {
 // every reservation remains charged, including unknown post-dispatch outcomes.
 export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
   const ledger = { directory, approvals: new Map(), reservations: new Map(), resolutions: new Map() }
-  const names = readdirSync(directory).filter(name => !['.learn-v2-scorer-global.lock', 'unresolved.json'].includes(name))
+  const names = readdirSync(directory).filter(name => !['.learn-v2-scorer-global.lock', 'unresolved.json'].includes(name) && !isOsMetadataFile(directory, name))
   for (const name of names) assert.match(name, /^(?:(?:approval|reservation)-[a-f0-9]{64}|resolution-[a-f0-9]{64}(?:-[a-f0-9]{64})?)\.json$/, 'Interrupted or unknown global ledger entry requires reconciliation')
   for (const name of names.filter(name => name.startsWith('approval-'))) {
     const raw = readJson(join(directory, name))

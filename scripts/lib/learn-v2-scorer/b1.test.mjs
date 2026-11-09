@@ -152,19 +152,23 @@ function reportInputs(data) {
     return [row.id, { status: 'valid', criteria, weights, scorePercent: criteria.reduce((sum, row, index) => sum + (row.awarded ? weights[index] : 0), 0) }]
   }))
   const results = new Map(adapters.map(row => [row.id, structuredClone(output)]))
+  for (const result of results.get('baseline_1').values()) result.identity = { servingProvider: 'observed' }
   const pins = { mode: 'live', evidenceStatus: 'synthetic_contract_only', adapters,
     anchors: { version: 'learn-v2.synthetic-anchor-checks.v1', evidenceStatus: 'synthetic_contract_only', canvasAdmitted: false, rows: [] } }
   const schedule = adapters.flatMap(adapter => rows.map(row => ({ adapter: adapter.id, rowId: row.id })))
-  return { pins, pinsDigest: hash('report-pins'), corpus: data.corpus, schedule, results,
+  return { pins, pinsDigest: hash('report-pins'), corpus: data.corpus, sources: data.sources, schedule, results,
     thresholds: fitThresholds(data.corpus, adapters, results, []), artifacts: [], reservations: {} }
 }
 
-test('B1 M5 perfect graders pass consistency while 80-comparator partial false passes remain reported', async () => {
+test('B2 perfect graders cannot claim consistency while the frozen 80 comparator has source-proven counterexamples', async () => {
   const input = reportInputs(await corpus())
   const report = buildReport(input)
-  assert.equal(report.consistencyClaim, 'provisional_consistency_pass')
+  assert.equal(report.consistencyClaim, 'unavailable')
   assert.equal(report.complete, true)
-  assert.deepEqual(report.quarantine, [])
+  assert.deepEqual(report.consistencyClaimBlockers, ['threshold_counterexample'])
+  assert.deepEqual(report.quarantine.map(row => [row.adapter, row.reason]), ['baseline_1', 'claude_1', 'gemini_1'].map(id => [id, 'threshold_counterexample']))
+  assert.deepEqual(report.thresholdCounterexamples, { threshold: 80, core: { falsePass: 24, falseBlock: 0 }, controls: { falsePass: 0, falseBlock: 0 }, diagnostics: { falsePass: 0, falseBlock: 0 } })
+  assert.deepEqual(report.graderResults, { baseline_1: 'no_errors_observed', claude_1: 'no_errors_observed', gemini_1: 'no_errors_observed' })
   assert.equal(report.realAnchorValidity, 'pending_real_delayed_evidence')
   assert.equal(report.authority.promotion, false)
   for (const stats of Object.values(report.configurations)) {
@@ -174,6 +178,170 @@ test('B1 M5 perfect graders pass consistency while 80-comparator partial false p
     assert.equal(stats.thresholdFinding.classification, 'threshold_comparison_not_criterion_divergence')
     assert.equal(stats.thresholdFinding.falsePass.errors, 24)
   }
+})
+
+function withoutCounterexamples(data) {
+  const corpus = structuredClone(data.corpus)
+  for (const rows of [corpus.core, corpus.controls, corpus.repeats, corpus.diagnostics]) for (const row of rows) {
+    const { atoms } = data.sources.packets.find(packet => packet.id === row.packetId)
+    row.expected.referencePass = atoms.reduce((sum, atom) => sum + (row.expected.criteria[atom.id] ? atom.weight : 0), 0) >= 80
+  }
+  return { ...data, corpus }
+}
+
+function flipFirstCriterion(result) {
+  const index = result.criteria.findIndex(row => row.awarded)
+  result.criteria[index].awarded = false
+  result.scorePercent -= result.weights[index]
+}
+
+test('B2 grader-level results separate perfect, erroneous, divergent and unavailable graders', async () => {
+  const data = await corpus()
+  for (const [counterexamples, source] of [[true, data], [false, withoutCounterexamples(data)]]) {
+    const perfect = buildReport(reportInputs(source))
+    assert.equal(perfect.graderResults.claude_1, 'no_errors_observed')
+    assert.equal(perfect.configurations.claude_1.graderResult.criterionErrors, 0)
+    assert.equal(perfect.consistencyClaim, counterexamples ? 'unavailable' : 'provisional_consistency_pass')
+    assert.deepEqual(perfect.consistencyClaimBlockers, counterexamples ? ['threshold_counterexample'] : [])
+    assert.ok(!perfect.quarantine.some(row => row.reason === 'source_or_repeat_divergence'))
+    for (const [change, status, reason, field] of [['core', 'errors_observed', 'source_or_repeat_divergence', 'criterionErrors'],
+      ['controls', 'errors_observed', 'source_or_repeat_divergence', 'criterionErrors'], ['diagnostics', 'errors_observed', 'source_or_repeat_divergence', 'criterionErrors'],
+      ['repeats', 'errors_observed', 'source_or_repeat_divergence', 'repeatDisagreements'], ['unavailable', 'unavailable_evidence', 'unavailable_evidence', 'unavailable']]) {
+      const input = reportInputs(source)
+      const output = input.results.get('claude_1')
+      if (change === 'unavailable') output.set(source.corpus.core[0].id, { status: 'malformed' })
+      else flipFirstCriterion(output.get(source.corpus[change].find(row => Object.values(row.expected.criteria).includes(true)).id))
+      const report = buildReport(input)
+      assert.equal(report.graderResults.claude_1, status, change)
+      assert.equal(report.graderResults.gemini_1, 'no_errors_observed', change)
+      assert.equal(report.configurations.claude_1.graderResult[field], 1, change)
+      assert.equal(report.consistencyClaim, 'unavailable', change)
+      const adapterReasons = id => report.quarantine.filter(row => row.adapter === id).map(row => row.reason)
+      assert.deepEqual(adapterReasons('claude_1'), [reason, ...(counterexamples ? ['threshold_counterexample'] : [])], change)
+      assert.deepEqual(adapterReasons('gemini_1'), counterexamples ? ['threshold_counterexample'] : [], change)
+    }
+  }
+})
+
+test('B2 a report with both real errors and unavailable evidence names each blocker', async () => {
+  const data = withoutCounterexamples(await corpus())
+  const input = reportInputs(data)
+  const output = input.results.get('claude_1')
+  flipFirstCriterion(output.get(data.corpus.core.find(row => Object.values(row.expected.criteria).includes(true)).id))
+  output.set(data.corpus.controls[0].id, { status: 'refused' })
+  const report = buildReport(input)
+  assert.equal(report.graderResults.claude_1, 'errors_observed')
+  assert.deepEqual(report.consistencyClaimBlockers, ['source_or_repeat_divergence', 'unavailable_evidence'])
+})
+
+test('B2 each counterexample direction and evidence set blocks a perfect grader', async () => {
+  const data = withoutCounterexamples(await corpus())
+  for (const [set, referencePass, direction] of [['core', true, 'falsePass'], ['core', false, 'falseBlock'], ['controls', true, 'falsePass'],
+    ['diagnostics', true, 'falsePass'], ['diagnostics', false, 'falseBlock']]) {
+    const source = { ...data, corpus: structuredClone(data.corpus) }
+    source.corpus[set].find(row => row.expected.referencePass === referencePass).expected.referencePass = !referencePass
+    const report = buildReport(reportInputs(source))
+    assert.equal(report.consistencyClaim, 'unavailable', `${set}/${direction}`)
+    assert.deepEqual(report.consistencyClaimBlockers, ['threshold_counterexample'], `${set}/${direction}`)
+    assert.equal(report.thresholdCounterexamples[set][direction], 1, `${set}/${direction}`)
+    assert.equal(report.graderResults.claude_1, 'no_errors_observed', `${set}/${direction}`)
+  }
+})
+
+test('B2 a grader-induced false pass is not reported as a threshold counterexample', async () => {
+  const data = withoutCounterexamples(await corpus())
+  const input = reportInputs(data)
+  const row = data.corpus.core.find(row => !row.expected.referencePass)
+  const result = input.results.get('claude_1').get(row.id)
+  for (const criterion of result.criteria) criterion.awarded = true
+  result.scorePercent = 100
+  const report = buildReport(input)
+  assert.equal(report.configurations.claude_1.core.falsePass, 1)
+  assert.deepEqual(report.thresholdCounterexamples.core, { falsePass: 0, falseBlock: 0 })
+  assert.deepEqual(report.consistencyClaimBlockers, ['source_or_repeat_divergence'])
+})
+
+async function servedBaseline(data, inventory, upstreamFor) {
+  const definition = { configurationId: 'legacy.upstream.v1', configurationVersion: 'route.v1', kind: 'legacy_baseline', requestedModel: 'openai/gpt-4.1', endpoint: null,
+    identity: { mappingVersion: 'route.identity.v1', canonicalModel: 'openai/gpt-4.1', family: 'openai-gpt', snapshotAssurance: 'unknown', verifiedReturnedModels: [] } }
+  const saved = await sealLearnScorerConfiguration(definition)
+  const registry = await createLearnScorerRegistry({ epoch: 'route.v1', configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }],
+    legacyAllowlist: [definition.configurationId], prospectiveConfigurationId: null })
+  const input = reportInputs(data)
+  const pin = { ...adapter('baseline'), model: definition.requestedModel, upstream: inventory, configuration: saved.binding.configurationDigest }
+  input.pins.adapters[0] = pin
+  const rows = [...data.corpus.core, ...data.corpus.controls, ...data.corpus.repeats, ...data.corpus.diagnostics]
+  const output = new Map()
+  for (const [index, row] of rows.entries()) {
+    const blind = blindRow(row, data.sources, 'synthetic-upstream-seed', 'baseline_1')
+    const raw = fixtureEnvelope({ ...pin, upstream: upstreamFor(index) }, blind, 'valid')
+    output.set(row.id, { ...await baselineExecution({ adapter: pin, blind, saved, registry, startedAt: 1000, terminalAt: 1001, raw }),
+      weights: blind.scoringInput.rubric.criteria.map(criterion => criterion.weightPercent) })
+  }
+  input.results.set('baseline_1', output)
+  input.thresholds = fitThresholds(data.corpus, input.pins.adapters, input.results, [])
+  return { report: buildReport(input), rows, output, configuration: pin.configuration }
+}
+
+test('B2 three observed upstreams stay valid, are each named with counts and cannot claim consistency', async () => {
+  const data = withoutCounterexamples(await corpus())
+  const upstreams = ['Upstream Alpha', 'Upstream Beta', 'Upstream Gamma']
+  const { report, rows, output, configuration } = await servedBaseline(data, 'Upstream Alpha', index => upstreams[index % upstreams.length])
+  assert.ok(rows.every(row => output.get(row.id).status === 'valid'), 'Automatic routing alone fails no row')
+  const baseline = report.configurations.baseline_1
+  assert.equal(baseline.inventoryUpstream, 'Upstream Alpha')
+  assert.equal(baseline.core.statuses.valid, 224)
+  assert.equal(baseline.observedUpstreams.unobserved, 0)
+  assert.deepEqual(baseline.observedUpstreams.served.map(row => row.upstream), upstreams)
+  assert.deepEqual(baseline.observedUpstreams.served.map(row => row.matchesInventory), [true, false, false])
+  assert.deepEqual(baseline.observedUpstreams.served.map(row => row.scheduled), upstreams.map((_, slot) => rows.filter((__, index) => index % 3 === slot).length))
+  for (const set of ['core', 'controls', 'repeats', 'diagnostics']) {
+    assert.equal(baseline.observedUpstreams.served.reduce((sum, row) => sum + row[set].scheduled, 0), data.corpus[set].length, set)
+    assert.equal(baseline.observedUpstreams.served.reduce((sum, row) => sum + row[set].available, 0), data.corpus[set].length, set)
+  }
+  assert.equal(report.consistencyClaim, 'unavailable')
+  assert.deepEqual(report.consistencyClaimBlockers, ['mixed_upstream'])
+  assert.deepEqual(report.quarantine, [{ configuration, adapter: 'baseline_1', status: 'quarantined_validation_claim', reason: 'mixed_upstream' }])
+  assert.equal(report.configurations.claude_1.observedUpstreams, null)
+})
+
+test('B2 one upstream matching the inventory reports as before; one other upstream is blocked accurately', async () => {
+  const data = withoutCounterexamples(await corpus())
+  const matching = await servedBaseline(data, 'Upstream Alpha', () => 'Upstream Alpha')
+  const served = matching.report.configurations.baseline_1.observedUpstreams.served
+  assert.deepEqual(served.map(row => [row.upstream, row.matchesInventory, row.scheduled]), [['Upstream Alpha', true, 256]])
+  assert.equal(matching.report.consistencyClaim, 'provisional_consistency_pass')
+  assert.deepEqual(matching.report.quarantine, [])
+  const moved = await servedBaseline(data, 'Upstream Alpha', () => 'Upstream Beta')
+  assert.ok(moved.rows.every(row => moved.output.get(row.id).status === 'valid'))
+  assert.deepEqual(moved.report.configurations.baseline_1.observedUpstreams.served.map(row => [row.upstream, row.matchesInventory, row.scheduled]), [['Upstream Beta', false, 256]])
+  assert.equal(moved.report.consistencyClaim, 'unavailable')
+  assert.deepEqual(moved.report.consistencyClaimBlockers, ['inventory_upstream_mismatch'])
+})
+
+test('B2 upstream results exclude rows without an observed upstream, without naming one', async () => {
+  const data = withoutCounterexamples(await corpus())
+  const { rows, output } = await servedBaseline(data, 'Upstream Alpha', () => 'Upstream Alpha')
+  const input = reportInputs(data)
+  input.pins.adapters[0].upstream = 'Upstream Alpha'
+  input.results.set('baseline_1', output)
+  output.set(rows[0].id, { status: 'ambiguous', identity: null })
+  output.delete(rows[1].id)
+  const report = buildReport(input)
+  assert.equal(report.configurations.baseline_1.observedUpstreams.unobserved, 2)
+  assert.deepEqual(report.configurations.baseline_1.observedUpstreams.served.map(row => [row.upstream, row.scheduled]), [['Upstream Alpha', 254]])
+  assert.deepEqual(report.consistencyClaimBlockers, ['unavailable_evidence'])
+})
+
+test('B2 Claude redacted_thinking blocks stay valid beside documented thinking and text only', async () => {
+  const data = await corpus()
+  const blind = blindRow(data.corpus.core[0], data.sources, 'synthetic-thinking-seed', 'claude_1')
+  const raw = fixtureEnvelope(adapter('claude'), blind, 'valid')
+  const parsed = content => parseIndependent(adapter('claude'), blind, { ...raw, content }).status
+  assert.equal(parsed([{ type: 'redacted_thinking', data: 'opaque' }, ...raw.content]), 'valid')
+  assert.equal(parsed([{ type: 'thinking', thinking: 'synthetic', signature: 'opaque' }, { type: 'redacted_thinking', data: 'opaque' }, ...raw.content]), 'valid')
+  assert.equal(parsed([{ type: 'redacted_thinking', data: 'opaque' }]), 'malformed')
+  assert.equal(parsed([{ type: 'tool_use', id: 'synthetic', name: 'forbidden', input: {} }, ...raw.content]), 'malformed')
 })
 
 test('B1 report preserves signed score errors and criterion false-positive/negative counters', async () => {

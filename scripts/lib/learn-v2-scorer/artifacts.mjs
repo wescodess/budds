@@ -15,6 +15,8 @@ export function liveLedgerDirectory(options = {}) {
   assert.ok(!Object.keys(process.env).some(key => /^BUDDS_.*SCORER.*(?:LEDGER|LIVE_DIR)/.test(key)), 'Live ledger overrides are forbidden')
   return join(homedir(), '.budds', 'learn-v2-scorer-live')
 }
+const OS_METADATA_FILES = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini'])
+export const isOsMetadataFile = (directory, name) => OS_METADATA_FILES.has(name) && lstatSync(join(directory, name)).isFile()
 export const canonical = value => {
   assert.notEqual(value, undefined, 'Undefined is not a JSON artifact value')
   if (value === null || typeof value !== 'object') {

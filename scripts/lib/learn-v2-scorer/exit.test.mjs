@@ -4,7 +4,7 @@ import { generateKeyPairSync, sign } from 'node:crypto'
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { ROOT, canonical, hash, readJson, exclusiveLock } from './artifacts.mjs'
 import { registerScorerImports } from './runtime.mjs'
 import { LEDGER_EXIT_TEST_NAME, ledgerPartitions, runLedgerPartition } from './ledger-exit.mjs'
@@ -18,7 +18,9 @@ const { admitLive } = await import('./live-approval.mjs')
 const fixtures = join(ROOT, 'tests/fixtures/learn-v2-scorer-harness')
 const seed = 'public-synthetic-exit-test-v1'
 const clock = 1793966400000
-const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:API_KEY|API_TOKEN|GATEWAY|CONVEX_DEPLOYMENT|E2E_)/.test(key)))
+const home = mkdtempSync(join(tmpdir(), 'budds-c3-3-home-'))
+after(() => rmSync(home, { recursive: true, force: true }))
+const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !/(?:API_KEY|API_TOKEN|GATEWAY|CONVEX_DEPLOYMENT|E2E_)/.test(key))), HOME: home }
 
 function workspace(t) {
   const directory = mkdtempSync(join(tmpdir(), 'budds-c3-3-exit-'))
@@ -70,6 +72,14 @@ test('full CLI capture: 768 blind dispatches, complete core denominators, exact 
   assert.equal(report.realAnchorValidity, 'pending_real_delayed_evidence')
   assert.equal(report.baselineThreshold, 80)
   assert.equal(report.consistencyClaim, 'offline_contract_only')
+  assert.deepEqual(report.consistencyClaimBlockers, ['threshold_counterexample'])
+  assert.deepEqual(report.thresholdCounterexamples.core, { falsePass: 24, falseBlock: 0 })
+  assert.deepEqual(new Set(Object.values(report.graderResults)), new Set(['no_errors_observed']))
+  assert.equal(report.halted, null)
+  assert.equal(summary.halted, null)
+  const baselineUpstreams = Object.values(report.configurations).find(stats => stats.observedUpstreams).observedUpstreams
+  assert.deepEqual(baselineUpstreams.served.map(row => [row.upstream, row.matchesInventory, row.scheduled]), [['synthetic-provider', true, 256]])
+  assert.equal(baselineUpstreams.unobserved, 0)
   assert.deepEqual(report.authority, { applicationWrites: 0, masteryWrites: 0, humanGrading: false, voting: false, promotion: false })
   assert.equal(names(directory, '.intent.json').length, 768)
   assert.equal(names(directory, '.terminal.json').length, 768)

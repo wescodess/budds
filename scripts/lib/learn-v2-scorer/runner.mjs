@@ -11,6 +11,8 @@ import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolutio
 import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
 
+// A backward wall-clock step must not seal a timestamp its predecessor rejects.
+const notBefore = floor => () => Math.max(Date.now(), floor)
 const emptyAnchors = { version: 'learn-v2.synthetic-anchor-checks.v1', evidenceStatus: 'synthetic_contract_only', canvasAdmitted: false, rows: [] }
 
 export async function initialize(options) {
@@ -74,6 +76,7 @@ async function dispatch(state, item, options) {
   const adapter = state.pins.adapters.find(adapter => adapter.id === item.adapter)
   const request = requestFor(adapter, item.blind)
   const startedAt = state.pins.mode === 'offline' ? state.pins.clock : Date.now()
+  const now = notBefore(startedAt)
   const ordinal = state.plan.filter(previous => previous.adapter === item.adapter && state.intents.has(previous.blind.id)).length
   const outcome = state.pins.mode === 'offline' ? state.pins.fixture.outcomes[adapter.role]?.[ordinal] ?? state.pins.fixture.default : null
   let approval = null
@@ -113,7 +116,7 @@ async function dispatch(state, item, options) {
       let transportStarted = false
       let consistencyFailure
       try {
-        const remaining = intent.payload.deadline - Date.now()
+        const remaining = intent.payload.deadline - now()
         if (remaining <= 0 || Date.now() >= approval.validUntil) raw = { failure: 'not_dispatched' }
         else {
           // Approval, publication and baseline preparation consume this same
@@ -132,7 +135,7 @@ async function dispatch(state, item, options) {
           const deadline = new Promise(resolve => { timer = setTimeout(() => { controller.abort(); resolve({ failure: 'outcome_unknown' }) }, remaining) })
           const operation = adapter.role === 'baseline'
             ? baselineExecution({ adapter, blind: item.blind, saved: state.pins.bindings.find(binding => binding.binding.configurationDigest === adapter.configuration),
-                registry: state.registry, startedAt, clock: Date.now, infer }).then(value => value.raw)
+                registry: state.registry, startedAt, clock: now, infer }).then(value => value.raw)
             : Promise.resolve(infer())
           raw = await Promise.race([operation.catch(error => ({ failure: classifyAiGatewayFailure(error) })), deadline])
           // The baseline service can translate an inference rejection into a
@@ -142,7 +145,7 @@ async function dispatch(state, item, options) {
         if (!transportStarted) raw = { failure: 'not_dispatched' }
       }
       finally { clearTimeout(timer) }
-      terminalAt = Date.now()
+      terminalAt = now()
     }
   }
   let cancellation
@@ -178,12 +181,12 @@ function report(state) {
     const unresolved = [...state.intents].filter(([id]) => unresolvedItem(state, id))
     return { directory: state.directory, pinsDigest: state.pinsDigest, verification: 'sealed_digest_consistency',
       digest: hash([...state.verifiedRecords].sort()), report: null, complete: false,
-      dispatched: [...state.dispatchCounts.values()].reduce((sum, count) => sum + count, 0), ambiguous: unresolved.length }
+      dispatched: [...state.dispatchCounts.values()].reduce((sum, count) => sum + count, 0), ambiguous: unresolved.length, halted: state.halted }
   }
   const thresholds = state.thresholds?.payload ?? { ...fitThresholds(state.corpus.corpus, state.pins.adapters, state.results, state.fitDigests), phase: 'diagnostic_fit_not_frozen' }
   const ambiguous = [...state.intents].filter(([id]) => unresolvedItem(state, id))
-  const payload = buildReport({ pins: state.pins, pinsDigest: state.pinsDigest, corpus: state.corpus.corpus, schedule: state.plan,
-    results: state.results, thresholds, artifacts: state.artifacts,
+  const payload = buildReport({ pins: state.pins, pinsDigest: state.pinsDigest, corpus: state.corpus.corpus, sources: state.corpus.sources, schedule: state.plan,
+    results: state.results, thresholds, artifacts: state.artifacts, halted: state.halted,
     reservations: { capMicroUsd: state.pins.budgetMicroUsd, retainedMicroUsd: state.reserved,
       ambiguousCount: ambiguous.length, ambiguousReservedMicroUsd: ambiguous.reduce((sum, [, intent]) => sum + intent.payload.reservationMicroUsd, 0),
       policy: 'retain_full_reservations_until_separate_reconciliation_no_automatic_refund',
@@ -192,7 +195,7 @@ function report(state) {
   const artifact = seal(state.directory, name, 'report', state.pinsDigest, payload)
   return { report: join(state.directory, name), digest: artifact.digest, evidenceStatus: payload.evidenceStatus,
     complete: payload.complete, dispatched: [...state.dispatchCounts.values()].reduce((sum, count) => sum + count, 0),
-    ambiguous: ambiguous.length, realAnchorValidity: payload.realAnchorValidity }
+    ambiguous: ambiguous.length, realAnchorValidity: payload.realAnchorValidity, halted: state.halted }
 }
 
 export async function runOffline(path, options = {}) {
@@ -227,7 +230,7 @@ export async function dispatchLive(path, id, options = {}) {
     assert.ok(!state.writeOffs.has(id), 'Written-off intent cannot dispatch')
     const item = state.plan.find(item => item.blind.id === id)
     assert.ok(item, 'Unknown opaque dispatch ID')
-    if (state.intents.has(id)) return report(state)
+    if (state.intents.has(id) || state.halted) return report(state)
     const next = state.plan.find(item => !state.intents.has(item.blind.id) && !stopped(state, item.adapter))
     assert.equal(item, next, 'Single dispatch must follow the frozen blind schedule')
     if (!item.canary) assert.ok(state.plan.filter(row => row.canary).every(row => state.results.get(row.adapter).get(row.rowId)?.status === 'valid'),
@@ -267,9 +270,7 @@ export async function reconcileLive(path, id, options = {}) {
     const intent = state.intents.get(id)
     assert.ok(intent?.payload.dispatched && reserved, 'Reconciliation requires a recorded dispatched intent')
     if (options.writeOffFile && !state.writeOffs.has(id)) {
-      assert.ok(!state.notDispatched.has(id)
-        && (!state.terminals.has(id) || liveOutcome(state.terminals.get(id).payload.result) === 'still_unknown')
-        && (!state.reconciliations.has(id) || state.reconciliations.get(id).payload.status === 'still_unknown'), 'Only an unknown outcome can be written off')
+      assert.ok(!await knownOutcomeSaved(state, intent), 'Only an unknown outcome can be written off')
       const writtenOffAt = Date.now()
       const authorization = authorizeWriteOff(options.writeOffFile, state, intent, options, writtenOffAt)
       seal(state.directory, artifactName(id, 'written-off'), 'dispatch_write_off', state.pinsDigest, { intentDigest: intent.digest, authorization, writtenOffAt })
@@ -343,7 +344,7 @@ export async function reconcileLive(path, id, options = {}) {
       if (!lookup && observation && adapter.role === 'baseline') {
         const original = await evaluate(state, item, intent.payload, observation.payload.raw, observation.payload.terminalAt)
         const generationId = original.execution?.terminal.generationId
-        const now = Date.now()
+        const now = notBefore(observation.payload.terminalAt)()
         if (generationId && original.execution.receipt.integrityResult === 'identity_unavailable' && now < intent.payload.approval.validUntil) {
           const currentApproval = approveLive(state, item, options, now)
           assert.deepEqual(currentApproval, intent.payload.approval, 'Metadata lookup requires current original approval')
@@ -363,7 +364,7 @@ export async function reconcileLive(path, id, options = {}) {
         const index = record ? Number(previousName.match(/reconciled-(\d+)/)?.[1] ?? 0) + 1 : 0
         const name = reconciliationName(id, index)
         record = seal(state.directory, name, 'reconciled_verdict', state.pinsDigest,
-          { intentDigest: intent.digest, ...evidence, previousDigest: record?.digest ?? null, reconciledAt: Date.now() })
+          { intentDigest: intent.digest, ...evidence, previousDigest: record?.digest ?? null, reconciledAt: notBefore(record?.payload.reconciledAt ?? intent.payload.startedAt)() })
         recordReconciliation(state, item, record, name)
       }
     }
@@ -373,7 +374,26 @@ export async function reconcileLive(path, id, options = {}) {
   }))
 }
 
+async function knownOutcomeSaved(state, intent) {
+  const { id } = intent.payload
+  const terminal = state.terminals.get(id)
+  const reconciled = state.reconciliations.get(id)
+  if (state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
+    || (reconciled && reconciled.payload.status !== 'still_unknown')) return true
+  const observation = state.observations.get(id)
+  if (!observation) return false
+  // Changed pins cannot reinterpret a saved response. Only recorded transport
+  // uncertainty can be closed without restoring the original implementation.
+  if (state.sealedOnly) return !terminal && observation.payload.raw.failure !== 'outcome_unknown'
+  const item = state.plan.find(item => item.blind.id === id)
+  const { raw, terminalAt } = observation.payload
+  if (liveOutcome(await evaluate(state, item, intent.payload, raw, terminalAt)) !== 'still_unknown') return true
+  const lookup = state.metadataIntents.get(id)
+  return Boolean(lookup) && metadataOutcome(await replayMetadata(state, item, intent, observation, lookup, state.metadataObservations.get(id))) !== 'still_unknown'
+}
+
 async function captureMetadata(state, item, intent, observation, lookup) {
+  const clock = notBefore(lookup.payload.startedAt)
   let accepting = true
   let publicationError
   try {
@@ -384,12 +404,12 @@ async function captureMetadata(state, item, intent, observation, lookup) {
       if (!accepting || signal.aborted) throw new Error('Metadata lookup lease ended')
       try {
         seal(state.directory, artifactName(item.blind.id, 'metadata-observation'), 'metadata_observation', state.pinsDigest,
-          { lookupDigest: lookup.digest, metadata, observedAt: Date.now() })
+          { lookupDigest: lookup.digest, metadata, observedAt: clock() })
       }
       catch (error) { publicationError = error; throw error }
       if (metadata === null) throw new Error('Metadata unavailable')
       return metadata
-    }, Date.now, lookup.payload.deadline)
+    }, clock, lookup.payload.deadline)
   }
   finally { accepting = false }
   if (publicationError) throw publicationError

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import fs, { chmodSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
@@ -50,6 +51,7 @@ let realAdapters = false
 let preparationFailure = null
 let abortBeforeSend = false
 let baselineStatus = null
+const PROVIDER_REFUSAL_TEXT = 'SYNTHETIC-PROVIDER-REFUSAL-TEXT'
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
@@ -136,7 +138,7 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
   },
 } })
 const { initialize, planRun, dispatchLive, reconcileLive, replay } = await import('./runner.mjs')
-const { main } = await import('../../learn-v2-scorer-harness.mjs')
+const { main, cli, RUN_HALTED_MESSAGE } = await import('../../learn-v2-scorer-harness.mjs')
 const { openLiveLedger, reserveLiveDispatch, unresolvedLiveDispatches } = await import('./live-ledger.mjs')
 const { sealLearnScorerConfiguration } = await import('../../../convex/lib/learnV2ScorerConfig.ts')
 const { canonical, hash, readJson, outputDirectory } = artifacts
@@ -147,7 +149,8 @@ process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID = 'approval-contract-gateway'
 async function workspace(t, approvalDurationMs = 600000, initialClock = fixtureClock) {
   const parent = mkdtempSync(join(tmpdir(), 'budds-c3-global-ledger-'))
   t.after(() => rmSync(parent, { recursive: true, force: true }))
-  globalDirectory = outputDirectory(join(parent, 'global'))
+  const home = join(parent, 'home')
+  globalDirectory = outputDirectory(join(home, '.budds', 'learn-v2-scorer-live'))
   calls.length = 0
   metadataCalls.length = 0
   outcome = 'valid'
@@ -217,7 +220,7 @@ async function workspace(t, approvalDurationMs = 600000, initialClock = fixtureC
     return { approvalFile: signed(`${name}-approval.json`, approval), costFile: signed(`${name}-cost.json`, cost), trustKey,
       record: { approvalDigest: hash(approval), costDigest: hash(cost), ownerKeyDigest: hash(publicKey.export({ type: 'spki', format: 'der' })) } }
   }
-  return { createRun, approve, signed, clock, setClock: value => { now = value } }
+  return { createRun, approve, signed, clock, home, setClock: value => { now = value } }
 }
 
 function syntheticKeys(t) {
@@ -309,7 +312,7 @@ function syntheticHttp(t, setup, mode) {
     if (responseMode === 'abort') throw new DOMException('Synthetic abort after send', 'AbortError')
     if (responseMode === 'classified-rejection') throw Object.assign(new Error('Synthetic classified rejection'), { aiGatewayFailureKind: 'definitive_failure' })
     const intent = readJson(join(setup.state.directory, `${setup.id}.intent.json`)).payload
-    if (responseMode === 'late-400') setup.setClock(intent.deadline + 1)
+    if (/^late-4\d\d$/.test(responseMode)) setup.setClock(intent.deadline + 1)
     if (responseMode === 'timeout') return new Promise((_resolve, reject) => {
       request.signal.addEventListener('abort', () => reject(new DOMException('Synthetic timeout after send', 'AbortError')), { once: true })
       setTimer(() => {
@@ -318,7 +321,8 @@ function syntheticHttp(t, setup, mode) {
         for (const timeout of timeouts) timeout()
       }, 0)
     })
-    if (responseMode.startsWith('provider-') || responseMode.startsWith('gemini-') || responseMode.startsWith('baseline-') || responseMode === 'missing-id-200') {
+    if (responseMode === 'backward-clock-200') setup.setClock(intent.startedAt - 5_000)
+    if (responseMode.startsWith('provider-') || responseMode.startsWith('gemini-') || responseMode.startsWith('baseline-') || responseMode === 'missing-id-200' || responseMode === 'backward-clock-200') {
       const wire = JSON.parse(request.body)
       const payload = adapter.role === 'gemini' ? wire.input : wire.messages.find(row => row.role === 'user').content
       const scoringInput = JSON.parse(payload)
@@ -341,9 +345,10 @@ function syntheticHttp(t, setup, mode) {
       }
       if (responseMode === 'provider-requestId') body.requestId = 'provider-controlled-request-id'
       if (responseMode === 'provider-pinsDigest') body.pinsDigest = hash('provider-controlled-pins')
+      if (responseMode === 'provider-accessRefusalStatus') body.accessRefusalStatus = 429
       if (responseMode === 'provider-extras') {
         body.providerExtra = { ignored: true }
-        if (adapter.role === 'baseline') Object.assign(body, { failure: 'not_dispatched', requestId: 'provider-controlled-id', pinsDigest: hash('provider-controlled-pins') })
+        if (adapter.role === 'baseline') Object.assign(body, { failure: 'not_dispatched', accessRefusalStatus: 429, requestId: 'provider-controlled-id', pinsDigest: hash('provider-controlled-pins') })
       }
       return new Response(JSON.stringify(body), { headers: { 'request-id': 'synthetic-header-request-id' } })
     }
@@ -381,6 +386,7 @@ function syntheticHttp(t, setup, mode) {
     if (responseMode === 'primitive-200') return new Response('"synthetic"', { status: 200 })
     if (responseMode.startsWith('oversized-')) return rejectedBody(Number(status), false, responseMode.includes('cancel') ? 'throw' : 'resolve', true)
     if (responseMode.startsWith('declared-')) return rejectedBody(200, true, /declared-(reject|throw|pending)-/.exec(responseMode)?.[1] ?? 'resolve')
+    if (responseMode.startsWith('refusal-text-')) return new Response(PROVIDER_REFUSAL_TEXT, { status: Number(status) })
     return rejectedBody(Number(status))
   })
   t.after(() => fetchMock.mock.restore())
@@ -405,24 +411,25 @@ function syntheticHttp(t, setup, mode) {
 // One executable contract for all adapters. Only the synthetic HTTP boundary
 // is replaced; capture, sealing, replay, reconciliation and admission are real.
 const transportOutcomes = [
-  ['400', 'definitive_failure'], ['429', 'definitive_failure'], ['500', 'outcome_unknown'], ['503', 'outcome_unknown'],
+  ['400', 'definitive_failure'], ['401', 'definitive_failure'], ['402', 'definitive_failure'], ['403', 'definitive_failure'], ['429', 'definitive_failure'],
+  ['500', 'outcome_unknown'], ['503', 'outcome_unknown'],
   ['204', 'invalid_response'], ['205', 'invalid_response'],
   ...[301, 302, 303, 307, 308].map(status => [`redirect-${status}-to-400`, 'outcome_unknown']),
   ['redirect-302-no-location', 'outcome_unknown'],
   ['redirect-302-to-503', 'outcome_unknown'], ['redirect-loop', 'outcome_unknown'],
-  ['late-400', 'definitive_failure'], ['classified-rejection', 'definitive_failure'],
+  ['late-400', 'definitive_failure'], ['late-429', 'definitive_failure'], ['classified-rejection', 'definitive_failure'],
   ['network-loss', 'outcome_unknown'], ['timeout', 'outcome_unknown'], ['abort', 'outcome_unknown'],
   ['response-timeout', 'outcome_unknown'], ['body-reset-200', 'outcome_unknown'], ['body-abort-200', 'outcome_unknown'],
   ['malformed-200', 'invalid_response'], ['late-malformed-200', 'invalid_response'], ['null-200', 'invalid_response'],
   ['array-200', 'invalid_response'], ['primitive-200', 'invalid_response'],
   ['oversized-200', 'invalid_response'], ['declared-oversized-200', 'invalid_response'], ['oversized-cancel-200', 'invalid_response'],
   ['declared-reject-200', 'invalid_response'], ['declared-throw-200', 'invalid_response'], ['declared-pending-200', 'invalid_response'],
-  ['oversized-400', 'definitive_failure'], ['oversized-500', 'outcome_unknown'],
-  ['body-reset-400', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
+  ['oversized-400', 'definitive_failure'], ['oversized-429', 'definitive_failure'], ['oversized-500', 'outcome_unknown'],
+  ['body-reset-400', 'definitive_failure'], ['body-reset-429', 'definitive_failure'], ['body-reset-500', 'outcome_unknown'],
   ['missing-key', 'not_dispatched'], ['pre-send-abort', 'not_dispatched'],
   ...['not_dispatched', 'definitive_failure', 'outcome_unknown', 'invalid_response', 'null', 'false', 'empty']
     .map(value => [`provider-failure-${value}`, 'invalid_response', ['claude', 'gemini']]),
-  ...['requestId', 'pinsDigest'].map(key => [`provider-${key}`, 'invalid_response', ['claude', 'gemini']]),
+  ...['requestId', 'pinsDigest', 'accessRefusalStatus'].map(key => [`provider-${key}`, 'invalid_response', ['claude', 'gemini']]),
   ['missing-id-200', 'invalid_response'],
   ...[['in_progress', 'ambiguous'], ['requires_action', 'truncated'], ['requires_continuation', 'truncated'], ['incomplete', 'truncated'],
     ['failed', 'definitive_failure'], ['cancelled', 'definitive_failure']].map(([status, result]) => [`gemini-status-${status}`, null, ['gemini'], result]),
@@ -455,8 +462,10 @@ for (const [mode, failure, roles = ['baseline', 'claude', 'gemini'], nativeStatu
       const expectedStatus = nativeStatus ?? (failure === 'outcome_unknown' ? 'ambiguous' : failure === 'invalid_response' ? 'malformed' : failure)
       const unknown = expectedStatus === 'ambiguous'
       const notSent = failure === 'not_dispatched'
+      const refusalStatus = Number(/^(?:late-|oversized-|body-reset-)?(401|402|403|429)$/.exec(mode)?.[1]) || null
       if (nativeStatus) assert.equal(Object.hasOwn(terminal.payload.raw, 'failure'), false)
-      else assert.deepEqual(terminal.payload.raw, { failure })
+      else assert.deepEqual(terminal.payload.raw, { failure, ...(refusalStatus ? { accessRefusalStatus: refusalStatus } : {}) })
+      assert.equal(summary.halted?.httpStatus ?? null, refusalStatus)
       assert.equal(terminal.payload.result.status, expectedStatus)
       assert.equal(summary.ambiguous, Number(unknown))
       assert.equal(summary.dispatched, before + Number(!notSent))
@@ -485,6 +494,12 @@ for (const [mode, failure, roles = ['baseline', 'claude', 'gemini'], nativeStatu
       }
       assert.equal(calls.length, before + Number(!notSent), 'Replay and reconciliation never retry inference')
       assert.equal(metadataCalls.length, 0)
+      if (refusalStatus) {
+        const later = state.plan[state.plan.findIndex(row => row.id === id) + 1].id
+        assert.equal((await dispatchLive(state.directory, later, approval)).halted.httpStatus, refusalStatus)
+        assert.equal(calls.length, before + 1, 'A halted run refuses later dispatches without transport')
+        assert.equal(artifacts.exists(join(state.directory, `${later}.intent.json`)), false)
+      }
       const next = await createRun('separately-approved')
       const nextApproval = approve(next, 'separate')
       if (unknown) await assert.rejects(dispatchLive(next.directory, next.plan[0].id, nextApproval), /requires reconciliation/)
@@ -510,7 +525,7 @@ test('A12 response projection keeps native fields and excludes provider metadata
     const summary = await dispatchLive(state.directory, id, approval)
     const { raw, result } = readJson(join(state.directory, `${id}.terminal.json`)).payload
     assert.equal(result.status, 'valid')
-    for (const key of ['failure', 'pinsDigest', 'providerExtra']) assert.equal(Object.hasOwn(raw, key), false)
+    for (const key of ['failure', 'accessRefusalStatus', 'pinsDigest', 'providerExtra']) assert.equal(Object.hasOwn(raw, key), false)
     if (role === 'baseline') {
       assert.equal(Object.hasOwn(raw, 'requestId'), false)
       assert.ok(raw.scoringProvenance.metadataValid)
@@ -2263,4 +2278,380 @@ test('a reserved intent can be restored after approval expiry without new transp
   assert.equal(calls.length, 0)
   assert.equal(metadataCalls.length, 0)
   assert.equal([...((await openLiveLedger(globalDirectory)).reservations.values())][0].reservationMicroUsd, 100)
+})
+
+const flags = (state, id, approval) => ['--output', state.directory, '--id', id, '--approval', approval.approvalFile,
+  '--cost-evidence', approval.costFile, '--owner-public-key', approval.trustKey]
+const nextPlanned = (state, id) => state.plan[state.plan.findIndex(row => row.id === id) + 1].id
+
+async function runCli(args) {
+  const output = { stdout: '', stderr: '' }
+  const code = await cli(args, { stdout: { write: text => { output.stdout += text } }, stderr: { write: text => { output.stderr += text } } })
+  return { ...output, code, summary: output.stdout ? JSON.parse(output.stdout) : null }
+}
+
+for (const status of [429, 402, 401, 403]) {
+  test(`B2 access refusal ${status}: charged, halted, non-zero CLI exit and a separate run admitted`, async t => {
+    for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+      const setup = await canary(t, role)
+      const { state, approval, id, createRun, approve } = setup
+      const before = calls.length
+      const reset = syntheticHttp(t, setup, `refusal-text-${status}`)
+      const halted = { reason: 'provider_access_refused', httpStatus: status, adapter: state.plan.find(row => row.id === id).adapter, id }
+      const refused = await runCli(['dispatch', ...flags(state, id, approval)])
+      assert.equal(refused.code, 1)
+      assert.equal(refused.stderr, RUN_HALTED_MESSAGE)
+      assert.deepEqual(refused.summary.halted, halted)
+      assert.equal(refused.summary.dispatched, before + 1)
+      assert.equal(calls.length, before + 1)
+      const terminalPath = join(state.directory, `${id}.terminal.json`)
+      const terminal = readJson(terminalPath).payload
+      assert.deepEqual(terminal.raw, { failure: 'definitive_failure', accessRefusalStatus: status })
+      assert.equal(terminal.result.status, 'definitive_failure')
+      assert.equal(terminal.result.scorePercent, null)
+      assert.equal(terminal.result.criteria, null)
+      const report = readJson(refused.summary.report).payload
+      assert.deepEqual(report.halted, halted)
+      assert.equal(report.reservations.retainedMicroUsd, (before + 1) * 100)
+      const ledger = await openLiveLedger(globalDirectory)
+      assert.equal([...ledger.resolutions.values()].find(row => row.id === id).status, 'failed')
+      assert.equal(unresolvedLiveDispatches(ledger).length, 0)
+      assert.equal([...ledger.reservations.values()].find(row => row.id === id).reservationMicroUsd, 100)
+      for (const text of [refused.stdout, refused.stderr, readFileSync(terminalPath, 'utf8'), readFileSync(refused.summary.report, 'utf8')]) assert.ok(!text.includes(PROVIDER_REFUSAL_TEXT))
+      const later = nextPlanned(state, id)
+      const repeated = await runCli(['dispatch', ...flags(state, later, approval)])
+      assert.equal(repeated.code, 1)
+      assert.equal(repeated.stderr, RUN_HALTED_MESSAGE)
+      assert.deepEqual(repeated.summary.halted, halted)
+      assert.equal(repeated.summary.digest, refused.summary.digest)
+      assert.equal(calls.length, before + 1, 'A halted run refuses later dispatches without transport')
+      assert.equal(artifacts.exists(join(state.directory, `${later}.intent.json`)), false)
+      const original = await runCli(['dispatch', ...flags(state, id, approval)])
+      assert.equal(original.code, 1)
+      assert.equal(calls.length, before + 1, 'The refused intent cannot be redispatched')
+      const next = await createRun('separately-approved')
+      reset()
+      const separate = await runCli(['dispatch', ...flags(next, next.plan[0].id, approve(next, 'separate'))])
+      assert.equal(separate.code, 0)
+      assert.equal(separate.stderr, '')
+      assert.equal(separate.summary.halted, null)
+      assert.equal(calls.length, before + 2)
+      const replayed = await runCli(['replay', '--output', state.directory])
+      assert.equal(replayed.code, 0)
+      assert.equal(replayed.stderr, '')
+      assert.deepEqual(replayed.summary.halted, halted)
+    })
+  })
+}
+
+test('B2 the halt message is fixed, names the halt and carries no provider text', () => {
+  assert.equal(RUN_HALTED_MESSAGE, 'Scorer run halted: the provider refused access (quota, billing or authorization). This run cannot dispatch again; a fresh run needs separate owner approval.\n')
+})
+
+test('B2 other 4xx responses stay charged without halting the run', async t => {
+  for (const status of [400, 404, 408, 409, 413, 422]) await t.test(String(status), async t => {
+    const setup = await workspace(t)
+    const state = await setup.createRun('ordinary-4xx')
+    const approval = setup.approve(state, 'ordinary-4xx')
+    const [first, second] = state.plan
+    syntheticHttp(t, { ...setup, state, id: first.id }, String(status))
+    const rejected = await runCli(['dispatch', ...flags(state, first.id, approval)])
+    assert.equal(rejected.code, 0)
+    assert.equal(rejected.stderr, '')
+    assert.equal(rejected.summary.halted, null)
+    assert.equal(readJson(rejected.summary.report).payload.halted, null)
+    assert.deepEqual(readJson(join(state.directory, `${first.id}.terminal.json`)).payload.raw, { failure: 'definitive_failure' })
+    assert.equal(readJson(rejected.summary.report).payload.reservations.retainedMicroUsd, 100)
+    assert.equal((await runCli(['dispatch', ...flags(state, second.id, approval)])).code, 0)
+    assert.equal(calls.length, 2, 'The next planned dispatch stays admitted')
+  })
+})
+
+test('B2 an access refusal interrupted before its terminal halts once reconciled', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    const before = calls.length
+    syntheticHttp(t, setup, '429')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    assert.equal(artifacts.exists(join(state.directory, `${id}.terminal.json`)), false)
+    const recovered = await reconcileLive(state.directory, id, approval)
+    assert.equal(recovered.reconciliation, 'failed')
+    assert.equal(recovered.halted.httpStatus, 429)
+    const later = await dispatchLive(state.directory, nextPlanned(state, id), approval)
+    assert.equal(later.halted.httpStatus, 429)
+    assert.equal(calls.length, before + 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('B2 a halted run keeps reporting its halt from sealed evidence after pins change', async t => {
+  const setup = await canary(t, 'claude')
+  const { state, approval, id } = setup
+  syntheticHttp(t, setup, '402')
+  await dispatchLive(state.directory, id, approval)
+  advanceRevision()
+  const summary = await replay(state.directory)
+  assert.equal(summary.verification, 'sealed_digest_consistency')
+  assert.equal(summary.halted.httpStatus, 402)
+})
+
+test('B2 the real CLI process refuses a halted run with its fixed message, a private HOME and network denied', async t => {
+  const setup = await canary(t, 'gemini')
+  const { state, approval, id, home } = setup
+  syntheticHttp(t, setup, '403')
+  await dispatchLive(state.directory, id, approval)
+  const before = calls.length
+  const later = nextPlanned(state, id)
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== 'NODE_TEST_CONTEXT' && !/(?:API_KEY|API_TOKEN|GATEWAY|CONVEX_DEPLOYMENT|E2E_)/.test(key)))
+  const result = spawnSync(process.execPath, ['--import', join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/network-deny.mjs'),
+    join(artifacts.ROOT, 'scripts/learn-v2-scorer-harness.mjs'), 'dispatch', ...flags(state, later, approval)],
+  { cwd: artifacts.ROOT, encoding: 'utf8', timeout: 120_000, maxBuffer: 2_000_000, env: { ...env, HOME: home } })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`)
+  assert.equal(result.stderr, RUN_HALTED_MESSAGE)
+  assert.equal(JSON.parse(result.stdout).halted.httpStatus, 403)
+  assert.equal(artifacts.exists(join(state.directory, `${later}.intent.json`)), false)
+  assert.equal(calls.length, before)
+})
+
+test('B2 a live baseline row keeps its actual upstream and is reported beside the inventory value', async t => {
+  const setup = await canary(t, 'baseline')
+  const { state, approval, id } = setup
+  syntheticHttp(t, setup, 'baseline-upstream')
+  const summary = await dispatchLive(state.directory, id, approval)
+  const { result } = readJson(join(state.directory, `${id}.terminal.json`)).payload
+  assert.equal(result.status, 'valid')
+  assert.equal(result.identity.servingProvider, 'Different observed provider')
+  const report = readJson(summary.report).payload
+  const baseline = Object.values(report.configurations).find(row => row.observedUpstreams)
+  assert.equal(baseline.inventoryUpstream, 'OpenAI')
+  assert.deepEqual(baseline.observedUpstreams.served.map(row => [row.upstream, row.matchesInventory, row.scheduled]), [['Different observed provider', false, 1]])
+  assert.ok(report.consistencyClaimBlockers.includes('inventory_upstream_mismatch'))
+})
+
+test('B2 write-off refuses a saved known result and still closes saved uncertainty', async t => {
+  const writeOffRefused = async (setup, file = ownerWriteOff(setup)) => {
+    const { state, approval, id } = setup
+    await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), /Only an unknown outcome/)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+  }
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(`${role}/valid observation without a terminal`, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    assert.equal(artifacts.exists(join(state.directory, `${id}.terminal.json`)), false)
+    await writeOffRefused(setup)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'resolved')
+  })
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(`${role}/known failure without a terminal`, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, '400')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    await writeOffRefused(setup)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'failed')
+  })
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(`${role}/saved uncertainty without a terminal stays eligible`, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, 'network-loss')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    assert.equal((await reconcileLive(state.directory, id, { ...approval, writeOffFile: ownerWriteOff(setup) })).reconciliation, 'written_off')
+  })
+  await t.test('saved timely metadata proves a known result', async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id } = setup
+    publicationFailures.add('reconciled_verdict')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    assert.ok(artifacts.exists(join(state.directory, `${id}.metadata-observation.json`)))
+    await writeOffRefused(setup)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'resolved')
+  })
+  await t.test('a durable pre-send cancellation without its terminal', async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, '400')
+    process.env.OPENROUTER_API_KEY = process.env.NUXT_OPENROUTER_API_KEY = ''
+    earlyFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    earlyFailures.clear()
+    assert.ok(artifacts.exists(join(state.directory, `${id}.not-dispatched.json`)))
+    assert.equal(artifacts.exists(join(state.directory, `${id}.terminal.json`)), false)
+    await writeOffRefused(setup)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'not_dispatched')
+  })
+  await t.test('changed pins cannot write off a known sealed terminal', async t => {
+    const setup = await canary(t, 'claude')
+    const { state, approval, id } = setup
+    await dispatchLive(state.directory, id, approval)
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    await writeOffRefused(setup, file)
+  })
+  await t.test('changed pins cannot write off a known reconciliation', async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id } = setup
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'resolved')
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    await writeOffRefused(setup, file)
+  })
+  await t.test('changed pins cannot write off a saved response they cannot classify', async t => {
+    const setup = await canary(t, 'claude')
+    const { state, approval, id } = setup
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    await writeOffRefused(setup, file)
+  })
+  await t.test('changed pins can still write off recorded transport uncertainty', async t => {
+    const setup = await canary(t, 'claude')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, 'network-loss')
+    publicationFailures.add('sealed_verdict')
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+    publicationFailures.clear()
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    assert.equal((await reconcileLive(state.directory, id, { ...approval, writeOffFile: file })).reconciliation, 'written_off')
+  })
+  await t.test('changed pins can still write off a sealed unknown terminal', async t => {
+    const setup = await pendingBaseline(t)
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    assert.equal((await reconcileLive(setup.state.directory, setup.id, { ...setup.approval, writeOffFile: file })).reconciliation, 'written_off')
+  })
+})
+
+test('B2 a backward clock step during transport seals an observation that reopens', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id, createRun, approve, setClock, clock } = setup
+    const before = calls.length
+    const reset = syntheticHttp(t, setup, 'backward-clock-200')
+    const summary = await dispatchLive(state.directory, id, approval)
+    const intent = readJson(join(state.directory, `${id}.intent.json`)).payload
+    const terminal = readJson(join(state.directory, `${id}.terminal.json`)).payload
+    assert.equal(terminal.result.status, 'valid')
+    assert.equal(terminal.terminalAt, intent.startedAt)
+    assert.equal(readJson(join(state.directory, `${id}.observation.json`)).payload.terminalAt, intent.startedAt)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    setClock(clock)
+    reset()
+    const next = await createRun('after-backward-step')
+    await dispatchLive(next.directory, next.plan[0].id, approve(next, 'after-backward-step'))
+    assert.equal(calls.length, before + 2)
+  })
+})
+
+test('B2 a backward clock step before transport cannot extend the 90-second bound', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const { state, approval, id, setClock } = await canary(t, role)
+    let watching = false
+    afterIntent = intent => { setClock(intent.startedAt - 60_000); watching = true }
+    const timers = []
+    const expected = role === 'baseline' ? 2 : 1
+    const original = globalThis.setTimeout
+    const timerMock = mock.method(globalThis, 'setTimeout', (callback, delay, ...args) => {
+      if (watching && timers.length < expected) timers.push(delay)
+      return original(callback, delay, ...args)
+    })
+    t.after(() => timerMock.mock.restore())
+    await dispatchLive(state.directory, id, approval)
+    assert.equal(timers.length, expected)
+    assert.ok(timers.every(delay => delay <= contract.LIMITS.timeoutMs), `Transport timers: ${timers}`)
+    assert.equal(readJson(join(state.directory, `${id}.terminal.json`)).payload.result.status, 'valid')
+  })
+})
+
+test('B2 backward clock steps during reconciliation seal records that reopen', async t => {
+  await t.test('metadata lookup', async t => {
+    const { state, approval, id, setClock, clock, inferenceCalls } = await pendingBaseline(t)
+    setClock(clock - 5_000)
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'resolved')
+    assert.equal(readJson(join(state.directory, `${id}.metadata-intent.json`)).payload.startedAt, clock)
+    assert.equal(readJson(join(state.directory, `${id}.metadata-observation.json`)).payload.observedAt, clock)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(metadataCalls.length, 1)
+    assert.equal(calls.length, inferenceCalls)
+  })
+  await t.test('metadata lookup cannot precede its saved observation', async t => {
+    const { createRun, approve, setClock, clock } = await workspace(t)
+    const state = await createRun('late-observation')
+    const approval = approve(state, 'late-observation')
+    const item = state.plan.find(row => row.adapter.startsWith('baseline_'))
+    for (const preceding of state.plan.slice(0, state.plan.indexOf(item))) await dispatchLive(state.directory, preceding.id, approval)
+    omitProvider = true
+    afterIntent = () => setClock(clock + 1_000)
+    await dispatchLive(state.directory, item.id, approval)
+    afterIntent = null
+    omitProvider = false
+    assert.equal(readJson(join(state.directory, `${item.id}.observation.json`)).payload.terminalAt, clock + 1_000)
+    setClock(clock + 500)
+    const summary = await reconcileLive(state.directory, item.id, approval)
+    assert.equal(summary.reconciliation, 'resolved')
+    assert.equal(readJson(join(state.directory, `${item.id}.metadata-intent.json`)).payload.startedAt, clock + 1_000)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+  })
+  await t.test('reconciliation successor', async t => {
+    const { state, approval, id, setClock, clock } = await pendingBaseline(t)
+    failuresAfterWrite.add('metadata_lookup_intent')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+    failuresAfterWrite.clear()
+    setClock(clock + 1_000)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'still_unknown')
+    const first = readJson(join(state.directory, `${id}.reconciled.json`)).payload
+    const lookup = readJson(join(state.directory, `${id}.metadata-intent.json`))
+    artifacts.seal(state.directory, `${id}.metadata-observation.json`, 'metadata_observation', state.pinsDigest,
+      { lookupDigest: lookup.digest, observedAt: lookup.payload.startedAt, metadata: {
+        generationId: lookup.payload.generationId, returnedModel: 'openai/gpt-4.1', servingProvider: 'OpenAI', upstreamRequestId: null,
+        finishReason: 'stop', nativeFinishReason: 'stop', cancelled: false, usage: null,
+      } })
+    setClock(first.reconciledAt - 500)
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'resolved')
+    assert.equal(readJson(join(state.directory, `${id}.reconciled-1.json`)).payload.reconciledAt, first.reconciledAt)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+  })
+})
+
+test('B2 operating-system metadata files are ignored while every other stray entry refuses', async t => {
+  for (const name of ['.DS_Store', 'Thumbs.db', 'desktop.ini']) await t.test(name, async t => {
+    const { createRun, approve } = await workspace(t)
+    const state = await createRun('metadata')
+    const approval = approve(state, 'metadata')
+    writeFileSync(join(state.directory, name), 'operating-system metadata')
+    writeFileSync(join(globalDirectory, name), 'operating-system metadata')
+    const summary = await dispatchLive(state.directory, state.plan[0].id, approval)
+    assert.equal(calls.length, 1)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal((await reconcileLive(state.directory, state.plan[0].id, approval)).reconciliation, 'resolved')
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+  })
+  for (const location of ['run', 'ledger']) for (const [kind, name] of [['file', 'stray.txt'], ['file', '.DS_Store.json'], ['file', '.ds_store'], ['file', 'thumbs.db'], ['directory', '.DS_Store']]) {
+    await t.test(`${location}/${kind}/${name}`, async t => {
+      const { createRun, approve } = await workspace(t)
+      const state = await createRun('stray')
+      const approval = approve(state, 'stray')
+      const path = join(location === 'run' ? state.directory : globalDirectory, name)
+      if (kind === 'file') writeFileSync(path, 'unexpected')
+      else fs.mkdirSync(path)
+      await assert.rejects(dispatchLive(state.directory, state.plan[0].id, approval), /Unexpected artifact|unknown global ledger entry/)
+      assert.equal(calls.length, 0)
+    })
+  }
 })

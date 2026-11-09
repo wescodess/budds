@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { hash, unseal, exists, implementationPins, outputDirectory, FIXTURES, exactKeys, readJson, VERSION } from './artifacts.mjs'
+import { hash, unseal, exists, implementationPins, outputDirectory, FIXTURES, exactKeys, readJson, VERSION, isOsMetadataFile } from './artifacts.mjs'
 import { corpusInputs, bindInventory, runPins, schedule, LIMITS } from './contract.mjs'
 import { fitThresholds } from './report.mjs'
 import { requestFor, requestPinsDigest, baselineExecution, reconcileBaselineExecution, GRADER_PROMPT, GRADER_SCHEMA, parseIndependent } from './adapters.mjs'
@@ -133,7 +133,7 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
   const state = { directory, pins, pinsDigest: manifest.pinsDigest, registry, corpus, plan, results, sealedOnly,
     intents: new Map(), terminals: new Map(), observations: new Map(), metadataIntents: new Map(), reconciliations: new Map(), notDispatched: new Map(),
     verifiedRecords: new Map(), reconciliationNames: new Map(), metadataObservations: new Map(), writeOffs: new Map(),
-    artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map() }
+    artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map(), halted: null }
   const allowed = new Set(['manifest.json', 'thresholds.json', '.run.lock'])
   for (const item of plan) {
     for (const kind of ['intent', 'terminal']) allowed.add(artifactName(item.blind.id, kind))
@@ -233,7 +233,7 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
       }
       continue
     }
-    assert.ok(allowed.has(name), `Unexpected artifact or interrupted write requires reconciliation: ${name}`)
+    assert.ok(allowed.has(name) || isOsMetadataFile(directory, name), `Unexpected artifact or interrupted write requires reconciliation: ${name}`)
   }
   assert.ok(int(state.reserved) && state.reserved <= pins.budgetMicroUsd, 'Reservation ledger exceeds frozen cap')
   for (const count of state.dispatchCounts.values()) assert.ok(count <= 256, 'Dispatch ceiling exceeded')
@@ -379,4 +379,6 @@ export function recordTerminal(state, item, terminal) {
   state.results.get(item.adapter).set(item.rowId, terminal.payload.result)
   state.artifacts.push(terminal.digest)
   if (item.phase === 'fit') state.fitDigests.push(terminal.digest)
+  const httpStatus = terminal.payload.raw.accessRefusalStatus
+  if (httpStatus !== undefined) state.halted = { reason: 'provider_access_refused', httpStatus, adapter: item.adapter, id: item.blind.id }
 }

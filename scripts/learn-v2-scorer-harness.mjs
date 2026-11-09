@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 import { registerScorerImports, forbidNetwork } from './lib/learn-v2-scorer/runtime.mjs'
 
+export const RUN_HALTED_MESSAGE = 'Scorer run halted: the provider refused access (quota, billing or authorization). This run cannot dispatch again; a fresh run needs separate owner approval.\n'
+
 export async function main(argv = process.argv.slice(2)) {
   registerScorerImports()
   const [command, ...args] = argv
@@ -41,10 +43,20 @@ export async function main(argv = process.argv.slice(2)) {
   return live(options.output, options.id, { approvalFile: options.approval, costFile: options['cost-evidence'], trustKey: options['owner-public-key'], writeOffFile: options['write-off'] })
 }
 
-if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
-  main().then(result => process.stdout.write(`${JSON.stringify(result)}\n`)).catch(() => {
+export async function cli(argv = process.argv.slice(2), { stdout = process.stdout, stderr = process.stderr } = {}) {
+  try {
+    const result = await main(argv)
+    stdout.write(`${JSON.stringify(result)}\n`)
+    if (argv[0] !== 'dispatch' || !result.halted) return 0
+    stderr.write(RUN_HALTED_MESSAGE)
+  }
+  catch {
     // No upstream bodies, source/response text, keys or approval contents in logs.
-    process.stderr.write('Scorer harness blocked; inspect local pins, sealed artifacts and required approvals.\n')
-    process.exitCode = 1
-  })
+    stderr.write('Scorer harness blocked; inspect local pins, sealed artifacts and required approvals.\n')
+  }
+  return 1
+}
+
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
+  cli().then(code => { process.exitCode = code })
 }
