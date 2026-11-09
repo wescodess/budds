@@ -105,7 +105,7 @@ describe('Nitro handlers use registered server help admission', () => {
   test('audio interjection denies before overview/source reads, reservation, worker or provider', async () => {
     const overviewId = await s.t.run(ctx => ctx.db.insert('audioOverviews', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId,
       title: 'Teaching audio', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 }))
-    body({ overviewId, question: 'Give help', insertedAfterTurnIndex: 0 })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId, question: 'Give help', insertedAfterTurnIndex: 0 })
     await expect(audio(event)).rejects.toMatchObject({ statusCode: 403, data: { status: 'denied', reasonCode: 'test_open' } })
     noDispatch()
     expect(mutation).toHaveBeenCalledTimes(1)

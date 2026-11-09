@@ -2,7 +2,8 @@
 import { getFunctionName, type FunctionReference } from 'convex/server'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {} }))
+const mockAuthorizeHelp = vi.hoisted(() => vi.fn())
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => mockAuthorizeHelp }))
 
 const mockTeachingScope = vi.hoisted(() => vi.fn())
 const mockMutation = vi.fn()
@@ -87,6 +88,7 @@ function overview() {
 
 describe('POST /api/audio-overview/interject authority', () => {
   beforeEach(() => {
+    mockAuthorizeHelp.mockReset().mockResolvedValue(undefined)
     mockTeachingScope.mockReset().mockResolvedValue(['1', '2'].map((suffix, index) => ({ documentId: `doc_${suffix}`, folderId: 'folder_1', filename: `source-${suffix}.txt`, contentHash: (index ? 'b' : 'a').repeat(64), sourceRevision: `sha256:${(index ? 'b' : 'a').repeat(64)}` })))
     mockMutation.mockReset()
     mockQuery.mockReset()
@@ -165,6 +167,18 @@ describe('POST /api/audio-overview/interject authority', () => {
     expect(globalThis.generateCompletion).not.toHaveBeenCalled()
     expect(mockSynthesizeTurn).not.toHaveBeenCalled()
     expect(mockUpload).not.toHaveBeenCalled()
+    expect(mockAuthorizeHelp.mock.invocationCallOrder[0]).toBeLessThan(mockTeachingScope.mock.invocationCallOrder[0]!)
+  })
+
+  test('help denial precedes overview and frozen-lineage reads', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ overviewId: 'overview_v2', insertedAfterTurnIndex: 0, question: 'Own question' })
+    mockAuthorizeHelp.mockRejectedValue(Object.assign(new Error('Forbidden'), { statusCode: 403 }))
+    await expect(handler(makeEvent())).rejects.toMatchObject({ statusCode: 403 })
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(mockTeachingScope).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
   })
 
   test('a redacted ready replay returns no answer or media URL', async () => {
