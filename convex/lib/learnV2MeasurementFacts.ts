@@ -9,6 +9,7 @@ import {
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
+import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 
 type FactInput = Omit<LearnReportSourceFact, 'factVersion' | 'sequence'> & {
   learningVoidId?: Id<'learningVoids'>
@@ -93,13 +94,31 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
   })
 }
 
-export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId: string, response: Doc<'learnResponses'>, epoch: string) {
+export async function readLearnFirstCheckFact(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (!opportunity.firstCheckClaim || !opportunity.originalSlot) return null
+  const claim = parseLearnContract(learnFirstCheckClaimSchema, opportunity.firstCheckClaim)
+  const rows = await ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId)
+      .eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', claim.claimSequence)).take(2)
+  const row = rows[0]
+  if (opportunity.userId !== userId || rows.length !== 1 || row?.fact.kind !== 'independent_claim'
+    || row.learningVoidId !== opportunity.learningVoidId || row.fact.firstCheckOpportunityId !== opportunity._id
+    || row.fact.checkSequence !== opportunity.checkSequence || row.epoch !== row.fact.stratum.epoch) {
+    throw new Error('Learn first-check fact unavailable')
+  }
+  const { kind: _kind, firstCheckOpportunityId: _slot, checkSequence: _check, stratum: _stratum, ...savedClaim } = row.fact
+  if (JSON.stringify(parseLearnContract(learnFirstCheckClaimSchema, savedClaim)) !== JSON.stringify(claim)) throw new Error('Learn first-check fact unavailable')
+  return row
+}
+
+export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId: string, response: Doc<'learnResponses'>, epoch: string,
+  stateAtAcceptance: Extract<LearnReportSourceFact['fact'], { kind: 'response' }>['stateAtAcceptance'] = 'unknown') {
   return await appendLearnMeasurementFact(ctx, userId, {
     epoch, occurredAt: response.acceptedAt,
     ...(response.scopeKind === 'v2' ? { learningVoidId: response.learningVoidId } : {}),
     fact: { kind: 'response', submissionId: response._id, acceptedAt: response.acceptedAt,
       measurementEligible: response.validitySnapshot.measurementEligible, masteryEligible: response.validitySnapshot.masteryEligible,
-      assistanceSnapshot: response.assistanceSnapshot, validitySnapshot: response.validitySnapshot },
+      assistanceSnapshot: response.assistanceSnapshot, validitySnapshot: response.validitySnapshot, stateAtAcceptance },
   })
 }
 

@@ -852,3 +852,17 @@ describe('report source v4 computation contract', () => {
     finally { for (const spy of spies) spy.mockRestore() }
   })
 })
+
+it('accepts optional frozen prior-state facts without rewriting older source v4 facts', async () => {
+  const opportunity = { kind: 'opportunity', assessmentOpportunityId: 'opportunity1', recordRevision: 1, status: 'blocked',
+    dueAt: null, closeAt: 100, clock: null, originalSlot: true }
+  expect(learnReportFactPayloadSchema.parse(opportunity)).not.toHaveProperty('stateAtEligibility')
+  for (const stateAtEligibility of ['independent', 'retained', 'unknown']) {
+    expect(learnReportFactPayloadSchema.parse({ ...opportunity, stateAtEligibility })).toHaveProperty('stateAtEligibility', stateAtEligibility)
+  }
+  const response = { kind: 'response', submissionId: 'response1', acceptedAt: 10, measurementEligible: false, masteryEligible: false,
+    assistanceSnapshot: { policyVersion: 'assistance.v1', state: 'unassisted', assistanceRevision: 0, substantiveHintUsedAt: null, answerRevealedAt: null, priorExposure: 'unknown', outsideHelp: 'unknown', pasteObserved: 'unknown', focusLossObserved: 'unknown', instrumentationVersion: 'instrumentation.v1', instrumentationProvenance: 'missing.v1' }, validitySnapshot: { policyVersion: 'validity.v1', status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['unknown'] } }
+  expect(learnReportFactPayloadSchema.parse(response)).not.toHaveProperty('stateAtAcceptance')
+  expect(learnReportFactPayloadSchema.parse({ ...response, stateAtAcceptance: 'unknown' })).toHaveProperty('stateAtAcceptance', 'unknown')
+  expect(() => learnReportFactPayloadSchema.parse({ ...response, stateAtAcceptance: 'invented' })).toThrow()
+})

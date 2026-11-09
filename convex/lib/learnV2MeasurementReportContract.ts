@@ -13,6 +13,7 @@ const sourceCoverage = literals(['complete', 'unknown'])
 const responseKind = literals(LEARN_V2_REPORT_RESPONSE_KINDS)
 const familyStatus = literals(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired', 'unknown'])
 const masteryState = literals(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known'])
+export const learnReportCapturedMasteryStateValidator = v.union(masteryState, v.literal('unknown'))
 const replacementPolicy = v.union(v.object({ kind: v.literal('secondary_only') }),
   v.object({ kind: v.literal('predeclared'), protocolVersion: v.string(), ruleVersion: v.string(), ruleDigest: v.string() }))
 const interval = v.union(v.object({ lower: v.number(), upper: v.number() }), v.null())
@@ -133,7 +134,7 @@ export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('first_check_claim'), ...computationKeys,
     stratum: learnReportFirstSlotStratumValidator, claim: firstCheckClaim,
     firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), clock: reportClock,
-    stateAtEligibility: masteryState, stateAtAcceptance: v.union(masteryState, v.null()), acceptance: nullableAcceptance,
+    stateAtEligibility: learnReportCapturedMasteryStateValidator, stateAtAcceptance: v.union(learnReportCapturedMasteryStateValidator, v.null()), acceptance: nullableAcceptance,
     result: nullableResult, unresolvedReason: nullableString,
   }),
 ) satisfies Validator<z.infer<typeof learnReportInputSnapshotSchema>, 'required', string>

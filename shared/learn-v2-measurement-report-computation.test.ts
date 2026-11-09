@@ -492,3 +492,16 @@ describe('versioned report computation', () => {
     expect(cell(await buildLearningMeasurementReport(await computationInput([source.watermark, source.episode]))).allEligibleValue).toBe(-20)
   })
 })
+
+it.each(['eligibility', 'acceptance'] as const)('uncaptured first-check %s state stays unknown', async point => {
+  const f = await computationClaim(1, { score: 60 })
+  if (point === 'eligibility') f.claim.stateAtEligibility = 'unknown'
+  else f.claim.stateAtAcceptance = 'unknown'
+  const report = cell(await buildLearningMeasurementReport(await computationInput([f.watermark, f.claim])), 'false_mastery_next_delayed.v1')
+  // No historical state means unknown coverage; even a score of 60 cannot establish a checked failure.
+  expect(report.counts).toMatchObject({ maturedClaims: 1, checkedClaims: 0, failedClaims: 0 })
+  expect(report.populationState).toBe('unknown')
+  expect(report.allEligibleValue).toBeNull()
+  expect(report.missingOutcomeBounds).toBeNull()
+  expect(report.reasonCodes).toContain('unknown_prior_state')
+})

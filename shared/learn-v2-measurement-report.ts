@@ -33,6 +33,7 @@ export const learnReportOpportunityStatusSchema = z.union([learnAssessmentPhaseS
 const sourceCoverage = z.enum(['complete', 'unknown'])
 const count = z.number().int().min(0).max(LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes)
 const masteryState = z.enum(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known'])
+export const learnReportCapturedMasteryStateSchema = z.union([masteryState, z.literal('unknown')])
 export const learnReportLegacyIndependentAuditSchema = z.strictObject({
   unknownCount: count.nullable(), sourceCoverage,
 }).refine(value => (value.sourceCoverage === 'complete') === (value.unknownCount !== null), 'Legacy audit counts require complete enumeration')
@@ -177,7 +178,7 @@ export const learnReportFirstClaimSnapshotSchema = z.strictObject({
   kind: z.literal('first_check_claim'), ...computationKeys, stratum: learnReportFirstSlotStratumSchema,
   claim: learnFirstCheckClaimSchema, firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
   checkSequence: learnRevisionSchema, clock: learnAssessmentClockSchema,
-  stateAtEligibility: masteryState, stateAtAcceptance: masteryState.nullable(), acceptance: learnReportAcceptanceSnapshotSchema.nullable(),
+  stateAtEligibility: learnReportCapturedMasteryStateSchema, stateAtAcceptance: learnReportCapturedMasteryStateSchema.nullable(), acceptance: learnReportAcceptanceSnapshotSchema.nullable(),
   result: learnReportResultSnapshotSchema.nullable(),
   unresolvedReason: learnCodeSchema.nullable(),
 }).refine(value => acceptedResultMatches(value.acceptance, value.result)
@@ -310,9 +311,11 @@ export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
     status: z.enum(['considered', 'not_admitted', 'admitted']), snapshot: learnReportAssignmentSnapshotSchema })
     .refine(value => value.status === value.snapshot.status, 'Enrollment status must match the assignment snapshot'),
   z.strictObject({ kind: z.literal('opportunity'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), recordRevision: learnRevisionSchema,
-    status: learnReportOpportunityStatusSchema, dueAt: learnTimestampSchema.nullable(), closeAt: learnTimestampSchema, clock: learnAssessmentClockSchema.nullable(), originalSlot: z.boolean() }),
+    status: learnReportOpportunityStatusSchema, dueAt: learnTimestampSchema.nullable(), closeAt: learnTimestampSchema, clock: learnAssessmentClockSchema.nullable(), originalSlot: z.boolean(),
+    stateAtEligibility: learnReportCapturedMasteryStateSchema.optional() }),
   z.strictObject({ kind: z.literal('response'), submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: learnTimestampSchema,
-    measurementEligible: z.boolean(), masteryEligible: z.boolean(), assistanceSnapshot: learnAssistanceSnapshotSchema, validitySnapshot: learnValiditySnapshotSchema }),
+    measurementEligible: z.boolean(), masteryEligible: z.boolean(), assistanceSnapshot: learnAssistanceSnapshotSchema, validitySnapshot: learnValiditySnapshotSchema,
+    stateAtAcceptance: learnReportCapturedMasteryStateSchema.optional() }),
   z.strictObject({ kind: z.literal('score'), submissionId: learnIdSchema<'learnResponses'>(), attemptId: learnIdSchema<'masteryAttempts'>(),
     executionId: learnIdSchema<'learnScoringExecutions'>(), scorePercent: learnScoreSchema, scoreCommittedAt: learnTimestampSchema, snapshot: learnReportResultSnapshotSchema }),
   z.strictObject({ kind: z.literal('independent_claim'), ...learnFirstCheckClaimSchema.shape,
@@ -754,12 +757,14 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
     && (row.stratum.familyId === null || result?.familyRevision === row.stratum.familyRevision)
     && row.stratum.familyValidationStatus !== 'quarantined'
   const reasons = endpointReasons(row.result, row.acceptance, cutoff, row.stratum.scorerConfiguration, row.clock)
+  const stateKnown = row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown'
+  if (!stateKnown) reasons.push('unknown_prior_state')
   if (!timeEligible || !stateEligible) reasons.push('invalid_item_novelty')
   if (row.unresolvedReason) reasons.push(LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)
     ? row.unresolvedReason : 'reconciliation_required')
   if (!valid && !row.acceptance) reasons.push('missing_delayed')
   const value = valid && result ? (result.scorePercent < result.thresholdPercent ? 1 : 0) : null
-  return { learnerKey: row.learnerKey, band: reportBand(cold), stage: slotStage(row.clock, row.claim.firstIndependentAt, cutoff), known: true,
+  return { learnerKey: row.learnerKey, band: reportBand(cold), stage: slotStage(row.clock, row.claim.firstIndependentAt, cutoff), known: stateKnown,
     reasons: [...new Set(reasons)], observation: { learnerKey: row.learnerKey, value, lower: value ?? 0, upper: value ?? 1 }, secondary: null,
     disposition: reportDisposition(reasons, valid), eligible: stateEligible, acceptedCold: false, accepted: acceptedBy(row.acceptance, cutoff),
     validCold: false, validDelayed: valid, replacementAccepted: false, replacementValid: false, primaryIncluded: false,

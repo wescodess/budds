@@ -31,7 +31,7 @@ import {
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } from '../../shared/learn-v2-assessment-disclosure'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import {
-  appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
+  appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readLearnFirstCheckFact, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
 } from './learnV2MeasurementFacts'
 
 type ReadCtx = QueryCtx | MutationCtx
@@ -342,10 +342,11 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
     assignmentAdmitted: assignment?.status === 'admitted', coldBeforeTeaching, assistance,
     previousState: record?.state ?? 'unseen', firstIndependentLocalDate: record?.firstIndependentLocalDate ?? null,
     firstIndependentTimezone: record?.firstIndependentTimezone ?? null })
-  return parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
+  const validity = parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
     status: eligibility.measurementEligible || eligibility.masteryEligible ? 'valid' : 'excluded',
     measurementEligible: eligibility.measurementEligible, masteryEligible: eligibility.masteryEligible,
     exclusionReasons: eligibility.reasonCodes.length ? eligibility.reasonCodes : [] })
+  return { validity, stateAtAcceptance: record?.state ?? 'unknown' as const }
 }
 
 async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: Target, now: number) {
@@ -384,8 +385,8 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const context = 'assessmentPins' in row ? deriveLearnAssessmentResponseContext({ contextPins: row.contextPins,
     assignment: assignment?.status === 'admitted' ? { status: 'admitted', assignmentId: assignment._id, epoch: assignment.epoch, flow: assignment.flow }
       : assignment ? { status: assignment.status } : null }) : null
-  const validity = 'assessmentPins' in row ? await assessmentValidity(ctx, userId, row, authority, assistance, now, assignment, historyKnown)
-    : parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
+  const assessment = 'assessmentPins' in row ? await assessmentValidity(ctx, userId, row, authority, assistance, now, assignment, historyKnown) : null
+  const validity = assessment?.validity ?? parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
         status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] })
   if (entry.payload.kind !== 'text' && 'stage' in row) reject('invalid_payload')
   if ('assessmentPins' in row && row.assessmentPins.kind === 'measurement') {
@@ -403,7 +404,7 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
     const sourceRef = entry.payload.sourceRef
     if (!activity || !activity.evidenceReferences.some(value => String(value.sourceSnapshotId) === sourceRef)) reject('invalid_payload')
   }
-  return { entry, row, pins: authority.pins, dependencies, assistance, validity, assignment, context,
+  return { entry, row, pins: authority.pins, dependencies, assistance, validity, assignment, context, stateAtAcceptance: assessment?.stateAtAcceptance ?? 'unknown' as const,
     payloadDigest: await digest(entry.payload), payloadBytes: learnSerializedBytes(entry.payload, LEARN_V2_RESPONSE_LIMITS.maxResponseBytes) }
 }
 
@@ -512,10 +513,11 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
       aggregate: aggregate(value.row), ...aggregate(value.row), dependency,
     })
     if ('stage' in value.row) await ctx.db.patch(value.row._id, { status: 'accepted', submissionId, revision: value.row.revision + 1 })
-    if (value.assignment) {
-      await writeLearnMeasurementEnrollmentFact(ctx, userId, value.assignment)
-      await writeLearnResponseAcceptanceFact(ctx, userId, (await ctx.db.get(submissionId))!, value.assignment.epoch)
-    }
+    const firstCheck = 'assessmentPins' in value.row ? await readLearnFirstCheckFact(ctx, userId, value.row) : null
+    if (value.assignment && firstCheck && value.assignment.epoch !== firstCheck.epoch) throw new Error('Learn first-check epoch mismatch')
+    if (value.assignment) await writeLearnMeasurementEnrollmentFact(ctx, userId, value.assignment)
+    const epoch = firstCheck?.epoch ?? value.assignment?.epoch
+    if (epoch) await writeLearnResponseAcceptanceFact(ctx, userId, (await ctx.db.get(submissionId))!, epoch, value.stateAtAcceptance)
   }
   if (!submissionId) throw new Error('Learn submission unavailable')
   await ctx.db.patch(receiptId, { result: { kind: 'accepted', submissionId, acceptedAt: now }, expiresAt: undefined })
@@ -606,9 +608,15 @@ export async function terminalizeLearnResponseForOwner(ctx: MutationCtx, userId:
   else {
     await ctx.db.patch(row._id, { phase: result.reasonCode, reasonCode: result.reasonCode, revision: result.revision })
     const assignment = await matchingAssignment(ctx, userId, row)
-    if (assignment) await appendLearnMeasurementFact(ctx, userId, { epoch: assignment.epoch, learningVoidId: row.learningVoidId,
+    const firstCheck = await readLearnFirstCheckFact(ctx, userId, row)
+    if (assignment && firstCheck && assignment.epoch !== firstCheck.epoch) throw new Error('Learn first-check epoch mismatch')
+    const epoch = firstCheck?.epoch ?? assignment?.epoch
+    const previous = epoch ? await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', userId).eq('fact.assessmentOpportunityId', row._id)).order('desc').first() : null
+    if (epoch) await appendLearnMeasurementFact(ctx, userId, { epoch, learningVoidId: row.learningVoidId,
       occurredAt: result.terminalizedAt, fact: { kind: 'opportunity', assessmentOpportunityId: row._id, recordRevision: result.revision,
-        status: result.reasonCode, dueAt: row.dueAt ?? null, closeAt: row.closeAt, clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot } })
+        status: result.reasonCode, dueAt: row.dueAt ?? null, closeAt: row.closeAt, clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot,
+        stateAtEligibility: previous?.fact.kind === 'opportunity' ? previous.fact.stateAtEligibility ?? 'unknown' : 'unknown' } })
   }
   return { version: LEARN_V2_PUBLIC_API_VERSION, status: 'terminal', target: result.target, revision: result.revision, reason: result.reasonCode, terminalizedAt: result.terminalizedAt }
 }
@@ -665,7 +673,11 @@ export async function recordLearnResponseIntegrityForOwner(ctx: MutationCtx, use
   const previous = await ctx.db.query('learnResponseIntegrityEvents')
     .withIndex('by_userId_and_submissionId_and_sequence', q => q.eq('userId', userId).eq('submissionId', response._id)).order('desc').first()
   if (previous?.kind === value.kind && previous.effectiveAt === value.effectiveAt && previous.reasonCode === value.reasonCode) return previous._id
-  const epoch = 'measurementContext' in response && response.measurementContext.status === 'admitted' ? response.measurementContext.baselineEpoch : null
+  const opportunity = 'assessmentOpportunityId' in response ? await ctx.db.get(response.assessmentOpportunityId) : null
+  const firstCheck = opportunity ? await readLearnFirstCheckFact(ctx, userId, opportunity) : null
+  const measurementEpoch = 'measurementContext' in response && response.measurementContext.status === 'admitted' ? response.measurementContext.baselineEpoch : null
+  if (firstCheck && measurementEpoch && firstCheck.epoch !== measurementEpoch) throw new Error('Learn first-check epoch mismatch')
+  const epoch = firstCheck?.epoch ?? measurementEpoch
   const sourceFactSequence = epoch ? (await nextLearnMeasurementSourceSequence(ctx, userId)).sequence : 0
   const sequence = (previous?.sequence ?? 0) + 1
   if (!Number.isSafeInteger(sequence) || value.effectiveAt > Date.now()

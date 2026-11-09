@@ -21,6 +21,7 @@ type Entry = {
   voidDeletion: 'delete' | 'detach' | 'preserve'
   threadDeletion: 'delete_standalone' | 'detach' | 'preserve'
   indexes: readonly (readonly string[])[]
+  optionalFrozenStates?: readonly string[]
 }
 
 // Child-first order also defines bounded account deletion. Exposure and case
@@ -50,7 +51,7 @@ export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
   { table: 'learnMeasurementItems', parentField: 'familyId', parentIndex: 'by_userId_and_familyId_and_familyRevision_and_formLabel', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'familyId', 'familyRevision', 'formLabel'], ['userId', 'itemKey', 'revision'], ['userId', 'caseId'], ['userId', 'learningVoidId']] },
   { table: 'learnMeasurementFamilies', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'familyKey', 'revision'], ['userId', 'learningVoidId'], ['userId', 'blueprintRevisionId', 'objectiveId']] },
   { table: 'learnMeasurementValidations', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'subject.caseId'], ['userId', 'subject.itemId'], ['userId', 'subject.familyId'], ['userId', 'subject.scoringSpecId'], ['userId', 'learningVoidId']] },
-  { table: 'learnMeasurementReportFacts', retention: 'report_source', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'sequence'], ['userId', 'epoch', 'sequence'], ['userId', 'learningVoidId'], ['userId', 'fact.assignmentId'], ['userId', 'fact.assessmentOpportunityId'], ['userId', 'fact.submissionId'], ['userId', 'fact.claimKey', 'fact.claimSequence']] },
+  { table: 'learnMeasurementReportFacts', optionalFrozenStates: ['opportunity.stateAtEligibility', 'response.stateAtAcceptance'], retention: 'report_source', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'sequence'], ['userId', 'epoch', 'sequence'], ['userId', 'learningVoidId'], ['userId', 'fact.assignmentId'], ['userId', 'fact.assessmentOpportunityId'], ['userId', 'fact.submissionId'], ['userId', 'fact.claimKey', 'fact.claimSequence']] },
   { table: 'learnMeasurementSourceWatermarks', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'sequence']] },
   { table: 'learnAssessmentExposures', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'detach', threadDeletion: 'detach', indexes: [['userId', 'caseId', 'serverTime'], ['userId', 'assessmentOpportunityId'], ['userId', 'deliveryReceiptHash'], ['userId', 'learningVoidId'], ['userId', 'threadId']] },
   { table: 'learnAssessmentCases', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'caseKey'], ['userId', 'scenarioFingerprint'], ['userId', 'solutionFingerprint'], ['userId', 'usageClass'], ['userId', 'reservedAt'], ['userId', 'scenarioFingerprint', 'solutionFingerprint']] },
