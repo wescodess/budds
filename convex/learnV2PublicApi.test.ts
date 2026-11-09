@@ -10,6 +10,7 @@ import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/lear
 import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, type learnAcceptResponseRequestSchema } from '../shared/learn-v2-responses'
 import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION } from '../shared/learn-v2-measurement-report'
+import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '../shared/learn-v2-assessment-disclosure'
 import {
   LEARN_V2_PUBLIC_API_VERSION, type LearnV2SubmissionScore, type LearnV2ResponseState, type LearnV2AggregateExport,
   terminalizeResponseValidator, validateLearnMasterySubmission, type LearnV2AcceptMasterySubmission,
@@ -63,6 +64,8 @@ const cases: Array<{ name: string, call: (actor: Actor, f: Fixture) => Promise<u
   { name: 'acceptMasterySubmission bundle', call: (actor, f) => actor.mutation(learnV2CanvasMeasurementApi.acceptMasterySubmission, learnV2CanvasMeasurementApi.masterySubmissionArgs({ version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: key, teachBack: f.response, application: { ...f.response, target: f.assessmentTarget, confidence: 3 } })), expected: rejected },
   { name: 'scoreMasterySubmission', call: (actor, f) => actor.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION, submissionId: f.f.rows.learnResponses, idempotencyKey: key }), expected: disabled },
   { name: 'authorizeAssistance', call: (actor, f) => actor.mutation(api.learnV2Assistance.authorizeAssistance, { ...f.assessmentReference, kind: 'hint', idempotencyKey: key }), expected: { version: LEARN_V2_PUBLIC_API_VERSION, status: 'denied', reasonCode: 'disabled' } },
+  { name: 'getPostSealTeaching', call: (actor, f) => actor.query(learnV2CanvasMeasurementApi.getPostSealTeaching, { ...f.assessmentTarget, version: LEARN_V2_POST_SEAL_TEACHING_VERSION }), expected: { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode: 'disabled' } },
+  { name: 'authorizePracticeAssistance', call: (actor, f) => actor.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance, { ...f.assessmentTarget, version: LEARN_V2_POST_SEAL_TEACHING_VERSION, target: f.target, expectedRevision: 1, kind: 'hint', idempotencyKey: key }), expected: { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode: 'disabled' } },
   { name: 'requestReport', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.requestReport, { version: LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, viewerGrantId: f.f.rows.learnMeasurementReportViewerGrants, enrollmentStartAt: f.f.base.createdAt - 1000, enrollmentEndAt: f.f.base.createdAt, cutoff: f.f.base.createdAt, idempotencyKey: key }), expected: reportDisabled },
   { name: 'getReport', call: (actor, f) => actor.query(api.learnV2MeasurementReports.getReport, f.reportReference), expected: reportDisabled },
   { name: 'getReportCells', call: (actor, f) => actor.query(api.learnV2MeasurementReports.getReportCells, { ...f.reportReference, cursor: null }), expected: reportDisabled },
