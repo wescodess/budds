@@ -92,8 +92,12 @@ export function anchorReport(anchors) {
       invalid: 0, observedFailures: 0, excludedCanvas: 0 }
     if (row.flow === 'v2_canvas' && !anchors.canvasAdmitted) { stats.excludedCanvas++; continue }
     stats.eligible++
+    const validWindow = [row.windowStart, row.windowEnd].every(value => Number.isSafeInteger(value) && value >= 0)
+      && row.windowStart <= row.windowEnd
+    if (!validWindow) { stats.invalid++; continue }
     if (row.submittedAt === null) { stats.missed++; continue }
     stats.submitted++
+    if (![row.submittedAt, row.acceptedAt].every(value => Number.isSafeInteger(value) && value >= 0)) { stats.invalid++; continue }
     if (row.assisted !== false) { stats.assisted++; continue }
     if (row.scorePercent === null) { stats.unscored++; continue }
     assert.ok(Number.isFinite(row.scorePercent) && row.scorePercent >= 0 && row.scorePercent <= 100)
@@ -122,6 +126,7 @@ export function buildReport({ pins, pinsDigest, corpus, schedule, results, thres
     const core = counts(corpus.core, output)
     const threshold = thresholds.configurations[adapter.id]
     const controls = counts(corpus.controls, output)
+    const diagnostics = counts(corpus.diagnostics, output)
     const repeats = { scheduled: 20, availablePairs: 0, disagreements: 0, unavailablePairs: 0 }
     for (const row of corpus.repeats) {
       const a = output.get(row.id)
@@ -130,16 +135,19 @@ export function buildReport({ pins, pinsDigest, corpus, schedule, results, thres
       repeats.availablePairs++
       if (vector(a) !== vector(b)) repeats.disagreements++
     }
-    if (core.falsePass || core.falseBlock || core.criterion.falsePositive || core.criterion.falseNegative || controls.falseBlock
-      || core.unavailable || repeats.disagreements) quarantine.push({ configuration: adapter.configuration, adapter: adapter.id,
-        status: 'quarantined_validation_claim', reason: core.unavailable ? 'unavailable_evidence' : 'source_or_repeat_divergence' })
+    if (core.criterion.falsePositive || core.criterion.falseNegative || controls.criterion.falsePositive || controls.criterion.falseNegative
+      || diagnostics.criterion.falsePositive || diagnostics.criterion.falseNegative || core.unavailable || controls.unavailable
+      || diagnostics.unavailable || repeats.unavailablePairs || repeats.disagreements) quarantine.push({ configuration: adapter.configuration, adapter: adapter.id,
+        status: 'quarantined_validation_claim', reason: core.unavailable || controls.unavailable || diagnostics.unavailable || repeats.unavailablePairs ? 'unavailable_evidence' : 'source_or_repeat_divergence' })
     reports[adapter.id] = { model: adapter.model, configuration: adapter.configuration, upstream: adapter.upstream,
       scheduled: schedule.filter(item => item.adapter === adapter.id).length, core,
+      thresholdFinding: { threshold: 80, classification: 'threshold_comparison_not_criterion_divergence',
+        falsePass: core.falsePassBounds, falseBlock: core.falseBlockBounds },
       fit: counts(corpus.core.filter(row => row.split === 'fit'), output), heldout: counts(corpus.core.filter(row => row.split === 'heldout'), output),
       candidateHeldout: threshold.candidate === null ? null : counts(corpus.core.filter(row => row.split === 'heldout'), output, threshold.candidate),
       domain: strata(corpus.core, output, 'domain'), form: strata(corpus.core, output, 'formId'),
       packet: strata(corpus.core, output, 'packetId'), seedClass: strata(corpus.core, output, 'seedClass'),
-      controls, repeats, diagnostics: counts(corpus.diagnostics, output),
+      controls, repeats, diagnostics,
       uncertainty: { unit: 'source_packet', fitClusters: 8, heldoutClusters: 8, independentLearners: 0,
         interpretation: 'descriptive_correlated_synthetic_counts_only_no_population_accuracy_claim' } }
   }

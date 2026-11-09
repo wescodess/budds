@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { exactKeys, hash, readJson, seal, unseal, exists, VERSION } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
 import { liveOutcome, openRun, openRecoveryRun } from './run-state.mjs'
+import { requestPinsDigest } from './adapters.mjs'
 
 const digest = value => typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value)
 const integer = value => Number.isSafeInteger(value) && value >= 0
@@ -11,6 +12,13 @@ const approvalName = value => `approval-${value.slice(7)}.json`
 const reservationName = value => `reservation-${hash({ approvalDigest: value.approvalDigest, id: value.id }).slice(7)}.json`
 const resolutionName = value => reservationName(value).replace('reservation-', 'resolution-')
 const sameRun = (claim, state) => claim.directory === state.directory && claim.pinsDigest === state.pinsDigest
+const historicalRequestIdentities = new WeakMap()
+const requestIdentity = value => {
+  if (value.requestPinsDigest !== undefined) return value.requestPinsDigest
+  if (!value.intent) return undefined
+  if (!historicalRequestIdentities.has(value)) historicalRequestIdentities.set(value, requestPinsDigest(value.intent.request))
+  return historicalRequestIdentities.get(value)
+}
 
 function usage(ledger, state, approvalDigest, adapter) {
   let approved = 0
@@ -21,7 +29,8 @@ function usage(ledger, state, approvalDigest, adapter) {
     const claim = ledger.approvals.get(reservation.approvalDigest)
     if (reservation.approvalDigest === approvalDigest) approved += reservation.reservationMicroUsd
     if (sameRun(claim, state)) run += reservation.reservationMicroUsd
-    if (reservation.model === adapter.model && reservation.configuration === adapter.configuration) dispatches++
+    if (reservation.model === adapter.model && reservation.configuration === adapter.configuration
+      && requestIdentity(reservation) === requestIdentity(adapter)) dispatches++
   }
   assert.ok(integer(approved) && integer(run), 'Global reservation total is invalid')
   return { approved, run, dispatches }
@@ -38,7 +47,9 @@ export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_approval_consumption', raw.pinsDigest)
     const claim = entry.payload
-    exactKeys(claim, ['approvalDigest', 'costDigest', 'directory', 'pinsDigest', 'budgetMicroUsd'])
+    exactKeys(claim, ['approvalDigest', 'costDigest', 'directory', 'pinsDigest', 'budgetMicroUsd',
+      ...(claim.ownerKeyDigest === undefined ? [] : ['ownerKeyDigest'])])
+    if (claim.ownerKeyDigest !== undefined) assert.ok(digest(claim.ownerKeyDigest))
     assert.ok(digest(claim.approvalDigest) && digest(claim.costDigest) && digest(claim.pinsDigest) && integer(claim.budgetMicroUsd))
     assert.ok(typeof claim.directory === 'string' && isAbsolute(claim.directory) && resolve(claim.directory) === claim.directory)
     assert.equal(entry.pinsDigest, claim.pinsDigest)
@@ -50,7 +61,9 @@ export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
     const raw = readJson(join(directory, name))
     const entry = unseal(directory, name, 'live_dispatch_reservation', raw.pinsDigest)
     const reservation = entry.payload
-    exactKeys(reservation, ['approvalDigest', 'id', 'model', 'configuration', 'intentDigest', 'intent', 'reservationMicroUsd'])
+    exactKeys(reservation, ['approvalDigest', 'id', 'model', 'configuration', 'intentDigest', 'intent', 'reservationMicroUsd',
+      ...(reservation.requestPinsDigest === undefined ? [] : ['requestPinsDigest'])])
+    if (reservation.requestPinsDigest !== undefined) assert.ok(digest(reservation.requestPinsDigest), 'Invalid adapter request pins')
     assert.ok(digest(reservation.approvalDigest) && digest(reservation.configuration) && digest(reservation.intentDigest))
     assert.match(reservation.id, /^item_[a-f0-9]{32}$/)
     assert.ok(typeof reservation.model === 'string' && reservation.model.length > 0 && reservation.model.length <= 200)
@@ -64,6 +77,7 @@ export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
     assert.equal(reservation.intent.approval.approvalDigest, reservation.approvalDigest)
     assert.equal(reservation.intent.reservationMicroUsd, reservation.reservationMicroUsd)
     assert.equal(reservation.intent.dispatched, true)
+    if (reservation.requestPinsDigest !== undefined) assert.equal(reservation.requestPinsDigest, requestPinsDigest(reservation.intent.request), 'Reservation request pins differ')
     const ownedId = hash([claim.directory, claim.pinsDigest, reservation.id])
     assert.ok(!ownedIds.has(ownedId), 'Duplicate global dispatch requires reconciliation')
     ownedIds.add(ownedId)
@@ -115,13 +129,15 @@ export async function openLiveLedger(directory, { recoveringDirectory } = {}) {
 }
 
 function verifyResolution(state, pinsDigest, resolution) {
-  assert.ok(['resolved', 'failed', 'still_unknown', 'not_dispatched'].includes(resolution.status))
+  assert.ok(['resolved', 'failed', 'still_unknown', 'not_dispatched', 'written_off'].includes(resolution.status))
   assert.equal(state.pinsDigest, pinsDigest)
   const reconciled = new RegExp(`^${resolution.id}\\.reconciled(?:-[1-9][0-9]*)?\\.json$`).test(resolution.recordName)
   const notDispatched = resolution.recordName === `${resolution.id}.not-dispatched.json`
+  const writtenOff = resolution.recordName === `${resolution.id}.written-off.json`
   assert.equal(notDispatched, resolution.status === 'not_dispatched', 'Charge release requires a not-dispatched record')
-  assert.ok(reconciled || notDispatched || resolution.recordName === `${resolution.id}.terminal.json`)
-  const record = unseal(state.directory, resolution.recordName, reconciled ? 'reconciled_verdict' : notDispatched ? 'dispatch_not_sent' : 'sealed_verdict', pinsDigest)
+  assert.equal(writtenOff, resolution.status === 'written_off', 'Write-off requires signed evidence')
+  assert.ok(reconciled || notDispatched || writtenOff || resolution.recordName === `${resolution.id}.terminal.json`)
+  const record = unseal(state.directory, resolution.recordName, writtenOff ? 'dispatch_write_off' : reconciled ? 'reconciled_verdict' : notDispatched ? 'dispatch_not_sent' : 'sealed_verdict', pinsDigest)
   assert.equal(record.digest, resolution.recordDigest)
   assert.equal(record.payload.intentDigest, resolution.intentDigest)
   const replayed = state.verifiedRecords.get(record.digest)
@@ -131,7 +147,7 @@ function verifyResolution(state, pinsDigest, resolution) {
 export function unresolvedLiveDispatches(ledger) {
   // A reservation is also the durable global dispatch intent. Absence of a
   // matching durable resolution blocks every run, including distinct approvals.
-  return [...ledger.reservations].filter(([name]) => !['resolved', 'failed', 'not_dispatched'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
+  return [...ledger.reservations].filter(([name]) => !['resolved', 'failed', 'not_dispatched', 'written_off'].includes(ledger.resolutions.get(name)?.status)).map(([, reservation]) => reservation)
 }
 
 export async function recordLiveResolution(ledger, state, intent, record, recordName = `${intent.payload.id}.terminal.json`) {
@@ -140,6 +156,7 @@ export async function recordLiveResolution(ledger, state, intent, record, record
   const resolution = { approvalDigest: reservation.approvalDigest, id: reservation.id, intentDigest: intent.digest,
     recordName, recordDigest: record.digest,
     status: record.kind === 'dispatch_not_sent' ? 'not_dispatched'
+      : record.kind === 'dispatch_write_off' ? 'written_off'
       : record.kind === 'reconciled_verdict' ? record.payload.status : liveOutcome(record.payload.result) }
   verifyResolution(await openRecoveryRun(state.directory), state.pinsDigest, resolution)
   if (resolution.status === 'still_unknown') return
@@ -152,6 +169,7 @@ export async function recordLiveResolution(ledger, state, intent, record, record
 
 export function claimLiveApproval(ledger, state, approval) {
   const claim = { approvalDigest: approval.approvalDigest, costDigest: approval.costDigest, directory: state.directory,
+    ...(approval.ownerKeyDigest === undefined ? {} : { ownerKeyDigest: approval.ownerKeyDigest }),
     pinsDigest: state.pinsDigest, budgetMicroUsd: state.pins.budgetMicroUsd }
   const previous = ledger.approvals.get(approval.approvalDigest)
   if (previous) assert.deepEqual(previous, claim, 'Live approval already consumed by another run')
@@ -165,6 +183,7 @@ export function claimLiveApproval(ledger, state, approval) {
 
 function reservationFor(state, adapter, intent) {
   return { approvalDigest: intent.approval.approvalDigest, id: intent.id, model: adapter.model, configuration: adapter.configuration,
+    ...(adapter.requestPinsDigest === undefined ? {} : { requestPinsDigest: adapter.requestPinsDigest }),
     intentDigest: hash({ version: VERSION, kind: 'dispatch_intent', pinsDigest: state.pinsDigest, payload: intent }),
     intent, reservationMicroUsd: intent.reservationMicroUsd }
 }
@@ -172,12 +191,14 @@ function reservationFor(state, adapter, intent) {
 export function verifyLiveRun(ledger, state, { allowMissingIntents = false } = {}) {
   const owned = [...ledger.reservations.values()].filter(reservation => sameRun(ledger.approvals.get(reservation.approvalDigest), state))
   const dispatched = [...state.intents.values()].filter(intent => intent.payload.dispatched)
+  assert.ok(ledger.approvals.size > 0 || state.intents.size === 0, 'Prior dispatches require the original durable ledger')
   if (!allowMissingIntents) assert.equal(owned.length, dispatched.length, 'Global reservation/local intent discrepancy requires reconciliation')
   for (const intent of state.intents.values()) {
     assert.ok(intent.payload.approval, 'Live intent has no signed approval record')
     const claim = ledger.approvals.get(intent.payload.approval.approvalDigest)
     assert.ok(claim && sameRun(claim, state) && claim.budgetMicroUsd === state.pins.budgetMicroUsd
-      && claim.costDigest === intent.payload.approval.costDigest, 'Live intent has no matching global approval consumption')
+      && claim.costDigest === intent.payload.approval.costDigest && claim.ownerKeyDigest === intent.payload.approval.ownerKeyDigest,
+    'Live intent has no matching global approval consumption')
     if (!intent.payload.dispatched) continue
     const adapter = state.pins.adapters.find(adapter => adapter.id === intent.payload.adapter)
     const expected = reservationFor(state, adapter, intent.payload)
@@ -188,7 +209,7 @@ export function verifyLiveRun(ledger, state, { allowMissingIntents = false } = {
 
 export function reserveLiveDispatch(ledger, state, adapter, intent) {
   claimLiveApproval(ledger, state, intent.approval)
-  const totals = usage(ledger, state, intent.approval.approvalDigest, adapter)
+  const totals = usage(ledger, state, intent.approval.approvalDigest, { ...adapter, intent })
   assert.ok(totals.dispatches < LIMITS.dispatchesPerModelOrConfiguration, 'Global per-model/configuration dispatch ceiling reached')
   const amount = intent.reservationMicroUsd
   assert.ok(integer(amount) && amount > 0)

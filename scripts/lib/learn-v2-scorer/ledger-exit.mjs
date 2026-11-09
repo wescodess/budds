@@ -4,10 +4,10 @@ import { join } from 'node:path'
 import { ROOT } from './artifacts.mjs'
 
 export const LEDGER_EXIT_TEST_NAME = 'the global approval ledger exit regressions use isolated mock adapters with network denied'
-const patterns = ['A3 M1 and crash table', 'A[456]', 'crash table|post-dispatch|publication internals']
+const patterns = ['A3 M1 and crash table', 'A[456]', 'crash table|post-dispatch|publication internals', 'B1']
 const filters = [...patterns.map(pattern => `--test-name-pattern=^(?:${pattern})`),
   `--test-skip-pattern=^(?:${patterns.join('|')})`]
-const expected = [/A3 M1 and crash table/, /A5 historical admission/, /crash table: approval/, /one signed approval cannot dispatch in two directories/]
+const expected = [/A3 M1 and crash table/, /A5 historical admission/, /crash table: approval/, /B1/, /one signed approval cannot dispatch in two directories/]
 export const ledgerPartitions = filters.map((filter, index) => ({ name: String(index + 1), filter, expected: expected[index] }))
 
 export function runLedgerPartition(partition) {

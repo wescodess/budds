@@ -31,10 +31,10 @@ export const LEARN_MASTERY_IMPLEMENTATION_PINS = {
   requestBuilder: 'sha256:22e64ce3f359375e689e8bf5affa65d1005be79c3a4e5a1e4b0ea18c20517fbe',
   parser: 'sha256:7d09b0e42c32c0ea6945535bd086c1e322c16094111032670751221081120283',
   arithmeticAndTransition: 'sha256:2a4f659d03832281753f0ccab5fc3b0f6136745c733f437ecc0c6e05ad6505aa',
-  executionGuard: 'sha256:f04b087c8b5507aa99506952024ac1eaa02546d558adbfb40892c9985a766f18',
+  executionGuard: 'sha256:8a24e1644ea3418dc834009270196da46ad3f2b6f702e996f0c012290cb79266',
   gatewaySerializer: 'sha256:d88eb19ad882397b5263e9d2404934385586b513809010ac08aa5fc60e198583',
   gatewayProvenance: 'sha256:246a1980938330f4047f0537dc566b4c340aacbd15878d107c2b24abb2c81356',
-  gatewayTransport: 'sha256:d186366249e406058264a521803b4f1366461a8fbaf30c9b2bb5fbdc6f180c0b',
+  gatewayTransport: 'sha256:9eb150d0e36e6b4c8d01129aaa51948ad05d5e3405066cdb89911fec485a8d68',
 } as const
 
 function freeze<T>(value: T): T {

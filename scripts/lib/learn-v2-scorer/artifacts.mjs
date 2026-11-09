@@ -3,15 +3,26 @@ import { createHash } from 'node:crypto'
 import { constants, lstatSync, statSync, mkdirSync, openSync, closeSync, readFileSync, writeFileSync, fsyncSync, linkSync, unlinkSync, realpathSync, readdirSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
 import { execFileSync } from 'node:child_process'
 
 export const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 export const FIXTURES = join(ROOT, 'tests/fixtures/learn-v2-scorer')
 export const VERSION = 'mastery.scorer-evaluation.v1'
 export const POLICY = 'learn-v2.public-synthetic-payload.v1'
+export function liveLedgerDirectory(options = {}) {
+  assert.equal(options.ledgerDirectory, undefined, 'Live ledger overrides are forbidden')
+  assert.ok(!Object.keys(process.env).some(key => /^BUDDS_.*SCORER.*(?:LEDGER|LIVE_DIR)/.test(key)), 'Live ledger overrides are forbidden')
+  return join(homedir(), '.budds', 'learn-v2-scorer-live')
+}
 export const canonical = value => {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  assert.notEqual(value, undefined, 'Undefined is not a JSON artifact value')
+  if (value === null || typeof value !== 'object') {
+    const encoded = JSON.stringify(value)
+    assert.ok(typeof encoded === 'string' && (typeof value !== 'number' || Number.isFinite(value)), 'Invalid JSON artifact value')
+    return encoded
+  }
+  if (Array.isArray(value)) return `[${Array.from(value, canonical).join(',')}]`
   return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`
 }
 export const hash = value => `sha256:${createHash('sha256').update(typeof value === 'string' || Buffer.isBuffer(value) ? value : canonical(value)).digest('hex')}`

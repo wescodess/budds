@@ -5,6 +5,7 @@ import { generateCorpus } from '../../learn-v2-scorer-corpus.mjs'
 import { FIXTURES, VERSION, POLICY, canonical, hash, readJson, exactKeys, implementationPins } from './artifacts.mjs'
 import { sealLearnScorerConfiguration, createLearnScorerRegistry } from '../../../convex/lib/learnV2ScorerConfig.ts'
 import { buildBaselineMasteryScoringPayload } from '../../../server/utils/learn-v2-mastery-scorer.ts'
+import { adapterRequestDigest } from './adapters.mjs'
 
 export const ADAPTER_PINS = {
   baseline: { version: 'baseline-service.v1', provider: 'openrouter-via-cloudflare-ai-gateway', api: 'openrouter.chat-completions.v1',
@@ -61,7 +62,7 @@ export async function bindInventory(inventory, mode) {
     assert.match(entry.transportEndpoint, /^https:\/\/gateway\.ai\.cloudflare\.com\/v1\/[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/openrouter\/v1\/chat\/completions$/, 'Exact gateway transport pin required')
     assert.ok(!models.has(definition.requestedModel), 'Duplicate effective baseline model')
     models.add(definition.requestedModel)
-    if (mode === 'live') assert.ok(!/fixture|synthetic|test/i.test(canonical(entry)), 'Fixture inventory is forbidden live')
+    if (mode === 'live') assert.ok(!/\b(?:fixture|synthetic|test)\b/i.test(canonical(entry)), 'Fixture inventory is forbidden live')
     const saved = await sealLearnScorerConfiguration(definition)
     if (mode === 'live' || entry.expectedDigest !== null) assert.equal(entry.expectedDigest, saved.binding.configurationDigest, 'Unreviewed baseline configuration digest')
     configurations.push({ definition, expectedDigest: saved.binding.configurationDigest })
@@ -120,6 +121,7 @@ export function runPins({ mode, inventory, bindings, corpus, fixture, clock, see
     upstream: role === 'baseline' ? binding.upstream : ADAPTER_PINS[role].provider,
     ...ADAPTER_PINS[role], ...(role === 'baseline' ? { endpoint: binding.transportEndpoint } : {}),
   })))
+  for (const adapter of adapters) adapter.requestPinsDigest = adapterRequestDigest(adapter)
   return { version: VERSION, mode, evidenceStatus: mode === 'offline' ? 'offline_contract_only' : 'unvalidated_live_capture',
     payloadPolicyVersion: POLICY, implementation: implementationPins(), clock, seed, budgetMicroUsd,
     corpusHashes: corpus.hashes, corpusManifest: corpus.manifest, inventory, bindings, adapters,

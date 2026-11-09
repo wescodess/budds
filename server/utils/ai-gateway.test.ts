@@ -370,6 +370,12 @@ describe('generateCompletion', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  test.each([undefined, null, '', '   '])('B1 scoring HTTP 200 without a usable generation ID (%s) is invalid', async id => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ ...minimalResponse, id })))
+    await expect(generateCompletion({ ...baseParams, captureScoringProvenance: true })).rejects.toMatchObject({ aiGatewayFailureKind: 'invalid_response' })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   test('rejects an oversized provider response before JSON parsing', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce(new Response(JSON.stringify({ payload: 'x'.repeat(128) }), {
       status: 200,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import fs, { chmodSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { mock, test } from 'node:test'
 import { syncBuiltinESMExports } from 'node:module'
@@ -49,13 +49,14 @@ let beforeBaselineTransport = null
 let realAdapters = false
 let preparationFailure = null
 let abortBeforeSend = false
+let baselineStatus = null
 
 // Keep the production CLI's fixed global path and transport unchanged. Native
 // module mocks isolate this test process and deny every real network entry.
 mock.module(new URL('./artifacts.mjs', import.meta.url).href, { namedExports: { ...artifacts,
   hash: value => requestDigests.get(value) ?? artifacts.hash(value),
   implementationPins: () => ({ ...verifiedImplementation, ...revision }),
-  outputDirectory: path => artifacts.outputDirectory(path === '/tmp/budds-learn-v2-scorer-live' ? globalDirectory : path),
+  outputDirectory: path => artifacts.outputDirectory(path === artifacts.liveLedgerDirectory() ? globalDirectory : path),
   seal(...args) {
     if (interruptIntent && args[2] === 'dispatch_intent') throw new Error('Simulated interruption before local intent')
     if (earlyFailures.has(args[2])) throw new Error(`Simulated early publication failure: ${args[2]}`)
@@ -108,13 +109,13 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
     return adapters.baselineExecution({ ...options, ...(options.infer ? { infer: (...args) => {
       beforeBaselineTransport?.()
       return options.infer(...args)
-    } } : {}) })
+    } } : {}) }).then(result => !options.infer && baselineStatus ? { ...result, status: baselineStatus, scorePercent: null, criteria: null } : result)
   },
   async liveInfer(adapter, request, signal, baselineRequest) {
     if (realAdapters) return adapters.liveInfer(adapter, request, abortBeforeSend ? AbortSignal.abort() : signal, baselineRequest)
     calls.push({ adapter: adapter.id, requestDigest: artifacts.hash(request) })
     const body = JSON.parse(request.body)
-    const payload = adapter.role === 'gemini' ? body.input[0].content[0].text : body.messages.find(row => row.role === 'user').content
+    const payload = adapter.role === 'gemini' ? body.input : body.messages.find(row => row.role === 'user').content
     const scoringInput = JSON.parse(payload)
     const raw = adapters.fixtureEnvelope(adapter, { id: scoringInput.evidence[0].alias, payload, scoringInput }, outcome)
     if (omitProvider && adapter.role === 'baseline') {
@@ -143,7 +144,7 @@ const { canonical, hash, readJson, outputDirectory } = artifacts
 process.env.NUXT_CLOUDFLARE_ACCOUNT_ID = 'approval-contract-account'
 process.env.NUXT_CLOUDFLARE_AI_GATEWAY_ID = 'approval-contract-gateway'
 
-async function workspace(t, approvalDurationMs = 600000) {
+async function workspace(t, approvalDurationMs = 600000, initialClock = fixtureClock) {
   const parent = mkdtempSync(join(tmpdir(), 'budds-c3-global-ledger-'))
   t.after(() => rmSync(parent, { recursive: true, force: true }))
   globalDirectory = outputDirectory(join(parent, 'global'))
@@ -165,6 +166,7 @@ async function workspace(t, approvalDurationMs = 600000) {
   realAdapters = false
   preparationFailure = null
   abortBeforeSend = false
+  baselineStatus = null
   const inventory = readJson(join(artifacts.ROOT, 'tests/fixtures/learn-v2-scorer-harness/inventory.json'))
   inventory.scope = 'reviewed_published_inventory'
   inventory.epoch = 'approval-contract.v1'
@@ -176,7 +178,7 @@ async function workspace(t, approvalDurationMs = 600000) {
   entry.upstream = 'OpenAI'
   entry.transportEndpoint = 'https://gateway.ai.cloudflare.com/v1/approval-contract-account/approval-contract-gateway/openrouter/v1/chat/completions'
   entry.inventoryEvidence = 'owner-recorded-inventory'
-  const clock = fixtureClock
+  const clock = initialClock
   let now = clock
   const clockMock = mock.method(Date, 'now', () => now)
   t.after(() => clockMock.mock.restore())
@@ -213,9 +215,9 @@ async function workspace(t, approvalDurationMs = 600000) {
       pinsDigest: state.pinsDigest, budgetMicroUsd: state.pins.budgetMicroUsd, budgetApproved: true, providersApproved: true,
       privacyApproved: true, payloadPolicy: artifacts.POLICY, issuedAt: clock, expiresAt: clock + approvalDurationMs, costEvidenceDigest: hash(cost) }
     return { approvalFile: signed(`${name}-approval.json`, approval), costFile: signed(`${name}-cost.json`, cost), trustKey,
-      record: { approvalDigest: hash(approval), costDigest: hash(cost) } }
+      record: { approvalDigest: hash(approval), costDigest: hash(cost), ownerKeyDigest: hash(publicKey.export({ type: 'spki', format: 'der' })) } }
   }
-  return { createRun, approve, clock, setClock: value => { now = value } }
+  return { createRun, approve, signed, clock, setClock: value => { now = value } }
 }
 
 function syntheticKeys(t) {
@@ -316,12 +318,23 @@ function syntheticHttp(t, setup, mode) {
         for (const timeout of timeouts) timeout()
       }, 0)
     })
-    if (responseMode.startsWith('provider-')) {
+    if (responseMode.startsWith('provider-') || responseMode.startsWith('gemini-') || responseMode.startsWith('baseline-') || responseMode === 'missing-id-200') {
       const wire = JSON.parse(request.body)
-      const payload = adapter.role === 'gemini' ? wire.input[0].content[0].text : wire.messages.find(row => row.role === 'user').content
+      const payload = adapter.role === 'gemini' ? wire.input : wire.messages.find(row => row.role === 'user').content
       const scoringInput = JSON.parse(payload)
       const body = adapters.fixtureEnvelope(adapter, { id: setup.id, payload, scoringInput }, 'valid')
       delete body.requestId // This is harness metadata, not a native provider field.
+      if (responseMode === 'missing-id-200') delete body.id
+      if (responseMode === 'baseline-truncated') body.choices[0].finish_reason = 'length'
+      if (responseMode === 'baseline-identity-mismatch') body.model = 'openai/wrong-model'
+      if (responseMode === 'baseline-routing') body.openrouter_metadata.attempt = 2
+      if (responseMode === 'baseline-upstream') {
+        body.provider = 'Different observed provider'
+        body.openrouter_metadata.endpoints.available[0].provider = body.provider
+      }
+      if (responseMode.startsWith('gemini-status-')) body.status = responseMode.slice('gemini-status-'.length)
+      if (responseMode === 'gemini-thought') body.steps.unshift({ type: 'thought', summary: [{ type: 'text', text: 'Synthetic thought' }], signature: 'opaque' })
+      if (responseMode === 'gemini-tool') body.steps.push({ type: 'tool_call', name: 'forbidden' })
       if (responseMode.startsWith('provider-failure-')) {
         const value = responseMode.slice('provider-failure-'.length)
         body.failure = value === 'null' ? null : value === 'false' ? false : value === 'empty' ? '' : value
@@ -410,8 +423,14 @@ const transportOutcomes = [
   ...['not_dispatched', 'definitive_failure', 'outcome_unknown', 'invalid_response', 'null', 'false', 'empty']
     .map(value => [`provider-failure-${value}`, 'invalid_response', ['claude', 'gemini']]),
   ...['requestId', 'pinsDigest'].map(key => [`provider-${key}`, 'invalid_response', ['claude', 'gemini']]),
+  ['missing-id-200', 'invalid_response'],
+  ...[['in_progress', 'ambiguous'], ['requires_action', 'truncated'], ['requires_continuation', 'truncated'], ['incomplete', 'truncated'],
+    ['failed', 'definitive_failure'], ['cancelled', 'definitive_failure']].map(([status, result]) => [`gemini-status-${status}`, null, ['gemini'], result]),
+  ['gemini-thought', null, ['gemini'], 'valid'], ['gemini-tool', null, ['gemini'], 'malformed'],
+  ['baseline-truncated', null, ['baseline'], 'nonterminal_output'], ['baseline-identity-mismatch', null, ['baseline'], 'identity_mismatch'],
+  ['baseline-routing', null, ['baseline'], 'unexpected_routing'], ['baseline-upstream', null, ['baseline'], 'valid'],
 ]
-for (const [mode, failure, roles = ['baseline', 'claude', 'gemini']] of transportOutcomes) {
+for (const [mode, failure, roles = ['baseline', 'claude', 'gemini'], nativeStatus] of transportOutcomes) {
   test(`A9 transport table ${mode}: classification, replay and admission`, async t => {
     for (const role of roles) await t.test(role, async t => {
       const setup = await canary(t, role)
@@ -433,10 +452,12 @@ for (const [mode, failure, roles = ['baseline', 'claude', 'gemini']] of transpor
         assert.equal(sent.hops[0].body, readJson(join(state.directory, `${id}.intent.json`)).payload.request.body)
       }
       const terminal = readJson(join(state.directory, `${id}.terminal.json`))
-      const unknown = failure === 'outcome_unknown'
+      const expectedStatus = nativeStatus ?? (failure === 'outcome_unknown' ? 'ambiguous' : failure === 'invalid_response' ? 'malformed' : failure)
+      const unknown = expectedStatus === 'ambiguous'
       const notSent = failure === 'not_dispatched'
-      assert.deepEqual(terminal.payload.raw, { failure })
-      assert.equal(terminal.payload.result.status, unknown ? 'ambiguous' : failure === 'invalid_response' ? 'malformed' : failure)
+      if (nativeStatus) assert.equal(Object.hasOwn(terminal.payload.raw, 'failure'), false)
+      else assert.deepEqual(terminal.payload.raw, { failure })
+      assert.equal(terminal.payload.result.status, expectedStatus)
       assert.equal(summary.ambiguous, Number(unknown))
       assert.equal(summary.dispatched, before + Number(!notSent))
       assert.equal(calls.length, before + Number(!notSent))
@@ -447,9 +468,10 @@ for (const [mode, failure, roles = ['baseline', 'claude', 'gemini']] of transpor
       assert.equal(charged.length, before + Number(!notSent))
       assert.equal(charged.reduce((total, [, row]) => total + row.reservationMicroUsd, 0), (before + Number(!notSent)) * 100)
       assert.equal(unresolvedLiveDispatches(ledger).length, Number(unknown))
-      if (!unknown) assert.equal([...ledger.resolutions.values()].find(row => row.intentDigest === terminal.payload.intentDigest).status, notSent ? 'not_dispatched' : 'failed')
+      const resolvedStatus = notSent ? 'not_dispatched' : unknown ? 'still_unknown' : expectedStatus === 'valid' ? 'resolved' : 'failed'
+      if (!unknown) assert.equal([...ledger.resolutions.values()].find(row => row.intentDigest === terminal.payload.intentDigest).status, resolvedStatus)
       assert.equal((await replay(state.directory)).digest, summary.digest, 'Sealed classification must reproduce exactly')
-      assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, notSent ? 'not_dispatched' : unknown ? 'still_unknown' : 'failed')
+      assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, resolvedStatus)
       if (mode.startsWith('provider-')) {
         const files = readdirSync(globalDirectory).sort()
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -495,7 +517,7 @@ test('A12 response projection keeps native fields and excludes provider metadata
     }
     else {
       assert.equal(raw.requestId, 'synthetic-header-request-id')
-      assert.deepEqual(Object.keys(raw).sort(), ['id', 'model', 'usage', 'requestId', ...(role === 'claude' ? ['stop_reason', 'content'] : ['status', 'outputs'])].sort())
+      assert.deepEqual(Object.keys(raw).sort(), ['id', 'model', 'usage', 'requestId', ...(role === 'claude' ? ['stop_reason', 'content'] : ['status', 'steps'])].sort())
     }
     assert.equal((await replay(state.directory)).digest, summary.digest)
     assert.equal(calls.length, before + 1)
@@ -1352,19 +1374,25 @@ test('the explicit CLI reconciles saved generation metadata as resolved or faile
   })
 })
 
-test('missing or contradictory metadata stays globally unresolved and consumes at most one lookup across restarts', async t => {
+test('missing metadata stays unknown while contradictory metadata resolves failed with one lookup', async t => {
   for (const status of ['unavailable', 'contradictory', 'wrong-model', 'wrong-provider', 'missing-model', 'missing-provider']) await t.test(status, async t => {
     const { state, approval, id, inferenceCalls, createRun, approve } = await pendingBaseline(t)
     metadataOutcome = status
     const summary = await reconcileLive(state.directory, id, approval)
-    assert.equal(summary.reconciliation, 'still_unknown')
-    assert.equal(summary.ambiguous, 1)
+    const known = ['contradictory', 'wrong-model', 'wrong-provider'].includes(status)
+    assert.equal(summary.reconciliation, status === 'wrong-provider' ? 'resolved' : known ? 'failed' : 'still_unknown')
+    assert.equal(summary.ambiguous, Number(!known))
+    if (!known) {
+      const report = readJson(summary.report).payload.configurations.baseline_1
+      assert.equal(['core', 'controls', 'diagnostics'].reduce((count, group) => count + (report[group].statuses.identity_unavailable ?? 0), 0), 1)
+    }
     assert.equal((await replay(state.directory)).digest, summary.digest)
     assert.equal((await reconcileLive(state.directory, id, approval)).digest, summary.digest)
     assert.equal(metadataCalls.length, 1)
     const second = await createRun('second')
-    await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
-    assert.equal(calls.length, inferenceCalls)
+    if (known) await dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct'))
+    else await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
+    assert.equal(calls.length, inferenceCalls + Number(known))
   })
 })
 
@@ -1485,8 +1513,317 @@ function rewrite(path, mutate) {
   return value
 }
 
-function reserveFixture(ledger, state, adapter, intent) {
-  const request = { body: '{}' }
+function ownerWriteOff(setup, name = 'owner-write-off', change = value => value) {
+  const { state, id, signed } = setup
+  const intent = readJson(join(state.directory, `${id}.intent.json`))
+  return signed(name, change({ version: 'learn-v2.harness-write-off.v1', directory: state.directory, pinsDigest: state.pinsDigest,
+    intentDigest: intent.digest, approvalDigest: intent.payload.approval.approvalDigest, reason: 'Owner accepts the unknown outcome and full charge.', issuedAt: Date.now() }))
+}
+
+test('B1 known baseline classifications resolve failed and admit another approved run without a grade', async t => {
+  for (const status of ['identity_mismatch', 'upstream_mismatch', 'unexpected_routing', 'nonterminal_output']) await t.test(status, async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id, createRun, approve } = setup
+    baselineStatus = status // Isolate the runner's classified-result boundary.
+    const summary = await dispatchLive(state.directory, id, approval)
+    const terminal = readJson(join(state.directory, `${id}.terminal.json`)).payload.result
+    assert.equal(terminal.status, status)
+    assert.equal(terminal.scorePercent, null)
+    assert.equal(terminal.criteria, null)
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, 100)
+    const ledger = await openLiveLedger(globalDirectory)
+    assert.equal([...ledger.resolutions.values()].find(row => row.id === id).status, 'failed')
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'failed')
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    const next = await createRun('after-known-failure')
+    await dispatchLive(next.directory, next.plan[0].id, approve(next, 'after-known-failure'))
+    assert.equal(calls.length, 2)
+  })
+})
+
+test('B1 genuinely unknown baseline classifications retain the global block', async t => {
+  for (const status of ['ambiguous', 'outcome_unknown', 'identity_unavailable', 'lease_expired']) await t.test(status, async t => {
+    const setup = await canary(t, 'baseline')
+    baselineStatus = status
+    assert.equal((await dispatchLive(setup.state.directory, setup.id, setup.approval)).ambiguous, 1)
+    await assertBlocked(setup, 1)
+  })
+})
+
+test('B1 owner write-off retains charge and count, unblocks a separate run and forbids redispatch', async t => {
+  for (const role of ['baseline', 'claude', 'gemini']) await t.test(role, async t => {
+    const setup = await canary(t, role)
+    const { state, approval, id, createRun, approve } = setup
+    const before = calls.length
+    const reset = syntheticHttp(t, setup, 'network-loss')
+    await dispatchLive(state.directory, id, approval)
+    const file = ownerWriteOff(setup)
+    const summary = await main(['reconcile', '--output', state.directory, '--id', id, '--approval', approval.approvalFile,
+      '--cost-evidence', approval.costFile, '--owner-public-key', approval.trustKey, '--write-off', file])
+    assert.equal(summary.reconciliation, 'written_off')
+    assert.equal(summary.ambiguous, 0)
+    assert.equal(summary.dispatched, before + 1)
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, (before + 1) * 100)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    const ledger = await openLiveLedger(globalDirectory)
+    assert.equal(unresolvedLiveDispatches(ledger).length, 0)
+    assert.equal([...ledger.resolutions.values()].find(row => row.id === id).status, 'written_off')
+    assert.equal([...ledger.reservations.values()].find(row => row.id === id).reservationMicroUsd, 100)
+    assert.equal((await reconcileLive(state.directory, id, approval)).digest, summary.digest)
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Written-off intent/)
+    assert.equal(calls.length, before + 1)
+    assert.equal(metadataCalls.length, 0)
+    const next = await createRun('after-write-off')
+    reset()
+    await dispatchLive(next.directory, next.plan[0].id, approve(next, 'after-write-off'))
+    assert.equal(calls.length, before + 2)
+  })
+})
+
+test('B1 write-off rejects unsigned, wrong-key and incorrectly bound decisions', async t => {
+  for (const change of ['unsigned', 'wrong-key', 'wrong-key-reapproval', 'directory', 'pinsDigest', 'intentDigest', 'approvalDigest', 'reason', 'issuedAt']) await t.test(change, async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, 'network-loss')
+    await dispatchLive(state.directory, id, approval)
+    const file = ownerWriteOff(setup, 'bad-write-off', value => {
+      if (['directory', 'pinsDigest', 'intentDigest', 'approvalDigest'].includes(change)) value[change] = 'wrong'
+      if (change === 'reason') value.reason = ''
+      if (change === 'issuedAt') value.issuedAt = Date.now() + 1
+      return value
+    })
+    const envelope = readJson(file)
+    if (change === 'unsigned') writeFileSync(file, JSON.stringify(envelope.payload))
+    if (change === 'wrong-key') envelope.signature = sign(null, Buffer.from(canonical(envelope.payload)), generateKeyPairSync('ed25519').privateKey).toString('base64')
+    if (change === 'wrong-key') writeFileSync(file, JSON.stringify(envelope))
+    if (change === 'wrong-key-reapproval') {
+      const other = generateKeyPairSync('ed25519')
+      const keyFile = join(state.directory, '..', 'different-owner.pem')
+      writeFileSync(keyFile, other.publicKey.export({ type: 'spki', format: 'pem' }))
+      for (const path of [file, approval.approvalFile, approval.costFile]) {
+        const document = readJson(path)
+        document.signature = sign(null, Buffer.from(canonical(document.payload)), other.privateKey).toString('base64')
+        writeFileSync(path, JSON.stringify(document))
+      }
+      approval.trustKey = keyFile
+    }
+    await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }))
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+    await assertBlocked(setup, 1)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('B1 signed write-off works after approval expiry without metadata or inference', async t => {
+  const setup = await canary(t, 'baseline')
+  const { state, approval, id, setClock, clock } = setup
+  syntheticHttp(t, setup, 'network-loss')
+  await dispatchLive(state.directory, id, approval)
+  setClock(clock + 2 * 86_400_000)
+  const summary = await reconcileLive(state.directory, id, { ...approval, writeOffFile: ownerWriteOff(setup) })
+  assert.equal(summary.reconciliation, 'written_off')
+  assert.equal(summary.dispatched, 1)
+  assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, 100)
+  assert.equal(calls.length, 1)
+  assert.equal(metadataCalls.length, 0)
+})
+
+test('B1 write-off cannot replace a known result or release its global ceiling count', async t => {
+  const setup = await canary(t, 'baseline')
+  const { state, id, approval, createRun, approve } = setup
+  const reset = syntheticHttp(t, setup, 'network-loss')
+  await dispatchLive(state.directory, id, approval)
+  await reconcileLive(state.directory, id, { ...approval, writeOffFile: ownerWriteOff(setup) })
+  const next = await createRun('paid-count')
+  const ledger = await openLiveLedger(globalDirectory)
+  const adapter = next.pins.adapters.find(row => row.role === 'baseline')
+  const limit = contract.LIMITS.dispatchesPerModelOrConfiguration
+  contract.LIMITS.dispatchesPerModelOrConfiguration = 1
+  try {
+    assert.throws(() => reserveFixture(ledger, next, adapter, { id: next.plan.find(row => row.adapter === adapter.id).id,
+      approval: approve(next, 'paid-count').record, dispatched: true, reservationMicroUsd: 100 }), /ceiling/)
+  }
+  finally { contract.LIMITS.dispatchesPerModelOrConfiguration = limit }
+  reset()
+  const known = await createRun('known-failure')
+  const knownApproval = approve(known, 'known-failure')
+  const knownId = known.plan[0].id
+  await dispatchLive(known.directory, knownId, knownApproval)
+  const file = ownerWriteOff({ ...setup, state: known, id: knownId })
+  await assert.rejects(reconcileLive(known.directory, knownId, { ...knownApproval, writeOffFile: file }), /Only an unknown outcome/)
+  assert.equal(artifacts.exists(join(known.directory, `${knownId}.written-off.json`)), false)
+})
+
+test('B1 signed write-off closes an older-version unknown without replaying historical code', async t => {
+  const setup = await canary(t, 'baseline')
+  syntheticHttp(t, setup, 'network-loss')
+  await dispatchLive(setup.state.directory, setup.id, setup.approval)
+  const file = ownerWriteOff(setup)
+  advanceRevision()
+  const summary = await reconcileLive(setup.state.directory, setup.id, { ...setup.approval, writeOffFile: file })
+  assert.equal(summary.reconciliation, 'written_off')
+  assert.equal(summary.verification, 'sealed_digest_consistency')
+  assert.equal(summary.dispatched, 1)
+  assert.equal(summary.ambiguous, 0)
+  assert.equal(calls.length, 1)
+  assert.equal(metadataCalls.length, 0)
+})
+
+test('B1 signed write-off can recover an intent publication interruption without inference', async t => {
+  const { createRun, approve, signed } = await workspace(t)
+  const state = await createRun('write-off-unpublished-intent')
+  const approval = approve(state, 'write-off-unpublished-intent')
+  const id = state.plan[0].id
+  interruptIntent = true
+  await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+  interruptIntent = false
+  const reservation = [...(await openLiveLedger(globalDirectory, { recoveringDirectory: state.directory })).reservations.values()][0]
+  const file = signed('owner-write-off', { version: 'learn-v2.harness-write-off.v1', directory: state.directory, pinsDigest: state.pinsDigest,
+    intentDigest: reservation.intentDigest, approvalDigest: reservation.approvalDigest, reason: 'Owner retains the unresolved reservation.', issuedAt: Date.now() })
+  const summary = await reconcileLive(state.directory, id, { ...approval, writeOffFile: file })
+  assert.equal(summary.reconciliation, 'written_off')
+  assert.equal(summary.dispatched, 1)
+  assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, 100)
+  assert.equal(calls.length, 0)
+  assert.equal(metadataCalls.length, 0)
+})
+
+test('B1 write-off publication and resolution crashes recover without losing the charge', async t => {
+  for (const point of ['dispatch_write_off', 'live_dispatch_resolution', 'marker']) for (const after of [false, true]) await t.test(`${point}/${after}`, async t => {
+    const setup = await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    syntheticHttp(t, setup, 'network-loss')
+    await dispatchLive(state.directory, id, approval)
+    const file = ownerWriteOff(setup)
+    if (point === 'marker') markerRemovalFailure = after ? 'after' : 'before'
+    else (after ? failuresAfterWrite : publicationFailures).add(point)
+    await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), /Simulated/)
+    publicationFailures.clear(); failuresAfterWrite.clear(); markerRemovalFailure = null
+    const summary = await reconcileLive(state.directory, id, { ...approval, writeOffFile: file })
+    assert.equal(summary.reconciliation, 'written_off')
+    assert.equal(readJson(summary.report).payload.reservations.retainedMicroUsd, 100)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    await assert.rejects(dispatchLive(state.directory, id, approval), /Written-off/)
+    assert.equal(calls.length, 1)
+  })
+})
+
+test('B1 metadata has a separate bounded lease after the inference lease expires', async t => {
+  for (const window of ['after-inference-lease', 'near-approval-expiry', 'near-cost-expiry']) await t.test(window, async t => {
+    const { state, approval, id, inferenceCalls } = await pendingBaseline(t, window === 'near-cost-expiry' ? 3_600_000 : 600_000)
+    const intent = readJson(join(state.directory, `${id}.intent.json`))
+    const now = window === 'after-inference-lease' ? intent.payload.deadline + 1 : intent.payload.approval.validUntil - 500
+    const clockMock = mock.method(Date, 'now', () => now)
+    t.after(() => clockMock.mock.restore())
+    const summary = await reconcileLive(state.directory, id, approval)
+    assert.equal(summary.reconciliation, 'resolved')
+    const lookup = readJson(join(state.directory, `${id}.metadata-intent.json`)).payload
+    assert.equal(lookup.startedAt, now)
+    assert.equal(lookup.deadline, Math.min(now + 10_000, intent.payload.approval.validUntil))
+    assert.equal(metadataCalls.length, 1)
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal((await replay(state.directory)).digest, summary.digest)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+  })
+})
+
+test('B1 durable ledger path and private permissions have no live override', async t => {
+  assert.equal(artifacts.liveLedgerDirectory(), join(homedir(), '.budds', 'learn-v2-scorer-live'))
+  const { createRun, approve } = await workspace(t)
+  const state = await createRun('durable')
+  const approval = approve(state, 'durable')
+  await assert.rejects(dispatchLive(state.directory, state.plan[0].id, { ...approval, ledgerDirectory: '/tmp/untrusted-ledger' }), /overrides/)
+  process.env.BUDDS_LEARN_V2_SCORER_LEDGER = '/tmp/untrusted-ledger'
+  try { assert.throws(() => artifacts.liveLedgerDirectory(), /overrides/) }
+  finally { delete process.env.BUDDS_LEARN_V2_SCORER_LEDGER }
+  chmodSync(globalDirectory, 0o755)
+  await dispatchLive(state.directory, state.plan[0].id, approval)
+  assert.equal(fs.statSync(globalDirectory).mode & 0o777, 0o700)
+})
+
+test('B1 prior dispatches cannot start around a missing or empty durable ledger', async t => {
+  for (const loss of ['missing', 'empty']) await t.test(loss, async t => {
+    const { createRun, approve } = await workspace(t)
+    const state = await createRun('lost-ledger')
+    const approval = approve(state, 'lost-ledger')
+    await dispatchLive(state.directory, state.plan[0].id, approval)
+    rmSync(globalDirectory, { recursive: true })
+    if (loss === 'empty') outputDirectory(globalDirectory)
+    await assert.rejects(dispatchLive(state.directory, state.plan[1].id, approval), /original durable ledger/)
+    assert.equal(calls.length, 1)
+  })
+})
+
+test('B1 midnight dispatch stays inside signed cost validity and stops at expiry', async t => {
+  const clock = Date.parse('2026-11-10T23:59:30Z')
+  const { createRun, approve, setClock } = await workspace(t, 3_600_000, clock)
+  const state = await createRun('midnight')
+  const approval = approve(state, 'midnight')
+  await dispatchLive(state.directory, state.plan[0].id, approval)
+  setClock(clock + 60_000)
+  await dispatchLive(state.directory, state.plan[1].id, approval)
+  assert.equal(calls.length, 2)
+  setClock(clock + 600_000)
+  await assert.rejects(dispatchLive(state.directory, state.plan[2].id, approval), /Cost evidence is stale/)
+  assert.equal(calls.length, 2)
+})
+
+test('B1 evidence validity controls dispatch independently of the run clock age', async t => {
+  for (const fresh of [true, false]) await t.test(fresh ? 'fresh-after-old-run-clock' : 'too-old-despite-future-expiry', async t => {
+    const { createRun, approve, signed, clock, setClock } = await workspace(t)
+    const state = await createRun('evidence-age')
+    const approval = approve(state, 'evidence-age')
+    const now = clock + 2 * 86_400_000
+    const cost = readJson(approval.costFile).payload
+    cost.verifiedAt = fresh ? now : clock
+    cost.expiresAt = now + 60_000
+    const owner = readJson(approval.approvalFile).payload
+    owner.issuedAt = now
+    owner.expiresAt = now + 60_000
+    owner.costEvidenceDigest = hash(cost)
+    const options = { ...approval, costFile: signed('revalidated-cost', cost), approvalFile: signed('revalidated-approval', owner) }
+    setClock(now)
+    if (fresh) await dispatchLive(state.directory, state.plan[0].id, options)
+    else await assert.rejects(dispatchLive(state.directory, state.plan[0].id, options), /Cost evidence is stale/)
+    assert.equal(calls.length, Number(fresh))
+  })
+})
+
+test('B1 changed request pins get a fresh ceiling while unchanged pins stay capped', async t => {
+  const { createRun, approve } = await workspace(t)
+  const first = await createRun('request-cap')
+  const next = await createRun('changed-request')
+  const changedRun = await createRun('changed-request-version')
+  delete first.pins.adapters[0].requestPinsDigest
+  first.pins.implementation.files['scripts/lib/learn-v2-scorer/adapters.mjs'] = hash('historical request identity format')
+  first.pinsDigest = hash(first.pins)
+  rmSync(join(first.directory, 'manifest.json'))
+  artifacts.seal(first.directory, 'manifest.json', 'manifest', first.pinsDigest, first.pins)
+  const adapter = first.pins.adapters[0]
+  const ledger = await openLiveLedger(globalDirectory)
+  const approval = approve(first, 'request-cap').record
+  for (let ordinal = 0; ordinal < 256; ordinal++) assert.equal(reserveFixture(ledger, first, adapter,
+    { id: `item_${hash(ordinal).slice(7, 39)}`, approval, dispatched: true, reservationMicroUsd: 100 }), true)
+  const intent = { id: next.plan[0].id, approval: approve(next, 'unchanged-request').record, dispatched: true, reservationMicroUsd: 100 }
+  assert.throws(() => reserveFixture(ledger, next, next.pins.adapters[0], intent), /ceiling/)
+  const changedRequest = { ...adapters.requestFor(adapter, { payload: '' }), api: 'next-api-revision' }
+  const changed = { ...adapter, api: changedRequest.api, requestPinsDigest: adapters.requestPinsDigest(changedRequest) }
+  // A distinct, owner-signed manifest models the next adapter version. Global
+  // history checks its sealed pins without executing that version's code.
+  changedRun.pins.adapters[0] = changed
+  changedRun.pins.implementation.files['scripts/lib/learn-v2-scorer/adapters.mjs'] = hash('changed adapter implementation')
+  changedRun.pinsDigest = hash(changedRun.pins)
+  rmSync(join(changedRun.directory, 'manifest.json'))
+  artifacts.seal(changedRun.directory, 'manifest.json', 'manifest', changedRun.pinsDigest, changedRun.pins)
+  intent.approval = approve(changedRun, 'changed-request').record
+  assert.equal(reserveFixture(ledger, changedRun, changed, intent, changedRequest), true)
+  assert.equal((await openLiveLedger(globalDirectory)).reservations.size, 257)
+  assert.equal(calls.length, 0)
+})
+
+function reserveFixture(ledger, state, adapter, intent, request = adapters.requestFor(adapter, { payload: '' })) {
   const payload = { ...intent, adapter: adapter.id, request, requestDigest: hash(request), responseDigest: hash('synthetic'),
     startedAt: state.pins.clock, deadline: state.pins.clock + 90_000, thresholdDigest: null,
     approval: { ...intent.approval, reservationMicroUsd: intent.reservationMicroUsd, validUntil: state.pins.clock + 600_000,
@@ -1783,12 +2120,12 @@ test('crash table: marker removal before or after unlink resumes from the verifi
   })
 })
 
-test('expired original leases and late saved metadata never authorize a lookup or resolution', async t => {
+test('expired approvals and late saved metadata never authorize a lookup or resolution', async t => {
   for (const point of ['expired-original', 'late-metadata']) await t.test(point, async t => {
     const { state, approval, id, inferenceCalls } = await pendingBaseline(t)
     const intent = readJson(join(state.directory, `${id}.intent.json`))
     if (point === 'expired-original') {
-      const clockMock = mock.method(Date, 'now', () => intent.payload.deadline)
+      const clockMock = mock.method(Date, 'now', () => intent.payload.approval.validUntil)
       t.after(() => clockMock.mock.restore())
     }
     else {
@@ -1905,7 +2242,9 @@ test('expired approval cannot authorize new metadata I/O within an otherwise eli
   const { state, approval, id, clock, inferenceCalls } = await pendingBaseline(t, 1000)
   const clockMock = mock.method(Date, 'now', () => clock + 1000)
   t.after(() => clockMock.mock.restore())
-  await assert.rejects(reconcileLive(state.directory, id, approval), /Owner approval is stale/)
+  const summary = await reconcileLive(state.directory, id, approval)
+  assert.equal(summary.reconciliation, 'still_unknown')
+  assert.equal(summary.ambiguous, 1)
   assert.equal(metadataCalls.length, 0)
   assert.equal(calls.length, inferenceCalls)
   assert.ok(!artifacts.exists(join(state.directory, `${id}.metadata-intent.json`)))

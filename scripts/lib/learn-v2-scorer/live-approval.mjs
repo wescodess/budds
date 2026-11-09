@@ -5,16 +5,22 @@ import { canonical, hash, readJson, exactKeys, POLICY } from './artifacts.mjs'
 import { LIMITS } from './contract.mjs'
 import { readConfiguredRuntimeValue } from '../../../server/utils/runtime-config.ts'
 
-function signedDocument(file, trustKey) {
-  const envelope = readJson(file)
+export function verifyOwnerDocument(envelope, publicKey) {
   exactKeys(envelope, ['payload', 'signature'])
-  const key = createPublicKey(readFileSync(trustKey))
+  const key = createPublicKey(publicKey)
   assert.equal(key.asymmetricKeyType, 'ed25519', 'Owner trust key must be Ed25519')
   assert.ok(verify(null, Buffer.from(canonical(envelope.payload)), key, Buffer.from(envelope.signature, 'base64')), 'Owner signature is invalid')
   return envelope.payload
 }
 
+function signedDocument(file, trustKey) {
+  return verifyOwnerDocument(readJson(file), readFileSync(trustKey))
+}
+
+export const ownerKeyDigest = publicKey => hash(createPublicKey(publicKey).export({ type: 'spki', format: 'der' }))
+
 export function verifySavedApproval(saved, { approvalFile, costFile, trustKey }) {
+  if (saved.ownerKeyDigest) assert.equal(ownerKeyDigest(readFileSync(trustKey)), saved.ownerKeyDigest, 'Recovery requires the original owner key')
   assert.equal(hash(signedDocument(approvalFile, trustKey)), saved.approvalDigest, 'Recovery requires the original signed approval')
   assert.equal(hash(signedDocument(costFile, trustKey)), saved.costDigest, 'Recovery requires the original signed cost evidence')
 }
@@ -46,7 +52,8 @@ export function admitLive({ pins, pinsDigest, item, request, requestPins, approv
   assert.equal(approval.providersApproved, true)
   assert.equal(approval.privacyApproved, true)
   assert.equal(approval.payloadPolicy, POLICY)
-  assert.ok(approval.issuedAt <= now && now < approval.expiresAt, 'Owner approval is stale')
+  assert.ok([approval.issuedAt, approval.expiresAt, now].every(Number.isSafeInteger)
+    && approval.issuedAt <= now && now < approval.expiresAt, 'Owner approval is stale')
   const cost = signedDocument(costFile, trustKey)
   exactKeys(cost, ['version', 'pinsDigest', 'priceAccessDate', 'verifiedAt', 'expiresAt', 'includesSchemaAndSystemOverhead',
     'includesFeesTaxesAndPurchases', 'method', 'requests'])
@@ -54,7 +61,8 @@ export function admitLive({ pins, pinsDigest, item, request, requestPins, approv
   assert.equal(cost.version, 'learn-v2.harness-cost-reservation.v1')
   assert.equal(cost.pinsDigest, pinsDigest)
   assert.equal(cost.priceAccessDate, pins.priceAccessDate)
-  assert.ok(cost.verifiedAt <= now && now < cost.expiresAt && now - cost.verifiedAt <= 86_400_000, 'Cost evidence is stale')
+  assert.ok([cost.verifiedAt, cost.expiresAt].every(Number.isSafeInteger)
+    && cost.verifiedAt <= now && now < cost.expiresAt && now - cost.verifiedAt <= 86_400_000, 'Cost evidence is stale')
   assert.equal(cost.includesSchemaAndSystemOverhead, true)
   assert.equal(cost.includesFeesTaxesAndPurchases, true)
   assert.equal(cost.method, 'verified_conservative_reservation', 'An estimated token count is not a reservation')
@@ -81,6 +89,6 @@ export function admitLive({ pins, pinsDigest, item, request, requestPins, approv
   assert.ok(cost.requests.every(row => Number.isSafeInteger(row.maximumMicroUsd) && row.maximumMicroUsd > 0), 'Invalid reservation coverage')
   const total = cost.requests.reduce((sum, row) => sum + row.maximumMicroUsd, 0)
   assert.ok(Number.isSafeInteger(total) && total <= approval.budgetMicroUsd, 'Full cost reservation exceeds owner approval')
-  return { reservationMicroUsd: quote.maximumMicroUsd, approvalDigest: hash(approval), costDigest: hash(cost),
+  return { reservationMicroUsd: quote.maximumMicroUsd, approvalDigest: hash(approval), costDigest: hash(cost), ownerKeyDigest: ownerKeyDigest(readFileSync(trustKey)),
     validUntil: Math.min(approval.expiresAt, cost.expiresAt), quote }
 }

@@ -414,7 +414,11 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
   catch {
     throw providerError({ statusCode: 502, message: 'AI Gateway returned invalid JSON' }, 'invalid_response')
   }
-  return validateGenerateResponse(parsed, params.captureScoringProvenance === true)
+  const completion = validateGenerateResponse(parsed, params.captureScoringProvenance === true)
+  if (params.captureScoringProvenance && (typeof completion.id !== 'string' || !completion.id.trim())) {
+    throw providerError({ statusCode: 502, message: 'AI Gateway completion has no generation ID' }, 'invalid_response')
+  }
+  return completion
 }
 
 export async function generateCompletionStream(params: GenerateParams): Promise<ReadableStream> {

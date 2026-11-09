@@ -123,6 +123,12 @@ describe('closed immutable scorer inventory', () => {
 })
 
 describe('recorded execution verification', () => {
+  test.each(['new_vendor_terminal_value', 'MAX_TOKENS'])('B1 normalized stop accepts open-ended native finish observations (%s)', async native_finish_reason => {
+    const response = completion()
+    const { service, prepared } = await setup({ response: completion({ choices: [{ ...response.choices[0], native_finish_reason }] }) })
+    expect((await service.dispatch(prepared)).receipt.outcome).toBe('validated')
+  })
+
   test('preserves baseline request bytes/automatic routing while opting in to observations', async () => {
     const { prepared, service, infer, registry } = await setup()
     const result = await service.dispatch(prepared)
@@ -234,7 +240,6 @@ describe('recorded execution verification', () => {
     ['pipeline transformation', { openrouter_metadata: { strategy: 'direct', attempt: 1, pipeline: [{ type: 'response_healing', data: { private: 'body' } }] } }],
     ['malformed metadata', { openrouter_metadata: { attempt: 'one' } }],
     ['truncation', { choices: [{ index: 0, finish_reason: 'length', message: { role: 'assistant', content: JSON.stringify(vector) } }] }],
-    ['native truncation', { choices: [{ index: 0, finish_reason: 'stop', native_finish_reason: 'MAX_TOKENS', message: { role: 'assistant', content: JSON.stringify(vector) } }] }],
     ['missing terminal status', { choices: [{ index: 0, message: { role: 'assistant', content: JSON.stringify(vector) } }] }],
     ['refusal', { choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: null, refusal: 'private refusal' } }] }],
     ['filtered', { choices: [{ index: 0, finish_reason: 'content_filter', message: { role: 'assistant', content: JSON.stringify(vector) } }] }],
@@ -279,6 +284,15 @@ describe('recorded execution verification', () => {
     expect(reconciled.receipt.observedIdentity).toMatchObject({ observationSource: 'openrouter.generation-metadata', upstreamRequestId: 'upstream-fixture' })
     await expect(restarted.dispatch(restored)).rejects.toThrow('unavailable')
     await expect(restarted.reconcile(restored, reconciled)).rejects.toThrow('unavailable')
+  })
+
+  test('B1 metadata reconciliation refuses deterministic identity before I/O', async () => {
+    const { service, prepared, lookup, infer } = await setup({ response: completion({ openrouter_metadata: undefined }) })
+    const saved = await service.dispatch(prepared)
+    saved.receipt.observedIdentity = { status: 'deterministic', engineVersion: 'synthetic-only' }
+    await expect(service.reconcile(prepared, saved)).rejects.toThrow('unavailable')
+    expect(lookup).not.toHaveBeenCalled()
+    expect(infer).toHaveBeenCalledTimes(1)
   })
 
   test.each([

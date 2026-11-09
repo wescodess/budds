@@ -95,6 +95,7 @@ export type LearnScoringExecutionResult = {
   terminalDigest: string
   metadataLookups: number
   metadata: GatewayGenerationMetadata | null
+  metadataLease?: { startedAt: number, deadline: number, inferenceObservedAt: number }
 }
 export type PreparedLearnScoringExecution = {
   receipt: LearnScoringExecutionReceipt
@@ -184,8 +185,15 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
   }
 
   async function evaluate(prepared: PreparedLearnScoringExecution, terminal: LearnScoringTerminal,
-    metadata: GatewayGenerationMetadata | null, metadataLookups: number, observedAt = clock()): Promise<LearnScoringExecutionResult> {
+    metadata: GatewayGenerationMetadata | null, metadataLookups: number, observedAt = clock(),
+    metadataLease?: LearnScoringExecutionResult['metadataLease']): Promise<LearnScoringExecutionResult> {
     const binding = await verifyPrepared(prepared)
+    if (metadataLease && (![metadataLease.startedAt, metadataLease.deadline, metadataLease.inferenceObservedAt].every(Number.isSafeInteger)
+      || metadataLease.inferenceObservedAt < prepared.receipt.dispatchedAt || metadataLease.inferenceObservedAt > metadataLease.startedAt
+      || metadataLease.startedAt >= metadataLease.deadline || metadataLease.deadline > metadataLease.startedAt + 10_000
+      || observedAt < metadataLease.startedAt || metadataLookups !== 1)) throw new Error('Invalid metadata lease')
+    const timely = metadataLease ? metadataLease.inferenceObservedAt < prepared.leaseExpiresAt && observedAt < metadataLease.deadline
+      : observedAt < prepared.leaseExpiresAt
     const provenance = terminal.provenance
     const observed = { ...unknownIdentity(binding.requestedModel, observedAt),
       returnedScorerModel: metadata?.returnedModel ?? terminal.returnedModel, generationId: terminal.generationId,
@@ -218,25 +226,25 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
     observed.status = mismatch ? 'mismatch' : completeIdentity && !routeUnsafe ? 'verified' : 'unknown'
     const finishReason = provenance?.finishReason
     const refused = provenance?.refused || finishReason === 'content_filter' || metadata?.finishReason === 'content_filter'
-    const nativeComplete = (reason: string | null | undefined) => reason == null || ['stop', 'STOP', 'end_turn', 'stop_sequence'].includes(reason)
+    // OpenRouter's normalized finish reason is authoritative; native values are open-ended observations.
     const terminalComplete = finishReason === 'stop' && (!metadata || metadata.finishReason === null || metadata.finishReason === 'stop')
-      && nativeComplete(provenance?.nativeFinishReason) && nativeComplete(metadata?.nativeFinishReason)
       && !metadata?.cancelled && !provenance?.errored
     const verdict = terminal.verdict
     const outputValid = verdict !== null && terminalVerdict(JSON.stringify(verdict), prepared.criteria) !== null
     const validated = observed.status === 'verified' && terminalComplete && !refused && outputValid
-      && !terminal.failure && observedAt < prepared.leaseExpiresAt
+      && !terminal.failure && timely
     const receipt = learnScoringExecutionReceiptSchema.parse({
       ...prepared.receipt, observedIdentity: observed, usage: metadata?.usage ?? provenance?.usage ?? null,
       outcome: validated ? 'validated' : refused ? 'refused' : terminal.failure === 'not_dispatched' || terminal.failure === 'definitive_failure' ? 'error' : 'reconciliation_required',
       integrityResult: validated ? 'verified' : refused ? 'provider_refused' : mismatch ? 'identity_mismatch'
-        : routeUnsafe ? 'unexpected_routing' : observedAt >= prepared.leaseExpiresAt ? 'lease_expired'
+        : routeUnsafe ? 'unexpected_routing' : !timely ? 'lease_expired'
           : !terminalComplete ? 'nonterminal_output' : !outputValid ? 'invalid_verdict' : 'identity_unavailable',
       ...(validated && verdict ? { verdict: { ...verdict, scorePercent: scoreCriteria(prepared.criteria, verdict.criterionResults),
         responseDigest: prepared.receipt.responseDigest, verdictDigest: await scorerDigest(scorerCanonicalJson(verdict)) } } : {}),
     })
     if (validated && !isLearnScoringReceiptCommittable(receipt, registry.identityPolicy)) throw new Error('Scoring receipt failed the frozen commit gate')
-    return { receipt, terminal, terminalDigest: await scorerDigest(scorerCanonicalJson({ execution: prepared.receipt, terminal })), metadataLookups, metadata }
+    return { receipt, terminal, terminalDigest: await scorerDigest(scorerCanonicalJson({ execution: prepared.receipt, terminal })), metadataLookups, metadata,
+      ...(metadataLease ? { metadataLease } : {}) }
   }
 
   return {
@@ -295,20 +303,25 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
 
     // Call only with the saved terminal result. There is intentionally no path
     // from reconciliation to transport.infer or to a fresh request/binding.
-    async reconcile(prepared: PreparedLearnScoringExecution, saved: LearnScoringExecutionResult) {
+    async reconcile(prepared: PreparedLearnScoringExecution, saved: LearnScoringExecutionResult, metadataDeadline?: number) {
       await verifyPrepared(prepared)
       const handle = handles.get(prepared)
       if (!handle || handle.metadataLookups >= 1 || saved.metadataLookups !== 0
         || saved.receipt.outcome !== 'reconciliation_required' || saved.receipt.integrityResult !== 'identity_unavailable'
-        || saved.terminal.generationId === null || clock() >= prepared.leaseExpiresAt
+        || saved.receipt.observedIdentity.status === 'deterministic'
+        || saved.terminal.generationId === null
         || saved.terminalDigest !== await scorerDigest(scorerCanonicalJson({ execution: prepared.receipt, terminal: saved.terminal }))
         || saved.receipt.requestDigest !== prepared.receipt.requestDigest) throw new Error('Scoring reconciliation unavailable')
+      const startedAt = clock()
+      const deadline = Math.min(metadataDeadline ?? prepared.leaseExpiresAt, startedAt + 10_000)
+      if (!Number.isSafeInteger(deadline) || startedAt >= deadline) throw new Error('Scoring reconciliation unavailable')
+      const metadataLease = { startedAt, deadline, inferenceObservedAt: saved.receipt.observedIdentity.observedAt }
       handle.dispatched = true
       handle.metadataLookups += 1
       let metadata: GatewayGenerationMetadata
-      try { metadata = await finiteScoringIo(Math.min(10_000, prepared.leaseExpiresAt - clock()), signal => transport.metadata(saved.terminal.generationId!, signal)) }
+      try { metadata = await finiteScoringIo(deadline - clock(), signal => transport.metadata(saved.terminal.generationId!, signal)) }
       catch { return { ...saved, metadataLookups: 1 } }
-      return evaluate(prepared, saved.terminal, metadata, 1)
+      return evaluate(prepared, saved.terminal, metadata, 1, clock(), metadataLease)
     },
 
     /** Offline replay of the complete result, including the terminal guard and
@@ -318,7 +331,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
         const receipt = learnScoringExecutionReceiptSchema.parse(result.receipt)
         if (receipt.observedIdentity.status === 'deterministic' || receipt.observedIdentity.observedAt > clock()
           || ![0, 1].includes(result.metadataLookups) || (result.metadata !== null && result.metadataLookups !== 1)) return false
-        const replay = await evaluate(prepared, result.terminal, result.metadata, result.metadataLookups, receipt.observedIdentity.observedAt)
+        const replay = await evaluate(prepared, result.terminal, result.metadata, result.metadataLookups, receipt.observedIdentity.observedAt, result.metadataLease)
         return scorerCanonicalJson(replay) === scorerCanonicalJson(result) && isLearnScoringReceiptCommittable(receipt, registry.identityPolicy)
       }
       catch { return false }

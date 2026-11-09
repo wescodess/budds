@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { hash, unseal, exists, implementationPins, outputDirectory, FIXTURES, exactKeys, readJson, VERSION } from './artifacts.mjs'
 import { corpusInputs, bindInventory, runPins, schedule, LIMITS } from './contract.mjs'
 import { fitThresholds } from './report.mjs'
-import { requestFor, baselineExecution, reconcileBaselineExecution, GRADER_PROMPT, GRADER_SCHEMA, parseIndependent } from './adapters.mjs'
+import { requestFor, requestPinsDigest, baselineExecution, reconcileBaselineExecution, GRADER_PROMPT, GRADER_SCHEMA, parseIndependent } from './adapters.mjs'
+import { verifyWriteOff } from './write-off.mjs'
 
 const int = value => Number.isSafeInteger(value) && value >= 0
 export const artifactName = (id, type) => `${id}.${type}.json`
@@ -23,11 +24,13 @@ export function validateFixture(fixture) {
 
 export function liveOutcome(result) {
   if (result.status === 'not_dispatched') return 'not_dispatched'
-  if (['ambiguous', 'outcome_unknown', 'identity_unavailable', 'identity_mismatch', 'upstream_mismatch', 'unexpected_routing', 'nonterminal_output', 'lease_expired'].includes(result.status)) return 'still_unknown'
+  if (result.status === 'written_off') return 'written_off'
+  if (['ambiguous', 'outcome_unknown', 'identity_unavailable', 'lease_expired'].includes(result.status)) return 'still_unknown'
   return result.status === 'valid' ? 'resolved' : 'failed'
 }
 
 export function metadataOutcome(result) {
+  if (result && liveOutcome(result) === 'failed') return 'failed'
   const execution = result?.execution
   const metadata = execution?.metadata
   if (!metadata || execution.receipt.observedIdentity.status !== 'verified' || result.status === 'upstream_mismatch'
@@ -60,7 +63,8 @@ function verifySealedPins(pins) {
   assert.ok(Array.isArray(pins.adapters) && pins.adapters.length > 0 && pins.adapters.length <= 96)
   assert.equal(new Set(pins.adapters.map(adapter => adapter.id)).size, pins.adapters.length)
   for (const adapter of pins.adapters) assert.ok(typeof adapter.id === 'string' && digest(adapter.configuration)
-    && typeof adapter.model === 'string' && ['baseline', 'claude', 'gemini'].includes(adapter.role))
+    && typeof adapter.model === 'string' && ['baseline', 'claude', 'gemini'].includes(adapter.role)
+    && (adapter.requestPinsDigest === undefined || digest(adapter.requestPinsDigest)))
 }
 
 function verifySealedIntent(state, item, intent) {
@@ -69,12 +73,16 @@ function verifySealedIntent(state, item, intent) {
   assert.match(intent.id, /^item_[a-f0-9]{32}$/)
   assert.ok(state.pins.adapters.some(adapter => adapter.id === intent.adapter), 'Unknown sealed adapter')
   assert.equal(intent.requestDigest, hash(intent.request), 'Sealed request digest changed')
+  const adapter = state.pins.adapters.find(adapter => adapter.id === intent.adapter)
+  if (adapter?.requestPinsDigest !== undefined) assert.equal(adapter.requestPinsDigest, requestPinsDigest(intent.request), 'Sealed adapter request pins changed')
   assert.ok(digest(intent.responseDigest) && (intent.thresholdDigest === null || digest(intent.thresholdDigest)))
   assert.ok(int(intent.startedAt) && int(intent.deadline) && intent.deadline > intent.startedAt)
   assert.ok(int(intent.reservationMicroUsd) && typeof intent.dispatched === 'boolean')
   assert.ok(intent.dispatched ? intent.reservationMicroUsd > 0 : intent.reservationMicroUsd === 0)
   if (state.pins.mode === 'live') {
-    exactKeys(intent.approval, ['reservationMicroUsd', 'approvalDigest', 'costDigest', 'validUntil', 'quote'])
+    exactKeys(intent.approval, ['reservationMicroUsd', 'approvalDigest', 'costDigest', 'validUntil', 'quote',
+      ...(intent.approval.ownerKeyDigest === undefined ? [] : ['ownerKeyDigest'])])
+    if (intent.approval.ownerKeyDigest !== undefined) assert.ok(digest(intent.approval.ownerKeyDigest))
     assert.ok(digest(intent.approval.approvalDigest) && digest(intent.approval.costDigest) && int(intent.approval.validUntil))
     assert.equal(intent.approval.quote.id, intent.id)
     assert.equal(intent.approval.quote.requestDigest, intent.requestDigest)
@@ -124,7 +132,7 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
   const results = new Map(pins.adapters.map(adapter => [adapter.id, new Map()]))
   const state = { directory, pins, pinsDigest: manifest.pinsDigest, registry, corpus, plan, results, sealedOnly,
     intents: new Map(), terminals: new Map(), observations: new Map(), metadataIntents: new Map(), reconciliations: new Map(), notDispatched: new Map(),
-    verifiedRecords: new Map(), reconciliationNames: new Map(), metadataObservations: new Map(),
+    verifiedRecords: new Map(), reconciliationNames: new Map(), metadataObservations: new Map(), writeOffs: new Map(),
     artifacts: [], fitDigests: [], reserved: 0, dispatchCounts: new Map() }
   const allowed = new Set(['manifest.json', 'thresholds.json', '.run.lock'])
   for (const item of plan) {
@@ -133,13 +141,13 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
       || new RegExp(`^${item.blind.id}\\.reconciled-[1-9][0-9]*\\.json$`).test(name))
       .sort((a, b) => (Number(a.match(/reconciled-(\d+)/)?.[1]) || 0) - (Number(b.match(/reconciled-(\d+)/)?.[1]) || 0))
     if (pins.mode === 'live') {
-      for (const kind of ['observation', 'metadata-intent', 'metadata-observation', 'not-dispatched']) allowed.add(artifactName(item.blind.id, kind))
+      for (const kind of ['observation', 'metadata-intent', 'metadata-observation', 'not-dispatched', 'written-off']) allowed.add(artifactName(item.blind.id, kind))
       for (const name of history) allowed.add(name)
     }
     const intentName = artifactName(item.blind.id, 'intent')
     const terminalName = artifactName(item.blind.id, 'terminal')
     if (!exists(join(directory, intentName))) {
-      for (const kind of ['terminal', 'observation', 'metadata-intent', 'metadata-observation', 'not-dispatched']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Orphan dispatch artifact')
+      for (const kind of ['terminal', 'observation', 'metadata-intent', 'metadata-observation', 'not-dispatched', 'written-off']) assert.ok(!exists(join(directory, artifactName(item.blind.id, kind))), 'Orphan dispatch artifact')
       assert.equal(history.length, 0, 'Orphan reconciliation history')
       continue
     }
@@ -199,6 +207,22 @@ export async function openRun(path, { sealedOnly = false, expectedPinsDigest } =
       recordTerminal(state, item, terminal)
     }
     await openReconciliation(state, item, intent, history)
+    const writeOffName = artifactName(item.blind.id, 'written-off')
+    if (exists(join(directory, writeOffName))) {
+      const record = unseal(directory, writeOffName, 'dispatch_write_off', state.pinsDigest)
+      exactKeys(record.payload, ['intentDigest', 'authorization', 'writtenOffAt'])
+      assert.equal(record.payload.intentDigest, intent.digest)
+      assert.ok(dispatched && !state.notDispatched.has(item.blind.id), 'Only a dispatched reservation can be written off')
+      assert.ok(!state.terminals.has(item.blind.id) || liveOutcome(state.terminals.get(item.blind.id).payload.result) === 'still_unknown', 'Known terminal cannot be written off')
+      assert.ok(!state.reconciliations.has(item.blind.id) || state.reconciliations.get(item.blind.id).payload.status === 'still_unknown', 'Known reconciliation cannot be written off')
+      verifyWriteOff(record.payload.authorization, state, intent, record.payload.writtenOffAt)
+      state.writeOffs.set(item.blind.id, record)
+      state.verifiedRecords.set(record.digest, { name: writeOffName, intentDigest: intent.digest, status: 'written_off' })
+      state.artifacts.push(record.digest)
+      if (item.phase === 'fit') state.fitDigests.push(record.digest)
+      if (!sealedOnly) state.results.get(item.adapter).set(item.rowId, { status: 'written_off', scorePercent: null, criteria: null,
+        identity: null, usage: null, weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) })
+    }
   }
   for (const name of readdirSync(directory)) {
     if (/^report-[a-f0-9]{24}\.json$/.test(name)) {
@@ -263,12 +287,12 @@ export async function evaluate(state, item, intent, raw, terminalAt) {
   return { ...result, weights: item.blind.scoringInput.rubric.criteria.map(row => row.weightPercent) }
 }
 
-export async function reconcileObservation(state, item, intent, observation, lookup, clock) {
+export async function reconcileObservation(state, item, intent, observation, lookup, clock, metadataDeadline) {
   const adapter = state.pins.adapters.find(adapter => adapter.id === item.adapter)
   const original = await evaluate(state, item, intent.payload, observation.payload.raw, observation.payload.terminalAt)
   const saved = state.pins.bindings.find(binding => binding.binding.configurationDigest === adapter.configuration)
   const result = await reconcileBaselineExecution({ adapter, blind: item.blind, saved, registry: state.registry,
-    startedAt: intent.payload.startedAt, raw: observation.payload.raw, execution: original.execution, lookup, clock })
+    startedAt: intent.payload.startedAt, raw: observation.payload.raw, execution: original.execution, lookup, clock, metadataDeadline })
   return { ...result, weights: original.weights }
 }
 
@@ -280,7 +304,7 @@ export async function replayMetadata(state, item, intent, observation, lookup, s
     lookedUp = true
     if (saved.payload.metadata === null) throw new Error('Saved metadata unavailable')
     return saved.payload.metadata
-  }, () => lookedUp ? saved.payload.observedAt : lookup.payload.startedAt)
+  }, () => lookedUp ? saved.payload.observedAt : lookup.payload.startedAt, lookup.payload.deadline)
 }
 
 async function openReconciliation(state, item, intent, history) {
@@ -292,8 +316,9 @@ async function openReconciliation(state, item, intent, history) {
     assert.equal(lookup.payload.intentDigest, intent.digest)
     assert.equal(lookup.payload.generationId, observation?.payload.raw.id)
     assert.ok(typeof lookup.payload.generationId === 'string' && lookup.payload.generationId.length > 0)
-    assert.ok(int(lookup.payload.startedAt) && lookup.payload.startedAt >= intent.payload.startedAt && lookup.payload.startedAt < intent.payload.deadline)
-    assert.equal(lookup.payload.deadline, Math.min(lookup.payload.startedAt + 10_000, intent.payload.deadline))
+    assert.ok(int(lookup.payload.startedAt) && lookup.payload.startedAt >= intent.payload.startedAt && lookup.payload.startedAt < intent.payload.approval.validUntil)
+    assert.ok(int(lookup.payload.deadline) && lookup.payload.deadline > lookup.payload.startedAt
+      && lookup.payload.deadline <= Math.min(lookup.payload.startedAt + 10_000, intent.payload.approval.validUntil))
     state.metadataIntents.set(item.blind.id, lookup)
   }
   const lookup = state.metadataIntents.get(item.blind.id)
@@ -341,7 +366,8 @@ async function openReconciliation(state, item, intent, history) {
 export function recordReconciliation(state, item, record, name) {
   state.reconciliations.set(item.blind.id, record)
   state.reconciliationNames.set(record.digest, name)
-  if (record.payload.result && liveOutcome(state.terminals.get(item.blind.id)?.payload.result ?? { status: 'ambiguous' }) === 'still_unknown') {
+  if (record.payload.result && record.payload.status !== 'still_unknown'
+    && liveOutcome(state.terminals.get(item.blind.id)?.payload.result ?? { status: 'ambiguous' }) === 'still_unknown') {
     state.results.get(item.adapter).set(item.rowId, record.payload.result)
   }
   state.artifacts.push(record.digest)

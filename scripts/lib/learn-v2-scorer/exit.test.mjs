@@ -8,6 +8,7 @@ import { test } from 'node:test'
 import { ROOT, canonical, hash, readJson, exclusiveLock } from './artifacts.mjs'
 import { registerScorerImports } from './runtime.mjs'
 import { LEDGER_EXIT_TEST_NAME, ledgerPartitions, runLedgerPartition } from './ledger-exit.mjs'
+import './b1.test.mjs'
 
 registerScorerImports()
 const { blindRow, corpusInputs, THRESHOLD_POLICY } = await import('./contract.mjs')
@@ -128,10 +129,8 @@ test('full CLI capture: 768 blind dispatches, complete core denominators, exact 
     assert.ok(expected, 'Every dispatch must map to one permitted source projection')
     let content
     if (expected.role === 'gemini') {
-      assert.deepEqual(request.input.map(message => message.role), ['user'])
-      assert.equal(request.input[0].content.length, 1)
-      assert.equal(request.input[0].content[0].type, 'text')
-      content = request.input[0].content[0].text
+      assert.equal(typeof request.input, 'string')
+      content = request.input
     }
     else {
       assert.deepEqual(request.messages.map(message => message.role), expected.role === 'baseline' ? ['system', 'user'] : ['user'])

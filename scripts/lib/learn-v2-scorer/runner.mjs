@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { hash, seal, removeSealed, exists, exclusiveLock, outputDirectory, readJson } from './artifacts.mjs'
+import { chmodSync } from 'node:fs'
+import { hash, seal, removeSealed, exists, exclusiveLock, outputDirectory, readJson, liveLedgerDirectory } from './artifacts.mjs'
 import { corpusInputs, bindInventory, runPins, LIMITS } from './contract.mjs'
 import { requestFor, fixtureEnvelope, baselineExecution, liveMetadata, liveInfer, GRADER_PROMPT, GRADER_SCHEMA } from './adapters.mjs'
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive, verifySavedApproval } from './live-approval.mjs'
+import { authorizeWriteOff } from './write-off.mjs'
 import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches } from './live-ledger.mjs'
 import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
@@ -45,7 +47,7 @@ function freezeThresholds(state) {
 }
 
 function unresolvedItem(state, id) {
-  if (state.notDispatched.has(id)) return false
+  if (state.notDispatched.has(id) || state.writeOffs.has(id)) return false
   const terminal = state.terminals.get(id)
   if (state.pins.mode === 'live' && terminal && liveOutcome(terminal.payload.result) !== 'still_unknown') return false
   if (state.reconciliations.has(id)) return state.reconciliations.get(id).payload.status === 'still_unknown'
@@ -58,8 +60,7 @@ function stopped(state, adapterId) {
 }
 
 function approveLive(state, item, options, now) {
-  assert.ok(now - state.pins.clock >= 0 && now - state.pins.clock < 86_400_000, 'Run clock is stale')
-  assert.equal(state.pins.priceAccessDate, new Date(now).toISOString().slice(0, 10), 'Price access must be refreshed on dispatch day')
+  assert.ok(now >= state.pins.clock, 'Run clock is in the future')
   const request = requestFor(state.pins.adapters.find(adapter => adapter.id === item.adapter), item.blind)
   return admitLive({ pins: state.pins, pinsDigest: state.pinsDigest, item, request, now,
     requestPins: state.plan.map(row => ({ id: row.blind.id, requestDigest: hash(requestFor(state.pins.adapters.find(adapter => adapter.id === row.adapter), row.blind)) })),
@@ -211,10 +212,11 @@ export async function runOffline(path, options = {}) {
   })
 }
 
-export async function dispatchLive(path, id, options) {
-  // Fixed across runs and invocations on this machine, with no CLI override.
+export async function dispatchLive(path, id, options = {}) {
+  // Fixed across runs and invocations for this user, with no live override.
   // An unresolved provider outcome also keeps a global uncertainty tombstone.
-  const global = outputDirectory('/tmp/budds-learn-v2-scorer-live')
+  const global = outputDirectory(liveLedgerDirectory(options))
+  chmodSync(global, 0o700)
   return exclusiveLock(global, '.learn-v2-scorer-global.lock', () => exclusiveLock(outputDirectory(path), '.run.lock', async () => {
     assert.ok(!exists(join(global, 'unresolved.json')), 'Global dispatch outcome requires reconciliation')
     const state = await openRun(path)
@@ -222,6 +224,7 @@ export async function dispatchLive(path, id, options) {
     state.liveLedger = await openLiveLedger(global)
     assert.equal(unresolvedLiveDispatches(state.liveLedger).length, 0, 'Global dispatch outcome requires reconciliation')
     verifyLiveRun(state.liveLedger, state)
+    assert.ok(!state.writeOffs.has(id), 'Written-off intent cannot dispatch')
     const item = state.plan.find(item => item.blind.id === id)
     assert.ok(item, 'Unknown opaque dispatch ID')
     if (state.intents.has(id)) return report(state)
@@ -239,16 +242,48 @@ export async function dispatchLive(path, id, options) {
   }))
 }
 
-export async function reconcileLive(path, id, options) {
-  const global = outputDirectory('/tmp/budds-learn-v2-scorer-live')
+export async function reconcileLive(path, id, options = {}) {
+  const global = outputDirectory(liveLedgerDirectory(options))
+  chmodSync(global, 0o700)
   return exclusiveLock(global, '.learn-v2-scorer-global.lock', () => exclusiveLock(outputDirectory(path), '.run.lock', async () => {
     let state = await openRecoveryRun(path)
     assert.equal(state.pins.mode, 'live')
     const ledger = await openLiveLedger(global, { recoveringDirectory: state.directory })
+    const reserved = [...ledger.reservations.values()].find(row => row.id === id
+      && ledger.approvals.get(row.approvalDigest).directory === state.directory)
+    if (reserved && !state.intents.has(id)) {
+      assert.ok(!state.sealedOnly || options.writeOffFile, 'Historical missing intent requires its original implementation or an owner write-off')
+      verifySavedApproval(reserved.intent.approval, options)
+      if (!state.sealedOnly) {
+        const item = state.plan.find(item => item.blind.id === id)
+        assert.ok(item, 'Unknown opaque dispatch ID')
+        verifyIntent(state, item, reserved.intent)
+        assert.deepEqual(approveLive(state, item, options, reserved.intent.startedAt), reserved.intent.approval)
+      }
+      seal(state.directory, artifactName(id, 'intent'), 'dispatch_intent', state.pinsDigest, reserved.intent)
+      state = await openRecoveryRun(path)
+    }
+    verifyLiveRun(ledger, state)
+    const intent = state.intents.get(id)
+    assert.ok(intent?.payload.dispatched && reserved, 'Reconciliation requires a recorded dispatched intent')
+    if (options.writeOffFile && !state.writeOffs.has(id)) {
+      assert.ok(!state.notDispatched.has(id)
+        && (!state.terminals.has(id) || liveOutcome(state.terminals.get(id).payload.result) === 'still_unknown')
+        && (!state.reconciliations.has(id) || state.reconciliations.get(id).payload.status === 'still_unknown'), 'Only an unknown outcome can be written off')
+      const writtenOffAt = Date.now()
+      const authorization = authorizeWriteOff(options.writeOffFile, state, intent, options, writtenOffAt)
+      seal(state.directory, artifactName(id, 'written-off'), 'dispatch_write_off', state.pinsDigest, { intentDigest: intent.digest, authorization, writtenOffAt })
+      state = await openRecoveryRun(path)
+    }
+    if (state.writeOffs.has(id)) {
+      verifySavedApproval(intent.payload.approval, options)
+      const record = state.writeOffs.get(id)
+      await recordLiveResolution(ledger, state, intent, record, artifactName(id, 'written-off'))
+      clearResolvedMarker(global, ledger, state, id)
+      return { ...report(await openRecoveryRun(path)), reconciliation: 'written_off' }
+    }
     if (state.sealedOnly) {
       verifyLiveRun(ledger, state)
-      const intent = state.intents.get(id)
-      assert.ok(intent?.payload.dispatched, 'Reconciliation requires a recorded dispatched intent')
       verifySavedApproval(intent.payload.approval, options)
       // Only already-sealed known outcomes can be recovered across versions.
       // An unresolved old response needs its original implementation restored
@@ -267,16 +302,6 @@ export async function reconcileLive(path, id, options) {
     const item = state.plan.find(item => item.blind.id === id)
     // The global reservation includes the exact intent so an interruption
     // before local publication cannot strand the charge or permit redispatch.
-    const reserved = [...ledger.reservations.values()].find(row => row.id === id
-      && ledger.approvals.get(row.approvalDigest).directory === state.directory)
-    if (reserved && item && !state.intents.has(id)) {
-      verifyIntent(state, item, reserved.intent)
-      assert.deepEqual(approveLive(state, item, options, reserved.intent.startedAt), reserved.intent.approval, 'Reconciliation requires the original signed approval and pins')
-      seal(state.directory, artifactName(id, 'intent'), 'dispatch_intent', state.pinsDigest, reserved.intent)
-      state = await openRecoveryRun(path)
-    }
-    verifyLiveRun(ledger, state)
-    const intent = state.intents.get(id)
     assert.ok(item && intent?.payload.dispatched, 'Reconciliation requires a recorded dispatched intent')
     const marker = exists(join(global, 'unresolved.json')) ? readJson(join(global, 'unresolved.json')) : null
     const ownsMarker = marker?.pinsDigest === state.pinsDigest && marker?.payload.directory === state.directory && marker?.payload.id === id
@@ -319,10 +344,11 @@ export async function reconcileLive(path, id, options) {
         const original = await evaluate(state, item, intent.payload, observation.payload.raw, observation.payload.terminalAt)
         const generationId = original.execution?.terminal.generationId
         const now = Date.now()
-        if (generationId && original.execution.receipt.integrityResult === 'identity_unavailable' && now < intent.payload.deadline) {
-          assert.deepEqual(approveLive(state, item, options, now), intent.payload.approval, 'Metadata lookup requires current original approval')
+        if (generationId && original.execution.receipt.integrityResult === 'identity_unavailable' && now < intent.payload.approval.validUntil) {
+          const currentApproval = approveLive(state, item, options, now)
+          assert.deepEqual(currentApproval, intent.payload.approval, 'Metadata lookup requires current original approval')
           lookup = seal(state.directory, artifactName(id, 'metadata-intent'), 'metadata_lookup_intent', state.pinsDigest,
-            { intentDigest: intent.digest, generationId, startedAt: now, deadline: Math.min(now + 10_000, intent.payload.deadline) })
+            { intentDigest: intent.digest, generationId, startedAt: now, deadline: Math.min(now + 10_000, currentApproval.validUntil) })
           await captureMetadata(state, item, intent, observation, lookup)
         }
       }
@@ -363,7 +389,7 @@ async function captureMetadata(state, item, intent, observation, lookup) {
       catch (error) { publicationError = error; throw error }
       if (metadata === null) throw new Error('Metadata unavailable')
       return metadata
-    }, Date.now)
+    }, Date.now, lookup.payload.deadline)
   }
   finally { accepting = false }
   if (publicationError) throw publicationError
