@@ -11,7 +11,7 @@ type Version = 'learn-v2.post-seal-teaching.v1'
 type Reason = 'disabled' | 'unavailable' | 'not_sealed'
   | 'test_open' | 'evidence_unavailable' | 'disclosure_unknown'
 type SourcedTier = 'T0' | 'T1'
-type PracticeTier = SourcedTier | 'T2'
+type PracticeTier = 'T0' | 'T2'
 type Citation = { sourceRef: string; label: string }
 type Reference = {
   version: Version
@@ -50,7 +50,7 @@ type PracticeHelpAuthorization =
       authorizationId: Id<'learnAssessmentExposures'>
       deliveredAt: number
       content:
-        | { kind: 'hint'; tier: SourcedTier; text: string }
+        | { kind: 'hint'; tier: 'T0'; text: string }
         | { kind: 'worked_example'; tier: PracticeTier; text: string }
     }
 ```
@@ -61,7 +61,7 @@ Current read result: `{ version, status: 'unavailable', reasonCode: 'disabled' }
 
 Text is nonempty and at most 12,000 JavaScript code units; citation labels are at most 300 and public source references at most 200. Feedback and lessons require 1–16 citations. Lessons have 1–8 paragraphs. Original serialized envelopes are bounded by the existing 64 KiB contract ceiling, without truncation. Revisions are positive safe integers, timestamps are bounded integers, and command keys retain the existing 16–128-character URL-safe format. Convex validators enforce closed structure; the shared parsers additionally enforce these semantic bounds before publication.
 
-Every content object requires its own closed ADR-0009 `tier`: T0 is an accepted source with entailment verified; T1 is attributed fetched web content not yet accepted; T2 is model knowledge. T2 is admitted here only for practice prompts and worked examples, which are explicitly permitted forms in the ADR. Generic feedback, lessons and hints accept only T0/T1; the contract has no narrower analogy, prerequisite-bridge or simulation discriminator that could authorize them as T2. Missing, unknown or forbidden tiers close the whole stored source/receipt, including withheld fields. Publication must validate a uniform tier within each object and prohibit unlabeled blending; high-stakes facts and all mastery/scoring authority remain T0-only, while private keys/rubrics/measurement material remain absent from these returns. The tier is a data channel only; its learner presentation is a later design decision, subject to the ADR's visible-label requirements.
+Every content object requires its own closed ADR-0009 `tier`: T0 is an accepted source with entailment verified; T1 is attributed fetched web content not yet accepted; T2 is model knowledge. Feedback and lessons accept T0/T1, practice prompts and worked examples accept T0/T2, and hints accept only T0. The ADR defines T1 by its attribution, so it is admitted only on feedback and lessons, the two objects with citations; practice prompts, worked examples and hints have no citation field and reject it. T2 is admitted only for practice prompts and worked examples, which are explicitly permitted forms in the ADR; the contract has no narrower analogy, prerequisite-bridge or simulation discriminator that could authorize generic feedback, lessons or hints as T2. Missing, unknown or forbidden tiers close the whole stored source/receipt, including withheld fields. Publication must validate a uniform tier within each object and prohibit unlabeled blending; high-stakes facts and all mastery/scoring authority remain T0-only, while private keys/rubrics/measurement material remain absent from these returns. The tier is a data channel only; its learner presentation is a later design decision, subject to the ADR's visible-label requirements.
 
 ## Disclosure and the #373 amendment
 
@@ -81,6 +81,8 @@ Preparing, ready, open, cancelled, abandoned and invalid-without-acceptance stat
 
 The internal context requires `relevantOpenCheck: 'yes' | 'no' | 'unknown'`. For an owned accessible scope, `yes` closes both projections with `test_open`, and `unknown` closes them with `disclosure_unknown`, including replay; only `no` permits the remaining gates to run. An old scored check cannot authorize teaching while another relevant check is open. The stored source also requires `attemptId: Id<'masteryAttempts'> | null`, matching `lifecycle.authoritativeAttemptId`; mismatch closes the entire read, and it is null when the lifecycle has no authoritative attempt. This internal binding is never returned. `publicationAllowed` must cover every content dependency, including source purge or access loss behind only a feedback or lesson citation.
 
+The gate runs in a fixed order: ownership and access (`unavailable`), relevant open check, evidence (`evidence_unavailable`), pins and publication (`disclosure_unknown`), capability status (`unavailable`), then sealing and the grant. Evidence and pin loss therefore keep their own reasons when resolver-derived capabilities are already `unavailable` for the same loss.
+
 After authority checks, any stored source/receipt or final-envelope validation failure, including byte ceilings and withheld fields, returns `unavailable`/`denied` with `disclosure_unknown` and no partial content; malformed public arguments and server context continue to throw.
 
 Every return object is allowlisted. Neither successful nor unavailable results can carry score percentages, thresholds, criteria, rubric keys/descriptions/snapshots, weights, per-criterion verdicts, scorer rationale, model confidence/details, answer keys, reference solutions, item/family/case IDs, private source identifiers/locators, or provider payloads. Structural schemas cannot prove arbitrary prose is safe; the runtime publication and lineage checks must establish that before supplying the source DTO. ADR-0009's provenance and T0 restrictions still apply; this contract adds no generation or provenance-policy change.
@@ -89,7 +91,7 @@ Every return object is allowlisted. Neither successful nor unavailable results c
 
 The help target is exclusively `{ responseSlotId }`. The sealed opportunity is authorization context, never the assistance target. The server-only practice binding must prove ownership, `stage: 'practice'`, its own `evidenceAvailable: true`, the exact check submission, `caseRelation: 'separate_case'`, and `reservedCase: 'no'`. A same-case, sibling, reserved, unknown, foreign, evidence-unavailable or stale binding releases neither practice nor help; unavailable/unknown slot evidence must resolve to false.
 
-`binding.revision` is the practice response slot's current revision. The read publishes it, and both a request and its saved receipt must match it at authorization and replay. Once the slot advances, the old request/receipt is denied closed; a fresh matching request uses a new command key. Slot identity remains bound to the check submission under this rule.
+`binding.revision` is the practice response slot's current revision. The read publishes it, and both a request and its saved receipt must match it at authorization and replay. Once the slot advances, the old request/receipt is denied closed; a fresh matching request uses a new command key. Delivering help is not an advance: the revision check runs before the receipt, so a delivery that bumped it would deny its own same-key retry. Slot identity remains bound to the check submission under this rule.
 
 The internal receipt input freezes the complete request and its authorization result. Same key and canonical request replay the same saved authorization ID, delivery time and content; changed key/payload, slot, revision or help kind cannot reuse it. The authorization's delivery time cannot precede the check's acceptance time. Replay rechecks authorization before reading the receipt content. The helper validates a supplied receipt; it does not create, persist or acknowledge one.
 
@@ -106,6 +108,9 @@ The runtime ticket must implement the following before the Canvas replaces its t
 - Publish safe cited feedback and a valid-failure-only lesson bound to the authoritative attempt, without reconstructing a reserved solution or private criterion rationale. Enforce the tier restrictions above, source rights, lineage, bounded content and byte ceilings, including dependencies behind feedback/lesson citations. No unchecked stored JSON or fallback snapshot may bypass the projection.
 - Select and persist the different, nonreserved practice case and response slot once, binding their identity to the sealed check submission under the practice/replay rule above. Same-case/sibling/unknown lineage fails closed. Practice remains available during pending, failed and unconfirmed scoring when the server capability and relevant-open-check gate permit it, without requiring confidence or score success.
 - Serialize help authorization, slot acceptance and delivery/exposure accounting. Persist immutable content-bearing receipts with canonical request fingerprints, reject idempotency conflicts and stale/foreign targets, and replay the same content after renewed authorization. Keep slot assistance and later exposure separate from frozen check assistance. Assess persistence needs through the serial schema owner before adding storage; this inactive contract requires no schema edit.
+- Delivering practice help must not advance `binding.revision`; do not copy the legacy recorder's revision bump. Count slot assistance separately from the slot revision.
+- The score-commit transaction stamps the source's `attemptId`, in the same transaction that sets the authoritative attempt, so the read does not close in a gap after a score commits.
+- Authorize first-time help with `learnPostSealTeachingDenial`, which needs no sentinel receipt. It covers only the check-level gates above: the runtime must also prove the practice binding before persisting a receipt. Replay stays on `projectPracticeAssistanceAuthorization`.
 - Apply source/access purge, retention, owner export, account deletion and telemetry omission to every new content/receipt/binding copy. Export gains no new content permission from this amendment. Cover revocation races, cross-tab retries and help/acceptance races with real persisted records.
 - Replace #442's temporary `laterTeaching` channel using these server reads and authorization results, under its existing UI ownership and release gates. Run the runtime endpoint/alias matrix; contract fixtures here do not establish runtime publication, generation, persistence or production readiness.
 

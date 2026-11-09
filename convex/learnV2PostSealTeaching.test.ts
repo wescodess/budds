@@ -12,11 +12,11 @@ import {
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
   learnPostSealTeachingSchema, learnPostSealTeachingSourceSchema, learnAuthorizePracticeAssistanceSchema, type learnPostSealTeachingReferenceSchema,
-  learnPracticeAssistanceAuthorizationSchema, projectPostSealTeaching, projectPracticeAssistanceAuthorization,
+  learnPostSealTeachingDenial, learnPracticeAssistanceAuthorizationSchema, projectPostSealTeaching, projectPracticeAssistanceAuthorization,
   type LearnPostSealTeachingContext,
 } from '../shared/learn-v2-assessment-disclosure'
 import {
-  LEARN_V2_ASSESSMENT_PHASES, LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_DELAYED_CHECK_VERSION, learnAssessmentLifecycleSchema,
+  LEARN_V2_ASSESSMENT_PHASES, LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, LEARN_V2_DELAYED_CHECK_VERSION, learnAssessmentLifecycleSchema, resolveLearnAssessmentCapabilities,
   type LearnAssessmentPhase,
 } from '../shared/learn-v2-delayed-check'
 import { LEARN_V2_RESPONSE_LIMITS, learnIdSchema, learnPostSealPracticeBindingSchema, learnSerializedBytes, parseLearnContract } from '../shared/learn-v2-responses'
@@ -388,6 +388,56 @@ describe('B1 post-seal authority and provenance', () => {
     expect(first.revision).toBe(1)
   })
 
+  test.each(['hint', 'worked_example'] as const)('same-key %s replay at an unchanged slot revision returns the same authorization and content', async kind => {
+    const f = await fixture()
+    f.request.kind = kind; f.savedRequest.kind = kind
+    f.authorization.content = { kind, tier: 'T0', text: 'HELP_REPLAY_CANARY' }
+    expect(f.context.practiceBinding!.revision).toBe(1)
+    const delivered = await f.t.mutation(authorizeProjection, {})
+    expect(delivered).toEqual(f.authorization)
+    expect(f.context.practiceBinding!.revision).toBe(1)
+    expect(await f.t.mutation(authorizeProjection, {})).toEqual(delivered)
+    f.context.practiceBinding!.revision = 2
+    expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
+  })
+
+  test.each([
+    { loss: 'evidenceAvailable', reasonCode: 'evidence_unavailable' },
+    { loss: 'pinsMatch', reasonCode: 'disclosure_unknown' },
+  ] as const)('resolver-unavailable capabilities from $loss loss report $reasonCode', async ({ loss, reasonCode }) => {
+    const f = await fixture()
+    const { lifecycle } = f.context.disclosure
+    f.context.disclosure[loss] = false
+    f.context.capabilities = resolveLearnAssessmentCapabilities({ lifecycle, enabled: true, authorized: true, evidenceAvailable: true, pinsMatch: true, validScore: true, [loss]: false })
+    expect(f.context.capabilities.status).toBe('unavailable')
+    for (let replay = 0; replay < 2; replay++) {
+      expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode })
+      expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode })
+    }
+  })
+
+  test('evidence and pin reasons stay behind ownership, access and the open-check gate', async () => {
+    const f = await fixture()
+    f.context.disclosure.evidenceAvailable = false
+    f.context.disclosure.pinsMatch = false
+    expect(learnPostSealTeachingDenial(f.context)).toBe('evidence_unavailable')
+    f.context.relevantOpenCheck = 'yes'
+    expect(learnPostSealTeachingDenial(f.context)).toBe('test_open')
+    f.context.disclosure.accessAvailable = false
+    expect(learnPostSealTeachingDenial(f.context)).toBe('unavailable')
+  })
+
+  test('the exported denial gate authorizes first-time help without a receipt', async () => {
+    const f = await fixture()
+    expect(learnPostSealTeachingDenial(f.context)).toBeNull()
+    expect(learnPostSealTeachingDenial(f.setPhase('test_open'))).toBe('not_sealed')
+    f.setPhase('scored_fail')
+    f.context.publicationAllowed = false
+    expect(learnPostSealTeachingDenial(f.context)).toBe('disclosure_unknown')
+    Reflect.set(f.context, 'publicationAllowed', 'invalid')
+    expect(() => learnPostSealTeachingDenial(f.context)).toThrow()
+  })
+
   test.each(['missing', 'different', 'null'])('a %s stored attempt binding cannot release feedback or a lesson', async state => {
     const f = await fixture()
     if (state === 'missing') Reflect.deleteProperty(f.source, 'attemptId')
@@ -413,6 +463,7 @@ describe('B1 post-seal authority and provenance', () => {
   })
 
   const contentKinds = ['feedback', 'lesson', 'practice', 'hint', 'worked_example'] as const
+  const allowedTiers = { feedback: ['T0', 'T1'], lesson: ['T0', 'T1'], practice: ['T0', 'T2'], worked_example: ['T0', 'T2'], hint: ['T0'] }
   test.each(contentKinds)('%s requires an explicit closed tier in both public validators', async kind => {
     const f = await fixture()
     if (kind === 'hint' || kind === 'worked_example') {
@@ -436,7 +487,7 @@ describe('B1 post-seal authority and provenance', () => {
 
   test.each(contentKinds.flatMap(kind => ['T0', 'T1', 'T2'].map(tier => ({ kind, tier }))))('$kind enforces ADR-0009 tier $tier in projections and Convex returns', async ({ kind, tier }) => {
     const f = await fixture()
-    const allowed = tier !== 'T2' || kind === 'practice' || kind === 'worked_example'
+    const allowed = allowedTiers[kind].includes(tier)
     if (kind === 'hint' || kind === 'worked_example') {
       f.request.kind = kind; f.savedRequest.kind = kind; f.authorization.content.kind = kind
       Reflect.set(f.authorization.content, 'tier', tier)
