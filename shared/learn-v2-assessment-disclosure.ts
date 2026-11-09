@@ -130,17 +130,19 @@ export function canDiscloseLearnHelp(input: z.infer<typeof learnHelpDisclosureIn
 }
 
 export const LEARN_V2_POST_SEAL_TEACHING_VERSION = 'learn-v2.post-seal-teaching.v1' as const
-export const LEARN_V2_POST_SEAL_TEACHING_REASONS = ['disabled', 'unavailable', 'not_sealed', 'evidence_unavailable', 'disclosure_unknown'] as const
+export const LEARN_V2_POST_SEAL_TEACHING_REASONS = ['disabled', 'unavailable', 'not_sealed', 'test_open', 'evidence_unavailable', 'disclosure_unknown'] as const
 const postSealVersion = z.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION)
 export const learnPostSealTeachingReferenceSchema = z.strictObject({
   version: postSealVersion, assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
 })
 export const learnTeachingCitationSchema = z.strictObject({ sourceRef: learnTextSchema(200), label: learnTextSchema(300) })
 const teachingCitations = z.array(learnTeachingCitationSchema).min(1).max(16)
-export const learnPostSealFeedbackSchema = z.strictObject({ text: learnTextSchema(), citations: teachingCitations })
-export const learnPostSealLessonSchema = z.strictObject({ paragraphs: z.array(learnTextSchema()).min(1).max(8), citations: teachingCitations })
+const sourcedTeachingTier = z.enum(['T0', 'T1'])
+const practiceTeachingTier = z.enum(['T0', 'T1', 'T2'])
+export const learnPostSealFeedbackSchema = z.strictObject({ tier: sourcedTeachingTier, text: learnTextSchema(), citations: teachingCitations })
+export const learnPostSealLessonSchema = z.strictObject({ tier: sourcedTeachingTier, paragraphs: z.array(learnTextSchema()).min(1).max(8), citations: teachingCitations })
 export const learnPostSealPracticeSchema = z.strictObject({
-  responseSlotId: learnIdSchema<'learnResponseSlots'>(), revision: learnRevisionSchema, prompt: learnTextSchema(),
+  responseSlotId: learnIdSchema<'learnResponseSlots'>(), revision: learnRevisionSchema, tier: practiceTeachingTier, prompt: learnTextSchema(),
 })
 export const learnPostSealTeachingSchema = z.discriminatedUnion('status', [
   z.strictObject({ version: postSealVersion, status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
@@ -151,7 +153,10 @@ export const learnAuthorizePracticeAssistanceSchema = learnPostSealTeachingRefer
   target: learnPracticeAssistanceTargetSchema, expectedRevision: learnRevisionSchema,
   kind: z.enum(['hint', 'worked_example']), idempotencyKey: learnResponseIdempotencyKeySchema,
 })
-export const learnPracticeAssistanceContentSchema = z.strictObject({ kind: z.enum(['hint', 'worked_example']), text: learnTextSchema() })
+export const learnPracticeAssistanceContentSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('hint'), tier: sourcedTeachingTier, text: learnTextSchema() }),
+  z.strictObject({ kind: z.literal('worked_example'), tier: practiceTeachingTier, text: learnTextSchema() }),
+])
 export const learnPracticeAssistanceAuthorizationSchema = z.discriminatedUnion('status', [
   z.strictObject({ version: postSealVersion, status: z.literal('denied'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   z.strictObject({ version: postSealVersion, status: z.literal('authorized'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
@@ -163,10 +168,11 @@ export const learnPracticeAssistanceReceiptSchema = z.strictObject({
 })
 export const learnPostSealTeachingContextSchema = z.strictObject({
   disclosure: learnAssessmentDisclosureContextSchema, capabilities: learnAssessmentCapabilitiesSchema, validScore: z.boolean(),
-  publicationAllowed: z.boolean(), practiceBinding: learnPostSealPracticeBindingSchema.nullable(),
+  publicationAllowed: z.boolean(), relevantOpenCheck: z.enum(['yes', 'no', 'unknown']), practiceBinding: learnPostSealPracticeBindingSchema.nullable(),
 })
 export const learnPostSealTeachingSourceSchema = z.strictObject({
   assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), submissionId: learnIdSchema<'learnResponses'>(),
+  attemptId: learnIdSchema<'masteryAttempts'>().nullable(),
   feedback: learnPostSealFeedbackSchema.nullable(), lesson: learnPostSealLessonSchema.nullable(), practice: learnPostSealPracticeSchema.nullable(),
 })
 export type LearnPostSealTeaching = z.infer<typeof learnPostSealTeachingSchema>
@@ -179,7 +185,9 @@ export function unavailableLearnPostSealTeaching(reasonCode: typeof LEARN_V2_POS
 
 function postSealTeachingDenial(context: LearnPostSealTeachingContext): typeof LEARN_V2_POST_SEAL_TEACHING_REASONS[number] | null {
   const { disclosure, capabilities } = context
-  if (!disclosure.owned || !disclosure.accessAvailable || capabilities.status !== 'available') return 'unavailable'
+  if (!disclosure.owned || !disclosure.accessAvailable) return 'unavailable'
+  if (context.relevantOpenCheck !== 'no') return context.relevantOpenCheck === 'yes' ? 'test_open' : 'disclosure_unknown'
+  if (capabilities.status !== 'available') return 'unavailable'
   if (!disclosure.evidenceAvailable) return 'evidence_unavailable'
   if (!disclosure.pinsMatch || !context.publicationAllowed) return 'disclosure_unknown'
   const lifecycle = disclosure.lifecycle
@@ -192,7 +200,7 @@ function postSealTeachingDenial(context: LearnPostSealTeachingContext): typeof L
 
 function canReadPostSealPractice(context: LearnPostSealTeachingContext, responseSlotId: string, revision: number) {
   const binding = context.practiceBinding
-  return context.capabilities.canTeachSeparateCase && binding?.owned && binding.stage === 'practice'
+  return context.capabilities.canTeachSeparateCase && binding?.owned && binding.evidenceAvailable && binding.stage === 'practice'
     && binding.assessmentOpportunityId === context.disclosure.lifecycle.assessmentOpportunityId
     && binding.submissionId === context.disclosure.lifecycle.submissionId
     && binding.target.responseSlotId === responseSlotId && binding.revision === revision
@@ -206,7 +214,8 @@ export function projectPostSealTeaching(input: unknown, context: LearnPostSealTe
   try {
     const source = parseLearnContract(learnPostSealTeachingSourceSchema, input)
     const lifecycle = value.disclosure.lifecycle
-    if (source.assessmentOpportunityId !== lifecycle.assessmentOpportunityId || source.submissionId !== lifecycle.submissionId) return unavailableLearnPostSealTeaching('disclosure_unknown')
+    if (source.assessmentOpportunityId !== lifecycle.assessmentOpportunityId || source.submissionId !== lifecycle.submissionId
+      || source.attemptId !== lifecycle.authoritativeAttemptId) return unavailableLearnPostSealTeaching('disclosure_unknown')
     const feedbackAllowed = value.validScore && value.capabilities.canReadFeedback && lifecycle.authoritativeAttemptId !== null
       && ['scored_pass', 'scored_fail'].includes(lifecycle.phase)
     return parseLearnContract(learnPostSealTeachingSchema, {

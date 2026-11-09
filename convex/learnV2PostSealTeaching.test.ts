@@ -4,7 +4,7 @@ import { makeFunctionReference, mutationGeneric, queryGeneric, type FunctionArgs
 import { afterEach, describe, expect, expectTypeOf, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
-import { learnV2CanvasMeasurementApi } from './learnV2ApiAdapters'
+import { learnV2CanvasMeasurementApi, learnV2TodayMeasurementApi } from './learnV2ApiAdapters'
 import {
   postSealTeachingValidator, practiceAssistanceAuthorizationValidator,
   type LearnV2PostSealTeaching, type LearnV2PracticeAssistanceAuthorization,
@@ -74,15 +74,15 @@ async function fixture() {
   const request: z.infer<typeof learnAuthorizePracticeAssistanceSchema> = { ...reference, target, expectedRevision: 1, kind: 'hint', idempotencyKey: key }
   const savedRequest = structuredClone(request)
   const citations = [{ sourceRef: 'source_public_1', label: 'Accepted source' }]
-  const source: z.infer<typeof learnPostSealTeachingSourceSchema> = { assessmentOpportunityId: reference.assessmentOpportunityId, submissionId: f.rows.learnResponses,
-    feedback: { text: 'FEEDBACK_CANARY', citations }, lesson: { paragraphs: ['LESSON_CANARY'], citations },
-    practice: { ...target, revision: 1, prompt: 'PRACTICE_CANARY' } }
+  const source: z.infer<typeof learnPostSealTeachingSourceSchema> = { assessmentOpportunityId: reference.assessmentOpportunityId, submissionId: f.rows.learnResponses, attemptId: null,
+    feedback: { tier: 'T0', text: 'FEEDBACK_CANARY', citations }, lesson: { tier: 'T0', paragraphs: ['LESSON_CANARY'], citations },
+    practice: { ...target, revision: 1, tier: 'T0', prompt: 'PRACTICE_CANARY' } }
   const authorization: LearnV2PracticeAssistanceAuthorization = { ...reference, status: 'authorized', target, revision: 1,
-    authorizationId: f.rows.learnAssessmentExposures, deliveredAt: f.base.createdAt + 1, content: { kind: 'hint', text: 'HINT_CANARY' } }
+    authorizationId: f.rows.learnAssessmentExposures, deliveredAt: f.base.createdAt + 1, content: { kind: 'hint', tier: 'T0', text: 'HINT_CANARY' } }
   const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice }
   const unavailableTeaching: LearnV2PostSealTeaching = { version, status: 'unavailable', reasonCode: 'disabled' }
   const deniedAuthorization: LearnV2PracticeAssistanceAuthorization = { version, status: 'denied', reasonCode: 'disabled' }
-  function setPhase(phase: LearnAssessmentPhase, mask = 31, validScore = true) {
+  function setPhase(phase: LearnAssessmentPhase, mask = 31, validScore = true, relevantOpenCheck: LearnPostSealTeachingContext['relevantOpenCheck'] = 'no') {
     const sealed = sealedPhases.includes(phase)
     context = {
       disclosure: { version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, owned: true, accessAvailable: true, evidenceAvailable: true, pinsMatch: true,
@@ -96,9 +96,10 @@ async function fixture() {
           identity: { kind: 'measurement', itemId: f.rows.learnMeasurementItems, itemRevision: 1, promptDigest: 'a'.repeat(64) } } },
       capabilities: { version: LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, status: 'available', reasonCodes: [],
         canDeliver: !!(mask & 1), canSubmit: !!(mask & 2), canRequestAssistance: !!(mask & 4), canTeachSeparateCase: !!(mask & 8), canReadFeedback: !!(mask & 16) },
-      validScore, publicationAllowed: true, practiceBinding: { assessmentOpportunityId: reference.assessmentOpportunityId, submissionId: f.rows.learnResponses, target, revision: 1,
-        stage: 'practice', owned: true, caseRelation: 'separate_case', reservedCase: 'no' },
+      validScore, publicationAllowed: true, relevantOpenCheck, practiceBinding: { assessmentOpportunityId: reference.assessmentOpportunityId, submissionId: f.rows.learnResponses, target, revision: 1,
+        stage: 'practice', owned: true, evidenceAvailable: true, caseRelation: 'separate_case', reservedCase: 'no' },
     }
+    source.attemptId = context.disclosure.lifecycle.authoritativeAttemptId
     return context
   }
   setPhase('scored_fail')
@@ -112,13 +113,18 @@ async function snapshot(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe('post-seal teaching disclosure contract through Convex', () => {
-  test.each(LEARN_V2_ASSESSMENT_PHASES)('gates %s across all 32 capability combinations and score validity states', async phase => {
+  test.each(LEARN_V2_ASSESSMENT_PHASES)('gates %s across all capability, score validity and relevant-open-check states', async phase => {
     const f = await fixture()
-    for (let mask = 0; mask < 32; mask++) for (const valid of [false, true]) {
-      f.setPhase(phase, mask, valid)
+    for (let mask = 0; mask < 32; mask++) for (const valid of [false, true]) for (const relevantOpenCheck of ['yes', 'no', 'unknown'] as const) {
+      f.setPhase(phase, mask, valid, relevantOpenCheck)
       const read = await f.t.query(readProjection, {})
       const help = await f.t.mutation(authorizeProjection, {})
-      if (!sealedPhases.includes(phase)) {
+      if (relevantOpenCheck !== 'no') {
+        const reasonCode = relevantOpenCheck === 'yes' ? 'test_open' : 'disclosure_unknown'
+        expect(read).toEqual({ version, status: 'unavailable', reasonCode })
+        expect(help).toEqual({ version, status: 'denied', reasonCode })
+      }
+      else if (!sealedPhases.includes(phase)) {
         expect(read).toEqual({ version, status: 'unavailable', reasonCode: 'not_sealed' })
         expect(help).toEqual({ version, status: 'denied', reasonCode: 'not_sealed' })
       }
@@ -136,11 +142,12 @@ describe('post-seal teaching disclosure contract through Convex', () => {
 
   test.each(['disabled', 'unavailable'] as const)('capability status %s blocks content in every phase', async status => {
     const f = await fixture()
-    for (const phase of LEARN_V2_ASSESSMENT_PHASES) {
-      const context = f.setPhase(phase, 0)
+    for (const phase of LEARN_V2_ASSESSMENT_PHASES) for (const relevantOpenCheck of ['yes', 'no', 'unknown'] as const) {
+      const context = f.setPhase(phase, 0, true, relevantOpenCheck)
       context.capabilities.status = status
-      expect((await f.t.query(readProjection, {})).status).toBe('unavailable')
-      expect((await f.t.mutation(authorizeProjection, {})).status).toBe('denied')
+      const reasonCode = relevantOpenCheck === 'no' ? 'unavailable' : relevantOpenCheck === 'yes' ? 'test_open' : 'disclosure_unknown'
+      expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode })
+      expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode })
     }
   })
 
@@ -271,7 +278,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     f.setPhase('scoring_pending')
     f.request.kind = kind; f.savedRequest.kind = kind
     if (f.authorization.status !== 'authorized') throw new Error('Missing fixture authorization')
-    f.authorization.content = { kind, text: kind === 'hint' ? 'HINT_CANARY' : 'WORKED_EXAMPLE_CANARY' }
+    f.authorization.content = { kind, tier: 'T0', text: kind === 'hint' ? 'HINT_CANARY' : 'WORKED_EXAMPLE_CANARY' }
     const before = await snapshot(f)
     const first = await f.t.mutation(authorizeProjection, {})
     expect(first).toEqual(f.authorization)
@@ -287,7 +294,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
   test.each(['assessmentOpportunityId', 'target', 'revision', 'content'] as const)('rejects a mismatched authorization %s', async field => {
     const f = await fixture()
     Reflect.set(f.authorization, field, field === 'target' ? { responseSlotId: 'wrong' }
-      : field === 'content' ? { kind: 'worked_example', text: 'WRONG_HELP' } : field === 'revision' ? 2 : 'wrong')
+      : field === 'content' ? { kind: 'worked_example', tier: 'T0', text: 'WRONG_HELP' } : field === 'revision' ? 2 : 'wrong')
     expect((await f.t.mutation(authorizeProjection, {})).status).toBe('denied')
   })
 
@@ -329,14 +336,143 @@ describe('post-seal teaching disclosure contract through Convex', () => {
   })
 })
 
+describe('B1 post-seal authority and provenance', () => {
+  test.each(['relevantOpenCheck', 'evidenceAvailable'])('internal authority requires %s explicitly', async field => {
+    const f = await fixture()
+    Reflect.deleteProperty(field === 'relevantOpenCheck' ? f.context : f.context.practiceBinding!, field)
+    expect(() => projectPostSealTeaching(null, f.context)).toThrow()
+    expect(() => projectPracticeAssistanceAuthorization(null, f.request, f.context)).toThrow()
+  })
+
+  test.each(['yes', 'unknown'])('another relevant open check %s closes an old result and worked-example replay', async relevantOpenCheck => {
+    const f = await fixture()
+    f.request.kind = 'worked_example'; f.savedRequest.kind = 'worked_example'; f.authorization.content.kind = 'worked_example'
+    expect((await f.t.query(readProjection, {})).status).toBe('available')
+    expect((await f.t.mutation(authorizeProjection, {})).status).toBe('authorized')
+    Reflect.set(f.context, 'relevantOpenCheck', relevantOpenCheck)
+    const reasonCode = relevantOpenCheck === 'yes' ? 'test_open' : 'disclosure_unknown'
+    for (let replay = 0; replay < 2; replay++) {
+      expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode })
+      expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode })
+    }
+  })
+
+  test('practice evidence loss withholds its prompt and help on replay', async () => {
+    const f = await fixture()
+    expect((await f.t.query(readProjection, {})).practice).toEqual(f.source.practice)
+    expect((await f.t.mutation(authorizeProjection, {})).status).toBe('authorized')
+    Reflect.set(f.context.practiceBinding!, 'evidenceAvailable', false)
+    for (let replay = 0; replay < 2; replay++) {
+      expect(await f.t.query(readProjection, {})).toEqual({ ...f.reference, status: 'available',
+        feedback: f.source.feedback, lesson: f.source.lesson, practice: null })
+      expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
+    }
+  })
+
+  test('practice revision advance rejects an old receipt and permits only the current revision', async () => {
+    const f = await fixture()
+    const first = await f.t.mutation(authorizeProjection, {})
+    expect(first).toEqual(f.authorization)
+    f.context.practiceBinding!.revision = 2
+    f.source.practice!.revision = 2
+    expect((await f.t.query(readProjection, {})).practice.revision).toBe(2)
+    expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
+    f.request.expectedRevision = 2; f.savedRequest.expectedRevision = 2; f.authorization.revision = 2
+    f.request.idempotencyKey = 'practice_revision_1234567890'; f.savedRequest.idempotencyKey = f.request.idempotencyKey
+    f.authorization.authorizationId = await f.t.run(ctx => ctx.db.insert('learnAssessmentExposures', {
+      ...f.f.base, purpose: 'practice', status: 'granted', projectionDigest: 'a'.repeat(64), deliveryReceiptHash: 'b'.repeat(64),
+      serverTime: f.f.base.createdAt + 2, policyVersion: version, provenanceVersion: version,
+    }))
+    f.authorization.deliveredAt = f.f.base.createdAt + 2
+    expect(await f.t.mutation(authorizeProjection, {})).toEqual(f.authorization)
+    expect(first.revision).toBe(1)
+  })
+
+  test.each(['missing', 'different', 'null'])('a %s stored attempt binding cannot release feedback or a lesson', async state => {
+    const f = await fixture()
+    if (state === 'missing') Reflect.deleteProperty(f.source, 'attemptId')
+    else Reflect.set(f.source, 'attemptId', state === 'null' ? null : 'other-attempt')
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
+      version, status: 'unavailable', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test.each(['feedback', 'lesson'] as const)('publication loss behind only %s closes the read on replay', async field => {
+    const f = await fixture()
+    f.source.practice = null
+    f.source[field === 'feedback' ? 'lesson' : 'feedback'] = null
+    expect((await f.t.query(readProjection, {})).status).toBe('available')
+    f.context.publicationAllowed = false
+    for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
+      version, status: 'unavailable', reasonCode: 'disclosure_unknown',
+    })
+  })
+
+  test.each(['getPostSealTeaching', 'authorizePracticeAssistance'])('Today has no %s endpoint', endpoint => {
+    expect(learnV2TodayMeasurementApi).not.toHaveProperty(endpoint)
+  })
+
+  const contentKinds = ['feedback', 'lesson', 'practice', 'hint', 'worked_example'] as const
+  test.each(contentKinds)('%s requires an explicit closed tier in both public validators', async kind => {
+    const f = await fixture()
+    if (kind === 'hint' || kind === 'worked_example') {
+      f.authorization.content.kind = kind
+      Reflect.deleteProperty(f.authorization.content, 'tier')
+      expect(learnPracticeAssistanceAuthorizationSchema.safeParse(f.authorization).success).toBe(false)
+      await expect(f.t.mutation(rawAuthorization, {})).rejects.toThrow()
+      Reflect.set(f.authorization.content, 'tier', 'T3')
+      expect(learnPracticeAssistanceAuthorizationSchema.safeParse(f.authorization).success).toBe(false)
+      await expect(f.t.mutation(rawAuthorization, {})).rejects.toThrow()
+    }
+    else {
+      Reflect.deleteProperty(f.source[kind]!, 'tier')
+      expect(learnPostSealTeachingSchema.safeParse(f.teaching).success).toBe(false)
+      await expect(f.t.query(rawRead, {})).rejects.toThrow()
+      Reflect.set(f.source[kind]!, 'tier', 'T3')
+      expect(learnPostSealTeachingSchema.safeParse(f.teaching).success).toBe(false)
+      await expect(f.t.query(rawRead, {})).rejects.toThrow()
+    }
+  })
+
+  test.each(contentKinds.flatMap(kind => ['T0', 'T1', 'T2'].map(tier => ({ kind, tier }))))('$kind enforces ADR-0009 tier $tier in projections and Convex returns', async ({ kind, tier }) => {
+    const f = await fixture()
+    const allowed = tier !== 'T2' || kind === 'practice' || kind === 'worked_example'
+    if (kind === 'hint' || kind === 'worked_example') {
+      f.request.kind = kind; f.savedRequest.kind = kind; f.authorization.content.kind = kind
+      Reflect.set(f.authorization.content, 'tier', tier)
+      expect(learnPracticeAssistanceAuthorizationSchema.safeParse(f.authorization).success).toBe(allowed)
+      if (allowed) {
+        expect(await f.t.mutation(rawAuthorization, {})).toEqual(f.authorization)
+        expect(await f.t.mutation(authorizeProjection, {})).toEqual(f.authorization)
+      }
+      else {
+        await expect(f.t.mutation(rawAuthorization, {})).rejects.toThrow()
+        expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
+      }
+    }
+    else {
+      Reflect.set(f.source[kind]!, 'tier', tier)
+      expect(learnPostSealTeachingSchema.safeParse(f.teaching).success).toBe(allowed)
+      if (allowed) {
+        expect(await f.t.query(rawRead, {})).toEqual(f.teaching)
+        expect(await f.t.query(readProjection, {})).toEqual(f.teaching)
+      }
+      else {
+        await expect(f.t.query(rawRead, {})).rejects.toThrow()
+        expect(await f.t.query(readProjection, {})).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+      }
+    }
+  })
+})
+
 describe('stored post-seal payload failures', () => {
   test.each(['feedback', 'lesson', 'practice'] as const)('malformed stored %s closes the whole read even when withheld', async field => {
     const f = await fixture()
     if (field === 'feedback') f.setPhase('scoring_pending')
     else if (field === 'lesson') f.setPhase('scored_pass')
     else f.context.capabilities.canTeachSeparateCase = false
-    Reflect.set(f.source, field, field === 'feedback' ? { text: 'MALFORMED_CANARY', citations: [] }
-      : field === 'lesson' ? { paragraphs: [], citations: [] } : { ...f.source.practice, revision: 0 })
+    Reflect.set(f.source, field, field === 'feedback' ? { tier: 'T0', text: 'MALFORMED_CANARY', citations: [] }
+      : field === 'lesson' ? { tier: 'T0', paragraphs: [], citations: [] } : { ...f.source.practice, revision: 0 })
     for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
       version, status: 'unavailable', reasonCode: 'disclosure_unknown',
     })
@@ -353,6 +489,11 @@ describe('stored post-seal payload failures', () => {
 
   test('a valid stored source whose final output exceeds the envelope ceiling closes the read', async () => {
     const f = await fixture()
+    const submissionId = learnIdSchema<'learnResponses'>().parse('s')
+    const attemptId = learnIdSchema<'masteryAttempts'>().parse('a')
+    Object.assign(f.source, { submissionId, attemptId })
+    Object.assign(f.context.disclosure.lifecycle, { submissionId, authoritativeAttemptId: attemptId })
+    f.context.practiceBinding!.submissionId = submissionId
     const paragraphs = Array(5).fill('x'.repeat(12000))
     f.source.lesson!.paragraphs = paragraphs
     paragraphs.push('x'.repeat(LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes - learnSerializedBytes(f.source) - 3))
@@ -421,7 +562,7 @@ describe('registered disabled post-seal endpoints', () => {
       { ...f.request, target: { assessmentOpportunityId: f.reference.assessmentOpportunityId } } as never)).rejects.toThrow()
   })
 
-  test.each(['userId', 'phase', 'capabilities', 'validScore', 'publicationAllowed', 'practiceBinding', 'feedback', 'lesson', 'hint', 'workedExample'])('rejects client authority/content field %s', async field => {
+  test.each(['userId', 'phase', 'capabilities', 'validScore', 'publicationAllowed', 'practiceBinding', 'relevantOpenCheck', 'evidenceAvailable', 'attemptId', 'tier', 'feedback', 'lesson', 'hint', 'workedExample'])('rejects client authority/content field %s', async field => {
     const f = await fixture()
     const actor = f.t.withIdentity(OWNER)
     await expect(actor.query(learnV2CanvasMeasurementApi.getPostSealTeaching, { ...f.reference, [field]: 'forged' } as never)).rejects.toThrow()
@@ -439,7 +580,7 @@ describe('registered disabled post-seal endpoints', () => {
 describe('strict post-seal public validators', () => {
   const forbidden = ['scorePercent', 'thresholdPercent', 'criteria', 'rubric', 'rubricSnapshot', 'assessmentRubricSnapshot', 'weights', 'weightPercent',
     'criterionVerdicts', 'scorerRationale', 'modelConfidence', 'model', 'scorerModel', 'answerKey', 'expectedAnswer', 'referenceSolution',
-    'caseId', 'familyId', 'itemId', 'sourceSnapshotId', 'sourceExcerptId', 'privateLocator', 'providerResponse', 'hint', 'workedExample']
+    'caseId', 'familyId', 'itemId', 'attemptId', 'authoritativeAttemptId', 'sourceSnapshotId', 'sourceExcerptId', 'privateLocator', 'providerResponse', 'hint', 'workedExample']
   test.each(forbidden)('Zod and Convex reject %s at every new content/metadata boundary', async field => {
     const f = await fixture()
     if (f.teaching.status !== 'available' || f.authorization.status !== 'authorized') throw new Error('Missing fixture content')

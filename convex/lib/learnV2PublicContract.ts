@@ -197,15 +197,18 @@ const teachingCitations = v.array(v.object({ sourceRef: v.string(), label: v.str
 export const postSealTeachingValidator = v.union(
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('available'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
-    feedback: v.union(v.object({ text: v.string(), citations: teachingCitations }), v.null()),
-    lesson: v.union(v.object({ paragraphs: v.array(v.string()), citations: teachingCitations }), v.null()),
-    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), prompt: v.string() }), v.null()) }),
+    feedback: v.union(v.object({ tier: literals(['T0', 'T1']), text: v.string(), citations: teachingCitations }), v.null()),
+    lesson: v.union(v.object({ tier: literals(['T0', 'T1']), paragraphs: v.array(v.string()), citations: teachingCitations }), v.null()),
+    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), tier: literals(['T0', 'T1', 'T2']), prompt: v.string() }), v.null()) }),
 ) satisfies Validator<z.infer<typeof learnPostSealTeachingSchema>, 'required', string>
 export const practiceAssistanceAuthorizationValidator = v.union(
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('authorized'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
     target: v.object({ responseSlotId: v.id('learnResponseSlots') }), revision: v.number(), authorizationId: v.id('learnAssessmentExposures'), deliveredAt: v.number(),
-    content: v.object({ kind: literals(['hint', 'worked_example']), text: v.string() }) }),
+    content: v.union(
+      v.object({ kind: v.literal('hint'), tier: literals(['T0', 'T1']), text: v.string() }),
+      v.object({ kind: v.literal('worked_example'), tier: literals(['T0', 'T1', 'T2']), text: v.string() }),
+    ) }),
 ) satisfies Validator<z.infer<typeof learnPracticeAssistanceAuthorizationSchema>, 'required', string>
 
 export const requestReportArgs = {

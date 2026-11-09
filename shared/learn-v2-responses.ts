@@ -99,7 +99,7 @@ export const learnResponseTargetSchema = z.union([
 export const learnPracticeAssistanceTargetSchema = z.strictObject({ responseSlotId: learnIdSchema<'learnResponseSlots'>() })
 export const learnPostSealPracticeBindingSchema = z.strictObject({
   assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), submissionId: learnIdSchema<'learnResponses'>(),
-  target: learnPracticeAssistanceTargetSchema, revision: learnRevisionSchema, stage: z.literal('practice'), owned: z.boolean(),
+  target: learnPracticeAssistanceTargetSchema, revision: learnRevisionSchema, stage: z.literal('practice'), owned: z.boolean(), evidenceAvailable: z.boolean(),
   caseRelation: z.enum(['separate_case', 'check_case', 'sibling_form', 'unknown']),
   reservedCase: z.enum(['yes', 'no', 'unknown']),
 })
