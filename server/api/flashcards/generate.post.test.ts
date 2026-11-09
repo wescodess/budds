@@ -1,4 +1,6 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
+import { getFunctionName, type FunctionReference } from 'convex/server'
+import { api } from '../../../convex/_generated/api'
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),
@@ -16,7 +18,13 @@ vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedMo
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
 
 const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
-vi.mock('convex/browser', () => ({ ConvexHttpClient: class { setAuth() {} query = mockTeachingScope } }))
+const mockRoom = vi.hoisted(() => vi.fn())
+const mockMutation = vi.hoisted(() => vi.fn())
+vi.mock('convex/browser', () => ({ ConvexHttpClient: class {
+  setAuth() {}
+  mutation = mockMutation
+  query(reference: FunctionReference<'query'>) { return getFunctionName(reference) === 'documents:getTeachingScope' ? mockTeachingScope() : mockRoom() }
+} }))
 vi.stubGlobal('useRuntimeConfig', () => ({ public: { convex: { url: 'https://test.convex.cloud' } } }))
 
 const handler = (await import('./generate.post')).default
@@ -50,6 +58,8 @@ function goodLlmResponse() {
 describe('POST /api/flashcards/generate', () => {
   beforeEach(() => {
     mockTeachingScope.mockReset().mockResolvedValue([])
+    mockRoom.mockReset().mockResolvedValue({ room: { _id: 'room_abc', folderId: 'folder_abc' } })
+    mockMutation.mockReset().mockResolvedValue({ versionId: 'version_abc', cardCount: 2 })
     vi.mocked(globalThis.readBody).mockReset()
     vi.mocked(globalThis.searchDocuments).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
@@ -60,7 +70,7 @@ describe('POST /api/flashcards/generate', () => {
 
 
   test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
     await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
     expect(globalThis.searchDocuments).not.toHaveBeenCalled()
@@ -70,7 +80,7 @@ describe('POST /api/flashcards/generate', () => {
     vi.mocked(globalThis.getConvexTokenIdentifier).mockImplementation(() => {
       throw Object.assign(new Error('Convex authentication token not available'), { statusCode: 401 })
     })
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
 
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
     expect(err.statusCode).toBe(401)
@@ -85,7 +95,7 @@ describe('POST /api/flashcards/generate', () => {
   })
 
   test('[P0] 422 when both AI Search and folder-doc fallback are empty (LLM not called)', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
     vi.mocked(globalThis.fetchFolderDocs).mockResolvedValue([])
 
@@ -95,7 +105,7 @@ describe('POST /api/flashcards/generate', () => {
   })
 
   test('[P0] 503 Search index unavailable when empty retrieval follows a zero-vector index', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
     vi.mocked(globalThis.fetchFolderDocs).mockResolvedValue([])
     vi.mocked(globalThis.assertSearchIndexAvailable).mockRejectedValue(
@@ -109,7 +119,7 @@ describe('POST /api/flashcards/generate', () => {
   })
 
   test('[P0] uses raw text fallback when the search provider is unavailable', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockRejectedValue(
       Object.assign(new Error('Search index unavailable'), { statusCode: 503 }),
     )
@@ -125,8 +135,8 @@ describe('POST /api/flashcards/generate', () => {
     expect(globalThis.assertSearchIndexAvailable).not.toHaveBeenCalled()
   })
 
-  test('[P0] 200 happy path: returns generated cards payload for client persistence', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+  test('[P0] 200 happy path: publishes before returning generated cards', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'Photosynthesis content', score: 0.9, attributes: { filename: 'bio1.pdf', documentId: 'doc_1' } },
@@ -159,11 +169,43 @@ describe('POST /api/flashcards/generate', () => {
         },
       ],
       cardCount: 2,
+      roomId: 'room_abc',
+      versionId: 'version_abc',
     })
+    expect(mockMutation).toHaveBeenCalledWith(api.flashcardRooms.generateRoomCards, expect.objectContaining({ roomId: 'room_abc', requestedCardCount: 12, cards: expect.arrayContaining([expect.objectContaining({ term: 'What produces ATP?', definition: 'Mitochondria' })]) }))
+  })
+
+  test('requests without a publishing room stop before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    await expect(handler(makeEvent())).rejects.toMatchObject({ statusCode: 400, message: 'roomId is required for publication' })
+    expect(mockTeachingScope).not.toHaveBeenCalled()
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+  })
+
+  test('protected or foreign target rooms stop before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
+    mockRoom.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    mockRoom.mockResolvedValue({ room: { folderId: 'foreign' } })
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+  })
+
+  test('reserved output cannot escape in an HTTP response without a task ID', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [{ id: 'one', content: 'Ordinary teaching', attributes: {} }, { id: 'two', content: 'Ordinary teaching', attributes: {} }] })
+    vi.mocked(globalThis.generateCompletion).mockResolvedValue(goodLlmResponse())
+    mockMutation.mockRejectedValue(new Error('Instructional reservation check rejected'))
+    await expect(handler(makeEvent())).rejects.toThrow('Instructional reservation check rejected')
+    expect(mockMutation).toHaveBeenCalledOnce()
   })
 
   test('[P0] 502 when parseFlashcardResponse yields no valid cards', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'a', score: 0.9, attributes: { filename: 'a.pdf' } },
@@ -183,7 +225,7 @@ describe('POST /api/flashcards/generate', () => {
   test('[P1] disallowed model falls back to SERVER_DEFAULT_MODEL', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({
       folderId: 'folder_abc',
-      model: 'bogus/model',
+      model: 'bogus/model', roomId: 'room_abc',
     })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
@@ -201,7 +243,7 @@ describe('POST /api/flashcards/generate', () => {
   })
 
   test('[P1] integration: response cards round-trip through zod', async () => {
-    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', roomId: 'room_abc' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({
       data: [
         { id: '1', content: 'content 1', score: 0.9, attributes: { filename: 'a.pdf' } },

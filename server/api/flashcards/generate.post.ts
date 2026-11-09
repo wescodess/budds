@@ -41,13 +41,16 @@ export default defineEventHandler(async (event) => {
   if (!body?.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
+  if (!body.roomId?.trim()) throw createError({ statusCode: 400, message: 'roomId is required for publication' })
 
   const taskId = body.taskId as Id<'tasks'> | undefined
-  const roomId = body.roomId as Id<'flashcardRooms'> | undefined
+  const roomId = body.roomId as Id<'flashcardRooms'>
   const convexClient = makeConvexClient(event)
   if (!convexClient) throw createError({ statusCode: 503, message: 'Flashcard storage unavailable' })
 
   const teachingScope = await loadTeachingScope(convexClient, { folderId: body.folderId as Id<'folders'> })
+  const target = await convexClient.query(api.flashcardRooms.getRoom, { roomId })
+  if (!target || target.room.folderId !== body.folderId) throw new TeachingSourceError()
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -177,56 +180,47 @@ export default defineEventHandler(async (event) => {
       }
     })
 
-    if (taskId && roomId && convexClient) {
-      await setTaskProgress('Archiving previous deck…')
+    await setTaskProgress('Archiving previous deck…')
 
-      const payloadCards = persistCards.map((c) => ({
-        term: c.front,
-        definition: c.back,
-        metadata: {
-          source: {
-            documentId: c.sourceDocumentId,
-            filename: c.sourceFilename,
-            chunkContent: c.sourceChunkContent,
-          },
+    const payloadCards = persistCards.map((c) => ({
+      term: c.front,
+      definition: c.back,
+      metadata: {
+        source: {
+          documentId: c.sourceDocumentId,
+          filename: c.sourceFilename,
+          chunkContent: c.sourceChunkContent,
         },
-      }))
+      },
+    }))
 
-      const generateResult = await convexClient.mutation(api.flashcardRooms.generateRoomCards, {
-        roomId,
-        origin: 'ai' as const,
-        requestedCardCount: cardCount,
-        sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
-        model,
-        title: parsed.title,
-        cards: payloadCards,
-      })
+    const generateResult = await convexClient.mutation(api.flashcardRooms.generateRoomCards, {
+      roomId,
+      origin: 'ai' as const,
+      requestedCardCount: cardCount,
+      sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
+      model,
+      title: parsed.title,
+      cards: payloadCards,
+    })
 
-      await convexClient.mutation(api.tasks.markComplete, {
-        taskId,
-        result: {
-          roomId,
-          versionId: generateResult.versionId,
-          cardCount: generateResult.cardCount,
-        },
-      })
-
-      return {
-        title: parsed.title,
-        model,
-        cards: persistCards,
-        cardCount: persistCards.length,
-        taskId,
+    if (taskId) await convexClient.mutation(api.tasks.markComplete, {
+      taskId,
+      result: {
         roomId,
         versionId: generateResult.versionId,
-      }
-    }
+        cardCount: generateResult.cardCount,
+      },
+    })
 
     return {
       title: parsed.title,
       model,
       cards: persistCards,
       cardCount: persistCards.length,
+      ...(taskId ? { taskId } : {}),
+      roomId,
+      versionId: generateResult.versionId,
     }
   }
   catch (err) {
