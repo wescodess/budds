@@ -1,3 +1,4 @@
+import { assertTeachingCommand, loadTeachingScope } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -32,6 +33,8 @@ export default defineEventHandler(async (event) => {
     taskId?: string
   }>(event)
 
+  assertTeachingCommand(body, { courseId: 'string', taskId: 'string' })
+
   if (!body?.courseId?.trim()) {
     throw createError({ statusCode: 400, message: 'courseId is required' })
   }
@@ -43,6 +46,8 @@ export default defineEventHandler(async (event) => {
   if (!convexClient) {
     throw createError({ statusCode: 500, message: 'Failed to initialize Convex client' })
   }
+
+  const teachingScope = await loadTeachingScope(convexClient, { courseId })
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -84,6 +89,7 @@ export default defineEventHandler(async (event) => {
           .filter(Boolean) as string[]
 
         const results = await searchDocuments({
+          teachingScope,
           query: course.title,
           userId,
           folderId,
@@ -103,6 +109,7 @@ export default defineEventHandler(async (event) => {
 
       if (!documentContent.trim() && docIds.length > 0) {
         const broadResults = await searchDocuments({
+          teachingScope,
           query: course.title,
           userId,
           max_num_results: 40,

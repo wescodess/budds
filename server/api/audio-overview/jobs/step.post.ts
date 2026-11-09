@@ -1,3 +1,4 @@
+import { assertTeachingCommand } from '../../../utils/teaching-source-scope'
 import { getErrorMessage } from '../../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -151,6 +152,7 @@ function minimumGroundedCharacters(request: AudioOverviewRequest): number {
 }
 
 async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: string): Promise<AISearchChunk[]> {
+  const teachingScope = request.documents.map(({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }) => ({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }))
   const minimumCharacters = minimumGroundedCharacters(request)
   const scopeDocIds = request.documents.map(document => String(document.documentId))
   const frozenIdentityByDocument = new Map<string, { contentHash: string, sourceRevision: string }>(request.documents.map(document => [
@@ -173,6 +175,7 @@ async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: str
   const searchOrEmpty = async (scoreThreshold: number) => {
     try {
       const result = await searchDocuments({
+        teachingScope,
         query: SEED_QUERY,
         userId,
         max_num_results: 50,
@@ -200,6 +203,7 @@ async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: str
   }
   if (chunks.reduce((sum, chunk) => sum + chunk.content.trim().length, 0) < minimumCharacters) {
     const exactTextSources = await fetchFolderDocs({
+      teachingScope,
       userId,
       documents: request.documents.map(document => ({
         documentId: String(document.documentId),
@@ -914,6 +918,7 @@ export default defineEventHandler(async (event) => {
   if (!['prepare', 'scene-context', 'claim-render', 'commit-scene', 'publish', 'align', 'fail'].includes(body.stage)) {
     throw createError({ statusCode: 400, message: 'Invalid audio overview job stage' })
   }
+  assertTeachingCommand(body, { jobId: 'string', stage: 'string', sceneOrder: 'number', attempt: 'number', artifact: 'object', qualityGate: 'object', error: 'string' })
   const client = makeJobClient(event)
   const jobId = body.jobId as Id<'audioOverviewJobs'>
   try {

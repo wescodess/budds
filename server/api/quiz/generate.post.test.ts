@@ -1,5 +1,6 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
+const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
 const convexMutation = vi.hoisted(() => vi.fn())
 vi.mock('../../utils/learning-decisions', () => ({ shadowEvaluateQuiz }))
@@ -7,6 +8,7 @@ vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth() {}
     mutation = convexMutation
+    query = mockTeachingScope
   },
 }))
 
@@ -69,6 +71,7 @@ function goodLlmResponse() {
 
 describe('POST /api/quiz/generate', () => {
   beforeEach(() => {
+    mockTeachingScope.mockReset().mockResolvedValue([])
     vi.mocked(globalThis.readBody).mockReset()
     vi.mocked(globalThis.searchDocuments).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
@@ -112,6 +115,15 @@ describe('POST /api/quiz/generate', () => {
     }))
   })
 
+
+  test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', taskId: 'task_123' })
+    mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(convexMutation).not.toHaveBeenCalled()
+  })
   test('persists direct-generation criteria server-side and returns a safe saved identifier', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [

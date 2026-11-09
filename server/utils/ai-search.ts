@@ -1,3 +1,4 @@
+import { assertTeachingSourcePins, type TeachingSource } from './teaching-source-scope'
 import { readConfiguredRuntimeValue } from './runtime-config'
 import { readSourceIdentityMetadata } from '../../shared/source-identity'
 
@@ -29,6 +30,7 @@ export interface AISearchParams {
   max_num_results?: number
   score_threshold?: number
   reranking?: boolean
+  teachingScope?: TeachingSource[]
   filterDocIds?: string[]
 }
 
@@ -188,6 +190,13 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     })
   }
 
+  if (params.teachingScope) {
+    if (!params.teachingScope.length) return { data: [] }
+    const allowed = new Set(params.teachingScope.map(source => String(source.documentId)))
+    params = { ...params, filterDocIds: params.filterDocIds?.length ? params.filterDocIds.filter(id => allowed.has(id)) : [...allowed] }
+    if (!params.filterDocIds?.length) return { data: [] }
+  }
+
   const url = `https://api.cloudflare.com/client/v4/accounts/${cloudflareAccountId}/autorag/rags/${cloudflareAiSearchInstance}/search`
 
   const body: Record<string, unknown> = {
@@ -291,5 +300,6 @@ export async function searchDocuments(params: AISearchParams): Promise<AISearchR
     return !!chunk.attributes.documentId && docIdAllowlist.has(chunk.attributes.documentId)
   })
 
+  if (params.teachingScope) for (const chunk of filtered) assertTeachingSourcePins(params.teachingScope, chunk.attributes)
   return { data: filtered, search_query: json.result.search_query }
 }

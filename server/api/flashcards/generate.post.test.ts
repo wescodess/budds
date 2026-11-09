@@ -15,6 +15,10 @@ vi.stubGlobal('parseFlashcardResponse', (await import('../../utils/flashcard-pro
 vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedModel)
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
 
+const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
+vi.mock('convex/browser', () => ({ ConvexHttpClient: class { setAuth() {} query = mockTeachingScope } }))
+vi.stubGlobal('useRuntimeConfig', () => ({ public: { convex: { url: 'https://test.convex.cloud' } } }))
+
 const handler = (await import('./generate.post')).default
 
 function makeEvent(): any {
@@ -45,6 +49,7 @@ function goodLlmResponse() {
 
 describe('POST /api/flashcards/generate', () => {
   beforeEach(() => {
+    mockTeachingScope.mockReset().mockResolvedValue([])
     vi.mocked(globalThis.readBody).mockReset()
     vi.mocked(globalThis.searchDocuments).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
@@ -53,6 +58,14 @@ describe('POST /api/flashcards/generate', () => {
     vi.mocked(globalThis.getConvexTokenIdentifier).mockReturnValue('https://auth.example.com|user_test_123')
   })
 
+
+  test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc' })
+    mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+  })
   test('[P0] 401 when Convex token is missing', async () => {
     vi.mocked(globalThis.getConvexTokenIdentifier).mockImplementation(() => {
       throw Object.assign(new Error('Convex authentication token not available'), { statusCode: 401 })
