@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -23,7 +24,7 @@ test('reconciles a committed diagnostic with a discarded save acknowledgement th
     let cursor: string | null = null
     let pages = 0
     for (;;) {
-      const result: { page: unknown[], isDone: boolean, continueCursor: string } = await owner.query(api.dataExport.getUserDataPage, {
+      const result: { page: unknown[], isDone: boolean, continueCursor: string } = await owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner),
         collection, paginationOpts: { cursor, numItems: 2 },
       })
       expect(result.page.length).toBeLessThanOrEqual(2)

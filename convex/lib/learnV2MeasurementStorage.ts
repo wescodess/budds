@@ -210,6 +210,7 @@ const allocation = v.union(
 export const measurementAssignmentValidator = v.union(
   v.object({ ...assignmentBase, status: v.union(v.literal('considered'), v.literal('not_admitted')), protocolStatus: v.union(v.literal('protocol_not_frozen'), v.literal('blocked')), reasonCode: v.string() }),
   v.object({ ...assignmentBase, status: v.literal('admitted'), protocolStatus: v.literal('frozen'),
+    responseKind: v.union(v.literal('keyed'), v.literal('numeric'), v.literal('ordered'), v.literal('bounded_rubric')),
     familyId: v.id('learnMeasurementFamilies'), familyRevision: v.number(), allocation,
     randomizationSeed: v.string(), allocationVersion: v.string(), sequenceIndex: v.number(),
     protocolVersion: v.string(), schedulingPolicyVersion: v.string(), enrollmentAt: v.number(), enrollmentTimezone: v.string(),

@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest, type TestConvex } from 'convex-test'
 import type { FunctionArgs } from 'convex/server'
 import { describe, expect, test, vi } from 'vitest'
@@ -271,14 +272,14 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
       const adaptiveRequest = { threadId: activity.threadId, activityId: 'cross-wrapper-denial', ...attempt }
       await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: false })
-      const exported = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      const exported = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
       Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
       const retried = await setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, attempt).catch(error => ({ error }))
       expect(provider).not.toHaveBeenCalled()
       expect(retried).toMatchObject({ status: 'denied', code: 'adaptive_activity_authority_unavailable', retryable: false })
-      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported)
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported)
       for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
-        await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+        await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
       }
       Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: false })
       await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
@@ -312,9 +313,9 @@ describe('LA2-12 server-scored mastery attempts', () => {
       reply(successfulProviderResponse())
       await expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
       for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
-        await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+        await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
       }
-      const jobs = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      const jobs = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
       expect(jobs.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
     }
     finally { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
@@ -357,7 +358,10 @@ describe('LA2-12 server-scored mastery attempts', () => {
       const beforeReservation = await guardrail()
       expect(beforeReservation).toMatchObject({ dispatches: 1, reservedMicroUsd: 4920, outstanding: 1, ambiguousOutcomes: 0, rollbackLatched: false })
       await first.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: OWNER.tokenIdentifier })
-      for (let batch = 0; batch < 250; batch++) await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+      for (let batch = 0; batch < 250; batch++) {
+        const progress = await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+        if (progress.state === 'running' && progress.phase === 'waitingExternal') break
+      }
       // The database deletion phases have finished; real external cleanup is
       // outside this local fixture. The account tombstone denies its exports.
       await expect(first.t.query(internal.accountDeletion.getDeletionTombstone, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ phase: 'waitingExternal' })
@@ -375,7 +379,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       expect(await guardrail()).toEqual(retainedReservation)
       expect(await ownerBodies()).toEqual({ jobs: [], activities: [] })
       await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
-      await expect(second.owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      await expect(second.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(second.owner), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
       expect(provider).toHaveBeenCalledTimes(1)
     }
     finally { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
@@ -412,8 +416,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
           })
           clock.mockReturnValue(Date.parse('2026-10-01T00:01:00.000Z'))
           await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
-          await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
-          const exported = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+          await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+          const exported = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
           expect(exported.page).toEqual([expect.objectContaining({ userId: OTHER.tokenIdentifier, providerAdmissionDenialCode: code })])
           expect(JSON.stringify(exported.page)).not.toContain(OWNER.tokenIdentifier)
         }
@@ -439,7 +443,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       const activity = await addAdaptiveActivity(setup, 'unapproved-controls')
       const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('unapproved-controls-key', 80)
       await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'unapproved-controls', ...attempt })).resolves.toMatchObject({ kind: 'blocked', code, retryable: false })
-      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
       expect(provider).not.toHaveBeenCalled()
     }
     finally { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() }
@@ -472,7 +476,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'malformed-activation', ...attempt }))
         .resolves.toMatchObject({ kind: 'blocked', code: 'pilot_manifest_invalid', retryable: false })
       expect(provider).not.toHaveBeenCalled()
-      await expect(setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
+      await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
         .resolves.toMatchObject({ page: [], isDone: true })
     }
     finally {
@@ -564,6 +568,27 @@ describe('LA2-12 server-scored mastery attempts', () => {
     })
     expect(JSON.parse(rows.attempt!.contentRevisionPinsJson!)).toMatchObject([{ sourceSnapshotId: String(ids.sourceId), sourceRevisionNumber: 1, sourceRecordRevision: 1, sourceRevision: null, excerptLocator: 'paragraph:1', verifierVersion: 'test.verifier.v1' }])
     expect(rows.scoped).toMatchObject({ blueprintRevisionId: ids.blueprintIdRevision, objectiveId: ids.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId), state: 'independent' })
+  })
+
+  test('replays a legacy mastery receipt after source purge digests its raw fingerprint', async () => {
+    vi.useFakeTimers()
+    try {
+      const { t, ids, args } = await fixture({ state: 'guided' })
+      const request = args('purged-legacy-replay', 80)
+      const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)
+      const raw = JSON.stringify({ command: 'submitMasteryAttempt', studySessionId: String(request.studySessionId),
+        expectedSessionRevision: request.expectedSessionRevision, expectedContentRevision: request.expectedContentRevision,
+        expectedPlanRecordRevision: request.expectedPlanRecordRevision, expectedBlueprintRecordRevision: request.expectedBlueprintRecordRevision,
+        response: request.response, confidence: request.confidence })
+      await t.run(ctx => ctx.db.patch(result.attemptId!, { requestFingerprint: raw }))
+      const source = (await t.run(ctx => ctx.db.get(ids.sourceId)))!
+      await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: request.tokenIdentifier, sourceIdentityId: source.sourceIdentityId })
+      await t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await t.run(ctx => ctx.db.get(result.attemptId!)))?.requestFingerprint).toMatch(/^sha256:/)
+      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)).resolves.toMatchObject({ attemptId: result.attemptId, scorePercent: 80 })
+      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...request, response: 'Changed work' })).rejects.toThrow('Idempotency key was already used for a different request')
+    }
+    finally { vi.useRealTimers() }
   })
 
   test('appends one scoped before-and-after transition history row and replays it', async () => {
@@ -917,7 +942,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('adaptive-provider-timeout-key', 80)
       await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
       const request = { threadId: activity.threadId, activityId: 'adaptive-provider-timeout', ...attempt }
-      const exportPage = (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+      const exportPage = async (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })
       let settled = false
       const submission = setup.owner.action(api.learnAdaptive.submitResponse, request).finally(() => { settled = true })
       await Promise.race([dispatchObserved, submission.then((result) => {
@@ -925,7 +950,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       })])
       expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
       expect(provider).toHaveBeenCalledTimes(1)
-      const dispatchExport = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      const dispatchExport = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
       expect(dispatchExport.page).toEqual([expect.objectContaining({
         providerProductPolicyVersion: 'adaptive-v2-product-budget.utc-hour-day.v1',
         providerRollbackPolicyVersion: 'adaptive-v2-provider-rollback.v1',
@@ -940,7 +965,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await vi.advanceTimersByTimeAsync(1)
       expect(providerSignal).toMatchObject({ aborted: true, reason: { name: 'TimeoutError' } })
       await expect(submission).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
-      const ambiguousExport = await setup.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+      const ambiguousExport = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
       expect(ambiguousExport.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
       const events = await exportPage('learnActivityEvents')
       expect(events.isDone).toBe(true)
@@ -1043,7 +1068,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken })
     await setup.t.run(ctx => ctx.db.patch(acquired.jobId, { leaseExpiresAt: Date.now() - 1 }))
 
-    const exportPage = (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { cursor: null, numItems: 8 } })
+    const exportPage = async (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })
     const attemptsBeforeRecovery = await exportPage('masteryAttempts')
     const masteryBeforeRecovery = await exportPage('masteryRecords')
     expect(attemptsBeforeRecovery).toMatchObject({ page: [], isDone: true })

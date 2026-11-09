@@ -34,6 +34,7 @@ import type { LearnV2AssessmentContract } from "../shared/learn-v2-blueprint";
 import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, writeLearnActivityEvent } from "./lib/learnAdaptiveEvents";
 import { hasAdaptiveExperienceAccess } from "./lib/adaptiveLearnAccess";
 import { loadAdaptiveClaimProjection } from "./lib/adaptiveClaimProjection";
+import { matchesLegacyFingerprint } from "./lib/learnV2ResponsePrivacy";
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -1140,7 +1141,7 @@ export const retrySessionContentGeneration = mutation({
       .withIndex("by_userId_and_idempotencyKey", (q) => q.eq("userId", userId).eq("idempotencyKey", args.idempotencyKey))
       .unique();
     if (prior) {
-      if (prior.command !== "retrySessionContentGeneration" || prior.requestFingerprint !== requestFingerprint)
+      if (prior.command !== "retrySessionContentGeneration" || !await matchesLegacyFingerprint(prior.requestFingerprint, requestFingerprint))
         throw new Error("Idempotency key was already used for a different request");
       return JSON.parse(prior.response) as { status: "pending"; sessionRevision: number; jobId: Id<"learnJobs"> };
     }
@@ -1260,7 +1261,7 @@ export const startStudySession = mutation({
     if (prior) {
       if (
         prior.command !== "startStudySession" ||
-        prior.requestFingerprint !== fingerprint
+        !await matchesLegacyFingerprint(prior.requestFingerprint, fingerprint)
       )
         throw new Error(
           "Idempotency key was already used for a different request",

@@ -75,6 +75,64 @@ function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
 }
 
 describe('Learn V2 revision-safe map editing and calibration', () => {
+  test.each([false, true])('map acceptance cleanly rejects a missing or legacy stored contract with legacy=%s while the projection remains editable', async legacy => {
+    const f = await setupMap()
+    await f.t.mutation(internal.learnV2Retention.purgeLegacyObjectiveCopies, { userId: identity.tokenIdentifier,
+      sourceSnapshotId: f.sourceSnapshotId, objectiveId: f.objectives[0]! })
+    if (legacy) await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: 'Legacy rubric cache' }))
+    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[0]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+      expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'missing-contract' })).rejects.toThrow('Blueprint assessment contract is invalid')
+  })
+
+  test('map receipt replay recognizes the purged fingerprint without restoring the request', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = await setupMap()
+      await f.t.run(ctx => ctx.db.patch(f.blueprint._id, { status: 'draft' }))
+      const args = { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2,
+        idempotencyKey: 'replay-edited-map', candidate: editedCandidate(f.sourceSnapshotId) }
+      const original = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)
+      const source = (await f.t.run(ctx => ctx.db.get(f.sourceSnapshotId)))!
+      await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: identity.tokenIdentifier, sourceIdentityId: source.sourceIdentityId })
+      await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect(await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).toEqual(original)
+      await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...args, expectedRecordRevision: 3 })).rejects.toThrow('Idempotency key was already used for a different request')
+    }
+    finally { vi.useRealTimers() }
+  })
+
+  test('folder purge skips gap contracts and keeps missing supported contracts editable without republishing them', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = await setupMap()
+      const documentId = await f.t.run(async ctx => {
+        const aggregate = (await ctx.db.get(f.learningVoid._id))!
+        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: aggregate.folderId,
+          filename: 'map-backing.txt', fileSize: 1, status: 'success' })
+        const snapshot = (await ctx.db.get(f.sourceSnapshotId))!
+        await ctx.db.patch(snapshot.sourceIdentityId, { origin: 'folder_document', folderDocumentId: documentId })
+        await ctx.db.patch(snapshot._id, { rightsStatus: 'unknown' })
+        const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', snapshot._id)).unique()
+        await ctx.db.delete(excerpt!._id)
+        const link = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('objectiveId', f.objectives[0]!).eq('sourceSnapshotId', snapshot._id)).unique()
+        await ctx.db.patch(link!._id, { coverage: 'gap' })
+        await ctx.db.patch(f.objectives[0]!, { coverage: 'gap', gapReason: 'This source does not support the objective.' })
+        return documentId
+      })
+      expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[1]?.assessmentContract).toEqual(assessment)
+      await f.owner.mutation(api.documents.deleteDocument, { id: documentId })
+      await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+      expect((await f.t.run(ctx => ctx.db.get(f.objectives[0]!)))?.assessmentContract).toEqual(assessment)
+      expect((await f.t.run(ctx => ctx.db.get(f.objectives[1]!)))?.assessmentContract).toBeUndefined()
+      const mission = await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id })
+      expect(mission?.map?.objectives[1]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+      await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+        expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'reject-missing-contract' })).rejects.toThrow('Blueprint objective evidence is unavailable')
+    }
+    finally { vi.useRealTimers() }
+  })
+
   test('installs and atomically replaces the active Blueprint pointer with exact replay', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     try {
@@ -290,7 +348,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         const source = await ctx.db.get(setup.sourceSnapshotId)
         const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', setup.sourceSnapshotId)).unique()
         const learningVoid = await ctx.db.get(setup.learningVoid._id)
-        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: learningVoid!.folderId, filename: 'folder-evidence.pdf', status: 'success', fileSize: 100, r2Key: 'owners/map/folder-evidence.pdf' })
+        const documentId = await ctx.db.insert('documents', { userId: identity.tokenIdentifier, folderId: learningVoid!.folderId, filename: 'folder-evidence.pdf', status: 'success', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}`, fileSize: 100, r2Key: 'owners/map/folder-evidence.pdf' })
         await ctx.db.patch(source!.sourceIdentityId, { origin: 'folder_document', externalKey: `document:${documentId}`, canonicalUrl: undefined, folderDocumentId: documentId })
         await ctx.db.patch(source!._id, { rightsStatus: 'unknown', objectKey: 'owners/map/folder-evidence.pdf', contentHash: 'a'.repeat(64), sourceRevision: `sha256:${'a'.repeat(64)}` })
         await ctx.db.patch(excerpt!._id, { rightsStatus: 'unknown', locator: `sha256:${'a'.repeat(64)}`, excerpt: undefined })

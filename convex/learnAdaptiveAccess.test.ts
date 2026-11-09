@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest } from 'convex-test'
 import { afterAll, beforeEach, describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -85,7 +86,7 @@ describe('Adaptive Learn canonical access gate', () => {
     expect(ADAPTIVE_EXTERNAL_OBJECT_CLEANUP).toBe('deferred_no_adaptive_objects')
     const threadId = await t.run(ctx => ctx.db.insert('learningThreads', { userId: OWNER.tokenIdentifier, originalNeed: 'Export during rollback', intent: 'understand', availableTime: '15', authorityKind: 'standalone', sourceScope: { kind: 'none' }, evidenceState: 'none', lifecycle: 'ready', revision: 1, createdAt: 1, updatedAt: 1 }))
     process.env.LEARN_V2_ENABLED = 'false'
-    await expect(owner.query(api.dataExport.getUserDataPage, { collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [{ _id: threadId }] })
+    await expect(owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(owner), collection: 'learningThreads', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [{ _id: threadId }] })
   })
 
   test('keeps account deletion and source-purge maintenance available during rollback', async () => {

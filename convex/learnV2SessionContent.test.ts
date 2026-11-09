@@ -61,6 +61,16 @@ async function leaseAndBegin(t: ReturnType<typeof convexTest>, jobId: Id<'learnJ
 }
 
 describe('Learn V2 session-content publication contract', () => {
+  test('a purged objective contract produces a clean session-generation error', async () => {
+    const { t, graph } = await seedGenerationGraph()
+    const { lease, begun } = await leaseAndBegin(t, graph.jobId)
+    const input = { tokenIdentifier: identity.tokenIdentifier, jobId: graph.jobId, leaseToken: lease.leaseToken, expectedRevision: begun.revision }
+    await expect(t.query(internal.learnV2SessionContent.getSessionContentGenerationInput, input)).resolves.toHaveProperty('objective.assessmentRubric')
+    await t.mutation(internal.learnV2Retention.purgeLegacyObjectiveCopies, { userId: identity.tokenIdentifier,
+      sourceSnapshotId: graph.snapshotId, objectiveId: graph.objectiveId })
+    await expect(t.query(internal.learnV2SessionContent.getSessionContentGenerationInput, input)).rejects.toThrow('objective_rubric_unavailable')
+  })
+
   test('accepts the complete evidence-bound mastery loop', () => {
     expect(validateLearnV2SessionContentCandidate(candidate(), [sourceId])).toMatchObject({
       version: 'learn-v2.session-content.v1',
@@ -312,6 +322,9 @@ describe('Learn V2 session-content publication contract', () => {
       expect.objectContaining({ _id: graph.jobId, status: 'failed', terminalReason: 'provider_outcome_reviewed_no_candidate' }),
       expect.objectContaining({ status: 'queued', expectedSessionRevision: 3, attempts: 0 }),
     ]))
+    await t.mutation(internal.learnV2Retention.purgeLegacySourceCopies, { userId: identity.tokenIdentifier, sourceSnapshotId: graph.snapshotId, phase: 'plan_receipts' })
+    await expect(owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: graph.sessionId, expectedSessionRevision: 2,
+      idempotencyKey: 'retry-session-generation' })).resolves.toMatchObject({ status: 'unavailable', reasonCode: 'evidence_unavailable' })
   })
 
   test('starts only the exact published revision and returns the durable receipt only to its owner', async () => {
@@ -336,6 +349,8 @@ describe('Learn V2 session-content publication contract', () => {
     await other.mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: otherIdentity.tokenIdentifier, enabled: true })
     await expect(other.mutation(api.learnV2SessionContent.startStudySession, args)).rejects.toThrow(/Study session is not ready/)
+    await t.mutation(internal.learnV2Retention.purgeLegacySourceCopies, { userId: identity.tokenIdentifier, sourceSnapshotId: graph.snapshotId, phase: 'plan_receipts' })
+    await expect(owner.mutation(api.learnV2SessionContent.startStudySession, args)).resolves.toMatchObject({ status: 'unavailable', reasonCode: 'evidence_unavailable' })
   })
 
   test('records first value only after the linked adaptive content is rendered and operable', async () => {
