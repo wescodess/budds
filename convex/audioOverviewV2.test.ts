@@ -856,9 +856,12 @@ describe('V2 Audio lineage isolation', () => {
     await enrollProducer(initial.t, USER_ID, [initial.firstDocumentId, initial.secondDocumentId])
     const f = await readyPublication(initial)
     const published = await f.t.mutation(api.audioOverviewV2.publishFinalArtifact, f.finalArtifactArgs)
+    const workflow = (await f.t.query(api.audioOverviewV2.getForWorkflow, { jobId: f.jobId, capability: CAPABILITY }))!
     const token = '1'.repeat(32)
     await f.t.run(ctx => ctx.db.patch(published.overviewId, { shareToken: token, publishedAt: Date.now() }))
     await protectProducerArtifact(f.t, USER_ID, { kind: 'audio_overview', id: published.overviewId }, 'private_scoring')
+    const inventory = () => f.t.run(async ctx => ({ artifacts: await ctx.db.query('audioOverviewAudioArtifacts').take(100), gates: await ctx.db.query('audioOverviewSceneQualityGates').take(100), segments: await ctx.db.query('audioOverviewAlignmentSegments').take(100), lineages: await ctx.db.query('learnArtifactLineages').take(100) }))
+    const before = await inventory()
     for (const work of [
       () => f.asUser.query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: published.overviewId }),
       () => f.t.query(api.audioOverviewV2.getPlaybackByShareToken, { token }),
@@ -866,8 +869,14 @@ describe('V2 Audio lineage isolation', () => {
       () => f.t.query(api.audioOverviewV2.resolveMediaByShareToken, { token }),
       () => f.t.query(api.audioOverviewV2.getForWorkflow, { jobId: f.jobId, capability: CAPABILITY }),
       () => f.t.query(api.audioOverviewV2.listAlignmentSegments, { jobId: f.jobId, capability: CAPABILITY, alignmentId: published.alignmentId, paginationOpts: { cursor: null, numItems: 10 } }),
+      () => f.t.mutation(api.audioOverviewV2.appendAlignmentSegments, { jobId: f.jobId, capability: CAPABILITY, alignmentId: published.alignmentId, segments: [{ utteranceId: workflow.utterances[0]!._id, wordIndex: 0, word: 'private transcript canary', startMs: 0, endMs: 10 }] }),
+      () => f.t.mutation(api.audioOverviewV2.recordSceneEvaluation, { jobId: f.jobId, capability: CAPABILITY, sceneId: workflow.scenes[0]!._id, attempt: 1, passed: true,
+        artifact: { ...f.finalArtifactArgs.artifact, container: 'pcm', objectKey: `audio-overviews/jobs/${f.jobId}/scenes/0-1.pcm` },
+        checks: { claimsSupported: true, scriptedSpeakerPairValid: true, audioProfileMatches: true, speakerCountEvidence: 'not_measured', speakerConsistencyEvidence: 'not_measured', durationWithinTolerance: true, silenceWithinTolerance: true, clippingWithinTolerance: true, truncationFree: true, tempoWithinTolerance: true, directionsNotSpoken: true },
+      }),
       () => f.t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: CAPABILITY, alignmentId: published.alignmentId }),
       () => f.t.mutation(api.audioOverviewV2.publishFinalArtifact, f.finalArtifactArgs),
     ]) await expect(work()).rejects.toThrow('Teaching input is unavailable')
+    expect(await inventory()).toEqual(before)
   })
 })

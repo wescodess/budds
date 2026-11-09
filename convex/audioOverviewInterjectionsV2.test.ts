@@ -781,7 +781,7 @@ describe('#540 interjection graph and pin limits', () => {
     await expect(f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, f.input))).rejects.toThrow('Artifact lineage unavailable')
     expect(await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())).toEqual(catalog)
   })
-  test.each(['object', 'hash', 'revision', 'foreign', 'missing', 'duplicate'] as const)('rejects a substituted %s source or join', async change => {
+  test.each(['object', 'hash', 'revision', 'foreign', 'missing', 'duplicate', 'episode', 'utterance', 'entry'] as const)('rejects a substituted %s source or join', async change => {
     const f = await contractFixture('audio_interjection_v2')
     await f.t.run(async ctx => {
       if (change === 'object') await ctx.db.patch(f.firstEntryId, { objectKey: 'private/other-object' })
@@ -791,6 +791,24 @@ describe('#540 interjection graph and pin limits', () => {
       if (change === 'foreign') await ctx.db.patch(links[0]!._id, { userId: STRANGER.tokenIdentifier })
       if (change === 'missing') for (const link of links.filter(link => link.utteranceId === links[0]!.utteranceId)) await ctx.db.delete(link._id)
       if (change === 'duplicate') { const { _id, _creationTime, ...fields } = links[0]!; await ctx.db.insert('audioOverviewInterjectionSources', fields) }
+      if (change === 'episode') {
+        const { _id, _creationTime, ...episode } = (await ctx.db.get(f.episodeId))!
+        const episodeId = await ctx.db.insert('audioOverviewEpisodes', episode)
+        await ctx.db.patch((await ctx.db.get(links[0]!.utteranceId))!._id, { episodeId })
+      }
+      if (change === 'utterance') {
+        const { _id, _creationTime, ...utterance } = (await ctx.db.get(links[0]!.utteranceId))!
+        const utteranceId = await ctx.db.insert('audioOverviewInterjectionUtterances', utterance)
+        await ctx.db.delete(utteranceId)
+        await ctx.db.patch(links[0]!._id, { utteranceId })
+      }
+      if (change === 'entry') {
+        const { _id, _creationTime, ...manifest } = (await ctx.db.get(f.manifestId))!
+        const manifestId = await ctx.db.insert('audioOverviewSourceManifests', manifest)
+        const { _id: _entryId, _creationTime: _entryTime, ...entry } = (await ctx.db.get(f.firstEntryId))!
+        const manifestEntryId = await ctx.db.insert('audioOverviewSourceManifestEntries', { ...entry, manifestId })
+        await ctx.db.patch(links[0]!._id, { manifestEntryId })
+      }
     })
     await expect(f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, f.input))).rejects.toThrow(change === 'hash' || change === 'revision' ? 'Artifact registration required' : 'Artifact lineage unavailable')
   })
@@ -818,6 +836,11 @@ test('#540 media publication advances the script binding and stale media never a
   expect((await f.t.run(ctx => ctx.db.get(script.lineageIds[0]!)))?.nextId).toBe(published.lineageIds[0])
   expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'admitted_registered' })
   expect((await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, f.input))).lineageIds).toEqual(published.lineageIds)
+  for (const change of [{ userId: STRANGER.tokenIdentifier }, { kind: 'final' as const }, { status: 'staged' as const }]) {
+    await f.t.run(ctx => ctx.db.patch(mediaId, change))
+    expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'rejected' })
+    await f.t.run(ctx => ctx.db.patch(mediaId, { userId: OWNER.tokenIdentifier, kind: 'interjection', status: 'published' }))
+  }
   await f.t.run(ctx => ctx.db.patch(mediaId, { checksumSha256: 'd'.repeat(64) }))
   expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
 })

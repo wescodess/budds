@@ -371,6 +371,27 @@ async function enrolledInterjection() {
 }
 
 describe('legacy Interjection producer and replay admission', () => {
+  test('unenrolled publication rejects a changed frozen object before consuming claims', async () => {
+    const t = convexTest(schema, modules)
+    const f = await createReadyOverview(t, USER_A)
+    const taskId = await reserveInterjectionTask(t, f.folderId)
+    const answerTurns = await sampleAnswerTurns(t)
+    await bindClaimsToTask(t, answerTurns, taskId)
+    const documentId = await t.run(async ctx => {
+      const id = await ctx.db.insert('documents', { userId: USER_A.tokenIdentifier, folderId: f.folderId, filename: 'owned.txt', status: 'success', fileSize: 1, r2Key: 'owned/replacement', contentHash: 'a'.repeat(64), sourceRevision: 'source.r1' })
+      await ctx.db.patch(f.overviewId, { scopeDocIds: [id], sourceDocumentIds: [id] })
+      const task = (await ctx.db.get(taskId))!
+      await ctx.db.patch(taskId, { audioOverviewRequest: { ...task.audioOverviewRequest!, scope: { mode: 'explicit', documentIds: [id] }, documents: [{ documentId: id, folderId: f.folderId, filename: 'owned.txt', r2Key: 'owned/original', contentHash: 'a'.repeat(64), sourceRevision: 'source.r1' }] } })
+      return id
+    })
+    const args = { audioOverviewId: f.overviewId, taskId, insertedAfterTurnIndex: 0, question: 'Own question', answerTurns }
+    await expect(f.asUser.mutation(api.audioOverviewInterjections.create, args)).rejects.toThrow('Teaching input is unavailable')
+    expect(await t.run(ctx => ctx.db.query('audioOverviewInterjections').withIndex('by_audioOverview', q => q.eq('audioOverviewId', f.overviewId)).take(1))).toEqual([])
+    expect((await t.run(ctx => ctx.db.get(answerTurns[0]!.uploadClaimId)))?.consumedAt).toBeUndefined()
+    await t.run(ctx => ctx.db.patch(documentId, { r2Key: 'owned/original' }))
+    expect(await f.asUser.mutation(api.audioOverviewInterjections.create, args)).toHaveProperty('interjectionId')
+    expect(await t.run(ctx => ctx.db.query('learnArtifactLineages').take(1))).toEqual([])
+  })
   test('ordinary publication registers atomically and exact task replay writes no second receipt', async () => {
     const f = await enrolledInterjection()
     const result = await f.asUser.mutation(api.audioOverviewInterjections.create, f.args)

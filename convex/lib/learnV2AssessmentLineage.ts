@@ -212,12 +212,13 @@ export async function publishCardRoom(ctx: MutationCtx, userId: string, roomId: 
 }
 
 export const teachingSourcePinsValidator = v.array(v.object({ documentId: v.id('documents'), sourceRevision: v.optional(v.string()), contentHash: v.optional(v.string()) }))
-export async function admitTeachingSourcePins(ctx: ReadCtx, userId: string, pins: Array<{ documentId: Id<'documents'>, sourceRevision?: string, contentHash?: string }>) {
+export async function admitTeachingSourcePins(ctx: ReadCtx, userId: string, pins: Array<{ documentId: Id<'documents'>, sourceRevision?: string, contentHash?: string, r2Key?: string }>) {
   if (pins.length > 64) teachingUnavailable()
   const documents = await teachingDocuments(ctx, userId, pins.map(pin => pin.documentId))
   for (const pin of pins) {
     const current = documents.find(document => document._id === pin.documentId)
-    if (!current || current.sourceRevision !== pin.sourceRevision || current.contentHash !== pin.contentHash) teachingUnavailable()
+    if (!current || current.sourceRevision !== pin.sourceRevision || current.contentHash !== pin.contentHash
+      || Object.hasOwn(pin, 'r2Key') && current.r2Key !== pin.r2Key) teachingUnavailable()
   }
   return documents.flatMap(document => document.sourceRevision ? [{ kind: 'document' as const, documentId: document._id, sourceRevision: document.sourceRevision }] : [])
 }

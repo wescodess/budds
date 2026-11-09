@@ -86,7 +86,7 @@ export const create = mutation({
       throw new Error('Reserved audio overview scope does not match')
     }
 
-    await admitTeachingSourcePins(ctx, userId, task.audioOverviewRequest.documents.map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })))
+    await admitTeachingSourcePins(ctx, userId, task.audioOverviewRequest.documents.map(({ documentId, sourceRevision, contentHash, r2Key }) => ({ documentId, sourceRevision, contentHash, r2Key })))
     const persistedTurns = args.answerTurns.map(({ uploadClaimId: _claimId, ...turn }) => turn)
     if (task.status === 'completed') {
       const rawId = task.result?.interjectionId
