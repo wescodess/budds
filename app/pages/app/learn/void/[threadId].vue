@@ -1,12 +1,9 @@
 <script setup lang="ts">
 import { api } from '#convex/api'
-import { createReusableTemplate } from '@vueuse/core'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { learnVoidRoute } from '~/utils/learn-void-routes'
 import type { CanvasCheckBinding } from '~/composables/useCanvasCheck'
 
-const [DefineThreadDetails, ThreadDetails] = createReusableTemplate()
-const [DefineThreadPanels, ThreadPanels] = createReusableTemplate()
 const route = useRoute()
 const router = useRouter()
 const threadId = computed(() => String(route.params.threadId))
@@ -425,11 +422,10 @@ const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
 const checkBinding = computed(() => (canvas.value as { assessmentCheck?: CanvasCheckBinding | null } | null)?.assessmentCheck ?? null)
 const checkBound = computed(() => Boolean(checkBinding.value))
-const checkActionText = computed(() => checkBound.value ? '[&_:is(a,button)]:text-foreground' : '')
 const checkLocked = useCanvasCheckLock(() => checkBinding.value)
-const toolsHiddenForCheck = computed(() => checkLocked.value || (thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
+const toolsHiddenForCheck = computed(() => checkBound.value || (thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
-const selectedHistory = computed(() => thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
+const selectedHistory = computed(() => checkBound.value ? null : thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => toolsHiddenForCheck.value || !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
 const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
@@ -463,6 +459,15 @@ function inspectEvidence(origin: HTMLButtonElement) {
   evidenceReturnFocus.value = origin
   evidenceOpenRequest.value += 1
 }
+const evidenceDrawerProps = computed(() => ({
+  evidence: evidence.value as never,
+  pending: evidenceQuery.pending.value,
+  sourceState: (selectedHistory.value ? evidence.value?.integrityState : thread.value?.thread.evidenceState) ?? 'unavailable',
+  safeDestination: safeDestination.value,
+  safeDestinationLabel: safeDestinationLabel.value,
+  openRequest: evidenceOpenRequest.value,
+  returnFocusTo: evidenceReturnFocus.value,
+}))
 
 function leave() { void router.push(safeDestination.value) }
 </script>
@@ -481,97 +486,90 @@ function leave() { void router.push(safeDestination.value) }
       <NuxtLink :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ safeDestinationLabel }}</NuxtLink>
     </section>
     <div v-else-if="thread" :class="['mx-auto w-full max-w-3xl px-4 sm:px-6', checkBound ? 'py-6 sm:py-8' : 'py-8']" data-testid="learn-adaptive-thread-shell">
-      <DefineThreadDetails>
-        <p v-if="!toolsHiddenForCheck && thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
-        <p v-if="!toolsHiddenForCheck && thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
-        <p v-if="!toolsHiddenForCheck" class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
-        <div v-if="!toolsHiddenForCheck" :class="['mt-3 flex items-center gap-3', checkActionText]">
-          <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" :open-request="evidenceOpenRequest" :return-focus-to="evidenceReturnFocus" />
-          <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @request-promotion="requestMemoryPromotion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
-        </div>
-      </DefineThreadDetails>
-      <DefineThreadPanels>
-        <section v-if="!toolsHiddenForCheck && (thread.currentActivity || thread.artifact)" class="mt-6 rounded-xl border border-border bg-card p-5" aria-label="Saved learning context" data-testid="learn-thread-resume-context">
-          <p v-if="thread.currentActivity" class="text-sm">Current activity: {{ thread.currentActivity.purpose }} · {{ thread.currentActivity.status }}</p>
-          <p v-if="thread.currentActivity?.attribution" class="mt-2 text-sm text-muted-foreground" data-testid="learn-current-contribution-origin">{{ contributionOrigin(thread.currentActivity.attribution.sourceFeature, thread.currentActivity.attribution.classification, thread.currentActivity.attribution.sourceStatus) }}</p>
-          <p v-if="thread.attemptContext?.priorOutcome" class="mt-2 text-sm">Previous attempt: {{ thread.attemptContext.priorOutcome }}</p>
-          <p v-if="thread.attemptContext?.assistance && thread.attemptContext.assistance !== 'none'" class="mt-2 text-sm">Earlier work used {{ thread.attemptContext.assistance === 'hint' ? 'a hint' : 'a revealed example' }}.</p>
-          <p v-if="thread.artifact" class="mt-2 text-sm">{{ thread.artifact.historical ? 'Historical artifact' : thread.artifact.status === 'saved' ? 'Saved artifact' : 'Draft artifact' }}: {{ thread.artifact.title }}</p>
-        </section>
-
-        <section v-if="!toolsHiddenForCheck" :class="['mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5', checkActionText]" aria-labelledby="learn-thread-next-title">
-          <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
-          <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
-          <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this Void from your learning home.' }}</p>
-          <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
-          <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
-        </section>
-
-        <section v-if="!toolsHiddenForCheck" class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
-          <h2 id="learn-thread-contributions-title" class="font-dm-sans text-lg font-semibold">Recent contributions</h2>
-          <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
-          <div v-if="thread.thread.sourceScope?.kind === 'document' || thread.thread.sourceScope?.kind === 'folder'" class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-document-producer">
-            <p class="text-sm font-medium">Add document context</p>
-            <p class="mt-1 text-sm text-muted-foreground">Record a document already selected for this Void as context only. This does not verify its claims.</p>
-            <p v-if="thread.thread.sourceScope.kind === 'document'" class="mt-2 text-sm">Selected Void document</p>
-            <template v-else>
-              <label for="learn-document-select" class="mt-2 block text-sm">Document in this Void’s folder</label>
-              <select
-                id="learn-document-select" v-model="selectedDocumentId" data-testid="learn-document-select" :disabled="recordBusy || Boolean(pendingRecord)"
-                class="mt-1 min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm">
-                <option value="">Choose a ready document</option>
-                <option v-for="document in folderDocuments" :key="document._id" :value="document._id">{{ document.filename }}</option>
-              </select>
-              <p v-if="documentsPending" class="mt-1 text-xs" role="status">Loading documents…</p>
-              <p v-else-if="folderDocuments.length === 0" class="mt-1 text-xs text-muted-foreground">No ready documents are available in this folder.</p>
-            </template>
-            <button
-              type="button" data-testid="learn-record-document" :disabled="!canRecordDocument || recordBusy || Boolean(pendingRecord)"
-              class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
-              @click="requestDocumentRecord">{{ recordBusy ? 'Checking document…' : 'Record document context' }}</button>
-            <p v-if="recordError" data-testid="learn-thread-record-error" class="mt-2 text-sm text-destructive" role="alert">{{ recordError }}</p>
-            <button
-              v-if="pendingRecord && recordError" type="button" data-testid="learn-thread-record-retry" :disabled="recordBusy"
-              class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 text-sm underline" @click="retryDocumentRecord">Retry same record</button>
-            <p v-if="recordNotice" data-testid="learn-thread-record-notice" class="mt-2 text-sm" role="status">{{ recordNotice }}</p>
-          </div>
-          <LearnAdaptiveQuizContributionPicker
-            v-if="thread.thread.sourceScope?.kind === 'folder'"
-            :key="`${ownerId}:${thread.thread.id}:${thread.thread.sourceScope.sourceId}`"
-            :thread-id="thread.thread.id" :owner-id="String(ownerId)" :folder-id="thread.thread.sourceScope.sourceId"
-            :expected-revision="thread.thread.revision" :lifecycle="thread.thread.lifecycle" />
-          <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
-          <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this Void yet.</p>
-          <ol v-else class="mt-3 space-y-3">
-            <li v-for="item in contributions" :key="item._id" data-testid="learn-thread-contribution-row" class="rounded-lg border border-border p-3">
-              <p class="text-sm font-medium">{{ contributionFeatureLabel(item.sourceFeature) }} · {{ item.contributionKind }}</p>
-              <p class="mt-1 text-sm text-muted-foreground">{{ contributionClassificationLabel(item.classification) }}</p>
-              <p v-if="item.classification === 'accepted_evidence'" class="mt-1 text-xs text-muted-foreground" data-testid="learn-contribution-evidence-integrity">Evidence integrity: {{ item.evidenceIntegrity === 'accepted' ? 'accepted' : item.evidenceIntegrity === 'conflict' ? 'conflict unresolved' : 'unavailable' }}</p>
-              <p class="mt-1 text-xs text-muted-foreground">{{ contributionStatusLabel(item) }}</p>
-              <button
-                v-if="canConvertContribution(item)" type="button" data-testid="learn-convert-contribution"
-                :disabled="contributionConversionBusy || Boolean(pendingContributionConversion)"
-                class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]"
-                @click="requestContributionConversion(item)">{{ contributionConversionBusy ? 'Preparing next activity…' : 'Use for my next move' }}</button>
-            </li>
-          </ol>
-          <p v-if="!contributionsQuery.pending.value && contributions.length > 0" class="mt-3 text-xs text-muted-foreground">Showing up to 20 recent contributions.</p>
-          <p v-if="contributionConversionError" class="mt-3 text-sm text-destructive" role="alert" data-testid="learn-thread-conversion-error">{{ contributionConversionError }}</p>
-          <button
-            v-if="pendingContributionConversion && contributionConversionError" type="button" data-testid="learn-thread-conversion-retry"
-            class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 py-2 text-sm font-medium underline disabled:opacity-50"
-            :disabled="contributionConversionBusy" @click="retryContributionConversion">Retry same conversion</button>
-          <p v-if="contributionConversionNotice" class="mt-3 text-sm" role="status" data-testid="learn-thread-conversion-notice">{{ contributionConversionNotice }}</p>
-        </section>
-      </DefineThreadPanels>
-
       <header>
         <p :class="checkBound ? 'font-inter text-xs font-medium text-muted-foreground' : 'text-xs font-medium uppercase tracking-wide text-primary'">Void · {{ thread.thread.intent }}</p>
         <h1 :class="['mt-2 font-dm-sans font-bold', checkBound ? 'text-2xl text-foreground sm:text-3xl' : 'text-3xl']">{{ thread.thread.outcome }}</h1>
-        <ThreadDetails v-if="!checkBound" />
+        <p v-if="!toolsHiddenForCheck && thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
+        <p v-if="!toolsHiddenForCheck && thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
+        <p v-if="!toolsHiddenForCheck" class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
+        <div v-if="!toolsHiddenForCheck" class="mt-3 flex items-center gap-3">
+          <LearnAdaptiveEvidenceDrawer v-bind="evidenceDrawerProps" />
+          <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @request-promotion="requestMemoryPromotion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
+        </div>
       </header>
 
-      <ThreadPanels v-if="!checkBound" />
+      <section v-if="!toolsHiddenForCheck && (thread.currentActivity || thread.artifact)" class="mt-6 rounded-xl border border-border bg-card p-5" aria-label="Saved learning context" data-testid="learn-thread-resume-context">
+        <p v-if="thread.currentActivity" class="text-sm">Current activity: {{ thread.currentActivity.purpose }} · {{ thread.currentActivity.status }}</p>
+        <p v-if="thread.currentActivity?.attribution" class="mt-2 text-sm text-muted-foreground" data-testid="learn-current-contribution-origin">{{ contributionOrigin(thread.currentActivity.attribution.sourceFeature, thread.currentActivity.attribution.classification, thread.currentActivity.attribution.sourceStatus) }}</p>
+        <p v-if="thread.attemptContext?.priorOutcome" class="mt-2 text-sm">Previous attempt: {{ thread.attemptContext.priorOutcome }}</p>
+        <p v-if="thread.attemptContext?.assistance && thread.attemptContext.assistance !== 'none'" class="mt-2 text-sm">Earlier work used {{ thread.attemptContext.assistance === 'hint' ? 'a hint' : 'a revealed example' }}.</p>
+        <p v-if="thread.artifact" class="mt-2 text-sm">{{ thread.artifact.historical ? 'Historical artifact' : thread.artifact.status === 'saved' ? 'Saved artifact' : 'Draft artifact' }}: {{ thread.artifact.title }}</p>
+      </section>
+
+      <section v-if="!toolsHiddenForCheck" class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
+        <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
+        <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
+        <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this Void from your learning home.' }}</p>
+        <NuxtLink v-if="thread.completion && thread.thread.authorityKind === 'v2_mission'" :to="safeDestination" data-testid="learn-representative-next-move" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
+        <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
+      </section>
+
+      <section v-if="!toolsHiddenForCheck" class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
+        <h2 id="learn-thread-contributions-title" class="font-dm-sans text-lg font-semibold">Recent contributions</h2>
+        <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
+        <div v-if="thread.thread.sourceScope?.kind === 'document' || thread.thread.sourceScope?.kind === 'folder'" class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-document-producer">
+          <p class="text-sm font-medium">Add document context</p>
+          <p class="mt-1 text-sm text-muted-foreground">Record a document already selected for this Void as context only. This does not verify its claims.</p>
+          <p v-if="thread.thread.sourceScope.kind === 'document'" class="mt-2 text-sm">Selected Void document</p>
+          <template v-else>
+            <label for="learn-document-select" class="mt-2 block text-sm">Document in this Void’s folder</label>
+            <select
+              id="learn-document-select" v-model="selectedDocumentId" data-testid="learn-document-select" :disabled="recordBusy || Boolean(pendingRecord)"
+              class="mt-1 min-h-11 w-full rounded-lg border border-border bg-background px-3 text-sm">
+              <option value="">Choose a ready document</option>
+              <option v-for="document in folderDocuments" :key="document._id" :value="document._id">{{ document.filename }}</option>
+            </select>
+            <p v-if="documentsPending" class="mt-1 text-xs" role="status">Loading documents…</p>
+            <p v-else-if="folderDocuments.length === 0" class="mt-1 text-xs text-muted-foreground">No ready documents are available in this folder.</p>
+          </template>
+          <button
+            type="button" data-testid="learn-record-document" :disabled="!canRecordDocument || recordBusy || Boolean(pendingRecord)"
+            class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50"
+            @click="requestDocumentRecord">{{ recordBusy ? 'Checking document…' : 'Record document context' }}</button>
+          <p v-if="recordError" data-testid="learn-thread-record-error" class="mt-2 text-sm text-destructive" role="alert">{{ recordError }}</p>
+          <button
+            v-if="pendingRecord && recordError" type="button" data-testid="learn-thread-record-retry" :disabled="recordBusy"
+            class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 text-sm underline" @click="retryDocumentRecord">Retry same record</button>
+          <p v-if="recordNotice" data-testid="learn-thread-record-notice" class="mt-2 text-sm" role="status">{{ recordNotice }}</p>
+        </div>
+        <LearnAdaptiveQuizContributionPicker
+          v-if="thread.thread.sourceScope?.kind === 'folder'"
+          :key="`${ownerId}:${thread.thread.id}:${thread.thread.sourceScope.sourceId}`"
+          :thread-id="thread.thread.id" :owner-id="String(ownerId)" :folder-id="thread.thread.sourceScope.sourceId"
+          :expected-revision="thread.thread.revision" :lifecycle="thread.thread.lifecycle" />
+        <p v-if="contributionsQuery.pending.value" class="mt-3 text-sm" role="status">Loading recent contributions…</p>
+        <p v-else-if="contributions.length === 0" class="mt-3 text-sm text-muted-foreground">No contributions are available for this Void yet.</p>
+        <ol v-else class="mt-3 space-y-3">
+          <li v-for="item in contributions" :key="item._id" data-testid="learn-thread-contribution-row" class="rounded-lg border border-border p-3">
+            <p class="text-sm font-medium">{{ contributionFeatureLabel(item.sourceFeature) }} · {{ item.contributionKind }}</p>
+            <p class="mt-1 text-sm text-muted-foreground">{{ contributionClassificationLabel(item.classification) }}</p>
+            <p v-if="item.classification === 'accepted_evidence'" class="mt-1 text-xs text-muted-foreground" data-testid="learn-contribution-evidence-integrity">Evidence integrity: {{ item.evidenceIntegrity === 'accepted' ? 'accepted' : item.evidenceIntegrity === 'conflict' ? 'conflict unresolved' : 'unavailable' }}</p>
+            <p class="mt-1 text-xs text-muted-foreground">{{ contributionStatusLabel(item) }}</p>
+            <button
+              v-if="canConvertContribution(item)" type="button" data-testid="learn-convert-contribution"
+              :disabled="contributionConversionBusy || Boolean(pendingContributionConversion)"
+              class="mt-2 inline-flex min-h-11 items-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]"
+              @click="requestContributionConversion(item)">{{ contributionConversionBusy ? 'Preparing next activity…' : 'Use for my next move' }}</button>
+          </li>
+        </ol>
+        <p v-if="!contributionsQuery.pending.value && contributions.length > 0" class="mt-3 text-xs text-muted-foreground">Showing up to 20 recent contributions.</p>
+        <p v-if="contributionConversionError" class="mt-3 text-sm text-destructive" role="alert" data-testid="learn-thread-conversion-error">{{ contributionConversionError }}</p>
+        <button
+          v-if="pendingContributionConversion && contributionConversionError" type="button" data-testid="learn-thread-conversion-retry"
+          class="mt-2 inline-flex min-h-11 items-center rounded-lg border border-border px-4 py-2 text-sm font-medium underline disabled:opacity-50"
+          :disabled="contributionConversionBusy" @click="retryContributionConversion">Retry same conversion</button>
+        <p v-if="contributionConversionNotice" class="mt-3 text-sm" role="status" data-testid="learn-thread-conversion-notice">{{ contributionConversionNotice }}</p>
+      </section>
 
       <section :class="checkPresented ? undefined : 'mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4'" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
         <div v-if="selectedActivityId && !showCurrent" data-testid="learn-selected-history" class="rounded-lg border border-border p-5">
@@ -616,10 +614,9 @@ function leave() { void router.push(safeDestination.value) }
         </div>
       </section>
 
-      <div v-if="checkBound && !toolsHiddenForCheck" class="mt-6 [&>:first-child]:mt-0"><ThreadDetails /></div>
-      <ThreadPanels v-if="checkBound" />
+      <LearnAdaptiveEvidenceDrawer v-if="checkBound && !checkLocked" v-bind="evidenceDrawerProps" hide-trigger />
 
-      <section v-if="!toolsHiddenForCheck" :class="['mt-6', checkActionText]" aria-labelledby="learn-thread-history-title">
+      <section v-if="!toolsHiddenForCheck" class="mt-6" aria-labelledby="learn-thread-history-title">
         <h2 id="learn-thread-history-title" class="font-dm-sans text-lg font-semibold">Recent activity</h2>
         <p v-if="thread.history.length === 0" class="mt-2 text-sm text-muted-foreground">Your activity history will appear here.</p>
         <ol v-else class="mt-3 space-y-2">
@@ -630,7 +627,7 @@ function leave() { void router.push(safeDestination.value) }
           </li>
         </ol>
       </section>
-      <NuxtLink v-if="canvas || diagnostic || artifact || reflection" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
+      <NuxtLink v-if="(canvas || diagnostic || artifact || reflection) && (!checkBound || checkPresented)" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
     </div>
   </section>
 </template>

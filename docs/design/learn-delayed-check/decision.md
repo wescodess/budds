@@ -45,7 +45,7 @@ Owner, 2026-11-08. These override `approved.html`.
 - Failed practice help reads "Could not load support. Try again."
 - A failed practice submit reads "Submission did not confirm. Your draft remains here. Retry submission to reconcile it."
 - A saved practice answer reads "Response submitted."
-- A failed online submit reads "It's still here on this device." under "Your answer wasn't submitted".
+- A failed online submit reads "It's still here on this device. Submit again." under "Your answer wasn't submitted". Owner's choice, 2026-11-09, replacing "It's still here on this device."
 - An empty practice answer reads "Write your answer before you submit."
 - A cancelled or abandoned check uses "Your check isn't ready yet".
 - The server's `instructions` field stays hidden.

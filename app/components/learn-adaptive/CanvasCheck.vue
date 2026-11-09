@@ -68,7 +68,7 @@ const showCollapsedPractice = computed(() => Boolean(practice.value) && !showFul
   && (receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid' || (receipt.value?.receipt === 'not_yet' && !lesson.value)))
 const submitFailureBody = computed(() => submitFailure.value === 'offline'
   ? 'You’re offline. It’s still here on this device. Submit again when you’re back online.'
-  : 'It’s still here on this device.')
+  : 'It’s still here on this device. Submit again.')
 
 const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 const savedAtLabel = computed(() => receipt.value?.acceptedAt ? savedAtFormat.format(receipt.value.acceptedAt) : null)

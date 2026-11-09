@@ -297,6 +297,7 @@ describe('Canvas check', () => {
       await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-submit-error"]').exists()).toBe(true))
       expect(wrapper.get('[data-testid="learn-canvas-check-submit-error"]').text()).toContain('Your answer wasn’t submitted')
+      expect(wrapper.get('[data-testid="learn-canvas-check-submit-error"]').text()).toContain('It’s still here on this device. Submit again.')
       expect(wrapper.get('[data-testid="learn-canvas-check-submit"]').attributes('disabled')).toBeUndefined()
       await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
       await vi.waitFor(() => expect(accept).toHaveBeenCalledTimes(2))

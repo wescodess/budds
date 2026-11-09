@@ -20,6 +20,7 @@ const props = defineProps<{
   safeDestinationLabel: string
   openRequest?: number
   returnFocusTo?: HTMLButtonElement | null
+  hideTrigger?: boolean
 }>()
 
 const open = ref(false)
@@ -63,7 +64,7 @@ function restoreSourceFocus(event: Event) {
 
 <template>
   <Sheet v-model:open="open">
-    <SheetTrigger as-child>
+    <SheetTrigger v-if="!hideTrigger" as-child>
       <button ref="trigger" type="button" data-testid="learn-evidence-open" class="min-h-11 rounded-lg border border-border px-4 text-sm font-medium text-[var(--learn-action)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="useDefaultTriggerFocus">Evidence</button>
     </SheetTrigger>
     <SheetContent side="right" :overlay-class="LEARN_ADAPTIVE_SURFACE" data-testid="learn-evidence-drawer" :class="[LEARN_ADAPTIVE_SURFACE, 'w-screen max-w-none gap-3 bg-[var(--learn-context-surface)] p-4 md:w-[32rem] md:max-w-md']" @close-auto-focus="restoreSourceFocus">
