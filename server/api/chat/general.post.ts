@@ -1,4 +1,5 @@
 import type { ChatMessage } from '../../utils/ai-gateway'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 
 const SYSTEM_PROMPT = `You are Budds, a warm, encouraging study companion.
 You help students think through problems, learn new concepts, and draft ideas.
@@ -24,6 +25,10 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'model is required' })
   }
 
+  // Client history/session assertions cannot establish unrelated context.
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: null })
+  await authorizeHelp()
+
   const requestedModel = body.model
   let modelFallback: { requested: string; actual: string } | undefined
   if (!isAllowedModel(requestedModel)) {
@@ -46,6 +51,7 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
+    redactUpstreamErrorBody: true,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }
@@ -56,6 +62,7 @@ export default defineEventHandler(async (event) => {
   }
   catch (err) {
     if (body.model !== SERVER_DEFAULT_MODEL) {
+      await authorizeHelp()
       modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
       completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })
     }
@@ -64,6 +71,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  await authorizeHelp()
   return {
     answer: completion.choices[0]?.message?.content ?? '',
     model: completion.model,

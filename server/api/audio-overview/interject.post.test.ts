@@ -1,4 +1,7 @@
+// These transport tests isolate admission; help-admission.test.ts exercises the real boundary.
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {} }))
 
 const mockMutation = vi.fn()
 const mockQuery = vi.fn()
@@ -554,7 +557,7 @@ describe('POST /api/audio-overview/interject authority', () => {
     expect(deletePayload).toMatchObject({ jobId: 'job_v2', interjectionId: 'interjection_v2' })
     expect(mockMutation).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
       interjectionId: 'interjection_v2',
-      error: 'connection reset after upload',
+      error: 'Audio interjection generation failed',
     }))
   })
 })

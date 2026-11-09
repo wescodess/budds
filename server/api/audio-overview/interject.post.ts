@@ -1,4 +1,3 @@
-import { getErrorMessage } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
@@ -17,6 +16,7 @@ import {
   requestInterjectionWorker,
   type InterjectionArtifactEvidence,
 } from '../../utils/audio-overview-interjection-worker'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const MAX_SEARCH_RESULTS = 10
@@ -81,6 +81,7 @@ async function runV2Interjection(
   userId: string,
   overview: Pick<Doc<'audioOverviews'>, 'title'>,
   body: { overviewId: string, insertedAfterTurnIndex: number, question: string },
+  authorizeHelp: () => Promise<void>,
 ) {
   const orchestrationToken = getAudioOverviewWorkerToken(event)
   const suppliedKey = getRequestHeader(event, 'idempotency-key')?.trim()
@@ -97,8 +98,10 @@ async function runV2Interjection(
     throw createError({ statusCode: 409, message: 'Audio interjection generation is not available' })
   }
   if (reservation.status === 'ready') {
+    await authorizeHelp()
     const existing = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
+    await authorizeHelp()
     return v2Response(existing)
   }
 
@@ -112,14 +115,16 @@ async function runV2Interjection(
     })
     ownsScripting = claim.claimed
     if (!claim.claimed) {
+      await authorizeHelp()
       const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
         interjectionId: reservation.interjectionId,
       })
-      if (current?.status === 'ready') return v2Response(current)
+      if (current?.status === 'ready') { await authorizeHelp(); return v2Response(current) }
       throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
     }
     const allowedDocuments = reservation.sources.map(source => String(source.documentId))
     const allowedSourceByDocument = new Map(reservation.sources.map(source => [String(source.documentId), source]))
+    await authorizeHelp()
     const result = await searchDocuments({
       query: body.question,
       userId,
@@ -151,8 +156,10 @@ async function runV2Interjection(
       })
     }
 
+    await authorizeHelp()
     const completion = await generateCompletion({
       model: SCRIPT_MODEL,
+      redactUpstreamErrorBody: true,
       messages: buildV2InterjectionPrompt({ question: body.question, overviewTitle: overview.title, sources: evidence }),
       temperature: 0.4,
       max_tokens: 1_500,
@@ -173,8 +180,10 @@ async function runV2Interjection(
         evidenceQuotes: utterance.evidenceQuotes,
       }],
     }))
+    await authorizeHelp()
     const verificationCompletion = await generateCompletion({
       model: SCRIPT_MODEL,
+      redactUpstreamErrorBody: true,
       messages: buildClaimEntailmentPrompt(entailmentInput),
       temperature: 0,
       max_tokens: Math.min(1_000, Math.max(500, entailmentInput.length * 100)),
@@ -216,6 +225,7 @@ async function runV2Interjection(
     if (!renderClaim.claimed) {
       throw createError({ statusCode: 409, message: 'Audio interjection rendering was already attempted' })
     }
+    await authorizeHelp()
     workerAttempted = true
     const render = await requestInterjectionWorker<{ artifact: InterjectionArtifactEvidence }>(event, 'POST', {
       jobId: String(reservation.jobId),
@@ -249,6 +259,7 @@ async function runV2Interjection(
       interjectionId: reservation.interjectionId,
     })
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
+    await authorizeHelp()
     return v2Response(published)
   }
   catch (error) {
@@ -263,7 +274,7 @@ async function runV2Interjection(
       await convexClient.mutation(api.audioOverviewInterjectionsV2.fail, {
         interjectionId: reservation.interjectionId,
         orchestrationToken,
-        error: getErrorMessage(error, 'Audio interjection generation failed'),
+        error: 'Audio interjection generation failed',
       }).catch(() => {})
     }
     throw error
@@ -307,6 +318,9 @@ export default defineEventHandler(async (event) => {
     : 0
 
   const convexClient = makeConvexClient(event)
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'audio',
+    scope: { references: [{ kind: 'audio_overview', id: body.overviewId as Id<'audioOverviews'> }] } }, convexClient)
+  await authorizeHelp()
 
   const overview = await convexClient.query(api.audioOverviews.getWithTurns, {
     id: body.overviewId as Id<'audioOverviews'>,
@@ -323,7 +337,7 @@ export default defineEventHandler(async (event) => {
       overviewId: body.overviewId,
       insertedAfterTurnIndex: afterIndex,
       question,
-    })
+    }, authorizeHelp)
   }
 
   // Version 1 remains readable and playable, but Ask must never create new

@@ -1,7 +1,10 @@
+// Admission and registered aliases are covered by learnV2HelpConsumers.test.ts.
 import { describe, expect, test, vi } from 'vitest'
 import type { Id } from './_generated/dataModel'
 import { orchestrateSourceFetch } from './learnV2SourceActions'
 import { SafeFetchError } from '../server/utils/learn-v2-safe-fetch'
+
+vi.mock('./lib/learnV2HelpActions', () => ({ admitActionHelp: async () => ({ version: 'learn-v2.help-admission.v1', status: 'ordinary' }) }))
 
 const sourceSnapshotId = 'source-id' as Id<'learnSourceSnapshots'>
 

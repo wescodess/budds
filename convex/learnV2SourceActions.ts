@@ -11,6 +11,7 @@ import {
   type SafeFetchResult,
 } from '../server/utils/learn-v2-safe-fetch'
 import { deterministicLearnV2Source } from '../server/utils/learn-v2-e2e-fixtures'
+import { admitActionHelp } from './lib/learnV2HelpActions'
 
 type FetchSourceArgs = {
   sourceSnapshotId: Id<'learnSourceSnapshots'>
@@ -25,6 +26,9 @@ export async function orchestrateSourceFetch(
 ): Promise<Record<string, unknown>> {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) throw new Error('Learn V2 access denied')
+    const authorizeHelp = () => admitActionHelp(ctx, { kind: 'source', scope: { references: [{ kind: 'source_snapshot', id: args.sourceSnapshotId }] } }, args.idempotencyKey)
+    const help = await authorizeHelp()
+    if (help.status === 'denied') return { ok: false, ...help }
     const admission: Record<string, unknown> = await ctx.runMutation(
       internal.learnV2Sources.replayOrAcquireFetch,
       { tokenIdentifier: identity.tokenIdentifier, ...args },
@@ -37,6 +41,8 @@ export async function orchestrateSourceFetch(
     const leaseToken = String(admission.leaseToken)
     let leaseSettled = false
     try {
+      const beforeFetch = await authorizeHelp()
+      if (beforeFetch.status === 'denied') return { ok: false, ...beforeFetch }
       const fetched = await fetcher(String(admission.url))
       const committed = await ctx.runMutation(internal.learnV2Sources.commitFetchResult, {
         tokenIdentifier: identity.tokenIdentifier,
