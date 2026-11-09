@@ -1,16 +1,16 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { makeFunctionReference } from 'convex/server'
-import { getDocumentSize, type Value } from 'convex/values'
+import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
+import { getDocumentSize, v, type Value } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
-import type { Doc, Id } from './_generated/dataModel'
+import type { Doc, Id, TableNames } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
-import { ARTIFACT_LINEAGE_INDEX_RANGES, ARTIFACT_LINEAGE_READ_BYTES, createArtifactLineageReadContext, registerInstructionalArtifactsForOwner, registerInstructionalArtifactsForRecord, registerInstructionalArtifactForRecord, resolveArtifactLineageForRecord, supersedeArtifactLineageForOwner, supersedeArtifactLineageForRecord, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
+import { ARTIFACT_LINEAGE_INDEX_RANGES, ARTIFACT_LINEAGE_READ_BYTES, ArtifactProjectionBudgetError, createArtifactLineagePublicationContext, admitArtifactInput, admitArtifactInputByIdentity, admitArtifactInputs, admitArtifactInputsForOwner, admitArtifactInputsForRecord, prepareAndRegisterInstructionalArtifacts, classifyPersonalWorkDocumentForOwner, classifyPersonalWorkDocumentForRecord, createArtifactLineageReadContext, registerInstructionalArtifactsForOwner, registerInstructionalArtifactsForRecord, registerInstructionalArtifactForRecord, resolveArtifactLineageForRecord, supersedeArtifactLineageForOwner, supersedeArtifactLineageForRecord, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
 import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
-import { LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference, type LearnArtifactOwnerRecord } from '../shared/learn-v2-artifact-lineage'
+import { LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY, LEARN_ARTIFACT_LINEAGE_VERSION, LEARN_ARTIFACT_LINEAGE_LIMITS, type LearnArtifactReference, type LearnArtifactOwnerRecord, learnArtifactInputAdmissionResultSchema } from '../shared/learn-v2-artifact-lineage'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { privateAdaptiveArtifactR2Key } from './lib/learnAdaptiveArtifacts'
@@ -21,6 +21,16 @@ const foreign = { tokenIdentifier: 'https://other.example.com|lineage-owner', su
 const modules = {
   ...import.meta.glob('./**/*.ts'),
   './artifactLineageTest.ts': async () => ({
+    protect: internalMutation({
+      args: { caseId: v.id('learnAssessmentCases'), documentId: v.id('documents'), lineageId: v.id('learnArtifactLineages'), kind: v.union(v.literal('reservation'), v.literal('availability'), v.literal('classification')) },
+      returns: v.null(),
+      handler: async (ctx, args) => {
+        if (args.kind === 'reservation') await ctx.db.patch(args.caseId, { reservedAt: 0 })
+        if (args.kind === 'availability') await ctx.db.patch(args.documentId, { status: 'indexing' })
+        if (args.kind === 'classification') await ctx.db.patch(args.lineageId, { classification: 'measurement' })
+        return null
+      },
+    }),
     registerInstructional: internalMutation({
       args: artifactRegistrationArgs,
       returns: artifactRegistrationResultValidator,
@@ -29,6 +39,7 @@ const modules = {
   }),
 }
 const registerInstructional = makeFunctionReference<'mutation', ReturnType<typeof registration>, Awaited<ReturnType<typeof registerInstructionalArtifactForOwner>>>('artifactLineageTest:registerInstructional')
+const protect = makeFunctionReference<'mutation', { caseId: Id<'learnAssessmentCases'>, documentId: Id<'documents'>, lineageId: Id<'learnArtifactLineages'>, kind: 'reservation' | 'availability' | 'classification' }, null>('artifactLineageTest:protect')
 type Fixture = Awaited<ReturnType<typeof prepare>>
 type Origin = Pick<Doc<'learnArtifactLineages'>, 'classification' | 'manifestDigest'> & { lineageId: Id<'learnArtifactLineages'>, caseId: Id<'learnAssessmentCases'>, reference: LearnArtifactReference }
 
@@ -1099,7 +1110,8 @@ async function tracedLookup(t: TestStore, f: Fixture, mode: 'resolve' | 'registe
     })
   }
   catch (error) {
-    if (!(error instanceof Error) || ![rollback, 'Artifact lineage unavailable'].includes(error.message)) throw error
+    if (error instanceof ArtifactProjectionBudgetError) expect(error.data.reasonCode).toBe('projection_exceeds_budget')
+    else if (!(error instanceof Error) || ![rollback, 'Artifact lineage unavailable'].includes(error.message)) throw error
   }
   return { status, ...stats }
 }
@@ -1895,7 +1907,7 @@ describe('B1 atomic batch registration', () => {
   })
   test('shares the read budget across otherwise admissible members and exposes failed and repeated lookup charges', async () => {
     const t = convexTest(schema, modules)
-    const fixtures = await prepareQuizBatch(t, 3)
+    const fixtures = await prepareQuizBatch(t, 6)
     for (const f of fixtures) await t.run(ctx => ctx.db.patch(f.documentId, { filename: 'x'.repeat(650_000) }))
     const rollback = 'Probe only'
     for (const f of fixtures) await expect(t.withIdentity(owner).run(async ctx => {
@@ -1966,6 +1978,659 @@ async function replacementLineage(ctx: MutationCtx, f: Fixture, payloadDigest: s
   return { ...f, lineageId, validationId, manifestDigest, reference: { ...f.reference, payloadDigest }, catalogRevision }
 }
 const repinnableKinds = ['document', 'document_chunk', 'session_block', 'flashcard_version', 'learner_artifact', 'measurement_item', 'scoring_spec'] as const
+
+describe('round-4 fresh helper calls', () => {
+  test.each(['captured', 'bound', 'copied', 'table', 'nested'] as const)('%s writers cannot preserve an earlier admission', async handle => {
+    for (const kind of ['reservation', 'availability', 'classification'] as const) {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+      await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+      await t.withIdentity(owner).run(async raw => {
+        const captured = raw.db.patch
+        const bound = raw.db.patch.bind(raw.db)
+        const copied = { ...raw.db }
+        const tables = raw.db as unknown as { table(name: string): { patch(id: string, fields: Record<string, unknown>): Promise<void> } }
+        const table = tables.table(kind === 'reservation' ? 'learnAssessmentCases' : kind === 'availability' ? 'documents' : 'learnArtifactLineages')
+        const before = Reflect.ownKeys(raw.db)
+        const budget = createArtifactLineagePublicationContext(raw)
+        expect(await admitArtifactInput(budget.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+        const id = kind === 'reservation' ? f.caseId : kind === 'availability' ? f.documentId : f.lineageId
+        const fields = kind === 'reservation' ? { reservedAt: 0 } : kind === 'availability' ? { status: 'indexing' as const } : { classification: 'measurement' as const }
+        if (handle === 'captured') await captured(id, fields)
+        if (handle === 'bound') await bound(id, fields)
+        if (handle === 'copied') await copied.patch(id, fields)
+        if (handle === 'table') await table.patch(id, fields)
+        if (handle === 'nested') await raw.runMutation(protect, { caseId: f.caseId, documentId: f.documentId, lineageId: f.lineageId, kind })
+        expect(await admitArtifactInputs(budget.admission.ctx, { references: [f.reference] })).toMatchObject({ status: 'rejected' })
+        expect(Reflect.ownKeys(raw.db)).toEqual(before)
+        expect(raw.db.patch).toBe(captured)
+      })
+    }
+  })
+
+  test('one batch validates shared lineage nodes once inside its invocation', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(origin)))
+    const copy = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(copy)))
+    await t.withIdentity(owner).run(async raw => {
+      let reads = 0
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property === 'query' && typeof method === 'function') return (...args: unknown[]) => {
+          if (args[0] === 'learnArtifactLineageOrigins') reads++
+          return Reflect.apply(method, target, args)
+        }
+        return typeof method === 'function' ? method.bind(target) : method
+      } })
+      expect(await admitArtifactInputs({ ...raw, db }, { references: [origin.reference, copy.reference] })).toMatchObject({ status: 'admitted_registered' })
+      expect(reads).toBe(2)
+    })
+  })
+
+  test('one batch reads an artifact inventory once across component aliases', async () => {
+    const t = convexTest(schema, modules)
+    const a = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const b = await t.run(async ctx => {
+      const next = await replacementLineage(ctx, a, a.reference.payloadDigest)
+      const reference = { ...next.reference, key: 'component' }
+      await ctx.db.patch(next.lineageId, { key: reference.key })
+      return resealed(ctx, { ...next, reference })
+    })
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(a)))
+    await t.run(ctx => ctx.db.patch(b.validationId, { comparedCatalogRevision: 1 }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(b), expectedCatalogRevision: 1 }))
+    await t.withIdentity(owner).run(async raw => {
+      let reads = 0
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property === 'query' && typeof method === 'function') return (...args: unknown[]) => {
+          if (args[0] === 'learnArtifactLineages') reads++
+          return Reflect.apply(method, target, args)
+        }
+        return typeof method === 'function' ? method.bind(target) : method
+      } })
+      expect(await admitArtifactInputs({ ...raw, db }, { references: [a.reference, b.reference] })).toMatchObject({ status: 'admitted_registered' })
+      expect(reads).toBe(4)
+    })
+  })
+
+  test('a reservation after a completed resolution prevents a later publication receipt', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(async raw => {
+      const captured = raw.db.patch
+      const budget = createArtifactLineagePublicationContext(raw)
+      expect(await resolveArtifactLineageForOwner(budget.admission.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await captured(f.caseId, { reservedAt: 0 })
+      await expect(registerInstructionalArtifactForOwner(budget.preparation.ctx, owner.tokenIdentifier, registration(f))).rejects.toThrow('unavailable')
+      expect(await raw.db.get(f.lineageId)).not.toHaveProperty('publication')
+      expect((await raw.db.get(f.catalogId))!.catalogRevision).toBe(0)
+    })
+  })
+
+  test('local edits cannot hide restrictive lineage or an enrollment change at the next call', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.withIdentity(owner).run(async raw => {
+      const budget = createArtifactLineagePublicationContext(raw)
+      const local = (await budget.admission.ctx.db.get(f.lineageId))!
+      expect(await admitArtifactInput(budget.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+      local.userId = foreign.tokenIdentifier
+      await raw.db.patch(f.lineageId, { classification: 'measurement' })
+      expect(await admitArtifactInput(budget.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected' })
+      await raw.db.delete(f.lineageId)
+      const catalog = (await budget.admission.ctx.db.get(f.catalogId))!
+      expect(await admitArtifactInput(budget.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_unregistered' })
+      catalog.userId = foreign.tokenIdentifier
+      await raw.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
+      expect(await admitArtifactInput(budget.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+    })
+  })
+
+  test('batch admission keeps authority, cardinality, strict fields and the most restrictive result', async () => {
+    const t = convexTest(schema, modules)
+    const a = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'a' }))
+    const b = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'b' }))
+    await t.run(ctx => ctx.db.delete(a.lineageId))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(b)))
+    const args = { references: [a.reference, b.reference] }
+    for (const operation of [
+      () => t.withIdentity(owner).run(ctx => admitArtifactInputs(ctx, args)),
+      () => t.withIdentity(owner).run(ctx => admitArtifactInputsForOwner(ctx, owner.tokenIdentifier, args)),
+      () => t.run(ctx => admitArtifactInputsForRecord(ctx, { kind: 'document', id: a.documentId }, args)),
+    ]) expect(await operation()).toMatchObject({ status: 'admitted_unregistered' })
+    await expect(t.withIdentity(foreign).run(ctx => admitArtifactInputsForOwner(ctx, owner.tokenIdentifier, args))).rejects.toThrow('Learn access denied')
+    await expect(t.run(ctx => admitArtifactInputsForRecord(ctx, { kind: 'document', id: a.documentId, userId: owner.tokenIdentifier } as never, args))).rejects.toThrow()
+    for (const input of [{ references: [] }, { references: Array.from({ length: 65 }, () => a.reference) }, { ...args, decision: 'pass' }, { references: [{ ...a.reference, classification: 'teaching' }] }]) {
+      await expect(t.withIdentity(owner).run(ctx => admitArtifactInputs(ctx, input))).rejects.toThrow()
+    }
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInputs(ctx, { references: Array.from({ length: 64 }, () => a.reference) }))).toMatchObject({ status: 'admitted_unregistered' })
+    await t.run(ctx => ctx.db.patch(b.lineageId, { classification: 'private_scoring' }))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInputs(ctx, args))).toMatchObject({ status: 'rejected' })
+  })
+
+  test.each(['registered_first', 'unregistered_first'] as const)('batch admission preserves returned rejection in %s order', async order => {
+    const t = convexTest(schema, modules)
+    const registered = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'a' }))
+    const ordinary = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'b' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(registered)))
+    await t.run(async ctx => {
+      await ctx.db.delete(ordinary.lineageId)
+      await ctx.db.patch(registered.catalogId, { measurementCapability: { enabled: true } })
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: registered.reference }))).toMatchObject({ status: 'admitted_registered' })
+    const references = order === 'registered_first' ? [registered.reference, ordinary.reference] : [ordinary.reference, registered.reference]
+    for (const operation of [
+      () => t.withIdentity(owner).run(ctx => admitArtifactInputs(ctx, { references })),
+      () => t.withIdentity(owner).run(ctx => admitArtifactInputsForOwner(ctx, owner.tokenIdentifier, { references })),
+      () => t.run(ctx => admitArtifactInputsForRecord(ctx, { kind: 'document', id: registered.documentId }, { references })),
+    ]) expect(await operation()).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+  })
+
+  test.each(['cache', 'share', 'offline'] as const)('%s follow-up rechecks lineage before publication', async transport => {
+    for (const state of ['ordinary', 'reserved', 'private'] as const) {
+      const t = convexTest(schema, modules)
+      const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+      await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+      expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'admitted_registered' })
+      if (state === 'reserved') await t.run(ctx => ctx.db.patch(f.caseId, { reservedAt: 0 }))
+      if (state === 'private') await t.run(ctx => ctx.db.patch(f.lineageId, { classification: 'private_scoring' }))
+      const decision = await t.withIdentity(owner).run(async ctx => {
+        const result = await admitArtifactInputs(ctx, { references: [f.reference] })
+        if (result.status === 'rejected') return result
+        await ctx.db.insert('quizzes', { userId: owner.tokenIdentifier, folderId: f.folderId, title: `${transport} publication`, status: 'ready', questionCount: 0, creationMethod: 'auto_generated' })
+        return result
+      })
+      expect(decision.status).toBe(state === 'ordinary' ? 'admitted_registered' : 'rejected')
+      const publications = await t.run(ctx => ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(2))
+      expect(publications).toHaveLength(state === 'ordinary' ? 1 : 0)
+    }
+  })
+})
+
+describe('round-3 shared validation exactness', () => {
+  test.each(['short_first', 'long_first'] as const)('shared subtree obeys the depth limit in %s order', async order => {
+    for (const edges of [8, 9]) {
+      const t = convexTest(schema, modules)
+      const fixtures = await t.run(async ctx => {
+        const all: Fixture[] = []
+        for (let i = 0; i < edges + 1; i++) all.push(await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: (i + 1).toString(16) }))
+        const leaf = all[0]!, shared = all[1]!, root = all.at(-1)!
+        const chain = all.slice(2, -1)
+        for (const f of all) {
+          const targets = f === root ? order === 'short_first' ? [shared, chain.at(-1)!] : [chain.at(-1)!, shared]
+            : f === shared ? [leaf] : f === leaf ? [] : [chain[chain.indexOf(f) - 1] ?? shared]
+          const sources = await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(65)
+          for (const source of sources) await ctx.db.delete(source._id)
+          for (const target of targets) await ctx.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'document', documentId: target.documentId, sourceRevision: 'source.r1' } })
+          if (!targets.length) await ctx.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: f.folderId } })
+          await ctx.db.patch(f.lineageId, { sourceCount: targets.length || 1 })
+          await resealed(ctx, f)
+        }
+        return all
+      })
+      for (const [index, f] of fixtures.entries()) await t.withIdentity(owner).run(async ctx => {
+        await ctx.db.patch(f.validationId, { comparedCatalogRevision: index })
+        await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(f), expectedCatalogRevision: index })
+      })
+      const reference = fixtures.at(-1)!.reference
+      expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: edges === 8 ? 'admitted_registered' : 'rejected' })
+    }
+  })
+
+  test.each(['document_patch', 'document_table_patch', 'document_replace', 'document_delete', 'folder_owner', 'reserved_case', 'validation', 'source_link', 'source_owner_move', 'extra_source', 'duplicate_case', 'unknown_case_patch', 'known_case_patch', 'origin_transform'] as const)('cached facts reject %s after a write through the original context', async mutation => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(async ctx => {
+      const origin = mutation === 'origin_transform' ? await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'a' }) : undefined
+      return { ...await prepare(ctx, { classification: 'genuine_personal_work', origin, transformation: 'summary', fingerprint: 'b' }), origin }
+    })
+    if (f.origin) {
+      await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f.origin!)))
+      await t.run(ctx => ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 }))
+      f.catalogRevision = 1
+    }
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.withIdentity(owner).run(async raw => {
+      const spare = await raw.db.insert('learnAssessmentCases', { ...f.base, caseKey: 'unread-case', scenarioFingerprint: 'f'.repeat(64), solutionFingerprint: 'f'.repeat(64), identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
+      const shared = createArtifactLineagePublicationContext(raw)
+      if (mutation === 'known_case_patch') await shared.admission.ctx.db.get(spare)
+      if (mutation === 'folder_owner') {
+        const row = (await raw.db.get(f.lineageId))!
+        const cases = await raw.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(33)
+        const sources = await raw.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).take(65)
+        await artifactManifestDigest(shared.admission.ctx, row, [], cases, sources)
+      }
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+      if (mutation === 'document_patch') await raw.db.patch(f.documentId, { status: 'indexing' })
+      if (mutation === 'document_table_patch') {
+        const table = raw.db as unknown as { table(name: 'documents'): { patch(id: Id<'documents'>, fields: { status: 'indexing' }): Promise<void> } }
+        await table.table('documents').patch(f.documentId, { status: 'indexing' })
+      }
+      if (mutation === 'document_replace') {
+        const row = (await raw.db.get(f.documentId))!
+        const { _id: _id, _creationTime: _time, ...fields } = row
+        await raw.db.replace(f.documentId, { ...fields, status: 'failed' })
+      }
+      if (mutation === 'document_delete') await raw.db.delete(f.documentId)
+      if (mutation === 'folder_owner') await raw.db.patch(f.folderId, { userId: foreign.tokenIdentifier })
+      if (mutation === 'reserved_case') await raw.db.patch(f.caseId, { reservedAt: 0 })
+      if (mutation === 'validation') await raw.db.patch(f.validationId, { invalidatedAt: 0 })
+      if (mutation === 'source_link' || mutation === 'source_owner_move') {
+        const source = (await raw.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
+        await raw.db.patch(source._id, mutation === 'source_link' ? { invalidatedAt: 0 } : { userId: foreign.tokenIdentifier })
+      }
+      if (mutation === 'extra_source') await raw.db.insert('learnArtifactSourceLinks', { ...f.base, lineageId: f.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: f.folderId } })
+      if (mutation === 'duplicate_case' || mutation === 'unknown_case_patch' || mutation === 'known_case_patch') {
+        const pin = { scenarioFingerprint: 'b'.repeat(64), solutionFingerprint: 'b'.repeat(64) }
+        if (mutation === 'duplicate_case') await raw.db.insert('learnAssessmentCases', { ...f.base, ...pin, caseKey: 'duplicate', identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
+        else await raw.db.patch(spare, pin)
+      }
+      if (mutation === 'origin_transform') {
+        const edge = (await raw.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', f.lineageId)).unique())!
+        await raw.db.patch(edge._id, { transformation: 'copy' })
+      }
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected' })
+    })
+  })
+
+  test('source and inventory caches recover after rejection and see enrollment changes', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.withIdentity(owner).run(async raw => {
+      const shared = createArtifactLineagePublicationContext(raw)
+      await raw.db.patch(f.documentId, { status: 'indexing' })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected' })
+      await raw.db.patch(f.documentId, { status: 'success' })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_registered' })
+      await raw.db.delete(f.lineageId)
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'admitted_unregistered' })
+      await raw.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
+      expect(await admitArtifactInput(shared.admission.ctx, { reference: f.reference })).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+    })
+  })
+
+  test('each resolution rereads lineage nodes, origins and sources', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const copy = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    const unrelated = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'f' }))
+    await t.withIdentity(owner).run(async raw => {
+      const reads = new Map<string, number>()
+      const db = new Proxy(raw.db, { get(target, property) {
+        const method: unknown = Reflect.get(target, property)
+        if (property !== 'get' || typeof method !== 'function') return typeof method === 'function' ? method.bind(target) : method
+        return (...args: unknown[]) => {
+          const id = String(args.at(-1))
+          reads.set(id, (reads.get(id) ?? 0) + 1)
+          return Reflect.apply(method, target, args)
+        }
+      } })
+      const budget = createArtifactLineagePublicationContext({ ...raw, db })
+      for (const ctx of [budget.admission.ctx, budget.preparation.ctx]) {
+        for (const f of [origin, copy]) expect(await resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'bound' })
+        if (ctx === budget.admission.ctx) {
+          await raw.db.insert('learnArtifactSourceLinks', { ...origin.base, lineageId: unrelated.lineageId, evidenceStatus: 'available', dependency: { kind: 'folder', folderId: unrelated.folderId } })
+          await advanceAssessmentCatalogForOwner(budget.preparation.ctx, owner.tokenIdentifier, 0)
+        }
+      }
+      for (const id of [origin.documentId, origin.validationId]) expect(reads.get(id), id).toBe(4)
+      expect(reads.get(origin.lineageId)).toBe(2)
+    })
+  })
+
+  test('reused node facts still compare against the current catalogue revision', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.run(async ctx => {
+      await ctx.db.patch(f.catalogId, { catalogRevision: 1 })
+      await ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 })
+    })
+    await t.withIdentity(owner).run(async raw => {
+      const budget = createArtifactLineagePublicationContext(raw)
+      expect(await resolveArtifactLineageForOwner(budget.admission.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'bound' })
+      await raw.db.patch(f.catalogId, { catalogRevision: 0 })
+      expect(await resolveArtifactLineageForOwner(budget.admission.ctx, owner.tokenIdentifier, { reference: f.reference })).toMatchObject({ status: 'unavailable' })
+    })
+  })
+
+  test('projection callers cannot mutate facts retained by the validation cache', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'section_block', 'folder'))
+    await t.withIdentity(owner).run(async raw => {
+      const budget = createArtifactLineagePublicationContext(raw)
+      const section = (await raw.db.get(f.sectionId))!
+      const first = await sectionContentProjection(budget.admission.ctx, section)
+      const expected = await artifactPayloadDigest(first)
+      Reflect.set(first, 'payload', {})
+      const second = await sectionContentProjection(budget.admission.ctx, section)
+      expect(await artifactPayloadDigest(second)).toBe(expected)
+      Reflect.set(second, 'payload', {})
+      expect(await artifactPayloadDigest(await sectionContentProjection(budget.admission.ctx, section))).toBe(expected)
+    })
+  })
+
+  test('supersession cannot change an origin transformation', async () => {
+    const t = convexTest(schema, modules)
+    const origin = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    const f = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    const next = await t.run(async ctx => {
+      const next = await replacementLineage(ctx, f, f.reference.payloadDigest)
+      const edge = (await ctx.db.query('learnArtifactLineageOrigins').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).unique())!
+      await ctx.db.patch(edge._id, { transformation: 'copy' })
+      return resealed(ctx, next)
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('nextId')
+  })
+})
+
+describe('round-2 admission invariants', () => {
+  test.each(documentKinds)('%s successor remains admissible after a stale payload and 16 manifest replacements', async kind => {
+    const t = convexTest(schema, modules)
+    let f: Fixture = await t.run(async ctx => {
+      const initial = await prepare(ctx, { classification: 'genuine_personal_work' })
+      const payloadDigest = await artifactPayloadDigest(artifactContentProjection({ kind, document: (await ctx.db.get(initial.documentId))! }))
+      const reference = { ...initial.reference, artifact: { kind, id: initial.documentId }, key: kind === 'document_chunk' ? LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY : 'whole', payloadDigest }
+      await ctx.db.patch(initial.lineageId, reference)
+      await ctx.db.patch(initial.validationId, { payloadDigest })
+      return resealed(ctx, { ...initial, reference })
+    })
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    const first = f
+    for (let i = 0; i < 17; i++) {
+      if (i === 0) await t.run(ctx => ctx.db.patch(f.documentId, { fileSize: 6 }))
+      const digest = await t.run(async ctx => artifactPayloadDigest(artifactContentProjection({ kind, document: (await ctx.db.get(f.documentId))! })))
+      let next = await t.run(ctx => replacementLineage(ctx, f, digest))
+      next = await t.run(async ctx => {
+        await ctx.db.patch(next.lineageId, { authorityVersion: `producer.v${i + 2}` })
+        return resealed(ctx, next)
+      })
+      await t.withIdentity(owner).run(async ctx => {
+        await supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId })
+        await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(next))
+      })
+      f = next
+      expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'admitted_registered' })
+      expect(await t.withIdentity(owner).run(ctx => classifyPersonalWorkDocumentForOwner(ctx, owner.tokenIdentifier, f.documentId))).toMatchObject({ classification: 'genuine_personal_work' })
+      expect(await t.run(ctx => classifyPersonalWorkDocumentForRecord(ctx, { kind: 'document', id: f.documentId }))).toMatchObject({ classification: 'genuine_personal_work' })
+    }
+    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: first.reference }))).toMatchObject({ status: 'unavailable' })
+    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: f.reference }))).toMatchObject({ status: 'bound', instructionalRegistered: true })
+  })
+
+  test.each(['measurement', 'private_scoring', 'unknown'] as const)('supersession cannot relax %s to teaching', async classification => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification }))
+    const next = await t.run(async ctx => {
+      await ctx.db.patch(f.documentId, { fileSize: 6 })
+      const digest = await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document: (await ctx.db.get(f.documentId))! }))
+      const next = await replacementLineage(ctx, f, digest)
+      await ctx.db.patch(next.lineageId, { classification: 'teaching' })
+      await resealed(ctx, next)
+      return next
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('nextId')
+  })
+
+  test('supersession cannot drop a reserved case binding', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work', reserved: true }))
+    const next = await t.run(async ctx => {
+      await ctx.db.patch(f.documentId, { fileSize: 6 })
+      const digest = await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document: (await ctx.db.get(f.documentId))! }))
+      const next = await replacementLineage(ctx, f, digest)
+      const bindings = await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', next.lineageId)).take(33)
+      for (const binding of bindings) await ctx.db.delete(binding._id)
+      await ctx.db.patch(next.lineageId, { caseCount: 0 })
+      await resealed(ctx, next)
+      return next
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.caseId))).toHaveProperty('reservedAt')
+  })
+
+  test.each(['measurement_cold', 'measurement_delayed'] as const)('parent %s denies admission and preparation without content duplicates', async purpose => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'session_block'))
+    await t.run(async ctx => {
+      await ctx.db.delete(f.lineageId)
+      await ctx.db.patch(f.sessionId, { assessmentPurpose: purpose })
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    await expect(t.withIdentity(owner).run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: f.reference.artifact, key: 'whole', origins: [], sources: [] }] }))).rejects.toThrow('unavailable')
+  })
+
+  test.each(['session_block', 'quiz_question', 'section_block', 'flashcard_version', 'audio_overview', 'learner_artifact'] as const)('%s inventory cannot disappear from ordinary admission', async kind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind))
+    await t.run(async ctx => { await ctx.db.patch(f.lineageId, { classification: 'private_scoring', authority: 'server_producer' }); await resealed(ctx, f) })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test.each(['quiz_question', 'flashcard_version', 'audio_overview'] as const)('%s admits its complete payload only when its document source is admissible', async kind => {
+    const t = convexTest(schema, modules)
+    let f = await t.run(ctx => prepareMatrix(ctx, kind))
+    const source = await t.run(ctx => prepare(ctx, { classification: 'measurement', fingerprint: 'e' }))
+    f = await t.run(async ctx => {
+      await ctx.db.delete(f.lineageId)
+      if (kind === 'quiz_question') await ctx.db.patch(f.questionId, { sourceDocumentId: source.documentId })
+      if (kind === 'flashcard_version') await ctx.db.patch(f.cardId, { sourceDocumentId: source.documentId })
+      if (kind === 'audio_overview') await ctx.db.patch(f.overviewId, { sourceDocumentIds: [source.documentId] })
+      return f
+    })
+    const digest = await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))
+    const reference = { ...f.reference, payloadDigest: digest, ...(kind === 'flashcard_version' ? {} : { revision: `sha256:${digest}` }) }
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test('section admission includes a private linked Quiz question', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'quiz_question'))
+    const reference = await t.run(async ctx => {
+      await ctx.db.patch(f.lineageId, { classification: 'private_scoring', authority: 'server_producer' })
+      await resealed(ctx, f)
+      await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'quiz', entityId: f.quizId, order: 0 }] })
+      const digest = await artifactPayloadDigest(await sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!))
+      return { artifact: { kind: 'section_block' as const, id: f.sectionId }, key: 'whole', revision: `sha256:${digest}`, payloadDigest: digest }
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test.each([false, true].flatMap(registered => ['opportunity_only', 'matching_measurement', 'mismatched_purposes', 'content_without_parent'].map(pins => ({ registered, pins }))))('session duplicate pins $pins reject with registration $registered', async ({ registered, pins }) => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'session_block'))
+    if (registered) await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.run(async ctx => {
+      const item = (await ctx.db.get(f.itemId))!
+      const opportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...f.base, evidenceStatus: 'available', scopeKind: 'v2',
+        learningVoidId: f.artifactVoidId, blueprintRevisionId: f.blueprintRevisionId, blueprintRecordRevision: 1, objectiveId: item.objectiveId,
+        assessmentContractVersion: item.assessmentContractVersion, assessmentContractDigest: item.assessmentContractDigest, depth: item.depth,
+        contextPins: { kind: 'calibration' }, purpose: { kind: 'calibration' }, delayedCheckId: 'session-input',
+        assessmentPins: { kind: 'calibration', caseId: f.caseId, promptDigest: 'a'.repeat(64), assessmentContractVersion: 'assessment.v1', assessmentContractDigest: 'a'.repeat(64), supportManifestDigest: 'a'.repeat(64) },
+        scoringBinding: { kind: 'deterministic', engineVersion: 'fixture.v1', thresholdVersion: 'fixture.v1', thresholdPercent: 80, transitionVersion: 'learn-v2.mastery-transition.v1' },
+        phase: 'ready', revision: 1, eligibilityPolicyVersion: 'fixture.v1', operationalEligibility: 'eligible', openAt: f.base.createdAt, closeAt: f.base.createdAt + 1000, checkSequence: 0, originalSlot: true })
+      await ctx.db.patch(f.catalogId, { measurementCapability: { enabled: registered } })
+      if (pins === 'opportunity_only') await ctx.db.patch(f.sessionId, { assessmentOpportunityId: opportunityId })
+      if (pins === 'matching_measurement' || pins === 'mismatched_purposes') {
+        await ctx.db.patch(f.sessionId, { assessmentPurpose: 'measurement_cold', assessmentOpportunityId: opportunityId })
+        await ctx.db.patch(f.contentId, { assessmentPurpose: pins === 'matching_measurement' ? 'measurement_cold' : 'measurement_delayed', assessmentOpportunityId: opportunityId })
+      }
+      if (pins === 'content_without_parent') await ctx.db.patch(f.contentId, { assessmentPurpose: 'measurement_delayed', assessmentOpportunityId: opportunityId })
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    const before = await t.run(ctx => ctx.db.get(f.catalogId))
+    await expect(t.withIdentity(owner).run(async ctx => {
+      const id = await ctx.db.insert('sessionContentBlocks', { userId: owner.tokenIdentifier, sessionContentId: f.contentId, order: 1, kind: 'explanation', content: 'New ordinary-looking block' })
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'session_block', id }, key: 'whole', origins: [], sources: [] }] })
+    })).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.catalogId))).toEqual(before)
+  })
+
+  test.each(['flashcard_version', 'audio_overview'] as const)('section admission includes a protected linked %s', async kind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, kind))
+    const reference = await t.run(async ctx => {
+      await ctx.db.patch(f.lineageId, { classification: 'private_scoring', authority: 'server_producer' })
+      await resealed(ctx, f)
+      await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: kind === 'flashcard_version' ? 'flashcard' : 'audio', entityId: kind === 'flashcard_version' ? f.flashcardRoomId : f.overviewId, order: 0 }] })
+      const digest = await artifactPayloadDigest(await sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!))
+      return { artifact: { kind: 'section_block' as const, id: f.sectionId }, key: 'whole', revision: `sha256:${digest}`, payloadDigest: digest }
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test('retained sources are admitted even when the payload has no document reference', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'learner_artifact'))
+    const source = await t.run(ctx => prepare(ctx, { classification: 'measurement', fingerprint: 'e' }))
+    await t.run(async ctx => {
+      await ctx.db.patch(f.linkId, { dependency: { kind: 'document', documentId: source.documentId, sourceRevision: 'source.r1' } })
+      await resealed(ctx, f)
+    })
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test('retained origins admit their own nested projected sources', async () => {
+    const t = convexTest(schema, modules)
+    let origin = await t.run(ctx => prepareMatrix(ctx, 'audio_overview'))
+    const source = await t.run(ctx => prepare(ctx, { classification: 'measurement', fingerprint: 'e' }))
+    await t.run(ctx => ctx.db.patch(origin.overviewId, { sourceDocumentIds: [source.documentId] }))
+    origin = await repinContent(t, origin)
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(origin)))
+    const summary = await t.run(ctx => prepare(ctx, { origin, transformation: 'summary' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(summary)))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: summary.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+
+  test('a registered aggregate with an unregistered source is ordinary only while unenrolled', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'quiz_question'))
+    await t.run(ctx => ctx.db.patch(f.questionId, { sourceDocumentId: f.sourceDocumentId }))
+    const pinned = await repinContent(t, f)
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(pinned)))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: pinned.reference }))).toMatchObject({ status: 'admitted_unregistered' })
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: pinned.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+  })
+
+  test.each(['revision', 'contentHash'] as const)('an unregistered V2 Audio source must retain its declared %s', async pin => {
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t, false)
+    const reference = await t.run(async ctx => {
+      await ctx.db.delete(f.lineageId)
+      await ctx.db.patch(f.entryId, { [pin]: pin === 'revision' ? 'stale.r0' : '0'.repeat(64) })
+      const digest = await artifactPayloadDigest(await audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
+      return { ...f.reference, payloadDigest: digest, revision: `sha256:${digest}` }
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+  })
+
+  test.each([false, true].flatMap(enrolled => ['missing_version', 'changed_cards'].map(condition => ({ enrolled, condition }))))('section cards $condition retain ordinary status with enrollment $enrolled', async ({ enrolled, condition }) => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'flashcard_version', 'folder'))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    const section = await t.run(async ctx => {
+      const card = (await ctx.db.get(f.cardId))!
+      await ctx.db.insert('flashcardRoomCards', { userId: owner.tokenIdentifier, roomId: f.flashcardRoomId, displayOrder: 0, term: card.term, definition: condition === 'changed_cards' ? 'Edited current definition' : card.definition })
+      if (condition === 'missing_version') await ctx.db.patch(f.flashcardRoomId, { activeVersionId: undefined })
+      await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'flashcard', entityId: f.flashcardRoomId, order: 0 }] })
+      const payloadDigest = await artifactPayloadDigest(await sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!))
+      const reference = { artifact: { kind: 'section_block' as const, id: f.sectionId }, key: 'whole', revision: `sha256:${payloadDigest}`, payloadDigest }
+      const parent = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'e' })
+      await ctx.db.patch(parent.lineageId, reference)
+      const source = (await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', parent.lineageId)).unique())!
+      await ctx.db.patch(source._id, { dependency: { kind: 'folder', folderId: f.folderId } })
+      await ctx.db.patch(parent.validationId, { payloadDigest })
+      return resealed(ctx, { ...parent, reference })
+    })
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(section)))
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: enrolled } }))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: section.reference }))).toMatchObject(enrolled ? { status: 'rejected', reasonCode: 'registration_required' } : { status: 'admitted_unregistered' })
+  })
+
+  test.each([9, 10])('nested source admission bounds a chain of %s artifacts', async count => {
+    const t = convexTest(schema, modules)
+    let previous: Fixture | undefined
+    for (let i = 0; i < count; i++) {
+      const f = await t.run(async ctx => {
+        const current = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: (i + 1).toString(16) })
+        if (previous) {
+          const link = (await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', current.lineageId)).unique())!
+          await ctx.db.patch(link._id, { dependency: { kind: 'document', documentId: previous.documentId, sourceRevision: 'source.r1' } })
+          return resealed(ctx, current)
+        }
+        return current
+      })
+      await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+      previous = f
+    }
+    if (!previous) throw new Error('Missing source chain')
+    const reference = previous.reference
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference }))).toMatchObject({ status: count === 9 ? 'admitted_registered' : 'rejected' })
+  })
+
+  test('cyclic retained sources cannot authorize each other', async () => {
+    const t = convexTest(schema, modules)
+    const [a, b] = await t.run(async ctx => {
+      const a = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'a' })
+      const b = await prepare(ctx, { classification: 'genuine_personal_work', fingerprint: 'b' })
+      for (const [parent, child] of [[a, b], [b, a]]) {
+        if (!parent || !child) throw new Error('Missing cycle fixture')
+        const link = (await ctx.db.query('learnArtifactSourceLinks').withIndex('by_userId_and_lineageId', q => q.eq('userId', owner.tokenIdentifier).eq('lineageId', parent.lineageId)).unique())!
+        await ctx.db.patch(link._id, { dependency: { kind: 'document', documentId: child.documentId, sourceRevision: 'source.r1' } })
+        await resealed(ctx, parent)
+      }
+      return [a, b] as const
+    })
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(a)))
+    await t.run(ctx => ctx.db.patch(b.validationId, { comparedCatalogRevision: 1 }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(b), expectedCatalogRevision: 1 }))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: a.reference }))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
+  })
+
+  test('Audio encoding and range ceilings return explicit rejection before publication', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareV2Audio(ctx))
+    await t.run(async ctx => {
+      const episode = (await ctx.db.get(f.episodeId))!
+      await ctx.db.insert('audioOverviewClaims', { userId: owner.tokenIdentifier, jobId: episode.jobId, ledgerId: episode.claimLedgerId, order: 0, claimId: 'large', text: 'x'.repeat(500000), status: 'supported', createdAt: f.base.createdAt })
+      await ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
+    })
+    const rejected = { status: 'rejected', reasonCode: 'projection_exceeds_budget' }
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: f.reference }))).toMatchObject(rejected)
+    await expect(t.withIdentity(owner).run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: f.reference.artifact, key: 'whole', origins: [], sources: [] }] }))).rejects.toMatchObject({ data: rejected })
+    expect(await t.withIdentity(owner).run(async ctx => {
+      const budget = createArtifactLineageReadContext(ctx)
+      for (let i = 0; i < 2040; i++) await budget.ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', 'absent')).take(1)
+      return admitArtifactInput(budget.ctx, { reference: f.reference })
+    })).toMatchObject(rejected)
+  })
+
+  test('oversized linked component inventories are rejected rather than truncated', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'section_block', 'folder'))
+    await t.run(async ctx => {
+      await ctx.db.delete(f.lineageId)
+      await ctx.db.patch(f.sectionId, { contentBlocks: [{ type: 'quiz', entityId: f.quizId, order: 0 }] })
+      for (let i = 1; i <= 200; i++) await ctx.db.insert('quizQuestions', { userId: owner.tokenIdentifier, quizId: f.quizId, order: i, question: `Question ${i}`, type: 'free-response', correctAnswer: `Solution ${i}` })
+    })
+    await expect(t.withIdentity(owner).run(async ctx => {
+      const projection = await sectionContentProjection(ctx, (await ctx.db.get(f.sectionId))!)
+      const payloadDigest = await artifactPayloadDigest(projection)
+      return admitArtifactInput(ctx, { reference: { artifact: { kind: 'section_block', id: f.sectionId }, key: 'whole', revision: `sha256:${payloadDigest}`, payloadDigest } })
+    })).rejects.toThrow('unavailable')
+  })
+})
 
 describe.each(repinnableKinds)('B1 supersession: %s', kind => {
   test('repins after a projection-version bump, preserves stable lineage and leaves the old row unavailable', async () => {
@@ -2280,6 +2945,8 @@ describe('B2 publication-sized batches', () => {
       expect(result.readUsage).toEqual({ chargedBytes: traced.stats.charged, documentsRead: traced.stats.documents, readRequests: traced.stats.requests, limitBytes: ARTIFACT_LINEAGE_READ_BYTES })
       return { fixtures, ...result.readUsage, ranges: traced.stats.ranges }
     })
+    const { fixtures: _fixtures, ...usage } = measured
+    console.log(JSON.stringify({ shape: 'presealed 50-question Quiz', ...usage }))
     expect(measured.fixtures).toHaveLength(50)
     // Convex allows 16 MiB read, 32,000 scanned documents and 4,096 index ranges per transaction.
     expect(measured.chargedBytes).toBeLessThan(ARTIFACT_LINEAGE_READ_BYTES / 4)
@@ -2370,5 +3037,208 @@ describe('B2 shared case proofs', () => {
     await t.withIdentity(owner).mutation(registerInstructional, registration(summary))
     expect(await t.run(ctx => ctx.db.get(summary.lineageId))).toHaveProperty('publication.catalogRevision', 2)
     expect(await t.run(ctx => ctx.db.get(origin.caseId))).toMatchObject({ usageClass: 'instructional', artifactIdentityValidationId: origin.validationId })
+  })
+})
+
+
+describe('round-2 maximum Audio Overview read footprint', () => {
+  test('measures every canonical playback row once at the existing producer maxima', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareV2Audio(ctx))
+    const e = (await t.run(ctx => ctx.db.get(f.episodeId)))!
+    const sizes: Record<string, { rows: number, bytes: number }> = {}
+    async function insert<T extends TableNames>(ctx: MutationCtx, table: T, value: WithoutSystemFields<Doc<T>>) {
+      const id = await ctx.db.insert(table, value)
+      const row = (await ctx.db.get(id))!
+      const total = sizes[table] ??= { rows: 0, bytes: 0 }
+      total.rows++
+      total.bytes += getDocumentSize(row as Record<string, Value>)
+      return id
+    }
+    const base = { userId: owner.tokenIdentifier, jobId: e.jobId, createdAt: f.base.createdAt }
+    const entries = await t.run(async ctx => {
+      const ids = []
+      for (let i = 0; i < 50; i++) {
+        const id = await insert(ctx, 'documents', { userId: base.userId, folderId: f.folderId, filename: `source-${i}`, fileSize: 1, status: 'success', sourceRevision: `sha256:${'f'.repeat(64)}`, contentHash: 'f'.repeat(64), r2Key: `owned/source-${i}` })
+        ids.push(await insert(ctx, 'audioOverviewSourceManifestEntries', { ...base, manifestId: e.sourceManifestId, order: i, sourceId: `source-${i}-${'s'.repeat(145)}`, documentId: id, revision: `sha256:${'f'.repeat(64)}`, contentHash: 'f'.repeat(64), displayReference: 'd'.repeat(1000) }))
+      }
+      for (let i = 0; i < 12; i++) await insert(ctx, 'audioOverviewLearningObjectives', { ...base, outlineId: e.outlineId, order: i, text: 'o'.repeat(1000) })
+      for (let i = 0; i < 50; i++) await insert(ctx, 'audioOverviewOutlineSources', { ...base, outlineId: e.outlineId, order: i, manifestEntryId: ids[i]! })
+      await ctx.db.patch(e.sourceManifestId, { entryCount: 50 })
+      await ctx.db.patch(e.outlineId, { narrativeArc: 'n'.repeat(4000), learningObjectiveCount: 12 })
+      await ctx.db.patch(e.claimLedgerId, { claimCount: 500, supportedClaimCount: 500 })
+      await ctx.db.patch(e._id, { sceneCount: 24, utteranceCount: 400 })
+      return ids
+    })
+    const claims: Id<'audioOverviewClaims'>[] = []
+    for (let batch = 0; batch < 5; batch++) claims.push(...await t.run(async ctx => {
+      const ids = []
+      for (let i = batch * 100; i < (batch + 1) * 100; i++) {
+        const id = await insert(ctx, 'audioOverviewClaims', { ...base, ledgerId: e.claimLedgerId, order: i, claimId: `claim-${i}-${'c'.repeat(90)}`, text: '界'.repeat(4000), status: 'supported', verificationVersion: 'claim-entailment.v1', verificationModel: '界'.repeat(200), entailmentDecision: 'entailed', entailmentReason: '界'.repeat(500) })
+        ids.push(id)
+        for (let j = 0; j < 1; j++) await insert(ctx, 'audioOverviewClaimSources', { ...base, ledgerId: e.claimLedgerId, claimRecordId: id, manifestEntryId: entries[j]! })
+      }
+      return ids
+    }))
+    const scenes = await t.run(async ctx => {
+      const ids = []
+      for (let i = 0; i < 24; i++) ids.push(await insert(ctx, 'audioOverviewScenes', { episodeId: e._id, jobId: e.jobId, userId: e.userId, order: i, title: 't'.repeat(300), narrativePurpose: 'n'.repeat(2000), targetDurationMs: 300000, durationMs: 300000, status: 'ready', currentAttempt: 1, updatedAt: base.createdAt }))
+      return ids
+    })
+    const utterances: Array<{ id: Id<'audioOverviewUtterances'>, sceneId: Id<'audioOverviewScenes'> }> = []
+    for (let batch = 0; batch < 20; batch++) utterances.push(...await t.run(async ctx => {
+      const ids = []
+      for (let i = batch * 20; i < (batch + 1) * 20; i++) {
+        const sceneId = scenes[i % 24]!
+        const id = await insert(ctx, 'audioOverviewUtterances', { ...base, episodeId: e._id, sceneId, order: i, sceneOrder: Math.floor(i / 24), speaker: i % 2 ? 'host_b' : 'host_a', text: '界'.repeat(600), emotionalIntent: '界'.repeat(500), deliveryIntent: '界'.repeat(500), pauseAfterMs: 10000, verificationUtteranceId: `utterance-${i}`, verificationVersion: 'claim-entailment.v1', verificationModel: '界'.repeat(200), entailmentDecision: 'entailed', entailmentReason: '界'.repeat(500) })
+        ids.push({ id, sceneId })
+        for (let j = 0; j < 1; j++) await insert(ctx, 'audioOverviewUtteranceSources', { ...base, episodeId: e._id, utteranceId: id, manifestEntryId: entries[j]! })
+        for (let j = 0; j < 13; j++) await insert(ctx, 'audioOverviewUtteranceClaims', { ...base, episodeId: e._id, utteranceId: id, claimRecordId: claims[(i * 13 + j) % 500]! })
+      }
+      return ids
+    }))
+    const alignmentId = await t.run(ctx => insert(ctx, 'audioOverviewAlignments', { ...base, episodeId: e._id, artifactId: f.mediaId, status: 'ready', segmentCount: 10000, updatedAt: base.createdAt }))
+    await t.run(ctx => ctx.db.patch(e._id, { alignmentId }))
+    for (let batch = 0; batch < 10; batch++) await t.run(async ctx => {
+      for (let i = batch * 1000; i < (batch + 1) * 1000; i++) {
+        const u = utterances[Math.floor(i / 25)]!
+        await insert(ctx, 'audioOverviewAlignmentSegments', { ...base, episodeId: e._id, alignmentId, utteranceId: u.id, sceneId: u.sceneId, wordIndex: i % 25, word: '界'.repeat(24), startMs: (i % 25) * 10, endMs: (i % 25) * 10 + 9, confidence: 1 })
+      }
+    })
+    const rows = Object.values(sizes).reduce((sum, value) => sum + value.rows, 0)
+    const bytes = Object.values(sizes).reduce((sum, value) => sum + value.bytes, 0)
+    console.log(JSON.stringify({ shape: 'canonical V2 Audio Overview', rows, uniqueDocumentBytes: bytes, convexReadLimit: 16 * 1024 * 1024, sizes }))
+    const planRows = rows - sizes.documents!.rows - sizes.audioOverviewAlignmentSegments!.rows - sizes.audioOverviewAlignments!.rows
+    expect(planRows).toBeLessThan(8192)
+    expect(rows).toBeGreaterThan(17000)
+    expect(bytes).toBeGreaterThan(16 * 1024 * 1024)
+
+    const rejected = { status: 'rejected', reasonCode: 'projection_exceeds_budget' }
+    for (const enabled of [false, true]) {
+      await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled } }))
+      const measured = await t.withIdentity(owner).run(async ctx => {
+        const traced = traceLineageReads(ctx)
+        const budget = createArtifactLineageReadContext(traced.ctx)
+        const result = await admitArtifactInput(budget.ctx, { reference: f.reference })
+        return { result, usage: budget.readUsage, ranges: budget.indexRanges, actual: traced.stats }
+      })
+      expect(measured.result).toMatchObject(rejected)
+      expect(measured.usage.chargedBytes).toBeLessThanOrEqual(ARTIFACT_LINEAGE_READ_BYTES)
+      expect(measured.actual.charged).toBe(measured.usage.chargedBytes)
+      expect(measured.actual.charged).toBeLessThanOrEqual(ARTIFACT_LINEAGE_READ_BYTES)
+      expect(measured.actual.documents).toBeLessThan(1000)
+      expect(measured.ranges).toBeLessThanOrEqual(ARTIFACT_LINEAGE_INDEX_RANGES)
+      console.log(JSON.stringify({ shape: 'bounded maximum V2 Audio admission', enabled, ...measured }))
+    }
+    const before = await t.run(async ctx => ({ title: (await ctx.db.get(f.overviewId))!.title, catalog: await ctx.db.get(f.catalogId), lineages: await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(8) }))
+    let preparationBytes = 0
+    let preparationRows = 0
+    await expect(t.withIdentity(owner).run(async ctx => {
+      const traced = traceLineageReads(ctx)
+      const total = createArtifactLineagePublicationContext(traced.ctx)
+      try {
+        await total.preparation.ctx.db.patch(f.overviewId, { title: 'Must roll back' })
+        return await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [{ artifact: f.reference.artifact, key: 'whole', origins: [], sources: [] }] })
+      }
+      finally { preparationBytes = traced.stats.charged; preparationRows = traced.stats.documents }
+    })).rejects.toMatchObject({ data: rejected })
+    expect(preparationBytes).toBeLessThanOrEqual(6 * 1024 * 1024)
+    expect(preparationRows).toBeLessThan(1000)
+    console.log(JSON.stringify({ shape: 'bounded maximum V2 Audio preparation', preparationBytes, preparationRows }))
+    expect(await t.run(async ctx => ({ title: (await ctx.db.get(f.overviewId))!.title, catalog: await ctx.db.get(f.catalogId), lineages: await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(8) }))).toEqual(before)
+    const summary = await t.run(ctx => prepare(ctx, { origin: f, transformation: 'summary' }))
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: summary.reference }))).toMatchObject(rejected)
+    expect(learnArtifactInputAdmissionResultSchema.parse(new ArtifactProjectionBudgetError().data)).toMatchObject(rejected)
+  })
+})
+
+describe('Stage B Audio alignment succession', () => {
+  test('completeAlignment registers a new revision while retaining the published case and source bindings', async () => {
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t, false)
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    await t.withIdentity(owner).run(async ctx => {
+      const documents = await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(10)
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.map(document => ({ artifact: { kind: 'document' as const, id: document._id }, key: 'whole', origins: [], sources: [] })) })
+      await ctx.db.patch(f.validationId, { comparedCatalogRevision: 1 })
+      await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, { ...registration(f), expectedCatalogRevision: 1 })
+    })
+    const next = await t.withIdentity(owner).run(async ctx => {
+      await ctx.runMutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: alignmentCapability, alignmentId: f.alignmentId })
+      const payloadDigest = await artifactPayloadDigest(await audioOverviewContentProjection(ctx, (await ctx.db.get(f.overviewId))!))
+      const replacement = await replacementLineage(ctx, f, payloadDigest)
+      const reference = { ...replacement.reference, revision: `sha256:${payloadDigest}` }
+      await ctx.db.patch(replacement.lineageId, reference)
+      const sealed = await resealed(ctx, { ...replacement, reference })
+      await registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(sealed))
+      return sealed
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInput(ctx, { reference: next.reference }))).toMatchObject({ status: 'admitted_registered' })
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).toHaveProperty('nextId', next.lineageId)
+    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: f.reference }))).toMatchObject({ status: 'unavailable' })
+    expect(await t.withIdentity(owner).run(ctx => resolveArtifactLineageForOwner(ctx, owner.tokenIdentifier, { reference: next.reference }))).toMatchObject({ cases: [{ caseId: f.caseId }] })
+  })
+})
+
+describe('Stage B immutable document source commitments', () => {
+  test.each(['contentHash', 'r2Key'] as const)('a changed %s cannot be repaired by document supersession or registration', async field => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepare(ctx, { classification: 'genuine_personal_work' }))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', [field]: field === 'contentHash' ? 'a'.repeat(64) : 'owned/replaced-object' })
+    const next = await t.run(async ctx => replacementLineage(ctx, f, await artifactPayloadDigest(artifactContentProjection({ kind: 'document', document: (await ctx.db.get(f.documentId))! }))))
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+    await expect(t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(next)))).rejects.toThrow('unavailable')
+    expect(await t.run(ctx => ctx.db.get(f.lineageId))).not.toHaveProperty('nextId')
+    expect((await t.run(ctx => ctx.db.get(f.catalogId)))!.catalogRevision).toBe(1)
+  })
+})
+
+describe('Stage B revision succession scope', () => {
+  test('learner-artifact revision changes remain outside instructional F1 succession', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareMatrix(ctx, 'learner_artifact'))
+    await t.withIdentity(owner).run(ctx => registerInstructionalArtifactForOwner(ctx, owner.tokenIdentifier, registration(f)))
+    const next = await t.run(async ctx => {
+      if (f.reference.artifact.kind !== 'learner_artifact') throw new Error('Expected learner artifact')
+      const artifact = (await ctx.db.get(f.reference.artifact.id))!
+      await ctx.db.patch(artifact._id, { revision: artifact.revision + 1, summary: 'Changed learner work' })
+      const replacement = await replacementLineage(ctx, f, await artifactPayloadDigest(await currentContent(ctx, f)))
+      const reference = { ...replacement.reference, revision: String(artifact.revision + 1) }
+      await ctx.db.patch(replacement.lineageId, reference)
+      return resealed(ctx, { ...replacement, reference })
+    })
+    await expect(t.withIdentity(owner).run(ctx => supersedeArtifactLineageForOwner(ctx, owner.tokenIdentifier, { previousLineageId: f.lineageId, replacementLineageId: next.lineageId }))).rejects.toThrow('unavailable')
+  })
+})
+
+describe('Stage B preparation snapshot provenance', () => {
+  test.each(['snapshot', 'excerpt'] as const)('a retained %s source rejects protected backing-document lineage', async kind => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => prepareSourceDependency(ctx, kind))
+    await t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } }))
+    const registered = await t.withIdentity(owner).run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'document', id: f.sourceDocumentId! }, key: 'whole', origins: [], sources: [] }] }))
+    await t.run(ctx => ctx.db.patch(registered.lineageIds[0]!, { classification: 'private_scoring' }))
+    await expect(t.withIdentity(owner).run(async ctx => {
+      const quizId = await ctx.db.insert('quizzes', { userId: owner.tokenIdentifier, folderId: f.folderId, title: 'Quiz', status: 'ready', questionCount: 1, creationMethod: 'auto_generated' })
+      const id = await ctx.db.insert('quizQuestions', { userId: owner.tokenIdentifier, quizId, order: 0, question: 'A fresh scenario', correctAnswer: 'A fresh answer', type: 'free-response' })
+      const snapshot = (await ctx.db.get(f.snapshotId))!
+      const pins = { sourceSnapshotId: snapshot._id, revision: snapshot.revision, recordRevision: snapshot.recordRevision ?? 1, contentHash: snapshot.contentHash }
+      const dependency = kind === 'snapshot' ? { kind, ...pins } : { kind, ...pins, sourceExcerptId: f.excerptId }
+      return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'quiz_question', id }, key: 'whole', origins: [], sources: [dependency] }] })
+    })).rejects.toThrow('unavailable')
+  })
+})
+
+describe('Stage B declared legacy document pins', () => {
+  test.each(['deleted', 'unpinned'] as const)('an ordinary Audio source with declared pins remains ordinary when %s', async state => {
+    const t = convexTest(schema, modules)
+    const f = await preparePlaybackDifferential(t, false)
+    await t.run(async ctx => {
+      await ctx.db.delete(f.lineageId)
+      if (state === 'deleted') await ctx.db.delete(f.documentId)
+      else await ctx.db.patch(f.documentId, { sourceRevision: undefined, contentHash: undefined })
+    })
+    expect(await t.withIdentity(owner).run(ctx => admitArtifactInputByIdentity(ctx, { kind: 'audio_overview', id: f.overviewId }))).toMatchObject({ status: 'admitted_unregistered' })
   })
 })
