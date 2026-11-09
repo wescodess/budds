@@ -55,11 +55,10 @@ export function useCanvasCheckLock(binding: () => CanvasCheckBinding | null | un
     const opportunityId = binding()?.assessmentOpportunityId
     return import.meta.client && opportunityId ? { version: PUBLIC_API_VERSION, assessmentOpportunityId: opportunityId as never } : 'skip'
   })
-  return computed(() => {
-    if (!binding()) return false
-    const state = stateQuery.data.value
-    return state?.status !== 'available' || PRE_SEAL_PHASES.includes(state.phase)
-  })
+  const state = computed(() => binding() ? stateQuery.data.value : null)
+  const locked = computed(() => Boolean(binding()) && (state.value?.status !== 'available' || PRE_SEAL_PHASES.includes(state.value.phase)))
+  const open = computed(() => state.value?.status === 'available' && state.value.phase === 'test_open' && state.value.capabilities.canSubmit)
+  return { locked, open }
 }
 
 export function useCanvasCheck(options: {

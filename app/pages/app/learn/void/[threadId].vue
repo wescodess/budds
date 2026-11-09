@@ -422,7 +422,7 @@ const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
 const checkBinding = computed(() => (canvas.value as { assessmentCheck?: CanvasCheckBinding | null } | null)?.assessmentCheck ?? null)
 const checkBound = computed(() => Boolean(checkBinding.value))
-const checkLocked = useCanvasCheckLock(() => checkBinding.value)
+const { locked: checkLocked, open: checkPhaseOpen } = useCanvasCheckLock(() => checkBinding.value)
 const toolsHiddenForCheck = computed(() => checkBound.value || (thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
 const selectedHistory = computed(() => checkBound.value ? null : thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
@@ -430,6 +430,7 @@ const showCurrent = computed(() => toolsHiddenForCheck.value || !selectedActivit
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
 const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
 const checkPresented = computed(() => checkBound.value && currentCanvasVisible.value)
+const checkOpen = computed(() => checkPresented.value && checkPhaseOpen.value)
 const currentActivityRoute = computed(() => {
   const { activity: _activity, ...query } = route.query
   return learnVoidRoute(threadId.value, query, route.hash)
@@ -487,7 +488,7 @@ function leave() { void router.push(safeDestination.value) }
     </section>
     <div v-else-if="thread" :class="['mx-auto w-full max-w-3xl px-4 sm:px-6', checkBound ? 'py-6 sm:py-8' : 'py-8']" data-testid="learn-adaptive-thread-shell">
       <header>
-        <p :class="checkBound ? 'font-inter text-xs font-medium text-muted-foreground' : 'text-xs font-medium uppercase tracking-wide text-primary'">Void · {{ thread.thread.intent }}</p>
+        <p :class="checkBound ? 'font-inter text-xs font-medium text-muted-foreground' : 'text-xs font-medium uppercase tracking-wide text-primary'">{{ checkOpen ? 'Check' : 'Void' }} · {{ thread.thread.intent }}</p>
         <h1 :class="['mt-2 font-dm-sans font-bold', checkBound ? 'text-2xl text-foreground sm:text-3xl' : 'text-3xl']">{{ thread.thread.outcome }}</h1>
         <p v-if="!toolsHiddenForCheck && thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
         <p v-if="!toolsHiddenForCheck && thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>

@@ -752,6 +752,63 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    it.each([
+      ['preparing', null, 'Void'],
+      ['ready', null, 'Void'],
+      ['test_open', null, 'Check'],
+      ['submitted_sealed', 'submission_1', 'Void'],
+      ['scoring_pending', 'submission_1', 'Void'],
+      ['retryable_failure', 'submission_1', 'Void'],
+      ['reconciliation_required', 'submission_1', 'Void'],
+      ['invalid', 'submission_1', 'Void'],
+      ['scored_pass', 'submission_1', 'Void'],
+      ['scored_fail', 'submission_1', 'Void'],
+    ])('names the header from the server phase in %s', async (phase, submissionId, name) => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      const state = assessment(phase!, submissionId)
+      checkState.value = { ...state, capabilities: { ...state.capabilities, canSubmit: phase === 'test_open' } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const eyebrow = wrapper.get('[data-testid="learn-adaptive-thread-shell"] header p')
+      expect(eyebrow.text()).toBe(`${name} · understand`)
+      expect(eyebrow.classes()).toEqual(expect.arrayContaining(['font-inter', 'text-xs', 'font-medium', 'text-muted-foreground']))
+      expect(eyebrow.classes()).not.toContain('uppercase')
+      wrapper.unmount()
+    })
+
+    it('updates the header when the server seals the open check', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      const open = assessment('test_open')
+      checkState.value = { ...open, capabilities: { ...open.capabilities, canSubmit: true } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const eyebrow = wrapper.get('[data-testid="learn-adaptive-thread-shell"] header p')
+      expect(eyebrow.text()).toBe('Check · understand')
+      checkState.value = assessment('submitted_sealed', 'submission_1')
+      await vi.waitFor(() => expect(eyebrow.text()).toBe('Void · understand'))
+      wrapper.unmount()
+    })
+
+    it('stays Void while the question cannot be answered or the check is not on screen', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = assessment('test_open')
+      const unanswerable = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(unanswerable.get('[data-testid="learn-adaptive-thread-shell"] header p').text()).toBe('Void · understand')
+      unanswerable.unmount()
+
+      const open = assessment('test_open')
+      checkState.value = { ...open, capabilities: { ...open.capabilities, canSubmit: true } }
+      projection.value = { ...missionThread(), thread: { ...missionThread().thread, evidenceState: 'stale' } }
+      const recovering = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(recovering.find('[data-testid="learn-current-source-recovery"]').exists()).toBe(true)
+      expect(recovering.get('[data-testid="learn-adaptive-thread-shell"] header p').text()).toBe('Void · understand')
+      recovering.unmount()
+    })
+
     it('keeps the activity surface when a recovery state replaces the check', async () => {
       const Page = await import(path)
       projection.value = { ...missionThread(), thread: { ...missionThread().thread, evidenceState: 'stale' } }
@@ -786,6 +843,7 @@ describe('adaptive thread route isolation', () => {
       }
       expect(shell.get('#learn-thread-history-title').element.compareDocumentPosition(frame.element) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
       expect(frame.classes()).toEqual(expect.arrayContaining(['mt-6', 'rounded-xl', 'p-4', 'bg-[var(--learn-activity-surface)]']))
+      expect(shell.get('header p').text()).toBe('Void · understand')
       expect(shell.get('header p').classes()).toEqual(expect.arrayContaining(['uppercase', 'tracking-wide', 'text-primary']))
       expect(shell.get('h1').classes()).toContain('text-3xl')
       expect(shell.get('[data-testid="learn-memory-open"]').element.parentElement?.className).not.toContain('text-foreground')

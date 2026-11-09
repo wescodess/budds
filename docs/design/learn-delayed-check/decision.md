@@ -24,7 +24,7 @@ Everything else comes from what already exists in the app.
 - Success icon `text-green-700 dark:text-green-400`, already approved in [quiz-grading-results](../quiz-grading-results/decision.md).
 - `text-[var(--learn-attention)]` on the processing spinner and on warning and Not yet icons. Text beside them stays `text-foreground` or `text-muted-foreground`, because the warning colour is below AA as text on the light card.
 - "Getting your result" on Today's status row uses that warning-colour spinner, where `approved.html` shows it grey. Owner, 2026-11-07: "yes". The Canvas line already uses it.
-- The practice card ends with a filled "Submit response", following `app/components/learn-adaptive/ReadySessionCanvas.vue`.
+- The practice card ends with an outlined "Submit answer" in the existing secondary style, replacing the filled "Submit response" in `approved.html`. See [Decisions after the fidelity run](#decisions-after-the-fidelity-run).
 
 ## Product decisions carried into the build
 
@@ -61,6 +61,17 @@ Owner, 2026-11-08. These override `approved.html`.
 **Date:** 2026-11-08
 
 Source-checked content shows no mark, so `T0` prompts, hints and worked examples show no visible origin.
+
+## Decisions after the fidelity run
+
+Owner, 2026-11-09: "use your reccomendations". These override `approved.html`.
+
+- While the check is open (`test_open`, the question is being answered) the eyebrow reads "Check · <subject>", as `approved.html` shows, derived from the server phase. In every other state it stays "Void · <subject>", following the [rename resolution](https://github.com/wescodess/budds/issues/358#issuecomment-6651400245). Both use the same muted sentence-case treatment, and ordinary threads do not change.
+- The practice submit button uses the outlined secondary style in every state, so a result and practice shown together never have two filled buttons.
+- The practice submit button reads "Submit answer", the same as the check. "Response submitted." stays.
+- "Open your Void" stays under the check as the way out.
+- The worked-example panel stays as approved in dark.
+- The locked light-theme `--muted-foreground` contrast and the app-wide missing document title are accepted for this surface's capture floor. The title is tracked separately.
 
 ## Known debt
 

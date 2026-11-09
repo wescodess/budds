@@ -275,6 +275,27 @@ describe('Canvas check', () => {
     })
   })
 
+  describe('header eyebrow', () => {
+    it('names the open check', async () => {
+      stateData.value = open()
+      deliveryData.value = delivered()
+      const wrapper = await mountCheck()
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-open"]').exists()).toBe(true))
+      expect(wrapper.get('header p').text()).toBe('Check · understand')
+    })
+
+    it.each([
+      ['ready', () => ready()],
+      ['scoring_pending', () => sealed('scoring_pending')],
+      ['scored_fail', () => scored('scored_fail')],
+    ])('stays Void in %s', async (_name, value) => {
+      stateData.value = value()
+      workData.value = workState({ result: result(['needs_review']) })
+      const wrapper = await mountCheck()
+      expect(wrapper.get('header p').text()).toBe('Void · understand')
+    })
+  })
+
   describe('keys and acceptance', () => {
     it('sends a real URL-safe key and a contract-valid single submission', async () => {
       const wrapper = await mountCheck()
@@ -549,6 +570,33 @@ describe('Canvas check', () => {
       const request = learnAcceptResponseRequestSchema.parse(acceptPractice.mock.calls[0]![0])
       expect(request.response).toEqual({ target: { responseSlotId: 'slot_1' }, expectedRevision: 1, payload: { kind: 'text', text: 'Habitat sets the range.' } })
       await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-practice-saved"]').text()).toBe('Response submitted.'))
+    })
+
+    const expectOutlinedSubmit = (wrapper: VueWrapper) => {
+      const submit = wrapper.get('[data-testid="learn-canvas-check-practice-submit"]')
+      expect(submit.text()).toBe('Submit answer')
+      expect(submit.classes()).toEqual(expect.arrayContaining(['border', 'border-border', 'bg-background', 'text-foreground']))
+      expect(submit.classes()).not.toContain('bg-primary')
+    }
+
+    it('uses the outlined Submit answer while the result is pending', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      expectOutlinedSubmit(wrapper)
+      expect(wrapper.findAll('[data-testid="learn-canvas-check-practice"] button.bg-primary')).toHaveLength(0)
+    })
+
+    it('never shows two filled buttons when practice sits under a result', async () => {
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      teachingData.value = teachingAvailable()
+      const wrapper = await mountCheck()
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-try-practice"]').exists()).toBe(true))
+      await wrapper.get('[data-testid="learn-canvas-check-try-practice"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true))
+      expectOutlinedSubmit(wrapper)
+      expect(wrapper.findAll('button.bg-primary:not([aria-label^="Source"])')).toHaveLength(0)
     })
 
     it('asks for a practice answer instead of sending an empty one', async () => {
