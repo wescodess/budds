@@ -1,3 +1,4 @@
+import { teachingSourcePinsValidator, admitTeachingSourcePins, assertSectionTeaching, assertBlockInputs, teachingDocuments, publishSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
@@ -15,6 +16,7 @@ export const get = query({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.id)
     if (!section || section.userId !== userId) return null
+    await assertSectionTeaching(ctx, section)
     return section
   },
 })
@@ -26,10 +28,12 @@ export const listByCourse = query({
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return []
 
-    return await ctx.db
+    const sections = await ctx.db
       .query('courseSections')
       .withIndex('by_courseId_and_order', (q) => q.eq('courseId', args.courseId))
       .take(100)
+    for (const section of sections) await assertSectionTeaching(ctx, section)
+    return sections
   },
 })
 
@@ -42,6 +46,7 @@ export const updateTitle = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
 
     const trimmed = args.title.trim().slice(0, 200) || 'Untitled Section'
     await ctx.db.patch(args.sectionId, { title: trimmed })
@@ -56,6 +61,7 @@ export const updateTitle = mutation({
         updatedAt: Date.now(),
       })
     }
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -73,6 +79,7 @@ export const updateKnowledgeType = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
 
     await ctx.db.patch(args.sectionId, { knowledgeType: args.knowledgeType })
 
@@ -86,6 +93,7 @@ export const updateKnowledgeType = mutation({
         updatedAt: Date.now(),
       })
     }
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -96,6 +104,7 @@ export const remove = mutation({
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
 
+    await assertSectionTeaching(ctx, section)
     const removedOrder = section.order
     await ctx.db.delete(args.sectionId)
 
@@ -110,6 +119,7 @@ export const remove = mutation({
       }
     }
 
+    await publishSections(ctx, userId, await ctx.db.query('courseSections').withIndex('by_courseId_and_order', q => q.eq('courseId', section.courseId)).collect())
     const course = await ctx.db.get(section.courseId)
     if (course) {
       const filtered = course.outlineSections
@@ -206,6 +216,7 @@ export const updateOrder = mutation({
       if (!section || section.userId !== userId || section.courseId !== args.courseId) {
         throw new Error('Section not found')
       }
+      await assertSectionTeaching(ctx, section)
       await ctx.db.patch(sectionId, { order: i })
 
       const oldOrder = orderBySectionId.get(sectionId as string)
@@ -217,6 +228,7 @@ export const updateOrder = mutation({
       })
     }
 
+    await publishSections(ctx, userId, await ctx.db.query('courseSections').withIndex('by_courseId_and_order', q => q.eq('courseId', args.courseId)).collect())
     await ctx.db.patch(args.courseId, {
       outlineSections: reorderedOutline,
       updatedAt: Date.now(),
@@ -255,6 +267,10 @@ export const getForGeneration = internalQuery({
       .withIndex('by_courseId', (q) => q.eq('courseId', section.courseId))
       .collect()
 
+    const userId = await requireAuth(ctx)
+    if (section.userId !== userId || course.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
+    await teachingDocuments(ctx, userId, sourceDocs.flatMap(source => source.documentId ? [source.documentId] : []))
     return { section, course, sourceDocs }
   },
 })
@@ -269,11 +285,16 @@ export const markReady = internalMutation({
     const section = await ctx.db.get(args.sectionId)
     if (!section) return
 
+    const userId = await requireAuth(ctx)
+    if (section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
+    await assertBlockInputs(ctx, userId, args.contentBlocks)
     await ctx.db.patch(args.sectionId, {
       status: 'ready',
       contentBlocks: args.contentBlocks,
       failureNotice: args.failureNotice,
     })
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -296,6 +317,7 @@ export const markSectionFailed = internalMutation({
 export const finalizeSectionGeneration = mutation({
   args: {
     sectionId: v.id('courseSections'),
+    sourcePins: v.optional(teachingSourcePinsValidator),
     textContent: v.optional(v.string()),
     quizData: v.optional(v.object({
       title: v.string(),
@@ -339,6 +361,14 @@ export const finalizeSectionGeneration = mutation({
 
     const course = await ctx.db.get(section.courseId)
     if (!course || course.userId !== userId || course.status === 'deleting') throw new Error('Course not found')
+
+    await assertSectionTeaching(ctx, section)
+    const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
+    await teachingDocuments(ctx, userId, (args.quizData?.questions ?? []).flatMap(question => question.sourceDocumentId ? [question.sourceDocumentId] : []))
+    if (args.audioEntityId) await assertBlockInputs(ctx, userId, [{ type: 'audio', order: 0, entityId: args.audioEntityId }])
+    const limits = section.knowledgeType === 'factual' ? [5, 16] : section.knowledgeType === 'procedural' ? [10, 8] : [8, 12]
+    if ((args.quizData?.questions.length ?? 0) > limits[0]! || (args.flashcardData?.cards.length ?? 0) > limits[1]!) throw new Error('Section exceeds the requested publication size')
+    const outputs: Array<{ artifact: { kind: 'quiz_question', id: Id<'quizQuestions'> } | { kind: 'flashcard_version', id: Id<'flashcardRoomVersions'> }, key: string, sources: typeof sources }> = []
 
     const contentBlocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -388,7 +418,7 @@ export const finalizeSectionGeneration = mutation({
           if (normalized) resolvedDocId = normalized
         }
 
-        await ctx.db.insert('quizQuestions', {
+        const questionId = await ctx.db.insert('quizQuestions', {
           quizId,
           userId,
           order: q.order,
@@ -402,6 +432,7 @@ export const finalizeSectionGeneration = mutation({
           sourceChunkContent: q.sourceChunkContent,
           sourceFilename: q.sourceFilename,
         })
+        outputs.push({ artifact: { kind: 'quiz_question', id: questionId }, key: 'whole', sources })
       }
 
       contentBlocks.push({
@@ -460,6 +491,7 @@ export const finalizeSectionGeneration = mutation({
         })
       }
 
+      outputs.push({ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', sources })
       await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.flashcardData.cards.length })
 
       contentBlocks.push({
@@ -489,6 +521,7 @@ export const finalizeSectionGeneration = mutation({
       failureNotice,
     })
 
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!], outputs, sources)
     return { status: 'ready' as const, blockCount: contentBlocks.length }
   },
 })
@@ -510,6 +543,7 @@ export const getNextSection = query({
       )
       .unique()
 
+    if (nextSection) await assertSectionTeaching(ctx, nextSection)
     return nextSection
   },
 })
@@ -661,6 +695,7 @@ export const completeSection = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
     if (section.status === 'completed') {
       return {
         practiceScore: section.practiceScore ?? args.practiceScore,
@@ -727,6 +762,7 @@ export const getOfflineCachePayload = query({
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) return null
     if (section.status !== 'completed') return null
+    await assertSectionTeaching(ctx, section)
 
     const blocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -833,6 +869,7 @@ export const setOfflineAvailable = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    if (args.offlineAvailable) await assertSectionTeaching(ctx, section)
     await ctx.db.patch(args.sectionId, { offlineAvailable: args.offlineAvailable })
   },
 })
@@ -848,6 +885,7 @@ export const reviewSection = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
     if (section.status !== 'completed') {
       throw new Error('Section must be completed before reviewing')
     }

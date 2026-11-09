@@ -1,3 +1,5 @@
+import { assertTeachingInputs, publishTeaching, teachingPublication, teachingUnavailable } from './lib/learnV2AssessmentLineage'
+import { classifyPersonalWorkDocumentForRecord } from './lib/learnV2ArtifactLineage'
 import { v } from "convex/values";
 import {
   mutation,
@@ -417,10 +419,15 @@ export const finalizeDocumentIndexing = internalMutation({
     )
       return false;
 
+    if (args.status === 'success') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: doc._id })
     await ctx.db.patch(args.id, {
       status: args.status,
       failureReason: args.status === "failed" ? args.failureReason : undefined,
     });
+    if (args.status === 'success') await publishTeaching(ctx, doc.userId, [
+      { artifact: { kind: 'document', id: doc._id }, key: 'whole' },
+      { artifact: { kind: 'document_chunk', id: doc._id }, key: 'chunk-set' },
+    ], { kind: 'document', id: doc._id })
     return true;
   },
 });
@@ -428,7 +435,9 @@ export const finalizeDocumentIndexing = internalMutation({
 export const getDocument = internalQuery({
   args: { id: v.id("documents") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const document = await ctx.db.get(args.id)
+    if (document?.status === 'indexing') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: document._id })
+    return document;
   },
 });
 
@@ -613,3 +622,36 @@ export const moveDocument = mutation({
     });
   },
 });
+
+export const getTeachingScope = query({
+  args: { folderId: v.optional(v.id('folders')), courseId: v.optional(v.id('courses')), documentIds: v.optional(v.array(v.id('documents'))) },
+  returns: v.array(v.object({ documentId: v.id('documents'), folderId: v.id('folders'), filename: v.string(), contentHash: v.optional(v.string()), sourceRevision: v.optional(v.string()), r2Key: v.optional(v.string()) })),
+  handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    let ids = args.documentIds
+    if (ids && ids.length > 64) teachingUnavailable()
+    if (args.courseId) {
+      const course = await ctx.db.get(args.courseId)
+      if (!course || course.userId !== userId) teachingUnavailable()
+      const links = await ctx.db.query('courseSourceDocs').withIndex('by_courseId', q => q.eq('courseId', course._id)).take(65)
+      if (links.length > 64 || links.some(link => link.userId !== userId)) teachingUnavailable()
+      ids = links.flatMap(link => link.documentId ? [link.documentId] : [])
+    } else if (args.folderId) {
+      const folder = await ctx.db.get(args.folderId)
+      if (!folder || folder.userId !== userId) teachingUnavailable()
+      if (!ids) {
+        const documents = await ctx.db.query('documents').withIndex('by_folderId', q => q.eq('folderId', folder._id)).take(65)
+        if (documents.length > 64) teachingUnavailable()
+        ids = documents.map(document => document._id)
+      }
+    } else if (!ids) teachingUnavailable()
+    const documents: Doc<'documents'>[] = []
+    for (const id of new Set(ids)) {
+      const document = await ctx.db.get(id)
+      if (!document || document.userId !== userId || args.folderId && document.folderId !== args.folderId) teachingUnavailable()
+      documents.push(document)
+    }
+    await assertTeachingInputs(ctx, userId, documents.map(document => ({ kind: 'document', id: document._id })))
+    return documents.map(document => ({ documentId: document._id, folderId: document.folderId, filename: document.filename, contentHash: document.contentHash, sourceRevision: document.sourceRevision, r2Key: document.r2Key }))
+  },
+})

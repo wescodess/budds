@@ -1,3 +1,4 @@
+import { cardCopyOrigins, teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertRoomTeaching, teachingDocuments, publishTeaching, publishCardRoom, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query, internalMutation } from './_generated/server'
@@ -35,6 +36,7 @@ async function requireOwnedRoom(
   if (!room || room.userId !== userId) {
     throw new Error('Room not found')
   }
+  await assertRoomTeaching(ctx, userId, roomId)
   return room
 }
 
@@ -45,9 +47,10 @@ async function resolveDocumentId(
 ): Promise<Id<'documents'> | undefined> {
   if (!raw) return undefined
   const normalized = ctx.db.normalizeId('documents', raw)
-  if (!normalized) return undefined
+  if (!normalized) throw new Error('Teaching input is unavailable')
   const doc = await ctx.db.get(normalized)
-  if (!doc || doc.userId !== userId) return undefined
+  if (!doc || doc.userId !== userId) throw new Error('Teaching input is unavailable')
+  await teachingDocuments(ctx, userId, [normalized])
   return normalized
 }
 
@@ -156,9 +159,11 @@ async function archiveCurrentCards(
       term: card.term,
       definition: card.definition,
       metadata: card.metadata,
+      sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename,
     })
   }
 
+  await publishTeaching(ctx, room.userId, [{ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', origins: await cardCopyOrigins(ctx, room.userId, room.activeVersionId) }])
   return versionId
 }
 
@@ -175,6 +180,10 @@ export const createCourseScopedRoom = internalMutation({
     })),
   },
   handler: async (ctx, args) => {
+    const userId = await requireAuth(ctx)
+    if (userId !== args.userId) throw new Error('Learn access denied')
+    const folder = await ctx.db.get(args.folderId)
+    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
     const title = normalizeTitle(args.title, 'Section Flashcards')
     const now = Date.now()
 
@@ -227,6 +236,7 @@ export const createCourseScopedRoom = internalMutation({
 
     await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.cards.length })
 
+    await publishCardRoom(ctx, userId, roomId)
     return { roomId }
   },
 })
@@ -314,6 +324,7 @@ export const getRoom = query({
     const room = await ctx.db.get(args.roomId)
     if (!room || room.userId !== userId) return null
 
+    await assertRoomTeaching(ctx, userId, room._id)
     const cards = await ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
@@ -358,6 +369,7 @@ export const createCard = mutation({
       cardCount: (room.cardCount ?? 0) + 1,
     })
 
+    await publishCardRoom(ctx, userId, room._id, room.activeVersionId)
     return { cardId }
   },
 })
@@ -376,6 +388,8 @@ export const updateCard = mutation({
       throw new Error('Card not found')
     }
 
+    await assertRoomTeaching(ctx, userId, existing.roomId)
+    const previousVersionId = (await ctx.db.get(existing.roomId))?.activeVersionId
     const term = args.term.trim()
     if (term.length === 0) throw new Error('Term required')
     const definition = args.definition.trim()
@@ -392,6 +406,7 @@ export const updateCard = mutation({
       updatedAt: Date.now(),
     })
 
+    await publishCardRoom(ctx, userId, existing.roomId, previousVersionId)
     return { cardId: args.cardId }
   },
 })
@@ -405,6 +420,8 @@ export const deleteCard = mutation({
       throw new Error('Card not found')
     }
 
+    await assertRoomTeaching(ctx, userId, existing.roomId)
+    const previousVersionId = (await ctx.db.get(existing.roomId))?.activeVersionId
     const roomId = existing.roomId
     await ctx.db.delete(args.cardId)
     const room = await ctx.db.get(roomId)
@@ -415,6 +432,7 @@ export const deleteCard = mutation({
       cardCount: nextCount,
     })
 
+    await publishCardRoom(ctx, userId, existing.roomId, previousVersionId)
     return { cardId: args.cardId, roomId }
   },
 })
@@ -479,6 +497,7 @@ export const reorderCards = mutation({
       updatedAt: Date.now(),
     })
 
+    await publishCardRoom(ctx, userId, room._id, room.activeVersionId)
     return { roomId: room._id, updated: args.order.length }
   },
 })
@@ -489,6 +508,7 @@ export const generateRoomCards = mutation({
     origin: v.union(v.literal('ai'), v.literal('manual')),
     prompt: v.optional(v.string()),
     requestedCardCount: v.optional(v.number()),
+    sourcePins: v.optional(teachingSourcePinsValidator),
     model: v.optional(v.string()),
     title: v.optional(v.string()),
     cards: v.array(
@@ -503,6 +523,8 @@ export const generateRoomCards = mutation({
     const userId = await requireIdentity(ctx)
     const room = await requireOwnedRoom(ctx, args.roomId, userId)
 
+    if (args.cards.length > (args.requestedCardCount ?? 200)) throw new Error('Flashcards exceed the requested publication size')
+    const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const archiveOpts = await resolveArchiveOpts(ctx, room)
     await archiveCurrentCards(ctx, room, archiveOpts)
 
@@ -562,6 +584,7 @@ export const generateRoomCards = mutation({
       cardCount: inserted,
     })
 
+    await publishContainingSections(ctx, userId, room._id, [{ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', sources }])
     return { roomId: room._id, versionId, cardCount: inserted }
   },
 })
@@ -580,6 +603,7 @@ export const listRoomVersions = query({
       .order('desc')
       .take(100)
 
+    await assertTeachingInputs(ctx, userId, versions.map(version => ({ kind: 'flashcard_version', id: version._id })))
     return versions.map((v) => ({
       _id: v._id,
       _creationTime: v._creationTime,
@@ -603,6 +627,7 @@ export const getRoomVersion = query({
     const version = await ctx.db.get(args.versionId)
     if (!version || version.userId !== userId) return null
 
+    await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: version._id }])
     const cards = await ctx.db
       .query('flashcardVersionCards')
       .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
@@ -626,6 +651,7 @@ export const restoreRoomVersion = mutation({
     if (!version || version.userId !== userId) throw new Error('Version not found')
     if (version.roomId !== room._id) throw new Error('Version not found')
 
+    await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: version._id }])
     if (room.activeVersionId === args.versionId) {
       const currentCards = await ctx.db
         .query('flashcardRoomCards')
@@ -654,6 +680,7 @@ export const restoreRoomVersion = mutation({
         term: card.term,
         definition: card.definition,
         metadata: card.metadata,
+        sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename,
       })
     }
 
@@ -663,6 +690,7 @@ export const restoreRoomVersion = mutation({
       cardCount: sorted.length,
     })
 
+    await publishCardRoom(ctx, userId, room._id)
     return { roomId: room._id, versionId: args.versionId, cardCount: sorted.length }
   },
 })

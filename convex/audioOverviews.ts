@@ -1,3 +1,4 @@
+import { assertAudioTeaching } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -79,6 +80,7 @@ export const getCourseScopedOverview = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const turnUrls: (string | null)[] = []
     for (const turn of overview.turns) {
       turnUrls.push(await ctx.storage.getUrl(turn.audioFileId))
@@ -177,6 +179,7 @@ export const getWithTurns = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     return overview
   },
 })
@@ -189,6 +192,7 @@ export const getTurnUrls = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))
@@ -353,6 +357,7 @@ export const publishOverview = mutation({
     if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
     if (overview.status !== 'ready') throw new Error('Audio overview is not ready to share')
 
+    await assertAudioTeaching(ctx, overview, true)
     if (overview.shareToken) {
       return { token: overview.shareToken, publishedAt: overview.publishedAt ?? Date.now() }
     }
@@ -405,6 +410,7 @@ export const getByShareToken = query({
       sourceFilenames.push(doc?.filename ?? 'Source')
     }
 
+    await assertAudioTeaching(ctx, overview, false)
     return {
       title: overview.title,
       turns: overview.turns.map(t => ({
@@ -436,6 +442,7 @@ export const getTurnUrlsByShareToken = query({
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
 
+    await assertAudioTeaching(ctx, overview, false)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))

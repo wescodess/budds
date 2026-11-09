@@ -3,6 +3,9 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { enrollProducer, protectProducerArtifact } from '../tests/fixtures/learn-v2-producer-lineage'
+import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION } from '../shared/learn-v2-artifact-lineage'
+import { normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
 
 const modules = import.meta.glob('./**/*.ts')
 const USER_ID = 'https://auth.example.com|audio-v2-owner'
@@ -765,5 +768,106 @@ describe('audioOverviewV2 artifact and alignment lifecycle', () => {
       r2Key: `audio-overviews/jobs/${jobId}/scenes/0/attempts/1.pcm`,
       kind: 'r2',
     })
+  })
+})
+
+
+async function readyPublication(f: Awaited<ReturnType<typeof setup>>) {
+  const { t, jobId, plan } = f
+    const { episodeId } = await t.mutation(api.audioOverviewV2.createPlan, plan)
+    const beforeRender = await t.query(api.audioOverviewV2.getForWorkflow, { jobId, capability: CAPABILITY })
+    const scene = beforeRender?.scenes[0]
+    if (!scene) throw new Error('Expected seeded scene')
+
+    const sceneBytes = 30_000 * 48
+    const sceneResult = await t.mutation(api.audioOverviewV2.recordSceneEvaluation, {
+      jobId,
+      capability: CAPABILITY,
+      sceneId: scene._id,
+      attempt: 1,
+      passed: true,
+      artifact: {
+        objectKey: `audio-overviews/jobs/${jobId}/scenes/0-1.pcm`,
+        checksumSha256: HASH_A,
+        byteLength: sceneBytes,
+        contentType: 'audio/L16;codec=pcm;rate=24000',
+        container: 'pcm',
+        sampleRateHz: 24000,
+        channelCount: 1,
+        bitsPerSample: 16,
+        durationMs: 30_000,
+        rendererRequestId: 'gemini-request-1',
+      },
+      checks: {
+        claimsSupported: true,
+        scriptedSpeakerPairValid: true,
+        audioProfileMatches: true,
+        speakerCountEvidence: 'not_measured',
+        speakerConsistencyEvidence: 'not_measured',
+        durationWithinTolerance: true,
+        silenceWithinTolerance: true,
+        clippingWithinTolerance: true,
+        truncationFree: true,
+        tempoWithinTolerance: true,
+        directionsNotSpoken: true,
+        transcriptDivergence: 0.02,
+        transcriptDivergenceThreshold: 0.08,
+      },
+    })
+    const finalArtifactArgs = {
+      jobId,
+      capability: CAPABILITY,
+      artifact: {
+        objectKey: `audio-overviews/jobs/${jobId}/episode.wav`,
+        checksumSha256: HASH_B,
+        byteLength: sceneBytes + 44,
+        contentType: 'audio/wav',
+        container: 'wav',
+        sampleRateHz: 24000,
+        channelCount: 1,
+        bitsPerSample: 16,
+        durationMs: 30_000,
+      },
+      alignment: { aligner: 'whisper', alignerVersion: '1' },
+    } as const
+  return { ...f, finalArtifactArgs, sceneResult, episodeId }
+}
+
+describe('V2 Audio lineage isolation', () => {
+  test.each(['measurement', 'private_scoring', 'unknown'] as const)('rejects %s input before script/manifest persistence and workflow delivery', async classification => {
+    const f = await setup()
+    await enrollProducer(f.t, USER_ID, [f.firstDocumentId, f.secondDocumentId])
+    await f.t.mutation(api.audioOverviewV2.createPlan, f.plan)
+    await protectProducerArtifact(f.t, USER_ID, { kind: 'document', id: f.firstDocumentId }, classification)
+    await expect(f.t.mutation(api.audioOverviewV2.createPlan, f.plan)).rejects.toThrow('Teaching input is unavailable')
+    await expect(f.t.query(api.audioOverviewV2.getForWorkflow, { jobId: f.jobId, capability: CAPABILITY })).rejects.toThrow('Teaching input is unavailable')
+  })
+  test('reserved cases reject final publication and roll back ready content', async () => {
+    const initial = await setup()
+    await enrollProducer(initial.t, USER_ID, [initial.firstDocumentId, initial.secondDocumentId])
+    const f = await readyPublication(initial)
+    await f.t.run(async ctx => ctx.db.insert('learnAssessmentCases', { userId: USER_ID, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: 1_800_000_000_000, caseKey: 'retired', usageClass: 'unknown', reservedAt: 0, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, ...await normalizedInstructionalCaseFingerprints('Retired task', 'Retired solution') }))
+    await expect(f.t.mutation(api.audioOverviewV2.publishFinalArtifact, f.finalArtifactArgs)).rejects.toThrow(/reservation check/)
+    expect(await f.t.run(ctx => ctx.db.query('audioOverviews').withIndex('by_episodeId', q => q.eq('episodeId', f.episodeId)).take(1))).toEqual([])
+    expect((await f.t.run(ctx => ctx.db.get(f.jobId)))?.status).toBe('running')
+  })
+  test('private published lineage denies every playback/media/transcript/workflow alias and publish replay', async () => {
+    const initial = await setup()
+    await enrollProducer(initial.t, USER_ID, [initial.firstDocumentId, initial.secondDocumentId])
+    const f = await readyPublication(initial)
+    const published = await f.t.mutation(api.audioOverviewV2.publishFinalArtifact, f.finalArtifactArgs)
+    const token = '1'.repeat(32)
+    await f.t.run(ctx => ctx.db.patch(published.overviewId, { shareToken: token, publishedAt: Date.now() }))
+    await protectProducerArtifact(f.t, USER_ID, { kind: 'audio_overview', id: published.overviewId }, 'private_scoring')
+    for (const work of [
+      () => f.asUser.query(api.audioOverviewV2.getPlaybackForOwner, { overviewId: published.overviewId }),
+      () => f.t.query(api.audioOverviewV2.getPlaybackByShareToken, { token }),
+      () => f.asUser.query(api.audioOverviewV2.resolveMediaForOwner, { artifactId: published.artifactId }),
+      () => f.t.query(api.audioOverviewV2.resolveMediaByShareToken, { token }),
+      () => f.t.query(api.audioOverviewV2.getForWorkflow, { jobId: f.jobId, capability: CAPABILITY }),
+      () => f.t.query(api.audioOverviewV2.listAlignmentSegments, { jobId: f.jobId, capability: CAPABILITY, alignmentId: published.alignmentId, paginationOpts: { cursor: null, numItems: 10 } }),
+      () => f.t.mutation(api.audioOverviewV2.completeAlignment, { jobId: f.jobId, capability: CAPABILITY, alignmentId: published.alignmentId }),
+      () => f.t.mutation(api.audioOverviewV2.publishFinalArtifact, f.finalArtifactArgs),
+    ]) await expect(work()).rejects.toThrow('Teaching input is unavailable')
   })
 })

@@ -1,7 +1,9 @@
+import { assertQuizTeaching, assertTeachingInputs, teachingUnavailable } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
-import { mutation, query } from './_generated/server'
+import { mutation, query, type QueryCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
-import { isRubricAssessment } from './lib/quizAnswerAssessment'
+import { isRubricAssessment, FREE_RESPONSE_RUBRIC } from './lib/quizAnswerAssessment'
+import type { Doc } from './_generated/dataModel'
 import manifest from '../workers/laya-evaluator/learningDecisionManifest.json'
 
 const labelValidator = v.union(
@@ -56,12 +58,30 @@ function requireProbabilityDistribution(
   if (selected < Math.max(...values)) throw new Error('Invalid assessment probability')
 }
 
+async function guardPending(ctx: QueryCtx, userId: string, rows: Doc<'quizAnswerAssessments'>[]) {
+  rows = rows.filter(row => !isRubricAssessment(row))
+  await assertTeachingInputs(ctx, userId, rows.map(row => ({ kind: 'quiz_question', id: row.questionId })))
+  for (const row of rows) {
+    const question = await ctx.db.get(row.questionId)
+    if (!question || question.userId !== userId || row.questionSnapshot.question !== question.question
+      || row.questionSnapshot.expectedAnswer !== question.correctAnswer
+      || row.questionSnapshot.questionType !== question.type
+      || row.questionSnapshot.evidenceExcerpt !== (question.sourceChunkContent ?? '')
+      || row.questionSnapshot.sourceFilename !== question.sourceFilename
+      || row.questionSnapshot.explanation !== question.explanation
+      || row.rubricSnapshot.length !== FREE_RESPONSE_RUBRIC.length
+      || row.rubricSnapshot.some((criterion, index) => criterion.label !== FREE_RESPONSE_RUBRIC[index]?.label
+        || criterion.description !== FREE_RESPONSE_RUBRIC[index]?.description)) teachingUnavailable()
+  }
+}
+
 export const listPendingForAttempt = query({
   args: { attemptId: v.id('quizAttempts') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
+    await assertQuizTeaching(ctx, userId, attempt.quizId)
     if (attempt.status !== 'completed') return []
     const now = Date.now()
     const indexedRows = await ctx.db
@@ -74,6 +94,7 @@ export const listPendingForAttempt = query({
       .withIndex('by_userId_and_attemptId_and_status_and_nextAttemptAt', q => q
         .eq('userId', userId).eq('attemptId', args.attemptId).eq('status', 'pending').eq('nextAttemptAt', undefined))
       .take(PENDING_SCAN_LIMIT)
+    await guardPending(ctx, userId, [...indexedRows, ...legacyRows])
     const rows = [...indexedRows, ...legacyRows]
       .filter(row => !isRubricAssessment(row))
       .filter((row, index, all) => all.findIndex(candidate => candidate._id === row._id) === index)
@@ -100,6 +121,7 @@ export const listPendingForShadowAttempt = query({
     const userId = await requireAuth(ctx)
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
+    await assertQuizTeaching(ctx, userId, attempt.quizId)
     if (attempt.status !== 'completed') return []
     const now = Date.now()
     const rows = await ctx.db
@@ -111,6 +133,7 @@ export const listPendingForShadowAttempt = query({
         .eq('shadowStatus', undefined)
         .eq('deterministicIsCorrect', false))
       .take(PENDING_SCAN_LIMIT)
+    await guardPending(ctx, userId, rows)
     return rows.filter(row => !isRubricAssessment(row)
       && (row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now))
       .slice(0, MAX_BATCH).map(row => ({

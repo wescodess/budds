@@ -98,7 +98,7 @@ describe('quizzes.createWithQuestions', () => {
     }
   })
 
-  test('[P1] drops sourceDocumentId when it does not belong to caller', async () => {
+  test('[P1] rejects a foreign source before persisting its copied payload', async () => {
     const t = convexTest(schema, modules)
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
@@ -120,18 +120,10 @@ describe('quizzes.createWithQuestions', () => {
 
     const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'Alice Folder' })
     const [q0] = sampleQuestions()
-    const { quizId } = await asUserA.mutation(api.quizzes.createWithQuestions, {
-      folderId: folderA,
-      title: 'Q',
-      questions: [
-        { ...q0!, sourceDocumentId: String(bobDocId) },
-      ],
-    })
-
-    const stored = await t.run(async (ctx) =>
-      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
-    )
-    expect(stored[0]!.sourceDocumentId).toBeUndefined()
+    await expect(asUserA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA, title: 'Q', questions: [{ ...q0!, sourceDocumentId: String(bobDocId) }],
+    })).rejects.toThrow('Teaching input is unavailable')
+    expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', USER_A.tokenIdentifier)).take(1))).toEqual([])
   })
 })
 
