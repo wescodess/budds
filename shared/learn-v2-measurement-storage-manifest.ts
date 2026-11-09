@@ -74,3 +74,9 @@ export const LEARN_MEASUREMENT_SOURCE_REGISTRATIONS = [
   { table: 'learnResponseEvidenceLinks', field: 'dependency.documentId', index: 'by_userId_and_dependency_documentId_and_invalidatedAt' },
   { table: 'learnResponseEvidenceLinks', field: 'dependency.folderId', index: 'by_userId_and_dependency_folderId_and_invalidatedAt' },
 ] as const
+
+
+export const LEARN_ARTIFACT_INTERJECTION_REGISTRATIONS = [
+  { kind: 'audio_interjection', table: 'audioOverviewInterjections', parentField: 'audioOverviewId', sourceRecordField: 'taskId', key: 'whole', questionAuthority: 'owner', answerClassification: 'teaching' },
+  { kind: 'audio_interjection_v2', table: 'audioOverviewInterjectionsV2', parentField: 'audioOverviewId', sourceRecordField: 'sourceManifestId', key: 'whole', questionAuthority: 'owner', answerClassification: 'teaching' },
+] as const

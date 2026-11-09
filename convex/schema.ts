@@ -993,6 +993,7 @@ export default defineSchema({
     .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
+    taskId: v.optional(v.id('tasks')),
     audioOverviewId: v.id('audioOverviews'),
     userId: v.string(),
     insertedAfterTurnIndex: v.number(),
