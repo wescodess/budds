@@ -3,31 +3,35 @@ import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, learnAcceptResponseRequestSchema, learnResponseIdempotencyKeySchema, learnResponseReceiptSchema } from '~~/shared/learn-v2-responses'
-import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema, learnDeliveredAssessmentSchema } from '~~/shared/learn-v2-assessment-disclosure'
+import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, learnAttemptHistorySchema, learnAuthorizePracticeAssistanceSchema, learnDeliveredAssessmentSchema, learnPostSealPracticeSchema, learnPostSealTeachingReferenceSchema, learnPostSealTeachingSchema, learnPracticeAssistanceAuthorizationSchema } from '~~/shared/learn-v2-assessment-disclosure'
 import { LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, learnAssessmentCapabilitiesSchema, type LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
-import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, grantAssessmentDeliverySchema, authorizeAssistanceSchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
+import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, grantAssessmentDeliverySchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
 
 const stateData = shallowRef<unknown>(null)
 const deliveryData = shallowRef<unknown>(null)
 const workData = shallowRef<unknown>(null)
+const teachingData = shallowRef<unknown>(null)
+const subscriptions = vi.fn()
 const isOnline = ref(true)
 const grant = vi.fn()
 const accept = vi.fn()
 const acceptPractice = vi.fn()
 const score = vi.fn()
-const authorize = vi.fn()
+const authorizePractice = vi.fn()
+const authorizeLegacy = vi.fn()
 const recordAssistance = vi.fn()
 const stageLegacy = vi.fn()
 const scoreLegacy = vi.fn()
 
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
-mockNuxtImport('useConvexQuery', () => (reference: never) => {
+mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference) ?? ''
-  return { data: name.includes('getAssessmentState') ? stateData : name.includes('getAssessment') ? deliveryData : name.includes('getResponseState') ? workData : ref(null), pending: ref(false) }
+  subscriptions(name, args)
+  return { data: name.includes('getPostSealTeaching') ? teachingData : name.includes('getAssessmentState') ? stateData : name.includes('getAssessment') ? deliveryData : name.includes('getResponseState') ? workData : ref(null), pending: ref(false) }
 })
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
-  return { mutate: name.includes('grantAssessmentDelivery') ? grant : name.includes('acceptMasterySubmission') ? accept : name.includes('acceptResponse') ? acceptPractice : name.includes('authorizeAssistance') ? authorize : name.includes('recordAssistanceUse') ? recordAssistance : name.includes('submitCanvasResponse') ? stageLegacy : vi.fn() }
+  return { mutate: name.includes('grantAssessmentDelivery') ? grant : name.includes('acceptMasterySubmission') ? accept : name.includes('acceptResponse') ? acceptPractice : name.includes('authorizePracticeAssistance') ? authorizePractice : name.includes('authorizeAssistance') ? authorizeLegacy : name.includes('recordAssistanceUse') ? recordAssistance : name.includes('submitCanvasResponse') ? stageLegacy : vi.fn() }
 })
 mockNuxtImport('useConvexAction', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
@@ -75,9 +79,15 @@ const result = (feedbackCodes: string[]) => ({ attemptId: 'attempt_1', scorePerc
 const acceptedReceipt = () => learnResponseReceiptSchema.parse({ kind: 'accepted', version: LEARN_V2_RESPONSE_CONTRACT_VERSION, target: { assessmentOpportunityId: OPPORTUNITY }, submissionId: SUBMISSION, acceptedAt: 1_800_000_000_000, revision: 3, phase: 'submitted_sealed', bodyAvailability: 'available' })
 const rejectedReceipt = (reasonCode: string) => learnResponseReceiptSchema.parse({ kind: 'rejected', version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode })
 
-const practice = { responseSlotId: 'slot_1', revision: 1, prompt: 'Cod digestive enzymes work well at 4°C.', hint: 'Think about habitat.', workedExample: 'Compare to a hot spring.' }
-const feedback = { text: 'You explained both results.', citations: [{ sourceRef: 'source_1', label: 'Biology notes' }] }
-const lesson = { paragraphs: ['Every enzyme has a range.'], citations: [{ sourceRef: 'source_1', label: 'Biology notes' }] }
+const practice = { responseSlotId: 'slot_1', revision: 1, tier: 'T2' as const, prompt: 'Cod digestive enzymes work well at 4°C.' }
+const feedback = { tier: 'T0' as const, text: 'You explained both results.', citations: [{ sourceRef: 'source_1', label: 'Biology notes' }] }
+const lesson = { tier: 'T1' as const, paragraphs: ['Every enzyme has a range.'], citations: [{ sourceRef: 'source_1', label: 'Biology notes' }] }
+const HINT = 'Think about habitat.'
+const WORKED = 'Compare to a hot spring.'
+const teachingAvailable = (overrides: Record<string, unknown> = {}) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY, feedback, lesson, practice, ...overrides })
+const teachingUnavailable = (reasonCode: string) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode })
+const helpAuthorized = (kind: 'hint' | 'worked_example', text: string, revision = 1) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'authorized', assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, revision, authorizationId: 'exposure_1', deliveredAt: 1_800_000_200_000, content: kind === 'hint' ? { kind, tier: 'T0', text } : { kind, tier: 'T2', text } })
+const helpDenied = (reasonCode: string) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
 const canvas = (overrides: Record<string, unknown> = {}) => ({
   ownerId: 'owner_1', status: 'started', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', revision: 2 },
   activity: { id: 'check_activity', status: 'eligible', purpose: 'Answer-bearing purpose text.', reasonCode: 'check', planRevision: 1, primitive: null,
@@ -86,7 +96,7 @@ const canvas = (overrides: Record<string, unknown> = {}) => ({
     requiredAction: { kind: 'submit_response', label: 'Submit response' } },
   session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
   responsePrompt: null,
-  assessmentCheck: { assessmentOpportunityId: OPPORTUNITY, laterTeaching: { practice, feedback, lesson } },
+  assessmentCheck: { assessmentOpportunityId: OPPORTUNITY },
   ...overrides,
 })
 
@@ -111,12 +121,15 @@ describe('Canvas check', () => {
     stateData.value = open()
     deliveryData.value = delivered()
     workData.value = null
+    teachingData.value = teachingAvailable()
+    subscriptions.mockClear()
     isOnline.value = true
     grant.mockReset().mockResolvedValue({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'granted', assessmentOpportunityId: OPPORTUNITY, deliveryGrantId: 'grant_1', revision: 2, phase: 'test_open' })
     accept.mockReset().mockResolvedValue(acceptedReceipt())
     acceptPractice.mockReset().mockResolvedValue(learnResponseReceiptSchema.parse({ kind: 'accepted', version: LEARN_V2_RESPONSE_CONTRACT_VERSION, target: { responseSlotId: 'slot_1' }, submissionId: 'submission_2', acceptedAt: 1, revision: 2, phase: 'accepted', bodyAvailability: 'available' }))
     score.mockReset().mockResolvedValue({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'scoring_pending', submissionId: SUBMISSION, reasonCodes: [] })
-    authorize.mockReset().mockResolvedValue({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'authorized', authorizationId: 'auth_1', assessmentOpportunityId: OPPORTUNITY })
+    authorizePractice.mockReset().mockImplementation(async (input: { kind: 'hint' | 'worked_example' }) => helpAuthorized(input.kind, input.kind === 'hint' ? HINT : WORKED))
+    authorizeLegacy.mockReset()
     recordAssistance.mockReset()
     stageLegacy.mockReset()
     scoreLegacy.mockReset()
@@ -204,7 +217,8 @@ describe('Canvas check', () => {
       expect(wrapper.text()).not.toContain('Answer-bearing purpose text.')
       expect(wrapper.text()).not.toContain('Answer in your own words.')
       expect(recordAssistance).not.toHaveBeenCalled()
-      expect(authorize).not.toHaveBeenCalled()
+      expect(authorizePractice).not.toHaveBeenCalled()
+      expect(authorizeLegacy).not.toHaveBeenCalled()
     })
 
     it('never renders practice, feedback or a lesson before the answer is sealed', async () => {
@@ -566,26 +580,195 @@ describe('Canvas check', () => {
       expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
     })
 
-    it('shows practice help only after the server authorizes it', async () => {
+    it('offers help whenever practice is available, with no content held by the client', async () => {
       stateData.value = sealed('scoring_pending')
       workData.value = workState()
       const wrapper = await mountCheck()
-      expect(wrapper.text()).not.toContain(practice.hint)
-      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
-      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(practice.hint))
-      expect(authorizeAssistanceSchema.parse(authorize.mock.calls[0]![0])).toMatchObject({ kind: 'hint', assessmentOpportunityId: OPPORTUNITY })
+      expect(wrapper.find('[data-testid="learn-canvas-check-hint"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-canvas-check-worked-example"]').exists()).toBe(true)
+      expect(wrapper.html()).not.toContain(HINT)
+      expect(wrapper.html()).not.toContain(WORKED)
+      expect(authorizePractice).not.toHaveBeenCalled()
+      expect(learnPostSealPracticeSchema.safeParse({ ...practice, hint: HINT }).success).toBe(false)
+      expect(learnPostSealPracticeSchema.safeParse({ ...practice, workedExample: WORKED }).success).toBe(false)
     })
 
-    it('renders no help content when the server denies it', async () => {
-      authorize.mockResolvedValueOnce({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'denied', reasonCode: 'test_open' })
+    it('shows help text only from the authorized response, targeting the practice slot', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(HINT))
+      const request = learnAuthorizePracticeAssistanceSchema.parse(authorizePractice.mock.calls[0]![0])
+      expect(request).toMatchObject({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, expectedRevision: 1, kind: 'hint' })
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(WORKED))
+      expect(authorizePractice.mock.calls[1]![0]).toMatchObject({ kind: 'worked_example' })
+      expect(authorizePractice.mock.calls[1]![0].idempotencyKey).not.toBe(authorizePractice.mock.calls[0]![0].idempotencyKey)
+      expect(authorizeLegacy).not.toHaveBeenCalled()
+      expect(recordAssistance).not.toHaveBeenCalled()
+    })
+
+    it.each(['test_open', 'disabled', 'not_sealed', 'unavailable', 'evidence_unavailable', 'disclosure_unknown'])('shows the approved line and no content when help is denied for %s', async (reasonCode) => {
+      authorizePractice.mockReset().mockResolvedValue(helpDenied(reasonCode))
       stateData.value = sealed('scoring_pending')
       workData.value = workState()
       const wrapper = await mountCheck()
       await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
-      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance-denied"]').exists()).toBe(true))
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance-denied"]').text()).toBe('Could not load support. Try again.'))
       expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(false)
-      expect(wrapper.text()).not.toContain(practice.workedExample)
+      expect(wrapper.html()).not.toContain(WORKED)
       expect(recordAssistance).not.toHaveBeenCalled()
+    })
+
+    it('reuses one help key per kind and revision across an ambiguous failure', async () => {
+      authorizePractice.mockRejectedValueOnce(new Error('network'))
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance-denied"]').exists()).toBe(true))
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
+      expect(wrapper.find('[data-testid="learn-canvas-check-assistance-denied"]').exists()).toBe(false)
+      expect(authorizePractice.mock.calls[1]![0]).toEqual(authorizePractice.mock.calls[0]![0])
+    })
+
+    it('uses a fresh help key after a definite denial or a new slot revision', async () => {
+      authorizePractice.mockResolvedValueOnce(helpDenied('disabled'))
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance-denied"]').exists()).toBe(true))
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(authorizePractice).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
+      expect(authorizePractice.mock.calls[1]![0].idempotencyKey).not.toBe(authorizePractice.mock.calls[0]![0].idempotencyKey)
+      teachingData.value = teachingAvailable({ practice: { ...practice, revision: 2 } })
+      await nextTick()
+      authorizePractice.mockResolvedValueOnce(helpAuthorized('hint', HINT, 2))
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(authorizePractice).toHaveBeenCalledTimes(3))
+      expect(authorizePractice.mock.calls[2]![0]).toMatchObject({ expectedRevision: 2 })
+      expect(authorizePractice.mock.calls[2]![0].idempotencyKey).not.toBe(authorizePractice.mock.calls[1]![0].idempotencyKey)
+    })
+  })
+
+  describe('post-seal teaching read', () => {
+    const teachingCalls = () => subscriptions.mock.calls.filter(([name]) => String(name).includes('getPostSealTeaching'))
+
+    it.each([
+      ['loading', () => null],
+      ['denied admission', () => ({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'disabled', reasonCodes: ['disabled'] })],
+      ['ready', ready],
+      ['test_open', open],
+      ['invalid without an accepted answer', () => available('invalid', null, 2, capabilities())],
+      ['cancelled', () => available('cancelled', null, 2, capabilities())],
+      ['abandoned', () => available('abandoned', null, 2, capabilities())],
+    ])('does not subscribe or render teaching in %s', async (_name, state) => {
+      stateData.value = state()
+      const wrapper = await mountCheck()
+      expect(teachingCalls()).toHaveLength(0)
+      expect(wrapper.text()).not.toContain(feedback.text)
+      expect(wrapper.text()).not.toContain(lesson.paragraphs[0])
+      expect(wrapper.text()).not.toContain(practice.prompt)
+    })
+
+    it('stays unsubscribed while an accepted receipt is still awaited', async () => {
+      let release!: (value: unknown) => void
+      accept.mockReturnValueOnce(new Promise(resolve => { release = resolve }))
+      const wrapper = await mountCheck()
+      await fillAnswer(wrapper)
+      await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
+      await flushPromises()
+      expect(teachingCalls()).toHaveLength(0)
+      release(acceptedReceipt())
+      await vi.waitFor(() => expect(teachingCalls()).toHaveLength(1))
+      expect(learnPostSealTeachingReferenceSchema.parse(teachingCalls()[0]![1])).toEqual({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: OPPORTUNITY })
+    })
+
+    it('reads the same teaching on a refresh of a sealed check', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      expect(teachingCalls()).toHaveLength(1)
+      expect(wrapper.get('[data-testid="learn-canvas-check-practice-prompt"]').text()).toBe(practice.prompt)
+    })
+
+    it.each(['disabled', 'unavailable', 'not_sealed', 'test_open', 'evidence_unavailable', 'disclosure_unknown'])('keeps the receipt and shows no teaching sections for %s', async (reasonCode) => {
+      teachingData.value = teachingUnavailable(reasonCode)
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const wrapper = await mountCheck()
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"] h2').text()).toBe('Not yet: part of this slipped')
+      expect(wrapper.get('[data-testid="learn-canvas-check-your-answer"]').text()).toBe(ANSWER)
+      for (const testId of ['feedback', 'lesson', 'practice', 'practice-collapsed', 'try-practice']) expect(wrapper.find(`[data-testid="learn-canvas-check-${testId}"]`).exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Feedback on your answer')
+      expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    })
+
+    it('keeps the waiting receipt when the read has not arrived or is unavailable', async () => {
+      teachingData.value = null
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      expect(receiptKind(wrapper)).toBe('saved')
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
+      teachingData.value = teachingUnavailable('test_open')
+      await nextTick()
+      expect(receiptKind(wrapper)).toBe('saved')
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
+    })
+
+    it('renders only the sections the server returned', async () => {
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      const wrapper = await mountCheck()
+      expect(receiptKind(wrapper)).toBe('passed')
+      expect(wrapper.find('[data-testid="learn-canvas-check-feedback"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-your-answer"]').text()).toBe(ANSWER)
+    })
+
+    it('keeps practice reachable after a miss with no lesson', async () => {
+      teachingData.value = teachingAvailable({ lesson: null })
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true)
+    })
+
+    it('ignores teaching fields passed on the binding', async () => {
+      teachingData.value = teachingUnavailable('disabled')
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      const wrapper = await mountCheck({ canvas: canvas({ assessmentCheck: { assessmentOpportunityId: OPPORTUNITY, laterTeaching: { feedback: { text: 'Binding canary', citations: [] }, practice: { prompt: 'Binding canary' } } } }) })
+      expect(wrapper.text()).not.toContain('Binding canary')
+    })
+
+    it('carries the tier through the composable without rendering it', async () => {
+      const { useCanvasCheck } = await import('~/composables/useCanvasCheck')
+      let check!: ReturnType<typeof useCanvasCheck>
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const probe = await mountSuspended(defineComponent({ setup() {
+        check = useCanvasCheck({ ownerId: 'owner_1', threadId: 'thread_1', binding: { assessmentOpportunityId: OPPORTUNITY }, isOnline })
+        return () => h('div')
+      } }))
+      wrappers.push(probe)
+      expect(check.feedback.value?.tier).toBe('T0')
+      expect(check.lesson.value?.tier).toBe('T1')
+      expect(check.practice.value?.tier).toBe('T2')
+      expect(Object.keys(check.practice.value!)).not.toEqual(expect.arrayContaining(['hint']))
+      await check.requestAssistance('worked_example')
+      expect(check.assistance.value).toEqual({ kind: 'worked_example', tier: 'T2', text: WORKED })
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-try-practice"]').trigger('click')
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
+      expect(wrapper.text()).not.toMatch(/\bT[012]\b/)
     })
   })
 

@@ -18,7 +18,7 @@ const { isOnline } = useOnlineStatus()
 const {
   view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
   invalidBySource, feedback, lesson, practice,
-  practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
+  practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
   start, submit, retryScore, submitPractice, requestAssistance,
 } = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: props.binding, isOnline })
 
@@ -34,7 +34,7 @@ const primaryAction = 'inline-flex min-h-11 items-center justify-center gap-2 ro
 const secondaryAction = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium text-foreground hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 const textLink = 'inline-flex min-h-11 items-center gap-1 rounded-sm text-sm font-medium text-foreground underline decoration-primary decoration-2 underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background'
 const fieldBase = 'mt-2 w-full rounded-lg border bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-const card = 'mt-6 rounded-xl border border-border bg-card p-4 sm:p-6'
+const card = 'mt-6 first:mt-0 rounded-xl border border-border bg-card p-4 sm:p-6'
 const citationBadge = 'mx-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground align-baseline transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 const sourceBadge = 'inline-flex h-5 min-w-5 items-center justify-center rounded bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground'
 const attention = 'text-[var(--learn-attention)]'
@@ -65,7 +65,7 @@ const receiptBody = computed(() => {
 })
 const showFullPractice = computed(() => Boolean(practice.value) && (receipt.value?.receipt === 'saved' || practiceExpanded.value))
 const showCollapsedPractice = computed(() => Boolean(practice.value) && !showFullPractice.value
-  && (receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid'))
+  && (receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid' || (receipt.value?.receipt === 'not_yet' && !lesson.value)))
 const submitFailureBody = computed(() => submitFailure.value === 'offline'
   ? 'You’re offline. It’s still here on this device. Submit again when you’re back online.'
   : 'It’s still here on this device.')
@@ -108,8 +108,7 @@ function openPractice() {
       <p class="font-inter text-xs font-medium text-muted-foreground">{{ view.kind === 'open' ? 'Check' : 'Void' }} · {{ intent }}</p>
       <h1 id="learn-canvas-title" class="mt-2 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl">{{ outcome }}</h1>
     </header>
-    <p v-if="view.kind === 'open'" class="mt-3 flex items-start gap-2 text-sm leading-6 text-muted-foreground"><Lock class="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /><span>Hints, examples, sources and chat come back after you submit.</span></p>
-    <p class="sr-only" aria-live="polite">{{ notice }}</p>
+    <p v-if="view.kind === 'open'" class="mt-3 first:mt-0 flex items-start gap-2 text-sm leading-6 text-muted-foreground"><Lock class="mt-1 h-4 w-4 shrink-0" aria-hidden="true" /><span>Hints, examples, sources and chat come back after you submit.</span></p>
 
     <div v-if="view.kind === 'loading'" data-testid="learn-canvas-check-loading" :class="card" role="status" aria-live="polite">
       <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
@@ -214,11 +213,11 @@ function openPractice() {
         <h2 :id="`${id}-practice`" class="font-dm-sans text-lg font-semibold text-foreground">Practice with a different case</h2>
         <p class="mt-1 text-sm leading-6 text-muted-foreground">Separate from your check. It won’t change the result.</p>
         <p data-testid="learn-canvas-check-practice-prompt" class="mt-4 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ practice.prompt }}</p>
-        <div v-if="practice.hint || practice.workedExample" class="mt-4 flex flex-wrap gap-2">
-          <button v-if="practice.hint" type="button" data-testid="learn-canvas-check-hint" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('hint')"><Lightbulb class="h-4 w-4 shrink-0" aria-hidden="true" />Get a hint</button>
-          <button v-if="practice.workedExample" type="button" data-testid="learn-canvas-check-worked-example" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('reveal')"><Eye class="h-4 w-4 shrink-0" aria-hidden="true" />Show worked example</button>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button type="button" data-testid="learn-canvas-check-hint" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('hint')"><Lightbulb class="h-4 w-4 shrink-0" aria-hidden="true" />Get a hint</button>
+          <button type="button" data-testid="learn-canvas-check-worked-example" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('worked_example')"><Eye class="h-4 w-4 shrink-0" aria-hidden="true" />Show worked example</button>
         </div>
-        <p v-if="assistanceText" data-testid="learn-canvas-check-assistance" class="mt-3 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-sm">{{ assistanceText }}</p>
+        <p v-if="assistance" data-testid="learn-canvas-check-assistance" class="mt-3 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-sm">{{ assistance.text }}</p>
         <p v-if="assistanceDenied" role="alert" data-testid="learn-canvas-check-assistance-denied" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
         <template v-if="!practiceSaved">
           <label :for="`${id}-practice-answer`" class="mt-5 block text-sm font-medium text-foreground">Your practice answer</label>
@@ -230,5 +229,6 @@ function openPractice() {
         <p v-else role="status" data-tone="neutral" data-testid="learn-canvas-check-practice-saved" class="mt-5 text-sm font-medium text-foreground">Response submitted.</p>
       </section>
     </template>
+    <p class="sr-only" aria-live="polite">{{ notice }}</p>
   </section>
 </template>

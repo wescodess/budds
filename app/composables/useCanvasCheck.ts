@@ -1,7 +1,8 @@
 import type { Ref } from 'vue'
-import type { LEARN_V2_PUBLIC_API_VERSION, LearnV2AssessmentDelivery, LearnV2AssessmentState, LearnV2ResponseState } from '~~/convex/lib/learnV2PublicContract'
+import type { LEARN_V2_PUBLIC_API_VERSION, LearnV2AssessmentDelivery, LearnV2AssessmentState, LearnV2PracticeAssistanceAuthorization, LearnV2ResponseState } from '~~/convex/lib/learnV2PublicContract'
 import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAdapters'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
+import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
@@ -9,13 +10,8 @@ const PUBLIC_API_VERSION: typeof LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-
 const MAX_ANSWER_LENGTH = 12_000
 const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
-export type CanvasCheckCitation = { sourceRef: string, label: string }
-export type CanvasCheckLaterTeaching = {
-  feedback?: { text: string, citations: CanvasCheckCitation[] } | null
-  practice?: { responseSlotId: string, revision: number, prompt: string, hint?: string | null, workedExample?: string | null } | null
-  lesson?: { paragraphs: string[], citations: CanvasCheckCitation[] } | null
-}
-export type CanvasCheckBinding = { assessmentOpportunityId: string, laterTeaching?: CanvasCheckLaterTeaching | null }
+export type CanvasCheckBinding = { assessmentOpportunityId: string }
+export type CanvasCheckHelpKind = 'hint' | 'worked_example'
 export type CanvasCheckReceiptKind = 'saved' | 'scoring_failed' | 'unconfirmed' | 'invalid' | 'passed' | 'not_yet'
 export type CanvasCheckView =
   | { kind: 'loading' }
@@ -28,6 +24,7 @@ type AvailableState = Extract<LearnV2AssessmentState, { status: 'available' }>
 type AvailableWork = NonNullable<Extract<LearnV2ResponseState, { status: 'available' }>['work']>
 type LocalReceipt = { submissionId: string, acceptedAt: number, answer: string }
 type SubmitFailure = 'offline' | 'request' | null
+type PracticeHelpContent = Extract<LearnV2PracticeAssistanceAuthorization, { status: 'authorized' }>['content']
 
 function commandKey(prefix: string) {
   return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
@@ -92,7 +89,7 @@ export function useCanvasCheck(options: {
   const acceptMutation = import.meta.client ? useConvexMutation(checkApi.acceptMasterySubmission) : { mutate: async () => undefined }
   const acceptPracticeMutation = import.meta.client ? useConvexMutation(checkApi.acceptResponse) : { mutate: async () => undefined }
   const scoreAction = import.meta.client ? useConvexAction(checkApi.scoreMasterySubmission) : { mutate: async () => undefined }
-  const authorizeMutation = import.meta.client ? useConvexMutation(checkApi.authorizeAssistance) : { mutate: async () => undefined }
+  const authorizePracticeMutation = import.meta.client ? useConvexMutation(checkApi.authorizePracticeAssistance) : { mutate: async () => undefined }
 
   const answer = ref('')
   const confidence = ref<number | null>(null)
@@ -150,16 +147,23 @@ export function useCanvasCheck(options: {
     return current.body.bodyAvailability !== 'available'
       || current.validitySnapshot.exclusionReasons.some(reason => reason === 'evidence_unavailable' || reason === 'pins_mismatch')
   })
+  const hasSealedReceipt = computed(() => view.value.kind === 'receipt' && submissionId.value !== null)
+  const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value
+    ? { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId }
+    : 'skip')
+  const teaching = computed(() => {
+    const value = teachingQuery.data.value
+    return hasSealedReceipt.value && value?.status === 'available' ? value : null
+  })
   const feedback = computed(() => {
     const current = view.value
-    return current.kind === 'receipt' && (current.receipt === 'passed' || current.receipt === 'not_yet')
-      ? options.binding.laterTeaching?.feedback ?? null : null
+    return current.kind === 'receipt' && (current.receipt === 'passed' || current.receipt === 'not_yet') ? teaching.value?.feedback ?? null : null
   })
   const lesson = computed(() => {
     const current = view.value
-    return current.kind === 'receipt' && current.receipt === 'not_yet' ? options.binding.laterTeaching?.lesson ?? null : null
+    return current.kind === 'receipt' && current.receipt === 'not_yet' ? teaching.value?.lesson ?? null : null
   })
-  const practice = computed(() => sealed.value && canTeachSeparateCase.value ? options.binding.laterTeaching?.practice ?? null : null)
+  const practice = computed(() => canTeachSeparateCase.value ? teaching.value?.practice ?? null : null)
 
   async function start() {
     const current = available.value
@@ -258,8 +262,9 @@ export function useCanvasCheck(options: {
   const practiceBusy = ref(false)
   const practiceFailed = ref(false)
   const practiceSaved = ref(false)
-  const assistanceText = ref<string | null>(null)
+  const assistance = shallowRef<PracticeHelpContent | null>(null)
   const assistanceDenied = ref(false)
+  const helpKeys = new Map<string, string>()
   let practiceKey: string | null = null
   let practicePayload: string | null = null
 
@@ -278,7 +283,7 @@ export function useCanvasCheck(options: {
       const receipt = await acceptPracticeMutation.mutate({
         version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
         idempotencyKey: practiceKey!,
-        response: { target: { responseSlotId: current.responseSlotId as never }, expectedRevision: current.revision, payload: { kind: 'text', text } },
+        response: { target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, payload: { kind: 'text', text } },
       })
       if (receipt?.kind === 'accepted') practiceSaved.value = true
       else {
@@ -291,15 +296,24 @@ export function useCanvasCheck(options: {
     finally { practiceBusy.value = false }
   }
 
-  async function requestAssistance(kind: 'hint' | 'reveal') {
+  async function requestAssistance(kind: CanvasCheckHelpKind) {
     const current = practice.value
     if (!current || practiceBusy.value || !options.isOnline.value) return
+    const helpKey = `${kind}:${current.revision}`
+    const idempotencyKey = helpKeys.get(helpKey) ?? commandKey('adaptive-canvas-check-help')
+    helpKeys.set(helpKey, idempotencyKey)
     practiceBusy.value = true
     assistanceDenied.value = false
     try {
-      const result = await authorizeMutation.mutate({ ...reference, kind, idempotencyKey: commandKey('adaptive-canvas-check-help') })
-      if (result?.status === 'authorized') assistanceText.value = kind === 'hint' ? current.hint ?? null : current.workedExample ?? null
-      else assistanceDenied.value = true
+      const result = await authorizePracticeMutation.mutate({
+        version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId,
+        target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, kind, idempotencyKey,
+      })
+      if (result?.status === 'authorized' && result.content.kind === kind) assistance.value = result.content
+      else {
+        helpKeys.delete(helpKey)
+        assistanceDenied.value = true
+      }
     }
     catch { assistanceDenied.value = true }
     finally { practiceBusy.value = false }
@@ -308,7 +322,7 @@ export function useCanvasCheck(options: {
   return {
     view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
     canTeachSeparateCase, invalidBySource, feedback, lesson, practice,
-    practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistanceText, assistanceDenied,
+    practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
     start, submit, retryScore, submitPractice, requestAssistance,
   }
 }

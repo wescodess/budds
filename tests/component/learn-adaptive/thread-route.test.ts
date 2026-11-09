@@ -567,12 +567,19 @@ describe('adaptive thread route isolation', () => {
       expect(wrapper.find('[data-testid="learn-thread-contributions"]').exists()).toBe(false)
       expect(wrapper.find('#learn-thread-history-title').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('Earlier teaching canary')
+      expect(wrapper.find('[data-testid="learn-thread-resume-context"]').exists()).toBe(false)
+      expect(wrapper.find('#learn-thread-next-title').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Current activity:')
+      expect(wrapper.text()).not.toContain('Evidence ready')
     }
     function expectToolsShown(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
       expect(wrapper.find('[data-testid="learn-memory-open"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="learn-evidence-open"]').exists()).toBe(true)
       expect(wrapper.find('[data-testid="learn-thread-contributions"]').exists()).toBe(true)
       expect(wrapper.find('#learn-thread-history-title').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-thread-resume-context"]').exists()).toBe(true)
+      expect(wrapper.find('#learn-thread-next-title').exists()).toBe(true)
+      expect(wrapper.text()).toContain('Evidence ready')
     }
 
     it.each([
