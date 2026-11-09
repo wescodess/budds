@@ -395,8 +395,8 @@ async function calibrationEvidence(ctx: MutationCtx | QueryCtx, userId: string, 
     if (link.coverage === 'gap') continue
     const source = await ctx.db.get(link.sourceSnapshotId)
     const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId_and_evidencePurgedAt', q => q.eq('userId', userId).eq('sourceSnapshotId', link.sourceSnapshotId).eq('evidencePurgedAt', undefined)).first()
-    if (!source || !await sourceBodyAvailable(ctx, userId, source._id) || !excerpt
-      || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined || excerpt.rightsStatus === 'prohibited') throw new Error('Calibration evidence is unavailable')
+    if (!source || source.conflictStatus !== 'clear' || !await sourceBodyAvailable(ctx, userId, source._id) || !excerpt
+      || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined || excerpt.rightsStatus === 'prohibited') continue
     const alias = `source-${String(evidence.length + 1).padStart(3, '0')}`
     let evidenceContentHash: string
     if (source.rightsStatus === 'permitted' && excerpt.rightsStatus === 'permitted' && excerpt.excerpt?.trim()) {

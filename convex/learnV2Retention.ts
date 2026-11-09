@@ -13,6 +13,7 @@ import { writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import { retainsSafeAdaptiveRejection } from './lib/learnAdaptiveReceiptPrivacy'
 import { activityResponseTargets, digestLegacyFingerprint, legacySourceIds, privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { sourceSupportsGeneration } from './lib/learnV2BackingSource'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence } from './lib/learnV2MeasurementFacts'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 
@@ -95,13 +96,25 @@ async function purgeResponseSourceBatch(ctx: MutationCtx, userId: string, source
   return await invalidateMeasurementSourceBatch(ctx, userId, source)
 }
 
+async function objectiveKeepsOtherSupport(ctx: MutationCtx, userId: string, objectiveId: Id<'learnObjectives'>, removed: Id<'learnSourceSnapshots'>) {
+  const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objectiveId)).take(65)
+  for (const link of links) {
+    if (link.coverage !== 'gap' && link.sourceSnapshotId !== removed && await sourceSupportsGeneration(ctx, userId, link.sourceSnapshotId)) return true
+  }
+  return false
+}
+
 export const purgeLegacyObjectiveCopies = internalMutation({
   args: { userId: v.string(), sourceSnapshotId: v.id('learnSourceSnapshots'), objectiveId: v.id('learnObjectives'), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const support = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', args.userId).eq('objectiveId', args.objectiveId).eq('sourceSnapshotId', args.sourceSnapshotId)).first()
     const objective = await ctx.db.get(args.objectiveId)
     const backsObjective = !!support && support.coverage !== 'gap'
-    if (backsObjective && objective?.userId === args.userId) await ctx.db.patch(objective._id, { assessmentContract: undefined })
+    // purgeSourceEvidence schedules this in the transaction that marks the
+    // snapshot purged, so whichever removal commits last finds no support left.
+    if (backsObjective && objective?.userId === args.userId && !await objectiveKeepsOtherSupport(ctx, args.userId, objective._id, args.sourceSnapshotId)) {
+      await ctx.db.patch(objective._id, { assessmentContract: undefined })
+    }
     const page = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', args.userId).eq('objectiveId', args.objectiveId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
     for (const attempt of page.page) {
       const ids = legacySourceIds(ctx, attempt.sourceSnapshotIdsJson)
@@ -137,6 +150,42 @@ async function jobDependsOnSource(ctx: MutationCtx, job: Doc<'learnJobs'>, sourc
     .withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', job.userId).eq('objectiveId', objectiveId!).eq('sourceSnapshotId', sourceSnapshotId)).first()
 }
 
+async function startedContentUsesSource(ctx: MutationCtx, job: Doc<'learnJobs'>, sourceSnapshotId: Id<'learnSourceSnapshots'>) {
+  const session = job.studySessionId && await ctx.db.get(job.studySessionId)
+  if (!session || session.userId !== job.userId || !session.startedSessionContentId) return true
+  const contentId = session.startedSessionContentId
+  const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', job.userId).eq('sessionContentId', contentId)).take(33)
+  if (!claims.length || claims.length > 32) return true
+  for (const claim of claims) {
+    const supports = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', job.userId).eq('sessionContentClaimId', claim._id)).take(9)
+    if (supports.length > 8) return true
+    for (const support of supports) {
+      const sourceId = support.sourceSnapshotId ?? (await ctx.db.get(support.sourceExcerptId))?.sourceSnapshotId
+      if (!sourceId || sourceId === sourceSnapshotId) return true
+    }
+  }
+  return false
+}
+
+async function purgeDependentJob(ctx: MutationCtx, job: Doc<'learnJobs'>, sourceSnapshotId: Id<'learnSourceSnapshots'>) {
+  const terminal = ['succeeded', 'failed', 'cancelled'].includes(job.status)
+  // Scoring reads only the started content's claims, so other sources cannot affect it.
+  const scoringContinues = !terminal && job.type === 'mastery_scoring' && !await startedContentUsesSource(ctx, job, sourceSnapshotId)
+  const stopsGeneration = !terminal && job.status !== 'blocked' && job.type === 'session_content_generation'
+  if (stopsGeneration && job.studySessionId) {
+    const session = await ctx.db.get(job.studySessionId)
+    if (session?.userId === job.userId && session.status === 'planned' && session.revision === job.expectedSessionRevision) {
+      await ctx.db.patch(session._id, { status: 'blocked', revision: session.revision + 1, auditReasonCode: 'evidence_unavailable' })
+    }
+  }
+  await ctx.db.patch(job._id, {
+    ...(job.requestFingerprint ? { requestFingerprint: await digestLegacyFingerprint(job.requestFingerprint) } : {}),
+    ...(scoringContinues ? {} : { checkpoint: undefined }),
+    ...(terminal || scoringContinues ? {} : { status: 'blocked' as const, leaseToken: undefined, leaseExpiresAt: undefined, terminalReason: 'evidence_unavailable' }),
+    ...(stopsGeneration ? { revision: job.revision + 1, updatedAt: Date.now() } : {}),
+  })
+}
+
 export const purgeLegacySourceCopies = internalMutation({
   args: { userId: v.string(), sourceSnapshotId: v.id('learnSourceSnapshots'), phase: v.optional(v.union(v.literal('jobs'), v.literal('lifecycle'), v.literal('plans'), v.literal('plan_receipts'))), cursor: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -150,11 +199,7 @@ export const purgeLegacySourceCopies = internalMutation({
     }
     if (args.phase === 'jobs') {
       const page = await ctx.db.query('learnJobs').withIndex('by_userId_and_learningVoidId_and_type', q => q.eq('userId', args.userId).eq('learningVoidId', snapshot.learningVoidId)).paginate({ cursor: args.cursor ?? null, numItems: BATCH_SIZE })
-      for (const job of page.page) if (await jobDependsOnSource(ctx, job, snapshot._id)) await ctx.db.patch(job._id, {
-        ...(job.requestFingerprint ? { requestFingerprint: await digestLegacyFingerprint(job.requestFingerprint) } : {}),
-        checkpoint: undefined,
-        ...(['succeeded', 'failed', 'cancelled'].includes(job.status) ? {} : { status: 'blocked' as const, leaseToken: undefined, leaseExpiresAt: undefined, terminalReason: 'evidence_unavailable' }),
-      })
+      for (const job of page.page) if (await jobDependsOnSource(ctx, job, snapshot._id)) await purgeDependentJob(ctx, job, snapshot._id)
       await ctx.scheduler.runAfter(0, internal.learnV2Retention.purgeLegacySourceCopies, { ...args, phase: page.isDone ? 'lifecycle' : 'jobs', cursor: page.isDone ? undefined : page.continueCursor })
       return
     }

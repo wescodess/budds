@@ -7,6 +7,7 @@ import { LEARN_V2_SCHEDULER_VERSION, rescheduleStudySessions, scheduleStudyPlan,
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
+import { sourceSupportsGeneration } from './lib/learnV2BackingSource'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MAX_OBJECTIVES = 15
@@ -25,16 +26,7 @@ async function supportedSourceIds(ctx: MutationCtx, userId: string, objectiveId:
   if (links.length > 64) throw new Error('Session content source scope is outside the bounded contract')
   const sourceIds: Id<'learnSourceSnapshots'>[] = []
   for (const link of links) {
-    if (link.coverage === 'gap') continue
-    const source = await ctx.db.get(link.sourceSnapshotId)
-    if (!source || source.userId !== userId || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted' || source.conflictStatus !== 'clear' || source.evidencePurgedAt !== undefined) continue
-    if (source.rightsStatus === 'permitted') {
-      sourceIds.push(source._id)
-      continue
-    }
-    const identity = await ctx.db.get(source.sourceIdentityId)
-    if (identity?.userId === userId && identity.origin === 'folder_document' && identity.folderDocumentId
-      && typeof source.contentHash === 'string' && typeof source.sourceRevision === 'string') sourceIds.push(source._id)
+    if (link.coverage !== 'gap' && await sourceSupportsGeneration(ctx, userId, link.sourceSnapshotId)) sourceIds.push(link.sourceSnapshotId)
   }
   const unique = [...new Map(sourceIds.map(id => [String(id), id])).values()].sort((a, b) => String(a).localeCompare(String(b)))
   return unique
