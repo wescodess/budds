@@ -1190,7 +1190,7 @@ function unavailableThreadProjection(thread: Doc<'learningThreads'>, ownerId: Id
   return {
     ownerId,
     thread: { id: thread._id, goal: thread.originalNeed, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent,
-      sourceScope: thread.sourceScope, evidenceState: 'unavailable' as const, lifecycle: thread.lifecycle, revision: thread.revision,
+      sourceScope: projectSourceScope(thread.sourceScope), evidenceState: 'unavailable' as const, lifecycle: thread.lifecycle, revision: thread.revision,
       lifecycleChangedAt: thread.lifecycleChangedAt ?? null, authorityKind: thread.authorityKind, learningVoidId: thread.learningVoidId ?? null },
     currentActivity: null, attemptContext: null, artifact: null, completion: null, history: [], unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
     nextAction: presentNextAction({ kind: 'recover' as const, label: 'Back to Learn', reasonCode: 'source_unavailable', activityId: null }),
