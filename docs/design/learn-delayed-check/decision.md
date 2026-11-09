@@ -50,6 +50,18 @@ Owner, 2026-11-08. These override `approved.html`.
 - A cancelled or abandoned check uses "Your check isn't ready yet".
 - The server's `instructions` field stays hidden.
 
+## Content label
+
+**Chosen:** [Caption line](./approved-content-label.html). The origin of teaching content joins the small caption above the block. `T1` feedback and lessons read "From the web, not yet verified", and `T2` practice prompts and worked examples read "Written by Budds, not source-checked". Labels use `text-foreground`, so colour never carries the meaning, and learners never see the tier codes.
+
+**Rejected:** [With the sources](./rejected-label-with-the-sources.html), [Corner tag](./rejected-label-corner-tag.html), [What this means](./rejected-label-what-this-means.html), [Run-in](./rejected-label-run-in.html).
+
+**Owner's words on approval:** picked `1. Caption line`, `Use it, no mark`, and on final confirmation `Yes, satisfied`.
+
+**Date:** 2026-11-08
+
+Source-checked content shows no mark, so `T0` prompts, hints and worked examples show no visible origin.
+
 ## Known debt
 
 Light-theme `--muted-foreground` measures below AA on `--background` and `--card`. The owner kept the token locked; it is every capture violation in this design.

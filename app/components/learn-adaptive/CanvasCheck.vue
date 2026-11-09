@@ -184,9 +184,9 @@ function openPractice() {
             <blockquote data-testid="learn-canvas-check-your-answer" class="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-6 text-foreground">{{ receipt.answer }}</blockquote>
           </template>
           <template v-if="feedback">
-            <p class="mt-4 font-inter text-xs font-medium text-muted-foreground">Feedback on your answer</p>
+            <p data-testid="learn-canvas-check-feedback-caption" class="mt-4 font-inter text-xs font-medium text-muted-foreground">Feedback on your answer<template v-if="feedback.tier === 'T1'"> · <span data-testid="learn-canvas-check-feedback-label" class="text-foreground">from the web, not yet verified</span></template></p>
             <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ feedback.text }}<button v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
-            <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2']" @click="inspectCitation">{{ citation.label }}</button></p>
+            <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
           </template>
         </div>
         <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('leave')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
@@ -194,8 +194,9 @@ function openPractice() {
 
       <section v-if="lesson" data-testid="learn-canvas-check-lesson" :aria-labelledby="`${id}-lesson`" :class="card">
         <h2 :id="`${id}-lesson`" class="font-dm-sans text-lg font-semibold text-foreground">Let’s rebuild the missing part</h2>
+        <p v-if="lesson.tier === 'T1'" data-testid="learn-canvas-check-lesson-label" class="mt-1 font-inter text-xs font-medium text-foreground">From the web, not yet verified</p>
         <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ paragraph }}<button v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
-        <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2']" @click="inspectCitation">{{ citation.label }}</button></p>
+        <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
         <div class="mt-5 flex flex-wrap items-center gap-3">
           <button v-if="practice && !practiceExpanded" type="button" data-testid="learn-canvas-check-try-practice" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
           <button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button>
@@ -212,12 +213,16 @@ function openPractice() {
       <section v-if="showFullPractice && practice" data-testid="learn-canvas-check-practice" :aria-labelledby="`${id}-practice`" :class="card">
         <h2 :id="`${id}-practice`" class="font-dm-sans text-lg font-semibold text-foreground">Practice with a different case</h2>
         <p class="mt-1 text-sm leading-6 text-muted-foreground">Separate from your check. It won’t change the result.</p>
-        <p data-testid="learn-canvas-check-practice-prompt" class="mt-4 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ practice.prompt }}</p>
+        <p v-if="practice.tier === 'T2'" data-testid="learn-canvas-check-practice-label" class="mt-4 font-inter text-xs font-medium text-foreground">Written by Budds, not <span class="whitespace-nowrap">source-checked</span></p>
+        <p data-testid="learn-canvas-check-practice-prompt" :class="[practice.tier === 'T2' ? 'mt-2' : 'mt-4', 'whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground']">{{ practice.prompt }}</p>
         <div class="mt-4 flex flex-wrap gap-2">
           <button type="button" data-testid="learn-canvas-check-hint" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('hint')"><Lightbulb class="h-4 w-4 shrink-0" aria-hidden="true" />Get a hint</button>
           <button type="button" data-testid="learn-canvas-check-worked-example" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('worked_example')"><Eye class="h-4 w-4 shrink-0" aria-hidden="true" />Show worked example</button>
         </div>
-        <p v-if="assistance" data-testid="learn-canvas-check-assistance" class="mt-3 whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-sm">{{ assistance.text }}</p>
+        <div v-if="assistance" class="mt-3 break-words rounded-lg bg-muted p-3 text-sm">
+          <p v-if="assistance.tier === 'T2'" data-testid="learn-canvas-check-worked-label" class="font-inter text-xs font-medium text-foreground">Worked example · written by Budds, not <span class="whitespace-nowrap">source-checked</span></p>
+          <p data-testid="learn-canvas-check-assistance" :class="['whitespace-pre-wrap', assistance.tier === 'T2' && 'mt-1']">{{ assistance.text }}</p>
+        </div>
         <p v-if="assistanceDenied" role="alert" data-testid="learn-canvas-check-assistance-denied" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
         <template v-if="!practiceSaved">
           <label :for="`${id}-practice-answer`" class="mt-5 block text-sm font-medium text-foreground">Your practice answer</label>

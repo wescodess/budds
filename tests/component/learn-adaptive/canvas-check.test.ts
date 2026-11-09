@@ -86,7 +86,7 @@ const HINT = 'Think about habitat.'
 const WORKED = 'Compare to a hot spring.'
 const teachingAvailable = (overrides: Record<string, unknown> = {}) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY, feedback, lesson, practice, ...overrides })
 const teachingUnavailable = (reasonCode: string) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode })
-const helpAuthorized = (kind: 'hint' | 'worked_example', text: string, revision = 1) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'authorized', assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, revision, authorizationId: 'exposure_1', deliveredAt: 1_800_000_200_000, content: kind === 'hint' ? { kind, tier: 'T0', text } : { kind, tier: 'T2', text } })
+const helpAuthorized = (kind: 'hint' | 'worked_example', text: string, revision = 1, workedTier: 'T0' | 'T2' = 'T2') => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'authorized', assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, revision, authorizationId: 'exposure_1', deliveredAt: 1_800_000_200_000, content: kind === 'hint' ? { kind, tier: 'T0', text } : { kind, tier: workedTier, text } })
 const helpDenied = (reasonCode: string) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
 const canvas = (overrides: Record<string, unknown> = {}) => ({
   ownerId: 'owner_1', status: 'started', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', revision: 2 },
@@ -769,6 +769,114 @@ describe('Canvas check', () => {
       await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
       expect(wrapper.text()).not.toMatch(/\bT[012]\b/)
+    })
+  })
+
+  describe('content labels', () => {
+    const label = (wrapper: VueWrapper, name: string) => wrapper.find(`[data-testid="learn-canvas-check-${name}-label"]`)
+    const expectForegroundLabel = (wrapper: VueWrapper, name: string, text: string) => {
+      expect(label(wrapper, name).text().replace(/\s+/g, ' ')).toBe(text)
+      expect(label(wrapper, name).classes()).toContain('text-foreground')
+      expect(label(wrapper, name).classes().some(name => name.includes('learn-attention') || name.includes('destructive') || name.includes('primary') || name.includes('green'))).toBe(false)
+    }
+    const expectNoCodes = (wrapper: VueWrapper) => expect(wrapper.text()).not.toMatch(/\bT[012]\b/)
+    async function mountResult(phase: 'scored_pass' | 'scored_fail', teaching: Record<string, unknown>) {
+      teachingData.value = teachingAvailable(teaching)
+      stateData.value = scored(phase)
+      workData.value = workState({ result: result([phase === 'scored_pass' ? 'pass' : 'needs_review']) })
+      return await mountCheck()
+    }
+    async function mountPractice(tier: 'T0' | 'T2') {
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null, practice: { ...practice, tier } })
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      return await mountCheck()
+    }
+
+    it('adds the web label to the feedback caption as its own element', async () => {
+      const wrapper = await mountResult('scored_pass', { feedback: { ...feedback, tier: 'T1' } })
+      expectForegroundLabel(wrapper, 'feedback', 'from the web, not yet verified')
+      expect(wrapper.get('[data-testid="learn-canvas-check-feedback-caption"]').text()).toBe('Feedback on your answer · from the web, not yet verified')
+      const feedbackText = wrapper.get('[data-testid="learn-canvas-check-feedback"]')
+      expect(feedbackText.text()).not.toContain('from the web')
+      expect(label(wrapper, 'feedback').element.compareDocumentPosition(feedbackText.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expectNoCodes(wrapper)
+    })
+
+    it('shows no mark on source-checked feedback', async () => {
+      const wrapper = await mountResult('scored_pass', { feedback: { ...feedback, tier: 'T0' } })
+      expect(label(wrapper, 'feedback').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-feedback-caption"]').text()).toBe('Feedback on your answer')
+      expectNoCodes(wrapper)
+    })
+
+    it('labels a web lesson above its text', async () => {
+      const wrapper = await mountResult('scored_fail', { lesson: { ...lesson, tier: 'T1' } })
+      expectForegroundLabel(wrapper, 'lesson', 'From the web, not yet verified')
+      const card = wrapper.get('[data-testid="learn-canvas-check-lesson"]')
+      expect(card.findAll('p').find(node => node.text().startsWith('Every enzyme'))!.text()).not.toContain('From the web')
+      expect(label(wrapper, 'lesson').element.compareDocumentPosition(card.findAll('p').find(node => node.text().startsWith('Every enzyme'))!.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expectNoCodes(wrapper)
+    })
+
+    it('shows no mark on a source-checked lesson', async () => {
+      const wrapper = await mountResult('scored_fail', { lesson: { ...lesson, tier: 'T0' } })
+      expect(label(wrapper, 'lesson').exists()).toBe(false)
+      expectNoCodes(wrapper)
+    })
+
+    it('labels a Budds-written practice prompt above its text', async () => {
+      const wrapper = await mountPractice('T2')
+      expectForegroundLabel(wrapper, 'practice', 'Written by Budds, not source-checked')
+      const prompt = wrapper.get('[data-testid="learn-canvas-check-practice-prompt"]')
+      expect(prompt.text()).toBe(practice.prompt)
+      expect(prompt.classes()).toContain('mt-2')
+      expect(label(wrapper, 'practice').get('span').classes()).toContain('whitespace-nowrap')
+      expect(label(wrapper, 'practice').element.compareDocumentPosition(prompt.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expectNoCodes(wrapper)
+    })
+
+    it('shows no mark on a source-checked practice prompt', async () => {
+      const wrapper = await mountPractice('T0')
+      expect(label(wrapper, 'practice').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-practice-prompt"]').classes()).toContain('mt-4')
+      expectNoCodes(wrapper)
+    })
+
+    it('labels a Budds-written worked example only once it arrives', async () => {
+      const wrapper = await mountPractice('T0')
+      expect(label(wrapper, 'worked').exists()).toBe(false)
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
+      expectForegroundLabel(wrapper, 'worked', 'Worked example · written by Budds, not source-checked')
+      expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(WORKED)
+      expect(label(wrapper, 'practice').exists()).toBe(false)
+      expectNoCodes(wrapper)
+    })
+
+    it('shows no mark on a source-checked worked example', async () => {
+      authorizePractice.mockReset().mockResolvedValue(helpAuthorized('worked_example', WORKED, 1, 'T0'))
+      const wrapper = await mountPractice('T0')
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance"]').exists()).toBe(true))
+      expect(label(wrapper, 'worked').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').classes()).not.toContain('mt-1')
+      expectNoCodes(wrapper)
+    })
+
+    it('shows no mark on a hint, even under a Budds-written prompt', async () => {
+      const wrapper = await mountPractice('T2')
+      await wrapper.get('[data-testid="learn-canvas-check-hint"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(HINT))
+      expect(label(wrapper, 'worked').exists()).toBe(false)
+      expectForegroundLabel(wrapper, 'practice', 'Written by Budds, not source-checked')
+      expectNoCodes(wrapper)
+    })
+
+    it('reads the labels from the server tier, not from the check result', async () => {
+      const wrapper = await mountResult('scored_fail', { feedback: { ...feedback, tier: 'T0' }, lesson: { ...lesson, tier: 'T1' } })
+      expect(label(wrapper, 'feedback').exists()).toBe(false)
+      expect(label(wrapper, 'lesson').exists()).toBe(true)
     })
   })
 

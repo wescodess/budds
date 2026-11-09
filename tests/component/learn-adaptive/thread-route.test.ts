@@ -551,7 +551,7 @@ describe('adaptive thread route isolation', () => {
   })
 
   describe('during a Canvas check', () => {
-    const missionThread = () => ({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
+    const missionThread = () => ({ ownerId: 'owner_1', unresolvedPoint: 'Why heat stops an enzyme', thread: { id: 'thread_1', goal: 'Understand enzymes', outcome: 'Explain enzymes', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: { id: 'activity_1', status: 'eligible', purpose: 'Answer the check.' }, history: [{ id: 'activity_0', status: 'completed', purpose: 'Earlier teaching canary' }],
       nextAction: { kind: 'continue', label: 'Continue', activityId: 'activity_1' } })
     const checkCanvas = (binding: unknown = { assessmentOpportunityId: 'opportunity_1' }) => ({ ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', revision: 2 }, status: 'started',
@@ -568,6 +568,9 @@ describe('adaptive thread route isolation', () => {
       expect(wrapper.find('#learn-thread-history-title').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('Earlier teaching canary')
       expect(wrapper.find('[data-testid="learn-thread-resume-context"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-thread-goal"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-thread-unresolved"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Why heat stops an enzyme')
       expect(wrapper.find('#learn-thread-next-title').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('Current activity:')
       expect(wrapper.text()).not.toContain('Evidence ready')
@@ -578,6 +581,8 @@ describe('adaptive thread route isolation', () => {
       expect(wrapper.find('[data-testid="learn-thread-contributions"]').exists()).toBe(true)
       expect(wrapper.find('#learn-thread-history-title').exists()).toBe(true)
       expect(wrapper.find('[data-testid="learn-thread-resume-context"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-thread-goal"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="learn-thread-unresolved"]').exists()).toBe(true)
       expect(wrapper.find('#learn-thread-next-title').exists()).toBe(true)
       expect(wrapper.text()).toContain('Evidence ready')
     }
