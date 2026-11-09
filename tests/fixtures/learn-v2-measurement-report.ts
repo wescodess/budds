@@ -4,7 +4,7 @@ import {
   learnReportResultSnapshotSchema, learnReportWatermarkSnapshotSchema,
 } from '../../shared/learn-v2-measurement-report'
 
-export async function measurementReportSourceFixture() {
+export async function measurementReportSourceFixture(bothHorizons = false) {
   const keys = await deriveLearnReportComputationKeys({ reportRunId: 'run1', ownerTokenIdentifier: 'https://fixture.example|owner',
     blueprintRevisionId: 'blueprint1', objectiveId: 'objective1' })
   const anchorAt = Date.UTC(2026, 9, 1)
@@ -18,10 +18,10 @@ export async function measurementReportSourceFixture() {
   const episode = learnReportEpisodeSnapshotSchema.parse({ kind: 'episode', ...keys, assignmentId: 'assignment1',
     learningVoidId: 'void1', blueprintRevisionId: 'blueprint1', objectiveId: 'objective1', horizonDays: 7,
     assignment: { ...stratum, status: 'admitted', protocolStatus: 'frozen', protocolVersion: 'protocol.v1', enrollmentAt: anchorAt - 1, timezone: 'UTC', anchorAt, anchorKind: 'sealed_cold',
-      historyStatus: 'prospectively_unexposed', allocationOrder: 'ABC', assignedDay7: true, assignedDay30: true, sourceCoverage: 'complete' },
+      historyStatus: 'prospectively_unexposed', allocationOrder: bothHorizons ? 'ABC' : 'AB', assignedDay7: true, assignedDay30: bothHorizons, sourceCoverage: 'complete' },
     clock, coldOpportunityId: 'coldOpportunity1', originalOpportunityId: 'delayedOpportunity1', replacementOpportunityId: null,
     coldAcceptance: { submissionId: 'coldSubmission1', acceptedAt: anchorAt }, delayedAcceptance: { submissionId: 'delayedSubmission1', acceptedAt: openAt },
-    cold: null, delayed: null, replacementClock: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
+    cold: null, delayed: null, coldReplacement: null, replacementClock: null, replacementAcceptance: null, replacement: null, replacementPolicy: { kind: 'secondary_only' },
     operationalEligibility: 'eligible', disposition: 'scoring_pending', reasonCodes: ['scoring_pending'], mixedFlow: false, treatmentEpochChanged: false })
   const claim = learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, stratum,
     claim: { claimKey: 'claim1', claimSequence: 1, basisAttemptId: 'basisAttempt1', masteryRecordRevision: 1,
@@ -55,8 +55,8 @@ export async function measurementReportNonAdmittedFixture(status: 'considered' |
   return { ...source, episode }
 }
 
-export async function measurementReportIdentityFixture() {
-  const source = await measurementReportSourceFixture()
+export async function measurementReportIdentityFixture(bothHorizons = false) {
+  const source = await measurementReportSourceFixture(bothHorizons)
   const { cold, delayed, claim } = source
   const replacementClock = { ...source.episode.clock!, dueAt: claim.clock.dueAt + 3_600_000,
     openAt: claim.clock.openAt + 3_600_000, closeAt: claim.clock.closeAt + 86_400_000 }
@@ -74,6 +74,7 @@ export async function measurementReportIdentityFixture() {
     acceptedAt: openAt + 3_600_000, scoreCommittedAt: openAt + 3_600_000 + 1000,
     attemptId: 'day30ReplacementAttempt', executionId: 'day30ReplacementExecution', caseId: 'caseE', itemId: 'itemE', formLabel: 'E' })
   const day30 = learnReportEpisodeSnapshotSchema.parse({ ...episode, horizonDays: 30,
+    assignment: bothHorizons ? episode.assignment : { ...episode.assignment, assignedDay7: false, assignedDay30: true },
     clock: { ...claim.clock, horizonDays: 30, dueLocalDate: '2026-10-31', dueAt: openAt, openAt, closeAt: openAt + 86_400_000 },
     replacementClock: { ...replacementClock, horizonDays: 30, dueLocalDate: '2026-10-31', dueAt: openAt + 3_600_000,
       openAt: openAt + 3_600_000, closeAt: openAt + 2 * 86_400_000 },
@@ -87,6 +88,24 @@ export async function measurementReportIdentityFixture() {
     replacementOpportunityId: 'otherReplacementOpportunity', replacementAcceptance: { ...episode.replacementAcceptance, submissionId: 'otherReplacementSubmission' },
     replacement: { ...replacement, submissionId: 'otherReplacementSubmission', attemptId: 'otherReplacementAttempt', executionId: 'otherReplacementExecution' } })
   return { ...source, episode, day30, otherAssignment }
+}
+
+export async function measurementReportColdReplacementFixture() {
+  const source = await measurementReportIdentityFixture(true)
+  const openAt = source.cold.acceptedAt
+  const acceptance = { submissionId: 'coldReplacementSubmission', acceptedAt: openAt + 1000 }
+  const coldReplacement = {
+    assessmentOpportunityId: 'coldReplacementOpportunity', replacesOpportunityId: source.episode.coldOpportunityId!,
+    replacementReason: 'unusable_case', openAt, closeAt: openAt + 3_600_000,
+    eligibilityPolicyVersion: 'learn-v2.delayed-check.v1', operationalEligibility: 'eligible', acceptance,
+    validitySnapshot: { policyVersion: 'validity.v1', status: 'valid', measurementEligible: true, masteryEligible: false, exclusionReasons: [] },
+    result: { ...source.cold, ...acceptance, attemptId: 'coldReplacementAttempt', executionId: 'coldReplacementExecution',
+      scorePercent: 20, caseId: 'reserveColdCaseD', itemId: 'reserveColdItemD', formLabel: 'D' },
+  }
+  const originalCold = { ...source.cold, validityStatus: 'excluded', measurementEligible: false, exclusionReasons: ['invalid_item_novelty'] }
+  const episode = learnReportEpisodeSnapshotSchema.parse({ ...source.episode, cold: originalCold, coldReplacement })
+  const day30 = learnReportEpisodeSnapshotSchema.parse({ ...source.day30, cold: originalCold, coldReplacement })
+  return { ...source, episode, day30 }
 }
 
 // A visible measurement or retained-check attempt cannot be an Independent basis (#364 §5).
