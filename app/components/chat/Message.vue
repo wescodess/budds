@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { parseMarkdown } from '@nuxtjs/mdc/runtime'
+import type { MDCRoot } from '@nuxtjs/mdc'
 import { cn } from '@/lib/utils'
-import { expandCitations } from '~/utils/expand-citations'
-import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
+import { generatedTextFallback, parseGeneratedMarkdown } from '~/utils/generated-markdown'
+import { generatedMdcComponents } from '~/utils/generated-mdc-components'
 import type { Source } from '~/composables/useChat'
 
 const props = defineProps<{
@@ -31,114 +31,48 @@ provide('chatCitationClick', (i: number) => emit('citation-click', i))
 provide('chatCitationLongPress', (i: number) => emit('citation-long-press', i))
 provide('chatCitationOpenInKnowledge', (i: number) => emit('open-in-knowledge', i))
 
-const processedContent = computed(() => {
-  if (props.role === 'user') return props.content
-  return expandCitations(props.content)
-})
-
 const isAssistant = computed(() => props.role === 'assistant')
-type ParsedMarkdown = Awaited<ReturnType<typeof parseMarkdown>>
-
-const parsedMarkdown = shallowRef<ParsedMarkdown | null>(null)
-const markdownParseError = shallowRef<unknown | null>(null)
+const markdownBody = shallowRef<MDCRoot | null>(null)
+const markdownParseError = ref(false)
 const isMarkdownParsing = ref(false)
+const hasMarkdownResult = ref(false)
+const applicationOrigins = [useRequestURL().origin, useRuntimeConfig().public.siteUrl].filter(Boolean)
 let markdownParseGeneration = 0
+let parsing: Promise<void> | undefined
+let settledContent: string | null = null
 
-const markdownBody = computed(() => parsedMarkdown.value?.body ?? null)
-const markdownData = computed(() => parsedMarkdown.value?.data ?? {})
-const fallbackContent = computed(() => {
-  if (!isAssistant.value) return props.content
-  return normalizeAssistantCitations(props.content)
-})
-const fallbackSegments = computed(() => {
-  const content = fallbackContent.value
-  const parts = content.split(/(\[\d+\])/g)
-  const segments: Array<
-    { type: 'text'; value: string }
-    | { type: 'citation'; index: number }
-  > = []
+const fallbackSegments = computed(() => generatedTextFallback(props.content, sourcesRef.value.length))
+const showMarkdownSkeleton = computed(() => isAssistant.value && isMarkdownParsing.value && !hasMarkdownResult.value && props.content.trim().length > 0)
+const showMarkdownFallback = computed(() => isAssistant.value && props.content.trim().length > 0 && !markdownBody.value && !showMarkdownSkeleton.value)
 
-  for (const part of parts) {
-    if (!part) continue
-
-    const match = /^\[(\d+)\]$/.exec(part)
-    if (match) {
-      segments.push({ type: 'citation', index: Number(match[1]) })
-      continue
-    }
-
-    segments.push({ type: 'text', value: part })
-  }
-
-  return segments
-})
-const showMarkdownSkeleton = computed(() =>
-  isAssistant.value
-  && isMarkdownParsing.value
-  && !markdownBody.value
-  && !markdownParseError.value
-  && processedContent.value.trim().length > 0,
-)
-const showMarkdownFallback = computed(() =>
-  isAssistant.value
-  && processedContent.value.trim().length > 0
-  && !markdownBody.value
-  && !showMarkdownSkeleton.value,
-)
-
-async function parseChatMarkdown(content: string, options: { highlight?: false } = {}) {
-  return parseMarkdown(content, {
-    toc: false,
-    contentHeading: false,
-    ...options,
-  })
-}
-
-async function parseAssistantMarkdown() {
-  const parseGeneration = ++markdownParseGeneration
-  const content = processedContent.value
-  const trimmedContent = content.trim()
-
-  if (!isAssistant.value || trimmedContent.length === 0) {
-    parsedMarkdown.value = null
-    markdownParseError.value = null
+async function parseAssistantMarkdown(content: string) {
+  const current = ++markdownParseGeneration
+  if (!isAssistant.value || !content.trim()) {
+    markdownBody.value = null
+    markdownParseError.value = false
     isMarkdownParsing.value = false
+    hasMarkdownResult.value = false
+    settledContent = null
     return
   }
-
   isMarkdownParsing.value = true
-  markdownParseError.value = null
-
-  try {
-    const parsed = await parseChatMarkdown(content)
-
-    if (parseGeneration !== markdownParseGeneration) return
-    parsedMarkdown.value = parsed
-  } catch (error) {
-    if (parseGeneration !== markdownParseGeneration) return
-    console.warn('[chat] Failed to parse assistant markdown with highlighting, retrying without highlight', error)
-
-    try {
-      const parsed = await parseChatMarkdown(content, { highlight: false })
-
-      if (parseGeneration !== markdownParseGeneration) return
-      parsedMarkdown.value = parsed
-    } catch (retryError) {
-      if (parseGeneration !== markdownParseGeneration) return
-      parsedMarkdown.value = null
-      markdownParseError.value = retryError
-      console.error('[chat] Failed to parse assistant markdown', retryError)
-    }
-  } finally {
-    if (parseGeneration === markdownParseGeneration) {
-      isMarkdownParsing.value = false
-    }
-  }
+  const result = await parseGeneratedMarkdown(content, { applicationOrigins, sourceCount: sourcesRef.value.length })
+  if (current !== markdownParseGeneration) return
+  isMarkdownParsing.value = false
+  // A later chunk may still complete a token on the open line, so keep its last good render.
+  const holdOpenBlock = props.streaming && result.tailRefused && settledContent !== null
+    && content.startsWith(settledContent) && !content.slice(settledContent.length).trimStart().includes('\n')
+  if (holdOpenBlock) return
+  markdownBody.value = result.body
+  markdownParseError.value = !result.body
+  hasMarkdownResult.value = true
+  settledContent = result.body && !result.tailRefused ? content : null
 }
-
-watch([processedContent, isAssistant], () => {
-  void parseAssistantMarkdown()
-}, { immediate: true })
+watch([() => props.content, isAssistant, () => sourcesRef.value.length, () => props.streaming], ([content]) => {
+  parsing = parseAssistantMarkdown(content)
+}, { immediate: true, flush: 'sync' })
+await parsing
+onBeforeUnmount(() => markdownParseGeneration++)
 </script>
 
 <template>
@@ -165,7 +99,8 @@ watch([processedContent, isAssistant], () => {
       <MDCRenderer
         v-if="markdownBody"
         :body="markdownBody"
-        :data="markdownData"
+        :components="generatedMdcComponents"
+        :prose="false"
         tag="div"
         :class="cn(
           'prose-chat space-y-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.85em] [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:bg-[#0f0d0c] [&_pre]:p-4 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:border-primary [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:w-full [&_table]:border-collapse [&_th]:border [&_th]:border-border [&_th]:bg-muted [&_th]:p-2 [&_th]:text-left [&_td]:border [&_td]:border-border [&_td]:p-2 [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_em]:italic',

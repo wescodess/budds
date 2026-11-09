@@ -154,53 +154,18 @@ describe('ChatMessage — markdown degradation', () => {
     vi.restoreAllMocks()
   })
 
-  it('[P0] should retry assistant markdown parsing without highlighting before raw-text fallback', async () => {
+  it('[P0] preserves literal Markdown as escaped text when the parser fails', async () => {
     vi.resetModules()
-
     vi.doMock('@nuxtjs/mdc/runtime', async () => {
       const actual = await vi.importActual<typeof import('@nuxtjs/mdc/runtime')>('@nuxtjs/mdc/runtime')
-      const parseMarkdown = vi.fn(actual.parseMarkdown)
-
-      parseMarkdown.mockRejectedValueOnce(new Error('highlight failed'))
-
-      return {
-        ...actual,
-        parseMarkdown,
-      }
+      return { ...actual, parseMarkdown: vi.fn().mockRejectedValue(new Error('parse failed')) }
     })
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const ChatMessage = await import(chatMessagePath)
-
-    const wrapper = await mountSuspended(ChatMessage.default, {
-      props: {
-        role: 'assistant',
-        content: 'Key points:\n\n- First item\n- Second item',
-      },
-    })
-
-    await flushPromises()
-    await wrapper.vm.$nextTick()
-
-    const { parseMarkdown } = await import('@nuxtjs/mdc/runtime')
-    const parseMarkdownMock = vi.mocked(parseMarkdown)
-
-    expect(parseMarkdownMock).toHaveBeenCalledTimes(2)
-    expect(parseMarkdownMock.mock.calls[0]?.[1]).toEqual({
-      toc: false,
-      contentHeading: false,
-    })
-    expect(parseMarkdownMock.mock.calls[1]?.[1]).toEqual({
-      toc: false,
-      contentHeading: false,
-      highlight: false,
-    })
-    expect(warnSpy).toHaveBeenCalled()
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(wrapper.findAll('li')).toHaveLength(2)
-    expect(wrapper.text()).toContain('First item')
-    expect(wrapper.text()).toContain('Second item')
+    const content = 'Key points:\n\n- First item\n- Second item'
+    const wrapper = await mountSuspended(ChatMessage.default, { props: { role: 'assistant', content } })
+    await vi.waitFor(() => expect(wrapper.text()).toContain(content))
+    expect(wrapper.find('li').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('[P0] should render citation badges in fallback mode when markdown parsing keeps failing', async () => {
@@ -215,8 +180,6 @@ describe('ChatMessage — markdown degradation', () => {
       }
     })
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const ChatMessage = await import(chatMessagePath)
     const sources = createSources(1, { filename: 'biology.pdf' })
 
@@ -231,8 +194,6 @@ describe('ChatMessage — markdown degradation', () => {
     await flushPromises()
     await wrapper.vm.$nextTick()
 
-    expect(warnSpy).toHaveBeenCalled()
-    expect(errorSpy).toHaveBeenCalled()
     expect(wrapper.text()).toContain('Context')
     expect(wrapper.findAll('button[type="button"]')).toHaveLength(1)
     expect(wrapper.text()).not.toContain('<citation')
