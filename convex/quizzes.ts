@@ -41,15 +41,20 @@ const settingsValidator = v.object({
   immediateFeedback: v.boolean(),
 })
 
-async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
+async function requireOwnedQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
   const quiz = await ctx.db.get(quizId)
   if (!quiz || quiz.userId !== userId || quiz.deletedAt !== undefined) throw new Error('Quiz not found')
+  return quiz
+}
+
+async function requireQuiz(ctx: QueryCtx | MutationCtx, quizId: Id<'quizzes'>, userId: string) {
+  const quiz = await requireOwnedQuiz(ctx, quizId, userId)
   await assertQuizTeaching(ctx, userId, quizId)
   return quiz
 }
 
-async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>) {
-  const quiz = await requireQuiz(ctx, quizId, userId)
+async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>, userId: string, attemptId?: Id<'quizAttempts'>, questionId?: Id<'quizQuestions'>) {
+  const quiz = await requireOwnedQuiz(ctx, quizId, userId)
   const gradingEnabled = isQuizGradingEnabled()
   // Stored rubric work keeps its parent fence when new grading is switched off.
   const storedRubric = !gradingEnabled && attemptId
@@ -59,6 +64,8 @@ async function requireQuizForSubmission(ctx: MutationCtx, quizId: Id<'quizzes'>,
   if ((gradingEnabled || storedRubric) && !await isQuizGradingParentEligible(ctx, quiz)) {
     throw new Error('Course quiz is unavailable for grading')
   }
+  if (questionId) await assertTeachingInputs(ctx, userId, [{ kind: 'quiz_question', id: questionId }])
+  else await assertQuizTeaching(ctx, userId, quizId)
   return quiz
 }
 
@@ -331,26 +338,16 @@ export const listByFolder = query({
       .sort((a, b) => b._creationTime - a._creationTime)
       .slice(0, MAX_QUIZZES_PER_FOLDER)
 
-    return await Promise.all(
-      rows.map(async (row) => {
-        const questions = await ctx.db
-          .query('quizQuestions')
-          .withIndex('by_quizId', (q) => q.eq('quizId', row._id))
-          .take(MAX_QUIZ_QUESTIONS)
-        return {
-          _id: row._id,
-          folderId: row.folderId,
-          _creationTime: row._creationTime,
-          title: row.title,
-          status: row.status,
-          score: row.score,
-          completedAt: row.completedAt,
-          questionCount: questions.length,
-          latestAttemptStatus: row.latestAttemptStatus,
-          difficulty: row.difficulty,
-        }
-      }),
-    )
+    const result = []
+    for (const row of rows) {
+      let questions
+      try { questions = await assertQuizTeaching(ctx, userId, row._id) }
+      catch { continue }
+      result.push({ _id: row._id, folderId: row.folderId, _creationTime: row._creationTime, title: row.title,
+        status: row.status, score: row.score, completedAt: row.completedAt, questionCount: questions.length,
+        latestAttemptStatus: row.latestAttemptStatus, difficulty: row.difficulty })
+    }
+    return result
   },
 })
 
@@ -385,7 +382,7 @@ export const updateQuiz = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
-    await requireQuiz(ctx, args.quizId, userId)
+    await requireOwnedQuiz(ctx, args.quizId, userId)
 
     const patch: Record<string, unknown> = {}
     if (args.title !== undefined) {
@@ -531,7 +528,7 @@ export const deleteQuestion = mutation({
 
     const question = await ctx.db.get(args.questionId)
     if (!question || question.userId !== userId) throw new Error('Question not found')
-    await requireQuiz(ctx, question.quizId, userId)
+    await requireOwnedQuiz(ctx, question.quizId, userId)
 
     const quizId = question.quizId
     await ctx.db.delete(args.questionId)
@@ -654,7 +651,7 @@ export const submitAnswer = mutation({
     const attempt = await ctx.db.get(args.attemptId)
     if (!attempt || attempt.userId !== userId) throw new Error('Attempt not found')
     if (attempt.status !== 'in_progress') throw new Error('Attempt is not in progress')
-    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id)
+    await requireQuizForSubmission(ctx, attempt.quizId, userId, attempt._id, args.questionId)
 
     const question = await ctx.db.get(args.questionId)
     if (!question) throw new Error('Question not found')

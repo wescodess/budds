@@ -36,6 +36,11 @@ async function requireOwnedRoom(
   if (!room || room.userId !== userId) {
     throw new Error('Room not found')
   }
+  return room
+}
+
+async function requireTeachingRoom(ctx: MutationCtx, roomId: Id<'flashcardRooms'>, userId: string) {
+  const room = await requireOwnedRoom(ctx, roomId, userId)
   await assertRoomTeaching(ctx, userId, roomId)
   return room
 }
@@ -302,7 +307,12 @@ export const listRoomsByFolder = query({
 
     const rooms = allRooms.filter((r) => r.courseScoped !== true)
 
-    const summaries = rooms.map((room) => ({
+    const admitted = []
+    for (const room of rooms) {
+      try { await assertRoomTeaching(ctx, userId, room._id); admitted.push(room) }
+      catch { continue }
+    }
+    const summaries = admitted.map((room) => ({
       _id: room._id,
       _creationTime: room._creationTime,
       title: room.title,
@@ -344,7 +354,7 @@ export const createCard = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const term = args.term.trim()
     if (term.length === 0) throw new Error('Term required')
@@ -449,7 +459,7 @@ export const reorderCards = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const currentCards = await ctx.db
       .query('flashcardRoomCards')
@@ -521,9 +531,10 @@ export const generateRoomCards = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
-    if (args.cards.length > (args.requestedCardCount ?? 200)) throw new Error('Flashcards exceed the requested publication size')
+    if (args.requestedCardCount !== undefined && (!Number.isInteger(args.requestedCardCount) || args.requestedCardCount < 1 || args.requestedCardCount > 200)
+      || args.cards.length > (args.requestedCardCount ?? 200)) throw new Error('Flashcards exceed the requested publication size')
     const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const archiveOpts = await resolveArchiveOpts(ctx, room)
     await archiveCurrentCards(ctx, room, archiveOpts)
@@ -645,7 +656,7 @@ export const restoreRoomVersion = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const version = await ctx.db.get(args.versionId)
     if (!version || version.userId !== userId) throw new Error('Version not found')

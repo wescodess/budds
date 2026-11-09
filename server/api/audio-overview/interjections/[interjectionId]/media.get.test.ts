@@ -25,6 +25,12 @@ describe('owner Interjection media route', () => {
     expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
   })
 
+  test('does not touch R2 when the parent or generated answer has protected lineage', async () => {
+    mockQuery.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler({ context: { convexToken: 'owner-token' } })).rejects.toThrow('Teaching input is unavailable')
+    expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
+  })
+
   test('proxies only the private artifact resolved from the Interjection ID', async () => {
     const media = { objectKey: 'audio-overviews/jobs/job_1/interjections/interjection_1.wav', container: 'wav', contentType: 'audio/wav' }
     const response = new Response('wav')

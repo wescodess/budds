@@ -7,6 +7,7 @@ import { artifactManifestDigest, prepareAndRegisterInstructionalArtifacts } from
 type Store = TestConvex<typeof schema>
 export async function enrollProducer(t: Store, userId: string, documents: Id<'documents'>[]) {
   await t.run(ctx => ctx.db.insert('learnAssessmentCatalogs', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: 1_800_000_000_000, catalogRevision: 0, instrumentationEpoch: 'epoch.v1', historyCompleteness: 'prospective_complete', historyBasisVersion: 'history.v1', historyCoverageWatermark: 'coverage.v1', measurementCapability: { enabled: true } }))
+  if (!documents.length) return
   await t.withIdentity({ tokenIdentifier: userId }).run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.flatMap(id => [
     { artifact: { kind: 'document' as const, id }, key: 'whole', sources: [], origins: [] },
     { artifact: { kind: 'document_chunk' as const, id }, key: 'chunk-set', sources: [], origins: [] },

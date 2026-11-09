@@ -678,9 +678,9 @@ describe('v2 Audio Overview Interjections', () => {
   })
 })
 
-async function contractFixture(kind: 'audio_interjection' | 'audio_interjection_v2', sources = 2) {
+async function contractFixture(kind: 'audio_interjection' | 'audio_interjection_v2', sources = 2, registered = true) {
   const f = await readyV2Overview()
-  await enrollProducer(f.t, OWNER.tokenIdentifier, [f.firstDocumentId, f.secondDocumentId])
+  if (registered) await enrollProducer(f.t, OWNER.tokenIdentifier, [f.firstDocumentId, f.secondDocumentId])
   if (sources > 2) {
     const documents = await f.t.run(async ctx => {
       const folderId = (await ctx.db.get(f.firstDocumentId))!.folderId
@@ -694,12 +694,12 @@ async function contractFixture(kind: 'audio_interjection' | 'audio_interjection_
       await ctx.db.patch(f.overviewId, { scopeDocIds: [f.firstDocumentId, f.secondDocumentId, ...documents] })
       return documents
     })
-    for (let offset = 0; offset < documents.length; offset += 25) await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.slice(offset, offset + 25).flatMap(id => [
+    for (let offset = 0; registered && offset < documents.length; offset += 25) await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.slice(offset, offset + 25).flatMap(id => [
       { artifact: { kind: 'document' as const, id }, key: 'whole', sources: [], origins: [] },
       { artifact: { kind: 'document_chunk' as const, id }, key: 'chunk-set', sources: [], origins: [] },
     ]) }))
   }
-  const parent = await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', origins: [], sources: [] }] }))
+  const parent = registered ? await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', origins: [], sources: [] }] })) : { lineageIds: [] }
   const artifact = await f.t.run(async ctx => {
     if (kind === 'audio_interjection') {
       const audioFileId = await ctx.storage.store(new Blob(['answer audio']))
@@ -760,6 +760,21 @@ describe('#540 interjection preparation contract', () => {
 
 
 describe('#540 interjection graph and pin limits', () => {
+  test.each(['audio_interjection', 'audio_interjection_v2'] as const)('an unregistered %s still rejects its protected parent', async kind => {
+    const f = await contractFixture(kind)
+    await f.t.run(async ctx => {
+      const catalog = (await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())!
+      await ctx.db.patch(catalog._id, { measurementCapability: { enabled: false } })
+    })
+    await protectProducerArtifact(f.t, OWNER.tokenIdentifier, { kind: 'audio_overview', id: f.overviewId }, 'private_scoring')
+    expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'rejected', reasonCode: 'restricted_lineage' })
+  })
+  test.each(['object', 'hash', 'revision'] as const)('ordinary unregistered reads reject a changed frozen %s pin', async pin => {
+    const f = await contractFixture('audio_interjection_v2', 2, false)
+    expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'admitted_unregistered' })
+    await f.t.run(ctx => ctx.db.patch(f.firstDocumentId, pin === 'object' ? { r2Key: 'owner/replaced-object' } : pin === 'hash' ? { contentHash: 'c'.repeat(64) } : { sourceRevision: 'changed.r2' }))
+    expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'rejected' })
+  })
   test('duplicated parent/source provenance above the existing 64-link graph bound fails closed', async () => {
     const f = await contractFixture('audio_interjection_v2', 50)
     const catalog = await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())
@@ -805,4 +820,54 @@ test('#540 media publication advances the script binding and stale media never a
   expect((await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, f.input))).lineageIds).toEqual(published.lineageIds)
   await f.t.run(ctx => ctx.db.patch(mediaId, { checksumSha256: 'd'.repeat(64) }))
   expect(await f.owner.run(ctx => admitArtifactInputByIdentity(ctx, f.artifact))).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
+})
+
+
+async function enrolledV2Interjection() {
+  const f = await readyV2Overview()
+  await enrollProducer(f.t, OWNER.tokenIdentifier, [f.firstDocumentId, f.secondDocumentId])
+  await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', sources: [], origins: [] }] }))
+  const request = { audioOverviewId: f.overviewId, idempotencyKey: 'interjection-admission-0001', insertedAfterTurnIndex: 0, question: 'My own question' }
+  const reserved = await f.owner.mutation(api.audioOverviewInterjectionsV2.reserve, request)
+  const credentials = { interjectionId: reserved.interjectionId, orchestrationToken: ORCHESTRATION_TOKEN }
+  await f.owner.mutation(api.audioOverviewInterjectionsV2.claimScripting, credentials)
+  const script = { ...credentials, utterances: [groundedUtterance('host_a', 'Gravity bends the path.', 'gravity-source', 'gravity-claim', String(reserved.interjectionId), 0), groundedUtterance('host_b', 'An orbit is free fall.', 'orbits-source', 'orbit-claim', String(reserved.interjectionId), 1)] }
+  const publish = { ...credentials, artifact: { objectKey: `audio-overviews/jobs/${f.jobId}/interjections/${reserved.interjectionId}.wav`, checksumSha256: HASH, byteLength: 48_044, contentType: 'audio/wav', durationMs: 1_000 } }
+  return { ...f, request, credentials, script, publish, interjectionId: reserved.interjectionId }
+}
+
+describe('V2 Interjection publication and read admission', () => {
+  test('script and media both register, exact publication replay is idempotent and own question remains independent', async () => {
+    const f = await enrolledV2Interjection()
+    await f.owner.mutation(api.audioOverviewInterjectionsV2.startRendering, f.script)
+    const script = await f.t.run(ctx => ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'audio_interjection_v2').eq('artifact.id', f.interjectionId).eq('nextId', undefined)).unique())
+    expect(script?.publication).toBeDefined()
+    await f.owner.mutation(api.audioOverviewInterjectionsV2.claimRenderingAttempt, f.credentials)
+    const result = await f.owner.mutation(api.audioOverviewInterjectionsV2.publish, f.publish)
+    expect(await f.owner.mutation(api.audioOverviewInterjectionsV2.publish, f.publish)).toMatchObject({ duplicate: true, artifactId: result.artifactId })
+    expect((await f.t.run(ctx => ctx.db.get(script!._id)))?.nextId).toBeDefined()
+    expect(await f.owner.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: f.interjectionId })).toMatchObject({ question: f.request.question, answerAvailability: 'available', utterances: [{ text: 'Gravity bends the path.' }, { text: 'An orbit is free fall.' }] })
+    expect(await f.owner.query(api.audioOverviewInterjectionsV2.resolveMediaForOwner, { interjectionId: f.interjectionId })).toHaveProperty('artifactId', result.artifactId)
+  })
+  test.each(['measurement', 'private_scoring', 'unknown'] as const)('%s answer and parent cannot pass renderer, publication, text or media replay', async classification => {
+    for (const parent of [false, true]) {
+      const f = await enrolledV2Interjection()
+      await f.owner.mutation(api.audioOverviewInterjectionsV2.startRendering, f.script)
+      await f.owner.mutation(api.audioOverviewInterjectionsV2.claimRenderingAttempt, f.credentials)
+      await f.owner.mutation(api.audioOverviewInterjectionsV2.publish, f.publish)
+      await protectProducerArtifact(f.t, OWNER.tokenIdentifier, parent ? { kind: 'audio_overview', id: f.overviewId } : { kind: 'audio_interjection_v2', id: f.interjectionId }, classification)
+      for (const run of [() => f.owner.mutation(api.audioOverviewInterjectionsV2.reserve, f.request), () => f.owner.mutation(api.audioOverviewInterjectionsV2.claimRenderingAttempt, f.credentials), () => f.owner.mutation(api.audioOverviewInterjectionsV2.publish, f.publish), () => f.owner.query(api.audioOverviewInterjectionsV2.resolveMediaForOwner, { interjectionId: f.interjectionId })]) await expect(run()).rejects.toThrow(/unavailable/)
+      expect(await f.owner.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: f.interjectionId })).toMatchObject({ question: f.request.question, idempotencyKey: f.request.idempotencyKey, answerAvailability: 'unavailable', utterances: [], artifact: null })
+    }
+  })
+  test.each(['script', 'media'] as const)('a late reserved case rolls back the %s publication', async stage => {
+    const f = await enrolledV2Interjection()
+    if (stage === 'media') { await f.owner.mutation(api.audioOverviewInterjectionsV2.startRendering, f.script); await f.owner.mutation(api.audioOverviewInterjectionsV2.claimRenderingAttempt, f.credentials) }
+    await f.t.run(async ctx => ctx.db.insert('learnAssessmentCases', { userId: OWNER.tokenIdentifier, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: 1, caseKey: 'retired-interjection', usageClass: 'unknown', reservedAt: 0, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, ...await normalizedInstructionalCaseFingerprints('Retired task', 'Retired solution') }))
+    const before = await f.t.run(ctx => ctx.db.get(f.interjectionId))
+    await expect(stage === 'script' ? f.owner.mutation(api.audioOverviewInterjectionsV2.startRendering, f.script) : f.owner.mutation(api.audioOverviewInterjectionsV2.publish, f.publish)).rejects.toThrow(/reservation check/)
+    expect(await f.t.run(ctx => ctx.db.get(f.interjectionId))).toEqual(before)
+    const artifacts = await f.t.run(ctx => ctx.db.query('audioOverviewAudioArtifacts').withIndex('by_episodeId_and_kind', q => q.eq('episodeId', f.episodeId)).take(10))
+    expect(artifacts.filter(row => row.interjectionId === f.interjectionId)).toEqual([])
+  })
 })

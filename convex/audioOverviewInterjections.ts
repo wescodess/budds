@@ -1,3 +1,5 @@
+import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, admitTeachingSourcePins, publishTeaching } from './lib/learnV2AssessmentLineage'
+import { artifactPayloadDigest } from './lib/learnV2ArtifactLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -51,6 +53,7 @@ export const create = mutation({
     const userId = await requireAuth(ctx)
     const overview = await requireOwnedOverview(ctx, args.audioOverviewId, userId)
     if (overview.status !== 'ready') throw new Error('Audio overview is not ready')
+    await assertAudioTeaching(ctx, overview)
 
     if (args.answerTurns.length === 0) {
       throw new Error('Interjection requires at least one answer turn')
@@ -67,7 +70,7 @@ export const create = mutation({
       || task.userId !== userId
       || task.folderId !== overview.folderId
       || task.type !== 'audio-overview-generation'
-      || task.status !== 'running'
+      || !['running', 'completed'].includes(task.status)
       || !task.audioOverviewRequest
     ) {
       throw new Error('Reserved audio overview task not found')
@@ -83,8 +86,20 @@ export const create = mutation({
       throw new Error('Reserved audio overview scope does not match')
     }
 
-    const claims = await requireVerifiedUploadClaims(ctx, userId, task._id, args.answerTurns)
+    await admitTeachingSourcePins(ctx, userId, task.audioOverviewRequest.documents.map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })))
     const persistedTurns = args.answerTurns.map(({ uploadClaimId: _claimId, ...turn }) => turn)
+    if (task.status === 'completed') {
+      const rawId = task.result?.interjectionId
+      const id = typeof rawId === 'string' ? ctx.db.normalizeId('audioOverviewInterjections', rawId) : null
+      const previous = id ? await ctx.db.get(id) : null
+      if (!previous || previous.userId !== userId || previous.taskId !== task._id || previous.audioOverviewId !== overview._id || previous.question !== trimmedQuestion
+        || previous.insertedAfterTurnIndex !== Math.max(0, Math.min(args.insertedAfterTurnIndex, overview.turns.length))
+        || await artifactPayloadDigest(previous.answerTurns) !== await artifactPayloadDigest(persistedTurns)) throw new Error('Interjection task was already completed with different content')
+      await assertInterjectionTeaching(ctx, userId, previous)
+      await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection', id: previous._id }, key: 'whole' }])
+      return { interjectionId: previous._id }
+    }
+    const claims = await requireVerifiedUploadClaims(ctx, userId, task._id, args.answerTurns)
 
     const clampedAfterIndex = Math.max(
       0,
@@ -93,6 +108,7 @@ export const create = mutation({
 
     const interjectionId = await ctx.db.insert('audioOverviewInterjections', {
       audioOverviewId: args.audioOverviewId,
+      taskId: task._id,
       userId,
       insertedAfterTurnIndex: clampedAfterIndex,
       question: trimmedQuestion,
@@ -100,6 +116,7 @@ export const create = mutation({
       answerTurns: persistedTurns,
     })
 
+    await publishTeaching(ctx, userId, [{ artifact: { kind: 'audio_interjection', id: interjectionId }, key: 'whole' }])
     await consumeVerifiedUploadClaims(ctx, claims)
     const now = Date.now()
     await ctx.db.patch(task._id, {
@@ -126,9 +143,14 @@ export const listByOverview = query({
       .query('audioOverviewInterjections')
       .withIndex('by_audioOverview', (q) => q.eq('audioOverviewId', args.audioOverviewId))
       .order('asc')
-      .collect()
-
-    return rows
+      .take(101)
+    if (rows.length > 100) throw new Error('Teaching input is unavailable')
+    const result = []
+    for (const row of rows) {
+      const available = await interjectionAnswerAvailable(ctx, userId, row)
+      result.push({ _id: row._id, _creationTime: row._creationTime, audioOverviewId: row.audioOverviewId, userId: row.userId, insertedAfterTurnIndex: row.insertedAfterTurnIndex, question: row.question, model: row.model, answerTurns: available ? row.answerTurns : [], answerAvailability: available ? 'available' as const : 'unavailable' as const })
+    }
+    return result
   },
 })
 
@@ -139,6 +161,7 @@ export const getTurnUrls = query({
     if (!userId) return null
     const row = await ctx.db.get(args.id)
     if (!row || row.userId !== userId) return null
+    await assertInterjectionTeaching(ctx, userId, row)
     const urls: (string | null)[] = []
     for (const turn of row.answerTurns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))

@@ -4,6 +4,16 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { artifactManifestDigest, prepareAndRegisterInstructionalArtifacts } from './lib/learnV2ArtifactLineage'
+import * as courses from './courses'
+import * as courseSections from './courseSections'
+import * as documents from './documents'
+import * as folders from './folders'
+import * as courseSourceDocs from './courseSourceDocs'
+import * as reviewItems from './reviewItems'
+import * as audioOverviewRooms from './audioOverviewRooms'
+import { invokePrivacyQuery, tracePrivacyReads } from '../tests/fixtures/learn-v2-privacy-reads'
+import { ASSESSMENT_DISCLOSURE_OTHER_OWNERS } from './lib/learnV2AssessmentDisclosure'
+import producerGuide from '../docs/plans/learn-v2-c1-public-api-contract.md?raw'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
@@ -13,6 +23,11 @@ const userId = identity.tokenIdentifier
 const base = { userId, storageVersion: 'learn-v2.measurement-storage.v1' as const, createdAt: 1_800_000_000_000 }
 const canary = 'held-out-private-scoring-canary'
 const settings = { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: false }
+
+test.each(ASSESSMENT_DISCLOSURE_OTHER_OWNERS['C4.3 #431'])('%s is mapped in the producer contract inventory', surface => {
+  const inventory = producerGuide.split('### C4.3 producer and legacy surface inventory')[1]!
+  expect(inventory).toContain(`\`${surface}\``)
+})
 
 async function fixture(enrolled = true) {
   const t = convexTest(schema, modules)
@@ -54,8 +69,8 @@ async function fixture(enrolled = true) {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>
 
-async function restrict(f: Fixture, kind: 'quiz_question' | 'document' | 'document_chunk' | 'flashcard_version' | 'audio_overview', classification: 'measurement' | 'private_scoring' | 'unknown' = 'private_scoring') {
-  const id = kind === 'quiz_question' ? f.questionId : kind === 'flashcard_version' ? f.versionId : kind === 'audio_overview' ? f.overviewId : f.documentId
+async function restrict(f: Fixture, kind: 'quiz_question' | 'section_block' | 'document' | 'document_chunk' | 'flashcard_version' | 'audio_overview', classification: 'measurement' | 'private_scoring' | 'unknown' = 'private_scoring') {
+  const id = kind === 'quiz_question' ? f.questionId : kind === 'section_block' ? f.sectionId : kind === 'flashcard_version' ? f.versionId : kind === 'audio_overview' ? f.overviewId : f.documentId
   await f.t.run(async ctx => {
     const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', kind).eq('artifact.id', id).eq('nextId', undefined)).take(16)
     expect(rows.length).toBeGreaterThan(0)
@@ -78,12 +93,23 @@ async function inventory(f: Fixture) {
     jobs: await ctx.db.query('audioOverviewJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
     quizzes: await ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', userId)).take(100),
     questions: await ctx.db.query('quizQuestions').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
+    rooms: await ctx.db.query('flashcardRooms').withIndex('by_userId', q => q.eq('userId', userId)).take(100),
+    cards: await ctx.db.query('flashcardRoomCards').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
+    versionCards: await ctx.db.query('flashcardVersionCards').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
     versions: await ctx.db.query('flashcardRoomVersions').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
     lineages: await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
+    overviews: await ctx.db.query('audioOverviews').withIndex('by_userId', q => q.eq('userId', userId)).take(100),
+    reviewItems: await ctx.db.query('reviewItems').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
     attempts: await ctx.db.query('quizAttempts').withIndex('by_userId', q => q.eq('userId', userId)).take(200),
   }))
 }
 const quizEntries: Array<[string, (f: Fixture) => Promise<unknown>]> = [
+  ['submitAnswer', async f => {
+    return f.owner.mutation(api.quizzes.submitAnswer, { attemptId: f.attemptId, questionId: f.questionId, userAnswer: 'Own work' })
+  }],
+  ['submitAllAnswers', async f => {
+    return f.owner.mutation(api.quizzes.submitAllAnswers, { attemptId: f.attemptId, answers: [{ questionId: f.questionId, userAnswer: 'Own work' }] })
+  }],
   ['getWithQuestions', f => f.owner.query(api.quizzes.getWithQuestions, { id: f.quizId })],
   ['startAttempt', f => f.owner.mutation(api.quizzes.startAttempt, { quizId: f.quizId, settings, restart: true })],
   ['getAttemptResults', f => f.owner.query(api.quizzes.getAttemptResults, { attemptId: f.attemptId })],
@@ -102,9 +128,10 @@ const sectionEntries: Array<[string, (f: Fixture) => Promise<unknown>]> = [
 ]
 
 describe('C4.3 registered producer and legacy boundaries', () => {
-  test.each(quizEntries)('%s rejects private lineage on either enrollment state', async (_name, run) => {
+  test.each(quizEntries)('%s rejects private lineage on either enrollment state', async (name, run) => {
     for (const enrolled of [true, false]) {
       const f = await fixture(enrolled)
+      if (name === 'submitAnswer' || name === 'submitAllAnswers') await f.t.run(ctx => ctx.db.patch(f.attemptId, { status: 'in_progress' }))
       await restrict(f, 'quiz_question')
       const before = await inventory(f)
       await expect(run(f)).rejects.toThrow('Teaching input is unavailable')
@@ -117,6 +144,25 @@ describe('C4.3 registered producer and legacy boundaries', () => {
     await expect(run(f)).rejects.toThrow('Teaching input is unavailable')
     expect((await f.t.run(ctx => ctx.db.get(f.sectionId)))?.offlineAvailable).toBeUndefined()
   })
+  test.each(sectionEntries)('%s rejects direct protected section lineage', async (_name, run) => {
+    const f = await fixture(false)
+    await restrict(f, 'section_block')
+    const before = await inventory(f)
+    await expect(run(f)).rejects.toThrow('Teaching input is unavailable')
+    expect(await inventory(f)).toEqual(before)
+  })
+  test.each(quizEntries)('%s rejects a retired reserved case before adopting an answer', async (name, run) => {
+    const f = await fixture(false)
+    if (name === 'submitAnswer' || name === 'submitAllAnswers') await f.t.run(ctx => ctx.db.patch(f.attemptId, { status: 'in_progress' }))
+    await f.t.run(async ctx => {
+      const lineage = (await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'quiz_question').eq('artifact.id', f.questionId).eq('nextId', undefined)).take(1))[0]!
+      const binding = (await ctx.db.query('learnArtifactCaseBindings').withIndex('by_userId_and_lineageId', q => q.eq('userId', userId).eq('lineageId', lineage._id)).take(1))[0]!
+      await ctx.db.patch(binding.caseId, { reservedAt: 0 })
+    })
+    const before = await inventory(f)
+    await expect(run(f)).rejects.toThrow('Teaching input is unavailable')
+    expect(await inventory(f)).toEqual(before)
+  })
   test.each(['document', 'document_chunk'] as const)('course/Quiz/card scope rejects a restrictive %s representation', async kind => {
     const f = await fixture(false)
     await restrict(f, kind)
@@ -124,10 +170,10 @@ describe('C4.3 registered producer and legacy boundaries', () => {
     await expect(f.owner.mutation(api.quizzes.createWithQuestions, { folderId: f.folderId, title: 'copy', questions: [{ type: 'free-response', order: 0, question: 'Rewrite', correctAnswer: 'copy', sourceDocumentId: f.documentId }] })).rejects.toThrow('Teaching input is unavailable')
     await expect(f.owner.mutation(api.flashcardRooms.generateRoomCards, { roomId: f.roomId, origin: 'ai', cards: [{ term: 'Copy', definition: 'Rewrite', metadata: { source: { documentId: f.documentId, filename: 'copy', chunkContent: canary } } }] })).rejects.toThrow('Teaching input is unavailable')
   })
-  test.each(['getRoom', 'getRoomVersion', 'restoreRoomVersion'] as const)('%s refuses a private version, including restore replay', async entry => {
+  test.each(['getRoom', 'getRoomVersion', 'restoreRoomVersion', 'listRoomVersions'] as const)('%s refuses a private version, including restore replay', async entry => {
     const f = await fixture()
     await restrict(f, 'flashcard_version')
-    const work = entry === 'getRoom' ? f.owner.query(api.flashcardRooms.getRoom, { roomId: f.roomId }) : entry === 'getRoomVersion' ? f.owner.query(api.flashcardRooms.getRoomVersion, { versionId: f.versionId }) : f.owner.mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.roomId, versionId: f.versionId })
+    const work = entry === 'listRoomVersions' ? f.owner.query(api.flashcardRooms.listRoomVersions, { roomId: f.roomId }) : entry === 'getRoom' ? f.owner.query(api.flashcardRooms.getRoom, { roomId: f.roomId }) : entry === 'getRoomVersion' ? f.owner.query(api.flashcardRooms.getRoomVersion, { versionId: f.versionId }) : f.owner.mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.roomId, versionId: f.versionId })
     await expect(work).rejects.toThrow('Teaching input is unavailable')
   })
   test.each(['publishOverview', 'getWithTurns', 'getTurnUrls', 'getByShareToken', 'getTurnUrlsByShareToken'] as const)('%s rejects protected Audio before share or media delivery', async entry => {
@@ -177,6 +223,12 @@ describe('C4.3 registered producer and legacy boundaries', () => {
 
 
 describe('C4.3 final publication checks', () => {
+  test.each([NaN, Infinity, 0, 201, 1.5])('invalid requested card count %s cannot authorize a producing write', async requestedCardCount => {
+    const f = await fixture(false)
+    const before = await inventory(f)
+    await expect(f.owner.mutation(api.flashcardRooms.generateRoomCards, { roomId: f.roomId, origin: 'ai', requestedCardCount, cards: [{ term: 'New', definition: 'New' }] })).rejects.toThrow('Flashcards exceed the requested publication size')
+    expect(await inventory(f)).toEqual(before)
+  })
   test.each(['document', 'document_chunk'] as const)('indexing rejects %s lineage before external indexing and finalization', async kind => {
     const f = await fixture()
     await restrict(f, kind)
@@ -221,5 +273,183 @@ describe('C4.3 final publication checks', () => {
     await expect(f.owner.query(api.quizAnswerAssessments.listPendingForAttempt, { attemptId: f.attemptId })).rejects.toThrow('Teaching input is unavailable')
     await expect(f.owner.query(api.quizAnswerAssessments.listPendingForShadowAttempt, { attemptId: f.attemptId })).rejects.toThrow('Teaching input is unavailable')
     expect(await f.owner.query(api.quizzes.getAttemptResults, { attemptId: f.attemptId })).toBeTruthy()
+  })
+  test.each(['quiz', 'cards'] as const)('the internal course %s seam requires a session and rejects reserved output atomically', async kind => {
+    const f = await fixture()
+    const write = (authenticated: boolean) => {
+      const caller = authenticated ? f.owner : f.t
+      return kind === 'quiz'
+        ? caller.mutation(internal.quizzes.createCourseScopedQuiz, { userId, courseId: f.courseId, folderId: f.folderId, title: 'Internal Quiz', questions: [{ order: 0, type: 'free-response', question: 'Rewritten question', correctAnswer: 'Rewritten solution' }] })
+        : caller.mutation(internal.flashcardRooms.createCourseScopedRoom, { userId, folderId: f.folderId, title: 'Internal cards', cards: [{ term: 'Rewritten term', definition: 'Rewritten solution', sourceFilename: 'owned.txt', sourceChunkContent: 'A snippet grants no identity.' }] })
+    }
+    const before = await inventory(f)
+    await expect(write(false)).rejects.toThrow('Unauthenticated')
+    expect(await inventory(f)).toEqual(before)
+    await f.t.run(async ctx => {
+      const cases = await ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', userId)).take(100)
+      await ctx.db.patch(cases[0]!._id, { reservedAt: 0 })
+    })
+    const reserved = await inventory(f)
+    await expect(write(true)).rejects.toThrow(/reservation check/)
+    expect(await inventory(f)).toEqual(reserved)
+  })
+})
+
+const writers: Array<[string, 'quiz_question' | 'flashcard_version', (f: Fixture) => Promise<unknown>]> = [
+  ['quizzes.updateQuestion', 'quiz_question', f => f.owner.mutation(api.quizzes.updateQuestion, { questionId: f.questionId, correctAnswer: 'Edited answer' })],
+  ['quizzes.addQuestion', 'quiz_question', f => f.owner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'New question', correctAnswer: 'New answer' })],
+  ['quizzes.deleteQuestion', 'flashcard_version', f => f.owner.mutation(api.quizzes.deleteQuestion, { questionId: f.questionId })],
+  ['contentFlags.flagQuizQuestion', 'quiz_question', f => f.owner.mutation(api.contentFlags.flagQuizQuestion, { questionId: f.questionId, correctedAnswer: 'Corrected answer' })],
+  ['contentFlags.unflagQuizQuestion', 'quiz_question', f => f.owner.mutation(api.contentFlags.unflagQuizQuestion, { questionId: f.questionId })],
+  ['courseSections.updateTitle', 'quiz_question', f => f.owner.mutation(api.courseSections.updateTitle, { sectionId: f.sectionId, title: 'New title' })],
+  ['courseSections.updateKnowledgeType', 'quiz_question', f => f.owner.mutation(api.courseSections.updateKnowledgeType, { sectionId: f.sectionId, knowledgeType: 'procedural' })],
+  ['courseSections.updateOrder', 'quiz_question', f => f.owner.mutation(api.courseSections.updateOrder, { courseId: f.courseId, sectionIds: [f.sectionId] })],
+  ['courseSections.remove', 'quiz_question', f => f.owner.mutation(api.courseSections.remove, { sectionId: f.sectionId })],
+  ['courseSections.markReady', 'quiz_question', f => f.owner.mutation(internal.courseSections.markReady, { sectionId: f.sectionId, contentBlocks: [{ type: 'text', order: 0, content: 'New teaching' }] })],
+  ['courseSections.finalizeSectionGeneration', 'quiz_question', f => f.owner.mutation(api.courseSections.finalizeSectionGeneration, { sectionId: f.sectionId, textContent: 'New teaching' })],
+  ['flashcardRooms.createCard', 'flashcard_version', f => f.owner.mutation(api.flashcardRooms.createCard, { roomId: f.roomId, term: 'Second', definition: 'Second definition' })],
+  ['flashcardRooms.updateCard', 'flashcard_version', async f => f.owner.mutation(api.flashcardRooms.updateCard, { cardId: (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!._id, term: 'Edited', definition: 'Edited definition' })],
+  ['flashcardRooms.deleteCard', 'flashcard_version', async f => f.owner.mutation(api.flashcardRooms.deleteCard, { cardId: (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!._id })],
+  ['flashcardRooms.reorderCards', 'flashcard_version', async f => f.owner.mutation(api.flashcardRooms.reorderCards, { roomId: f.roomId, order: [{ cardId: (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!._id, displayOrder: 0 }] })],
+  ['flashcardRooms.generateRoomCards', 'flashcard_version', f => f.owner.mutation(api.flashcardRooms.generateRoomCards, { roomId: f.roomId, origin: 'manual', requestedCardCount: 1, cards: [{ term: 'New', definition: 'New definition' }] })],
+  ['flashcardRooms.restoreRoomVersion', 'flashcard_version', f => f.owner.mutation(api.flashcardRooms.restoreRoomVersion, { roomId: f.roomId, versionId: f.versionId })],
+  ['contentFlags.flagFlashcard', 'flashcard_version', async f => f.owner.mutation(api.contentFlags.flagFlashcard, { cardId: (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!._id, correctedDefinition: 'Corrected' })],
+  ['contentFlags.unflagFlashcard', 'flashcard_version', async f => f.owner.mutation(api.contentFlags.unflagFlashcard, { cardId: (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!._id })],
+]
+
+describe('C4.3 complete writer admission and re-registration', () => {
+  test.each(writers)('%s rejects protected input without persisting a prefix', async (_name, kind, write) => {
+    const f = await fixture()
+    await restrict(f, kind)
+    const before = await inventory(f)
+    await expect(write(f)).rejects.toThrow(/unavailable|reservation check/)
+    expect(await inventory(f)).toEqual(before)
+  })
+  test.each(writers.filter(([name]) => !['courseSections.remove', 'quizzes.deleteQuestion', 'courseSections.markReady', 'courseSections.finalizeSectionGeneration'].includes(name)))('%s keeps ordinary teaching and every affected current key usable', async (name, _kind, write) => {
+    const f = await fixture()
+    if (name === 'flashcardRooms.deleteCard') await f.owner.mutation(api.flashcardRooms.createCard, { roomId: f.roomId, term: 'Survivor', definition: 'Remaining teaching' })
+    await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [
+      { artifact: { kind: 'quiz_question', id: f.questionId }, key: 'alias', sources: [], origins: [] },
+      { artifact: { kind: 'flashcard_version', id: f.versionId }, key: 'alias', sources: [], origins: [] },
+      { artifact: { kind: 'section_block', id: f.sectionId }, key: 'alias', sources: [], origins: [] },
+    ] }))
+    await write(f)
+    expect(await f.owner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toBeTruthy()
+    expect(await f.owner.query(api.quizzes.getWithQuestions, { id: f.quizId })).toBeTruthy()
+    expect(await f.owner.query(api.flashcardRooms.getRoom, { roomId: f.roomId })).toBeTruthy()
+  })
+  test.each(['getForGeneration', 'completeSection', 'reviewSection'] as const)('%s rejects private nested input before generation or review extraction', async entry => {
+    const f = await fixture()
+    await restrict(f, 'quiz_question')
+    const before = await inventory(f)
+    const run = entry === 'getForGeneration' ? f.owner.query(internal.courseSections.getForGeneration, { sectionId: f.sectionId }) : entry === 'completeSection' ? f.owner.mutation(api.courseSections.completeSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 1, quizTotal: 1 }) : f.owner.mutation(api.courseSections.reviewSection, { sectionId: f.sectionId, practiceScore: 80, quizCorrect: 1, quizTotal: 1 })
+    await expect(run).rejects.toThrow('Teaching input is unavailable')
+    expect(await inventory(f)).toEqual(before)
+    expect(await f.t.run(ctx => ctx.db.query('reviewItems').withIndex('by_userId', q => q.eq('userId', userId)).take(1))).toEqual([])
+  })
+  test('deletion retains case history and re-registers reordered survivors and containing sections', async () => {
+    const f = await fixture()
+    await f.owner.mutation(api.quizzes.addQuestion, { quizId: f.quizId, type: 'free-response', questionText: 'Second question', correctAnswer: 'Second answer' })
+    const cases = await f.t.run(ctx => ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', userId)).take(100))
+    await f.owner.mutation(api.quizzes.deleteQuestion, { questionId: f.questionId })
+    expect((await f.owner.query(api.quizzes.getWithQuestions, { id: f.quizId }))?.questions[0]?.order).toBe(0)
+    expect(await f.owner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toBeTruthy()
+    expect((await f.t.run(ctx => ctx.db.query('learnAssessmentCases').withIndex('by_userId', q => q.eq('userId', userId)).take(100))).map(row => row._id)).toEqual(expect.arrayContaining(cases.map(row => row._id)))
+  })
+  test('standalone card corrections register their effective answer and keep the original immutable version', async () => {
+    const f = await fixture()
+    await f.t.run(ctx => ctx.db.patch(f.sectionId, { contentBlocks: [] }))
+    const card = (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!
+    await f.owner.mutation(api.contentFlags.flagFlashcard, { cardId: card._id, correctedDefinition: 'A new corrected answer' })
+    const room = (await f.owner.query(api.flashcardRooms.getRoom, { roomId: f.roomId }))!
+    expect(room.room.activeVersionId).not.toBe(f.versionId)
+    expect((await f.owner.query(api.flashcardRooms.getRoomVersion, { versionId: room.room.activeVersionId }))?.cards[0]?.definition).toBe('A new corrected answer')
+    expect((await f.owner.query(api.flashcardRooms.getRoomVersion, { versionId: f.versionId }))?.cards[0]?.definition).toBe('Gas becomes liquid.')
+  })
+  test.each(['markReady', 'finalizeSectionGeneration'] as const)('%s replaces all section aliases in one publication', async writer => {
+    const f = await fixture()
+    await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'section_block', id: f.sectionId }, key: 'alias', sources: [], origins: [] }] }))
+    if (writer === 'markReady') await f.owner.mutation(internal.courseSections.markReady, { sectionId: f.sectionId, contentBlocks: [{ type: 'text', order: 0, content: 'New complete teaching.' }] })
+    else await f.owner.mutation(api.courseSections.finalizeSectionGeneration, { sectionId: f.sectionId, textContent: 'New complete teaching.', quizData: { title: 'New Quiz', questions: [{ order: 0, type: 'free-response', question: 'New question', correctAnswer: 'New answer' }] }, flashcardData: { title: 'New cards', cards: [{ term: 'New term', definition: 'New definition' }] } })
+    expect(await f.owner.query(api.courseSections.get, { id: f.sectionId })).toMatchObject({ status: 'ready' })
+    await f.t.run(ctx => ctx.db.patch(f.sectionId, { status: 'completed' }))
+    expect(await f.owner.query(api.courseSections.getOfflineCachePayload, { sectionId: f.sectionId })).toBeTruthy()
+    const rows = await f.t.run(ctx => ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'section_block').eq('artifact.id', f.sectionId).eq('nextId', undefined)).take(16))
+    expect(rows.map(row => row.key)).toEqual(expect.arrayContaining(['alias', 'block.0', 'block.1', 'block.2', 'block.3']))
+    expect(new Set(rows.map(row => row.payloadDigest)).size).toBe(1)
+  })
+  test.each(['remove', 'updateOrder'] as const)('%s re-registers every shifted sibling and its aliases', async writer => {
+    const f = await fixture()
+    const siblingId = await f.t.run(ctx => ctx.db.insert('courseSections', { userId, courseId: f.courseId, title: 'Sibling', order: 1, knowledgeType: 'conceptual', status: 'ready', masteryLevel: 'new', contentBlocks: [{ type: 'text', order: 0, content: 'Sibling teaching.' }] }))
+    await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: ['block.0', 'alias'].map(key => ({ artifact: { kind: 'section_block' as const, id: siblingId }, key, sources: [], origins: [] })) }))
+    if (writer === 'remove') await f.owner.mutation(api.courseSections.remove, { sectionId: f.sectionId })
+    else await f.owner.mutation(api.courseSections.updateOrder, { courseId: f.courseId, sectionIds: [siblingId, f.sectionId] })
+    expect((await f.owner.query(api.courseSections.get, { id: siblingId }))?.order).toBe(0)
+    await f.t.run(ctx => ctx.db.patch(siblingId, { status: 'completed' }))
+    expect(await f.owner.query(api.courseSections.getOfflineCachePayload, { sectionId: siblingId })).toBeTruthy()
+    const rows = await f.t.run(ctx => ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'section_block').eq('artifact.id', siblingId).eq('nextId', undefined)).take(16))
+    expect(rows.map(row => row.key).sort()).toEqual(['alias', 'block.0'])
+    expect(new Set(rows.map(row => row.payloadDigest)).size).toBe(1)
+  })
+})
+
+
+test('an enrolled empty version fails closed without fabricating a teaching case', async () => {
+  const f = await fixture()
+  const card = (await f.t.run(ctx => ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', f.roomId)).first()))!
+  const before = await inventory(f)
+  await expect(f.owner.mutation(api.flashcardRooms.deleteCard, { cardId: card._id })).rejects.toThrow('Artifact lineage unavailable')
+  expect(await inventory(f)).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.get(card._id))).toEqual(card)
+})
+
+test('generated-title indexes omit protected Quiz, deck and Audio publications', async () => {
+  const f = await fixture()
+  const { roomId } = await f.owner.mutation(api.audioOverviewRooms.create, { folderId: f.folderId })
+  await f.t.run(ctx => ctx.db.patch(f.overviewId, { roomId }))
+  await f.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', sources: [], origins: [] }] }))
+  await restrict(f, 'quiz_question')
+  await restrict(f, 'flashcard_version')
+  await restrict(f, 'audio_overview')
+  expect(await f.owner.query(api.quizzes.listByFolder, { folderId: f.folderId })).toEqual([])
+  expect(await f.owner.query(api.flashcardRooms.listRoomsByFolder, { folderId: f.folderId })).toEqual([])
+  expect(await f.owner.query(api.audioOverviews.listByFolder, { folderId: f.folderId })).toEqual([])
+  expect(await f.owner.query(api.audioOverviews.listByRoom, { roomId })).toEqual([])
+  await expect(f.owner.query(api.audioOverviews.getCourseScopedOverview, { id: f.overviewId })).rejects.toThrow('Teaching input is unavailable')
+})
+
+test('metadata and legacy review boundaries read no measurement or scoring input', async () => {
+  const f = await fixture(false)
+  const conversationId = await f.t.run(async ctx => {
+    const id = await ctx.db.insert('conversations', { userId, folderId: f.folderId, title: 'Own conversation' })
+    await ctx.db.insert('audioOverviewRooms', { userId, folderId: f.folderId, conversationId: id, title: 'Own room', createdAt: 1, updatedAt: 1 })
+    await ctx.db.insert('courseSourceDocs', { userId, courseId: f.courseId, folderId: f.folderId, documentId: f.documentId })
+    await ctx.db.insert('reviewItems', { userId, courseId: f.courseId, sectionId: f.sectionId, prompt: 'Own legacy prompt', answer: 'Own legacy answer', easeFactor: 2.5, interval: 1, repetitions: 0, nextReviewDate: '2000-01-01', flagged: false, createdAt: 1 })
+    return id
+  })
+  await restrict(f, 'quiz_question')
+  await restrict(f, 'document')
+  await restrict(f, 'audio_overview')
+  await f.owner.run(async ctx => {
+    const trace = tracePrivacyReads(ctx)
+    const outputs = [
+      await invokePrivacyQuery(courses.get, trace.ctx, { id: f.courseId }),
+      await invokePrivacyQuery(courses.listByUser, trace.ctx, {}),
+      await invokePrivacyQuery(courses.listByFolder, trace.ctx, { folderId: f.folderId }),
+      await invokePrivacyQuery(courseSections.checkPreFetchStatus, trace.ctx, { courseId: f.courseId, currentOrder: -1 }),
+      await invokePrivacyQuery(documents.listDocumentsByFolder, trace.ctx, { folderId: f.folderId }),
+      await invokePrivacyQuery(folders.resolveScope, trace.ctx, { folderIds: [f.folderId], fileIds: [f.documentId] }),
+      await invokePrivacyQuery(folders.searchScopeItems, trace.ctx, { rootFolderId: f.folderId, search: '' }),
+      await invokePrivacyQuery(courseSourceDocs.listByCourse, trace.ctx, { courseId: f.courseId }),
+      await invokePrivacyQuery(reviewItems.listDueForUser, trace.ctx, {}),
+      await invokePrivacyQuery(reviewItems.listDueWithContext, trace.ctx, {}),
+      await invokePrivacyQuery(reviewItems.listBySection, trace.ctx, { sectionId: f.sectionId }),
+      await invokePrivacyQuery(audioOverviewRooms.listByFolder, trace.ctx, { folderId: f.folderId }),
+      await invokePrivacyQuery(audioOverviewRooms.getForConversation, trace.ctx, { conversationId }),
+    ]
+    expect(outputs.slice(8, 11).every(output => JSON.stringify(output).includes('Own legacy answer'))).toBe(true)
+    expect(JSON.stringify(outputs)).not.toContain(canary)
+    const allowed = ['accountDeletionJobs', 'courses', 'courseSections', 'folders', 'documents', 'courseSourceDocs', 'reviewItems', 'learnProfile', 'audioOverviewRooms', 'conversations']
+    for (const key of Object.keys(trace.stats.byTable)) expect(allowed).toContain(key.split(':')[1])
   })
 })

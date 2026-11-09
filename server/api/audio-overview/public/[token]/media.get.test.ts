@@ -38,4 +38,10 @@ describe('public Audio Overview media route', () => {
     expect(mockQuery).toHaveBeenCalledWith(expect.anything(), { token: 'shared_token_1234567890' })
     expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media)
   })
+
+  test('does not touch R2 when the shared publication has protected lineage', async () => {
+    mockQuery.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler({ context: {} })).rejects.toThrow('Teaching input is unavailable')
+    expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
+  })
 })

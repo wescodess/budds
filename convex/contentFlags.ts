@@ -1,4 +1,4 @@
-import { assertTeachingInputs, assertRoomTeaching, publishContainingSections } from './lib/learnV2AssessmentLineage'
+import { assertTeachingInputs, assertRoomTeaching, publishContainingSections, publishCorrectedCardRoom } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
@@ -89,7 +89,7 @@ export const flagFlashcard = mutation({
       })
     }
 
-    await publishContainingSections(ctx, userId, card.roomId)
+    await publishCorrectedCardRoom(ctx, userId, card.roomId)
     return { success: true }
   },
 })
@@ -122,7 +122,7 @@ export const unflagFlashcard = mutation({
       })
     }
 
-    await publishContainingSections(ctx, userId, card.roomId)
+    await publishCorrectedCardRoom(ctx, userId, card.roomId)
     return { success: true }
   },
 })

@@ -1,3 +1,4 @@
+import { assertTeachingCommand, loadTeachingScope, assertTeachingSourcePins } from '../../utils/teaching-source-scope'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
@@ -42,7 +43,8 @@ async function sha256Base64Url(value: string): Promise<string> {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-type V2Projection = Doc<'audioOverviewInterjectionsV2'> & {
+type V2Projection = Pick<Doc<'audioOverviewInterjectionsV2'>, '_id' | 'insertedAfterTurnIndex' | 'model'> & {
+  answerAvailability?: 'available' | 'unavailable'
   utterances: Array<{ text: string }>
   artifact: {
     artifactId: Id<'audioOverviewAudioArtifacts'>
@@ -53,6 +55,7 @@ type V2Projection = Doc<'audioOverviewInterjectionsV2'> & {
 }
 
 function v2Response(interjection: V2Projection) {
+  if (interjection.answerAvailability === 'unavailable' || !interjection.artifact || !interjection.utterances.length) throw createError({ statusCode: 403, message: 'Teaching input is unavailable' })
   const artifactUrl = `/api/audio-overview/interjections/${interjection._id}/media`
   const durationMs = interjection.artifact?.durationMs ?? 0
   return {
@@ -122,6 +125,8 @@ async function runV2Interjection(
       if (current?.status === 'ready') { await authorizeHelp(); return v2Response(current) }
       throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
     }
+    const teachingScope = await loadTeachingScope(convexClient, { documentIds: reservation.sources.map(source => source.documentId) })
+    for (const source of reservation.sources) assertTeachingSourcePins(teachingScope, { documentId: source.documentId, contentHash: source.contentHash, sourceRevision: source.revision })
     const allowedDocuments = reservation.sources.map(source => String(source.documentId))
     const allowedSourceByDocument = new Map(reservation.sources.map(source => [String(source.documentId), source]))
     await authorizeHelp()
@@ -131,6 +136,7 @@ async function runV2Interjection(
       max_num_results: MAX_SEARCH_RESULTS,
       score_threshold: 0.05,
       filterDocIds: allowedDocuments,
+      teachingScope,
     })
     const indexedChunks = result.data ?? []
     let rejectedFrozenIdentity = false
@@ -309,6 +315,7 @@ export default defineEventHandler(async (event) => {
   if (!body?.overviewId) {
     throw createError({ statusCode: 400, message: 'overviewId is required' })
   }
+  assertTeachingCommand(body, { overviewId: 'string', insertedAfterTurnIndex: 'number', question: 'string' })
   const question = (body.question ?? '').trim().slice(0, 500)
   if (!question) {
     throw createError({ statusCode: 400, message: 'question is required' })

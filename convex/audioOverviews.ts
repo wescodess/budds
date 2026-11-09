@@ -122,11 +122,17 @@ export const listByFolder = query({
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
-      .collect()
+      .take(101)
 
+    if (allRows.length > 100) throw new Error('Teaching input is unavailable')
     const rows = allRows.filter((r) => r.courseScoped !== true)
 
-    return rows.map((row) => ({
+    const admitted = []
+    for (const row of rows) {
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map((row) => ({
       _id: row._id,
       _creationTime: row._creationTime,
       title: row.title,
@@ -154,9 +160,13 @@ export const listByRoom = query({
       .order('desc')
       .take(100)
 
-    return rows
-      .filter(row => row.courseScoped !== true)
-      .map(row => ({
+    const admitted = []
+    for (const row of rows) {
+      if (row.courseScoped === true) continue
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map(row => ({
         _id: row._id,
         _creationTime: row._creationTime,
         title: row.title,

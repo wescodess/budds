@@ -38,7 +38,7 @@ export async function assertTeachingInputs(ctx: ReadCtx, userId: string, artifac
         : await isArtifactRegistrationRequiredForOwner(publication.admission.ctx, userId)
       if (required) {
         for (let offset = 0; offset < input.artifacts.length; offset += 50) {
-          const artifacts = input.artifacts.slice(offset, offset + 50).filter((artifact): artifact is Output['artifact'] => ['document', 'document_chunk', 'quiz_question', 'section_block', 'flashcard_version', 'audio_overview'].includes(artifact.kind))
+          const artifacts = input.artifacts.slice(offset, offset + 50).filter((artifact): artifact is Output['artifact'] => ['document', 'document_chunk', 'quiz_question', 'section_block', 'flashcard_version', 'audio_overview', 'audio_interjection', 'audio_interjection_v2'].includes(artifact.kind))
           if (!artifacts.length) continue
           const preparation = teachingPublication(ctx).preparation.ctx
           if (record) await repinArtifactLineageDescendantsForRecord(preparation, record, { artifacts })
@@ -93,6 +93,7 @@ export async function assertQuizTeaching(ctx: ReadCtx, userId: string, quizId: I
   const questions = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
   if (questions.length > 200 || questions.some(question => question.userId !== userId)) teachingUnavailable()
   await assertTeachingInputs(ctx, userId, questions.map(question => ({ kind: 'quiz_question', id: question._id })))
+  return questions
 }
 export async function assertSectionTeaching(ctx: ReadCtx, section: Doc<'courseSections'>) {
   if (section.contentBlocks.length) await assertTeachingInputs(ctx, section.userId, [{ kind: 'section_block', id: section._id }])
@@ -203,7 +204,7 @@ export async function publishCardRoom(ctx: MutationCtx, userId: string, roomId: 
     if (cards.length > 200) teachingUnavailable()
     versionId = await ctx.db.insert('flashcardRoomVersions', { userId, roomId, title: room.title, origin: 'manual', cardCount: cards.length })
     for (const card of cards) await ctx.db.insert('flashcardVersionCards', { userId, roomId, versionId, displayOrder: card.displayOrder,
-      term: card.term, definition: card.definition, metadata: card.metadata, sourceDocumentId: card.sourceDocumentId,
+      term: card.term, definition: card.correctedDefinition ?? card.definition, metadata: card.metadata, sourceDocumentId: card.sourceDocumentId,
       sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename })
     await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: cards.length })
   }
@@ -219,4 +220,25 @@ export async function admitTeachingSourcePins(ctx: ReadCtx, userId: string, pins
     if (!current || current.sourceRevision !== pin.sourceRevision || current.contentHash !== pin.contentHash) teachingUnavailable()
   }
   return documents.flatMap(document => document.sourceRevision ? [{ kind: 'document' as const, documentId: document._id, sourceRevision: document.sourceRevision }] : [])
+}
+
+
+export async function assertInterjectionTeaching(ctx: ReadCtx, userId: string, interjection: Doc<'audioOverviewInterjections'> | Doc<'audioOverviewInterjectionsV2'>) {
+  const overview = await ctx.db.get(interjection.audioOverviewId)
+  if (!overview || overview.userId !== userId) teachingUnavailable()
+  await assertAudioTeaching(ctx, overview)
+  await assertTeachingInputs(ctx, userId, ['answerTurns' in interjection ? { kind: 'audio_interjection', id: interjection._id } : { kind: 'audio_interjection_v2', id: interjection._id }])
+}
+export async function interjectionAnswerAvailable(ctx: ReadCtx, userId: string, interjection: Doc<'audioOverviewInterjections'> | Doc<'audioOverviewInterjectionsV2'>) {
+  try { await assertInterjectionTeaching(ctx, userId, interjection); return true }
+  catch { return false }
+}
+
+
+export async function publishCorrectedCardRoom(ctx: MutationCtx, userId: string, roomId: Id<'flashcardRooms'>) {
+  if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return
+  const room = await ctx.db.get(roomId)
+  if (!room || room.userId !== userId) teachingUnavailable()
+  await ctx.db.patch(roomId, { activeVersionId: undefined })
+  await publishCardRoom(ctx, userId, roomId, room.activeVersionId)
 }

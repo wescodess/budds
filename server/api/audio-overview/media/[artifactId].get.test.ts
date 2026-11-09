@@ -36,4 +36,10 @@ describe('owner Audio Overview media route', () => {
     expect(mockQuery).toHaveBeenCalledWith(expect.anything(), { artifactId: 'artifact_1' })
     expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media)
   })
+
+  test('does not touch R2 when the publication has protected lineage', async () => {
+    mockQuery.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler({ context: { convexToken: 'owner-token' } })).rejects.toThrow('Teaching input is unavailable')
+    expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
+  })
 })
