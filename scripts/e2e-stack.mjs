@@ -10,7 +10,7 @@ import { cleanupStack, createStartupOutput, ensureDisposableLearner, forwardChil
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
-const backendVersionArgs = process.env.BACKEND_VERSION ? ['--local-backend-version', process.env.BACKEND_VERSION] : []
+const backendVersionArgs = process.env.BUDDS_E2E_CONVEX_BACKEND_VERSION ? ['--local-backend-version', process.env.BUDDS_E2E_CONVEX_BACKEND_VERSION] : []
 const token = process.env.BUDDS_E2E_AUTH_TOKEN || 'e2e-local-token-please-do-not-use-outside-tests'
 const baseUrl = assertLoopbackUrl(process.env.BUDDS_E2E_BASE_URL || 'http://127.0.0.1:3102', 'BUDDS_E2E_BASE_URL')
 const realAdaptiveCanvas = process.env.BUDDS_E2E_REAL_ADAPTIVE_CANVAS === 'true'
