@@ -385,10 +385,13 @@ async function knownOutcomeSaved(state, intent) {
   // Changed pins cannot reinterpret a saved response. Only recorded transport
   // uncertainty can be closed without restoring the original implementation.
   if (state.sealedOnly) {
+    if (reconciled) return reconciled.payload.status !== 'still_unknown'
     const saved = state.metadataObservations.get(id)
-    // Timely saved metadata also requires the original pins to classify.
+    const metadata = saved?.payload.metadata
+    // Only timely metadata with both identity fields could establish a known outcome.
     return (!terminal && observation.payload.raw.failure !== 'outcome_unknown')
-      || Boolean(saved && saved.payload.metadata !== null && saved.payload.observedAt < state.metadataIntents.get(id).payload.deadline)
+      || Boolean(metadata && metadata.returnedModel !== null && metadata.servingProvider !== null
+        && saved.payload.observedAt < state.metadataIntents.get(id).payload.deadline)
   }
   const item = state.plan.find(item => item.blind.id === id)
   const { raw, terminalAt } = observation.payload
