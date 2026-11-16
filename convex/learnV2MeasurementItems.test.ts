@@ -174,7 +174,7 @@ describe('held-out family publication commands', () => {
     expect(await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.studySessionId })).toBeNull()
     expect(await f.t.withIdentity(foreign).query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.studySessionId }).catch(() => null)).toBeNull()
     const authorizationId = await authorizeExport(f.owner)
-    for (const collection of ['learnMeasurementFamilies', 'learnMeasurementItems', 'learnMeasurementScoringSpecs', 'learnMeasurementClaims', 'learnMeasurementSupports', 'learnMeasurementValidations']) {
+    for (const collection of ['learnMeasurementFamilies', 'learnMeasurementItems', 'learnMeasurementScoringSpecs', 'learnMeasurementClaims', 'learnMeasurementSupports', 'learnMeasurementValidations'] as const) {
       const exported = await f.owner.query(api.dataExport.getUserDataPage, { authorizationId, collection, paginationOpts: { cursor: null, numItems: 8 } })
       const serialized = JSON.stringify(exported)
       expect(serialized).not.toContain('PRIVATE-SOLUTION')
