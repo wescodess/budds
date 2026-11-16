@@ -1,0 +1,10 @@
+{
+  "version": "learn-v2.fixture-transport.v1",
+  "default": "valid",
+  "reservationMicroUsd": 100,
+  "outcomes": {
+    "baseline": ["valid", "abstained", "refused", "truncated", "malformed", "mismatched", "coverage", "budget_exhausted", "ambiguous"],
+    "claude": ["valid", "abstained", "refused", "truncated", "malformed", "mismatched", "coverage", "budget_exhausted", "ambiguous"],
+    "gemini": ["valid", "abstained", "refused", "truncated", "malformed", "mismatched", "coverage", "budget_exhausted", "ambiguous"]
+  }
+}
