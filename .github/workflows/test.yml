@@ -267,38 +267,60 @@ jobs:
         timeout-minutes: 3
         run: |
           cli_version=$(node --input-type=module -e "import { readFileSync } from 'node:fs'; console.log(readFileSync('pnpm-lock.yaml', 'utf8').match(/^      convex:\n        specifier: [^\n]+\n        version: ([^(\s]+)/m)[1])")
-          backend_version=$(curl --fail --silent --show-error --location \
+          version_file=$(mktemp)
+          trap 'rm -f "$version_file"' EXIT
+          curl --fail --silent --show-error --location \
             --retry 6 --retry-delay 10 --retry-max-time 90 --retry-all-errors \
             --connect-timeout 15 --max-time 30 \
             --header "Convex-Client: npm-cli-${cli_version}" \
-            https://version.convex.dev/v1/local_backend_version | jq -er '.version')
+            https://version.convex.dev/v1/local_backend_version \
+            --output "$version_file"
+          backend_version=$(jq -er '.version' "$version_file")
           echo "cli-version=${cli_version}" >> "$GITHUB_OUTPUT"
           echo "BUDDS_E2E_CONVEX_BACKEND_VERSION=${backend_version}" >> "$GITHUB_OUTPUT"
           echo "BUDDS_E2E_CONVEX_BACKEND_VERSION=${backend_version}" >> "$GITHUB_ENV"
-      - name: Cache Convex backend binary
+      - name: Restore Convex backend and dashboard
         id: convex-cache
-        uses: actions/cache@v6
+        uses: actions/cache/restore@v6
         with:
-          path: ~/.cache/convex/binaries/${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
-          key: convex-backend-${{ runner.os }}-${{ runner.arch }}-${{ steps.convex.outputs.cli-version }}-${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
-      - name: Download Convex backend binary with retries
+          path: |
+            ~/.cache/convex/binaries/${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
+            ~/.cache/convex/dashboard
+          key: convex-local-${{ runner.os }}-${{ runner.arch }}-${{ steps.convex.outputs.cli-version }}-${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
+      - name: Download Convex backend and dashboard with retries
         if: steps.convex-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 8
+        timeout-minutes: 15
         env:
           BUDDS_E2E_CONVEX_BACKEND_VERSION: ${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
         run: |
           download_dir=$(mktemp -d)
           trap 'rm -rf "$download_dir"' EXIT
-          # Match the Convex CLI's Linux release asset and binary cache layout.
-          archive="convex-local-backend-$(uname -m)-unknown-linux-gnu.zip"
-          curl --fail --silent --show-error --location \
-            --retry 6 --retry-delay 30 --retry-max-time 300 --retry-all-errors \
-            --connect-timeout 15 --max-time 120 \
-            "https://github.com/get-convex/convex-backend/releases/download/${BUDDS_E2E_CONVEX_BACKEND_VERSION}/${archive}" \
-            --output "$download_dir/backend.zip"
+          fetch_release_asset() {
+            curl --fail --silent --show-error --location \
+              --retry 6 --retry-delay 30 --retry-max-time 300 --retry-all-errors \
+              --connect-timeout 15 --max-time 120 \
+              "https://github.com/get-convex/convex-backend/releases/download/${BUDDS_E2E_CONVEX_BACKEND_VERSION}/$1" \
+              --output "$2"
+          }
+          # Match the Convex CLI's Linux release assets and cache layout: binaries/<version>/ and dashboard/{out/,config.json}.
+          fetch_release_asset "convex-local-backend-$(uname -m)-unknown-linux-gnu.zip" "$download_dir/backend.zip"
           unzip -q "$download_dir/backend.zip" convex-local-backend -d "$download_dir"
           install -D -m 755 "$download_dir/convex-local-backend" \
             "$HOME/.cache/convex/binaries/${BUDDS_E2E_CONVEX_BACKEND_VERSION}/convex-local-backend"
+          fetch_release_asset dashboard.zip "$download_dir/dashboard.zip"
+          dashboard_dir="$HOME/.cache/convex/dashboard"
+          rm -rf "$dashboard_dir"
+          mkdir -p "$dashboard_dir/out"
+          unzip -q "$download_dir/dashboard.zip" -d "$dashboard_dir/out"
+          jq -cjn --arg version "$BUDDS_E2E_CONVEX_BACKEND_VERSION" '{version: $version}' > "$dashboard_dir/config.json"
+      - name: Save Convex backend and dashboard
+        if: steps.convex-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cache/convex/binaries/${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
+            ~/.cache/convex/dashboard
+          key: ${{ steps.convex-cache.outputs.cache-primary-key }}
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:design-capture
       - run: pnpm test:e2e:learn
