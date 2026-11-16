@@ -270,7 +270,9 @@ export async function reconcileLive(path, id, options = {}) {
     const intent = state.intents.get(id)
     assert.ok(intent?.payload.dispatched && reserved, 'Reconciliation requires a recorded dispatched intent')
     if (options.writeOffFile && !state.writeOffs.has(id)) {
-      assert.ok(!await knownOutcomeSaved(state, intent), 'Only an unknown outcome can be written off')
+      assert.ok(!await knownOutcomeSaved(state, intent), state.sealedOnly
+        ? `Only an unknown outcome can be written off. Check out original implementation commit ${state.pins.implementation.repositoryCommit}, run reconciliation there, then retry the write-off.`
+        : 'Only an unknown outcome can be written off')
       const writtenOffAt = Date.now()
       const authorization = authorizeWriteOff(options.writeOffFile, state, intent, options, writtenOffAt)
       seal(state.directory, artifactName(id, 'written-off'), 'dispatch_write_off', state.pinsDigest, { intentDigest: intent.digest, authorization, writtenOffAt })
@@ -381,35 +383,20 @@ export async function knownOutcomeSaved(state, intent) {
   if (state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
     || (!state.sealedOnly && reconciled && reconciled.payload.status !== 'still_unknown')) return true
   const observation = state.observations.get(id)
-  if (!observation) return false
-  // Changed pins cannot reinterpret a saved response. Only recorded transport
-  // uncertainty can be closed without restoring the original implementation.
   if (state.sealedOnly) {
     const lookup = state.metadataIntents.get(id)
     const saved = state.metadataObservations.get(id)
-    // The map holds the latest reconciliation. It classifies only the exact
-    // evidence it sealed; an older unknown cannot cover later observations.
-    if (reconciled && reconciled.payload.observationDigest === observation.digest
+    // Changed pins cannot classify saved evidence. Allow only unobserved work,
+    // unsealed transport uncertainty without timely metadata, or an exact seal.
+    if (!observation && !saved) return false
+    if (observation?.payload.raw.failure === 'outcome_unknown' && !terminal
+      && (!saved || (lookup && saved.payload.observedAt >= lookup.payload.deadline))) return false
+    return !(reconciled?.payload.status === 'still_unknown'
+      && reconciled.payload.observationDigest === (observation?.digest ?? null)
       && reconciled.payload.lookupDigest === (lookup?.digest ?? null)
-      && reconciled.payload.metadataDigest === (saved?.digest ?? null)) return reconciled.payload.status !== 'still_unknown'
-    // A verified terminal already classifies the raw observation. Without one,
-    // only an explicit transport-unknown failure proves the response unknown.
-    if (!terminal && observation.payload.raw.failure !== 'outcome_unknown') return true
-    const metadata = saved?.payload.metadata
-    if (!metadata || saved.payload.observedAt >= lookup.payload.deadline) return false
-    // Incomplete identity does not exclude failure: cancellation, nonterminal
-    // output or conflicting identity can fail before metadataOutcome's null checks.
-    const previous = terminal?.payload.result.execution?.terminal
-    const binding = terminal?.payload.result.execution?.receipt.scoringBinding
-    const adapter = state.pins.adapters.find(row => row.id === intent.payload.adapter)
-    return metadata.cancelled === true || ![null, 'stop'].includes(metadata.finishReason)
-      || (metadata.returnedModel !== null && metadata.servingProvider !== null)
-      || metadata.generationId !== lookup.payload.generationId
-      || (metadata.returnedModel !== null && metadata.returnedModel !== (previous?.returnedModel ?? observation.payload.raw.model))
-      || (metadata.servingProvider !== null && previous?.provenance?.servingProvider != null
-        && metadata.servingProvider !== previous.provenance.servingProvider)
-      || (binding?.routingMode === 'strict' && metadata.servingProvider !== null && metadata.servingProvider !== adapter.upstream)
+      && reconciled.payload.metadataDigest === (saved?.digest ?? null))
   }
+  if (!observation) return false
   const item = state.plan.find(item => item.blind.id === id)
   const { raw, terminalAt } = observation.payload
   if (liveOutcome(await evaluate(state, item, intent.payload, raw, terminalAt)) !== 'still_unknown') return true
