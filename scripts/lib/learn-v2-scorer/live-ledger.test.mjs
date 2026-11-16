@@ -37,6 +37,7 @@ let outcome = 'valid'
 const calls = []
 const metadataCalls = []
 let metadataOutcome = 'resolved'
+let metadataOverrides = {}
 let omitProvider = false
 let publicationFailures = new Set()
 let failuresAfterWrite = new Set()
@@ -134,10 +135,10 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
     return { generationId: metadataOutcome === 'contradictory' ? 'other-generation' : generationId,
       returnedModel: metadataOutcome === 'wrong-model' ? 'openai/gpt-other' : metadataOutcome === 'missing-model' ? null : 'openai/gpt-4.1',
       servingProvider: metadataOutcome === 'wrong-provider' ? 'Other' : metadataOutcome === 'missing-provider' ? null : 'OpenAI', upstreamRequestId: null,
-      finishReason: 'stop', nativeFinishReason: 'stop', cancelled: metadataOutcome === 'failed', usage: null }
+      finishReason: 'stop', nativeFinishReason: 'stop', cancelled: metadataOutcome === 'failed', usage: null, ...metadataOverrides }
   },
 } })
-const { initialize, planRun, dispatchLive, reconcileLive, replay } = await import('./runner.mjs')
+const { initialize, planRun, dispatchLive, reconcileLive, replay, knownOutcomeSaved } = await import('./runner.mjs')
 const { main, cli, RUN_HALTED_MESSAGE } = await import('../../learn-v2-scorer-harness.mjs')
 const { openLiveLedger, reserveLiveDispatch, unresolvedLiveDispatches } = await import('./live-ledger.mjs')
 const { sealLearnScorerConfiguration } = await import('../../../convex/lib/learnV2ScorerConfig.ts')
@@ -155,6 +156,7 @@ async function workspace(t, approvalDurationMs = 600000, initialClock = fixtureC
   metadataCalls.length = 0
   outcome = 'valid'
   metadataOutcome = 'resolved'
+  metadataOverrides = {}
   omitProvider = false
   publicationFailures = new Set()
   failuresAfterWrite = new Set()
@@ -2590,6 +2592,133 @@ test('B2 write-off refuses a saved known result and still closes saved uncertain
     advanceRevision()
     assert.equal((await reconcileLive(setup.state.directory, setup.id, { ...setup.approval, writeOffFile: file })).reconciliation, 'written_off')
   })
+})
+
+test('B2 partial identity cannot hide a saved cancellation after publication fails and pins change', async t => {
+  for (const field of ['returnedModel', 'servingProvider']) await t.test(field, async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id, inferenceCalls } = setup
+    metadataOverrides = { [field]: null, cancelled: true }
+    publicationFailures.add('reconciled_verdict')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated publication failure/)
+    publicationFailures.clear()
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), /Only an unknown outcome/)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+    revision = null
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'failed')
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, 1)
+  })
+})
+
+test('B2 a stale unknown reconciliation cannot hide later known metadata after pins change', async t => {
+  for (const status of ['resolved', 'failed']) await t.test(status, async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id, inferenceCalls } = setup
+    failuresAfterWrite.add('metadata_lookup_intent')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+    failuresAfterWrite.clear()
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'still_unknown')
+    const original = readFileSync(join(state.directory, `${id}.reconciled.json`))
+    const lookup = readJson(join(state.directory, `${id}.metadata-intent.json`))
+    artifacts.seal(state.directory, `${id}.metadata-observation.json`, 'metadata_observation', state.pinsDigest,
+      { lookupDigest: lookup.digest, observedAt: Date.now(), metadata: {
+        generationId: lookup.payload.generationId, returnedModel: 'openai/gpt-4.1', servingProvider: 'OpenAI', upstreamRequestId: null,
+        finishReason: 'stop', nativeFinishReason: 'stop', cancelled: status === 'failed', usage: null,
+      } })
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), /Only an unknown outcome/)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+    revision = null
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, status)
+    assert.deepEqual(readFileSync(join(state.directory, `${id}.reconciled.json`)), original)
+    assert.equal(readJson(join(state.directory, `${id}.reconciled-1.json`)).payload.status, status)
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, 0)
+  })
+})
+
+test('B2 changed-pin write-off exhaustively preserves original-pin known outcomes', async t => {
+  const { state, id, inferenceCalls } = await pendingBaseline(t)
+  const { openRun, evaluate, replayMetadata, liveOutcome, metadataOutcome: classifyMetadata } = await import('./run-state.mjs')
+  const opened = await openRun(state.directory)
+  const intent = opened.intents.get(id)
+  const item = opened.plan.find(row => row.blind.id === id)
+  const original = opened.observations.get(id)
+  const lookup = { digest: hash('matrix-lookup'), payload: { intentDigest: intent.digest, generationId: original.payload.raw.id,
+    startedAt: original.payload.terminalAt, deadline: original.payload.terminalAt + 10_000 } }
+  const discrepancies = []
+  const coveringStatuses = new Set()
+  let enumerated = 0
+  let checked = 0
+  let inconsistent = 0
+  let known = 0
+  let allowedUnknown = 0
+  // Replay each distinct response/metadata tuple with the real original-pin
+  // evaluators, then vary the seals in memory; no per-case disk or transport I/O.
+  for (const failure of [null, 'outcome_unknown', 'invalid_response', 'definitive_failure', 'not_dispatched']) {
+    const raw = failure === null ? original.payload.raw : { ...original.payload.raw, failure }
+    const observation = { digest: hash(raw), payload: { ...original.payload, raw } }
+    const result = await evaluate(opened, item, intent.payload, raw, observation.payload.terminalAt)
+    const rawKnown = liveOutcome(result) !== 'still_unknown'
+    for (const returnedModel of [null, 'openai/gpt-4.1', 'openai/gpt-other']) for (const servingProvider of [null, 'OpenAI', 'Other']) {
+      for (const generationId of [lookup.payload.generationId, 'other-generation']) for (const cancelled of [null, false, true]) {
+        for (const finishReason of [null, 'stop', 'content_filter', 'length', 'error', 'other']) {
+          for (const timely of [false, true]) {
+            const metadata = { generationId, returnedModel, servingProvider,
+              upstreamRequestId: null, finishReason, nativeFinishReason: null, cancelled, usage: null }
+            const payload = { lookupDigest: lookup.digest, metadata, observedAt: timely ? lookup.payload.startedAt : lookup.payload.deadline }
+            const saved = { digest: hash(payload), payload }
+            let replayed = null
+            // Metadata reconciliation is available only for identity-unavailable
+            // inference. Other raw outcomes are classified by evaluate above.
+            if (result.status === 'identity_unavailable') replayed = await replayMetadata(opened, item, intent, observation, lookup, saved)
+            const metadataStatus = classifyMetadata(replayed)
+            for (const terminal of [false, true]) for (const evidence of ['absent', 'covering', 'stale-metadata', 'stale-observation', 'stale-lookup']) {
+              for (const status of evidence === 'absent' ? [null] : ['still_unknown', 'resolved', 'failed']) {
+                enumerated++
+                // A covering seal must be one the original implementation could
+                // actually publish; contradictory recorded outcomes are invalid.
+                if (evidence === 'covering' && (rawKnown || status !== metadataStatus)) { inconsistent++; continue }
+                const record = evidence === 'absent' ? null : { payload: { status, intentDigest: intent.digest,
+                  observationDigest: evidence === 'stale-observation' ? null : observation.digest,
+                  lookupDigest: evidence === 'stale-lookup' ? null : lookup.digest,
+                  metadataDigest: evidence === 'stale-metadata' ? null : saved.digest } }
+                const candidate = { ...opened, sealedOnly: true,
+                  observations: new Map([[id, observation]]), terminals: new Map(terminal ? [[id, { payload: { result } }]] : []),
+                  metadataIntents: new Map([[id, lookup]]), metadataObservations: new Map([[id, saved]]),
+                  reconciliations: new Map(record ? [[id, record]] : []) }
+                const refuses = await knownOutcomeSaved(candidate, intent)
+                const originalKnown = rawKnown || metadataStatus !== 'still_unknown'
+                const mustAllow = !originalKnown && (evidence === 'covering'
+                  || ((terminal || failure === 'outcome_unknown') && (returnedModel === null || servingProvider === null)
+                    && cancelled !== true && [null, 'stop'].includes(finishReason) && generationId === lookup.payload.generationId
+                    && (returnedModel === null || returnedModel === raw.model)))
+                const row = { failure, terminal, generationId, returnedModel, servingProvider, cancelled, finishReason, timely, evidence, status }
+                if (originalKnown) { known++; if (!refuses) discrepancies.push({ ...row, error: 'known outcome accepted' }) }
+                if (mustAllow) { allowedUnknown++; if (refuses) discrepancies.push({ ...row, error: 'genuine unknown refused' }) }
+                if (evidence === 'covering') coveringStatuses.add(status)
+                checked++
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  assert.equal(enumerated, 84_240)
+  assert.equal(checked + inconsistent, enumerated)
+  assert.deepEqual([...coveringStatuses].sort(), ['failed', 'resolved', 'still_unknown'])
+  assert.ok(known > 0 && allowedUnknown > 0)
+  assert.equal(discrepancies.length, 0, JSON.stringify({ enumerated, checked, inconsistent, known, allowedUnknown, first: discrepancies.slice(0, 12) }))
+  assert.equal(calls.length, inferenceCalls)
+  assert.equal(metadataCalls.length, 0)
+  t.diagnostic(JSON.stringify({ enumerated, checked, inconsistent, known, allowedUnknown }))
 })
 
 test('B2 a backward clock step during transport seals an observation that reopens', async t => {

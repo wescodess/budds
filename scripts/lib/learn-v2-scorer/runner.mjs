@@ -374,24 +374,41 @@ export async function reconcileLive(path, id, options = {}) {
   }))
 }
 
-async function knownOutcomeSaved(state, intent) {
+export async function knownOutcomeSaved(state, intent) {
   const { id } = intent.payload
   const terminal = state.terminals.get(id)
   const reconciled = state.reconciliations.get(id)
   if (state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
-    || (reconciled && reconciled.payload.status !== 'still_unknown')) return true
+    || (!state.sealedOnly && reconciled && reconciled.payload.status !== 'still_unknown')) return true
   const observation = state.observations.get(id)
   if (!observation) return false
   // Changed pins cannot reinterpret a saved response. Only recorded transport
   // uncertainty can be closed without restoring the original implementation.
   if (state.sealedOnly) {
-    if (reconciled) return reconciled.payload.status !== 'still_unknown'
+    const lookup = state.metadataIntents.get(id)
     const saved = state.metadataObservations.get(id)
+    // The map holds the latest reconciliation. It classifies only the exact
+    // evidence it sealed; an older unknown cannot cover later observations.
+    if (reconciled && reconciled.payload.observationDigest === observation.digest
+      && reconciled.payload.lookupDigest === (lookup?.digest ?? null)
+      && reconciled.payload.metadataDigest === (saved?.digest ?? null)) return reconciled.payload.status !== 'still_unknown'
+    // A verified terminal already classifies the raw observation. Without one,
+    // only an explicit transport-unknown failure proves the response unknown.
+    if (!terminal && observation.payload.raw.failure !== 'outcome_unknown') return true
     const metadata = saved?.payload.metadata
-    // Only timely metadata with both identity fields could establish a known outcome.
-    return (!terminal && observation.payload.raw.failure !== 'outcome_unknown')
-      || Boolean(metadata && metadata.returnedModel !== null && metadata.servingProvider !== null
-        && saved.payload.observedAt < state.metadataIntents.get(id).payload.deadline)
+    if (!metadata || saved.payload.observedAt >= lookup.payload.deadline) return false
+    // Incomplete identity does not exclude failure: cancellation, nonterminal
+    // output or conflicting identity can fail before metadataOutcome's null checks.
+    const previous = terminal?.payload.result.execution?.terminal
+    const binding = terminal?.payload.result.execution?.receipt.scoringBinding
+    const adapter = state.pins.adapters.find(row => row.id === intent.payload.adapter)
+    return metadata.cancelled === true || ![null, 'stop'].includes(metadata.finishReason)
+      || (metadata.returnedModel !== null && metadata.servingProvider !== null)
+      || metadata.generationId !== lookup.payload.generationId
+      || (metadata.returnedModel !== null && metadata.returnedModel !== (previous?.returnedModel ?? observation.payload.raw.model))
+      || (metadata.servingProvider !== null && previous?.provenance?.servingProvider != null
+        && metadata.servingProvider !== previous.provenance.servingProvider)
+      || (binding?.routingMode === 'strict' && metadata.servingProvider !== null && metadata.servingProvider !== adapter.upstream)
   }
   const item = state.plan.find(item => item.blind.id === id)
   const { raw, terminalAt } = observation.payload
