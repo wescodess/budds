@@ -10,6 +10,7 @@ import { cleanupStack, createStartupOutput, ensureDisposableLearner, forwardChil
 const execFile = promisify(execFileCallback)
 const root = process.cwd()
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+const backendVersionArgs = process.env.BACKEND_VERSION ? ['--local-backend-version', process.env.BACKEND_VERSION] : []
 const token = process.env.BUDDS_E2E_AUTH_TOKEN || 'e2e-local-token-please-do-not-use-outside-tests'
 const baseUrl = assertLoopbackUrl(process.env.BUDDS_E2E_BASE_URL || 'http://127.0.0.1:3102', 'BUDDS_E2E_BASE_URL')
 const realAdaptiveCanvas = process.env.BUDDS_E2E_REAL_ADAPTIVE_CANVAS === 'true'
@@ -102,7 +103,7 @@ async function waitForLocalConvex(worktree) {
 
 function startConvex(worktree) {
   stage = 'starting disposable Convex'
-  convex = spawnOwnedChild(pnpm, ['exec', 'convex', 'dev', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
+  convex = spawnOwnedChild(pnpm, ['exec', 'convex', 'dev', ...backendVersionArgs, '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
     cwd: worktree,
     env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
   })
@@ -115,7 +116,7 @@ async function main() {
   await run('creating disposable checkout', 'git', ['worktree', 'add', '--detach', isolatedRoot, 'HEAD'], { cwd: root })
   await symlink(join(root, 'node_modules'), join(isolatedRoot, 'node_modules'), 'dir')
 
-  await run('initializing disposable Convex', pnpm, ['exec', 'convex', 'dev', '--once', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
+  await run('initializing disposable Convex', pnpm, ['exec', 'convex', 'dev', ...backendVersionArgs, '--once', '--typecheck', 'disable', '--codegen', 'disable', '--tail-logs', 'disable'], {
     cwd: isolatedRoot,
     env: { ...inheritedEnv, CONVEX_AGENT_MODE: 'anonymous' },
     maxBuffer: 8 * 1024 * 1024,

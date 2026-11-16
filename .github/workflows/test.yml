@@ -272,6 +272,7 @@ jobs:
             https://version.convex.dev/v1/local_backend_version | jq -er '.version')
           echo "cli-version=${cli_version}" >> "$GITHUB_OUTPUT"
           echo "backend-version=${backend_version}" >> "$GITHUB_OUTPUT"
+          echo "BACKEND_VERSION=${backend_version}" >> "$GITHUB_ENV"
       - name: Cache Convex backend binary
         id: convex-cache
         uses: actions/cache@v6
