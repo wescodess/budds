@@ -2506,6 +2506,33 @@ test('B2 write-off refuses a saved known result and still closes saved uncertain
     advanceRevision()
     await writeOffRefused(setup, file)
   })
+  for (const metadata of ['resolved', 'failed', 'unavailable']) await t.test(`changed pins after reconciliation publication failure/${metadata}`, async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id } = setup
+    metadataOutcome = metadata
+    publicationFailures.add('reconciled_verdict')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated publication failure/)
+    publicationFailures.clear()
+    const lookup = readJson(join(state.directory, `${id}.metadata-intent.json`))
+    const saved = readJson(join(state.directory, `${id}.metadata-observation.json`))
+    assert.ok(saved.payload.observedAt < lookup.payload.deadline)
+    assert.equal(saved.payload.metadata === null, metadata === 'unavailable')
+    assert.equal(artifacts.exists(join(state.directory, `${id}.reconciled.json`)), false)
+    const inferenceCalls = calls.length
+    const file = ownerWriteOff(setup)
+    advanceRevision()
+    if (metadata === 'unavailable') {
+      assert.equal((await reconcileLive(state.directory, id, { ...approval, writeOffFile: file })).reconciliation, 'written_off')
+    }
+    else {
+      await writeOffRefused(setup, file)
+      assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+      revision = null
+      assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, metadata)
+    }
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, 1)
+  })
   await t.test('changed pins cannot write off a saved response they cannot classify', async t => {
     const setup = await canary(t, 'claude')
     const { state, approval, id } = setup
