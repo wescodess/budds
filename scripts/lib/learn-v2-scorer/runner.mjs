@@ -7,6 +7,7 @@ import { requestFor, fixtureEnvelope, baselineExecution, liveMetadata, liveInfer
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive, verifySavedApproval } from './live-approval.mjs'
 import { authorizeWriteOff } from './write-off.mjs'
+import { WriteOffRefusalError } from './write-off-refusal.mjs'
 import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches } from './live-ledger.mjs'
 import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
@@ -270,9 +271,15 @@ export async function reconcileLive(path, id, options = {}) {
     const intent = state.intents.get(id)
     assert.ok(intent?.payload.dispatched && reserved, 'Reconciliation requires a recorded dispatched intent')
     if (options.writeOffFile && !state.writeOffs.has(id)) {
-      assert.ok(!await knownOutcomeSaved(state, intent), state.sealedOnly
-        ? `Only an unknown outcome can be written off. Check out original implementation commit ${state.pins.implementation.repositoryCommit}, run reconciliation there, then retry the write-off.`
-        : 'Only an unknown outcome can be written off')
+      if (await knownOutcomeSaved(state, intent)) {
+        const terminal = state.terminals.get(id)
+        const reconciled = state.reconciliations.get(id)
+        const knownRecord = state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
+          || (reconciled && reconciled.payload.status !== 'still_unknown')
+        throw new WriteOffRefusalError(state.sealedOnly && !knownRecord
+          ? `Only an unknown outcome can be written off. Restore the original implementation pins: check out commit ${state.pins.implementation.repositoryCommit} and use Node ${state.pins.implementation.node}. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
+          : 'Only an unknown outcome can be written off. The outcome is already known; no write-off is needed. Run reconcile without --write-off to close it.')
+      }
       const writtenOffAt = Date.now()
       const authorization = authorizeWriteOff(options.writeOffFile, state, intent, options, writtenOffAt)
       seal(state.directory, artifactName(id, 'written-off'), 'dispatch_write_off', state.pinsDigest, { intentDigest: intent.digest, authorization, writtenOffAt })

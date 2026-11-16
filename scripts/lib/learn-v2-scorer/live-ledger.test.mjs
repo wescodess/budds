@@ -2730,14 +2730,98 @@ test('B2 changed-pin write-off exhaustively follows the three conservative evide
   t.diagnostic(JSON.stringify({ checked, allowed, refused: checked - allowed, allowances }))
 })
 
+const knownOutcomeMessage = 'Only an unknown outcome can be written off. The outcome is already known; no write-off is needed. Run reconcile without --write-off to close it.'
+const restorePinsMessage = setup => `Only an unknown outcome can be written off. Restore the original implementation pins: check out commit ${setup.state.pins.implementation.repositoryCommit} and use Node ${setup.state.pins.implementation.node}. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
+
 function originalCommitRecovery(setup) {
-  const expected = `Only an unknown outcome can be written off. Check out original implementation commit ${setup.state.pins.implementation.repositoryCommit}, run reconciliation there, then retry the write-off.`
+  const expected = restorePinsMessage(setup)
   return error => {
     assert.equal(error.message, expected)
     assert.equal(artifacts.exists(join(setup.state.directory, `${setup.id}.written-off.json`)), false)
     return true
   }
 }
+
+test('B2 CLI write-off recovery guidance restores both original implementation pins', async t => {
+  for (const change of ['commit', 'Node-only']) await t.test(change, async t => {
+    const setup = await pendingBaseline(t)
+    const { state, approval, id, inferenceCalls } = setup
+    publicationFailures.add('reconciled_verdict')
+    await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated publication failure/)
+    publicationFailures.clear()
+    const file = ownerWriteOff(setup)
+    if (change === 'commit') advanceRevision()
+    else revision = { node: '99.0.0' }
+    const refused = await runCli(['reconcile', ...flags(state, id, approval), '--write-off', file])
+    assert.equal(refused.code, 1)
+    assert.equal(refused.stdout, '')
+    assert.equal(refused.stderr, `${restorePinsMessage(setup)}\n`)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+    revision = null
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, 'resolved')
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, 1)
+  })
+})
+
+test('B2 CLI write-off known-outcome guidance closes existing records without restoring pins', async t => {
+  for (const changed of [false, true]) for (const kind of ['not-dispatched', 'terminal', 'resolved', 'failed']) await t.test(`${kind}/changed: ${changed}`, async t => {
+    const setup = ['resolved', 'failed'].includes(kind) ? await pendingBaseline(t) : await canary(t, 'baseline')
+    const { state, approval, id } = setup
+    let expected = kind
+    if (kind === 'not-dispatched') {
+      syntheticHttp(t, setup, '400')
+      process.env.OPENROUTER_API_KEY = process.env.NUXT_OPENROUTER_API_KEY = ''
+      earlyFailures.add('sealed_verdict')
+      await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+      earlyFailures.clear()
+      assert.equal(artifacts.exists(join(state.directory, `${id}.terminal.json`)), false)
+      expected = 'not_dispatched'
+    }
+    else if (kind === 'terminal') {
+      publicationFailures.add('live_dispatch_resolution')
+      await assert.rejects(dispatchLive(state.directory, id, approval), /Simulated/)
+      publicationFailures.clear()
+      expected = 'resolved'
+    }
+    else {
+      metadataOutcome = kind
+      failuresAfterWrite.add('reconciled_verdict')
+      await assert.rejects(reconcileLive(state.directory, id, approval), /Simulated/)
+      failuresAfterWrite.clear()
+    }
+    const file = ownerWriteOff(setup)
+    const inferenceCalls = calls.length
+    const lookupCalls = metadataCalls.length
+    if (changed) advanceRevision()
+    const refused = await runCli(['reconcile', ...flags(state, id, approval), '--write-off', file])
+    assert.equal(refused.code, 1)
+    assert.equal(refused.stdout, '')
+    assert.equal(refused.stderr, `${knownOutcomeMessage}\n`)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+    assert.equal((await reconcileLive(state.directory, id, approval)).reconciliation, expected)
+    assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, lookupCalls)
+  })
+})
+
+test('B2 CLI redacts other recovery errors even when their text looks like guidance', async t => {
+  const setup = await pendingBaseline(t)
+  const { state, approval, id } = setup
+  const sensitive = 'SYNTHETIC-PRIVATE-APPROVAL-CONTENT'
+  const file = join(state.directory, '..', 'invalid-write-off.json')
+  writeFileSync(file, `Only an unknown outcome can be written off. ${sensitive}`)
+  const refused = await runCli(['reconcile', ...flags(state, id, approval), '--write-off', file])
+  assert.equal(refused.code, 1)
+  assert.equal(refused.stdout, '')
+  assert.equal(refused.stderr, 'Scorer harness blocked; inspect local pins, sealed artifacts and required approvals.\n')
+  assert.equal(artifacts.exists(join(state.directory, `${id}.written-off.json`)), false)
+  assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 1)
+  assert.equal(metadataCalls.length, 0)
+})
 
 test('B2 changed pins allow an unobserved intent without inference or metadata', async t => {
   const setup = await canary(t, 'baseline')
@@ -2791,7 +2875,7 @@ test('B2 original-pin classifications and commit-specific recovery remain author
       assert.equal(unresolvedLiveDispatches(await openLiveLedger(globalDirectory)).length, 0)
     }
     else {
-      await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), changed ? originalCommitRecovery(setup) : { message: 'Only an unknown outcome can be written off' })
+      await assert.rejects(reconcileLive(state.directory, id, { ...approval, writeOffFile: file }), { message: knownOutcomeMessage })
     }
     assert.equal(calls.length, inferenceCalls)
     assert.equal(metadataCalls.length, 1)
