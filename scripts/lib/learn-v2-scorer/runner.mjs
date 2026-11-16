@@ -7,6 +7,7 @@ import { requestFor, fixtureEnvelope, baselineExecution, liveMetadata, liveInfer
 import { buildReport, fitThresholds } from './report.mjs'
 import { admitLive, verifySavedApproval } from './live-approval.mjs'
 import { authorizeWriteOff } from './write-off.mjs'
+import { WriteOffRefusalError } from './write-off-refusal.mjs'
 import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches } from './live-ledger.mjs'
 import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
@@ -270,7 +271,15 @@ export async function reconcileLive(path, id, options = {}) {
     const intent = state.intents.get(id)
     assert.ok(intent?.payload.dispatched && reserved, 'Reconciliation requires a recorded dispatched intent')
     if (options.writeOffFile && !state.writeOffs.has(id)) {
-      assert.ok(!await knownOutcomeSaved(state, intent), 'Only an unknown outcome can be written off')
+      if (await knownOutcomeSaved(state, intent)) {
+        const terminal = state.terminals.get(id)
+        const reconciled = state.reconciliations.get(id)
+        const knownRecord = state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
+          || (reconciled && reconciled.payload.status !== 'still_unknown')
+        throw new WriteOffRefusalError(state.sealedOnly && !knownRecord
+          ? `Only an unknown outcome can be written off. Restore the original implementation pins: use a clean checkout of commit ${state.pins.implementation.repositoryCommit} on Node ${state.pins.implementation.node}, so the implementation file digests match manifest.json. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
+          : 'Only an unknown outcome can be written off. The outcome is already known; no write-off is needed. Run reconcile without --write-off to close it.')
+      }
       const writtenOffAt = Date.now()
       const authorization = authorizeWriteOff(options.writeOffFile, state, intent, options, writtenOffAt)
       seal(state.directory, artifactName(id, 'written-off'), 'dispatch_write_off', state.pinsDigest, { intentDigest: intent.digest, authorization, writtenOffAt })
@@ -374,17 +383,27 @@ export async function reconcileLive(path, id, options = {}) {
   }))
 }
 
-async function knownOutcomeSaved(state, intent) {
+export async function knownOutcomeSaved(state, intent) {
   const { id } = intent.payload
   const terminal = state.terminals.get(id)
   const reconciled = state.reconciliations.get(id)
   if (state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
-    || (reconciled && reconciled.payload.status !== 'still_unknown')) return true
+    || (!state.sealedOnly && reconciled && reconciled.payload.status !== 'still_unknown')) return true
   const observation = state.observations.get(id)
+  if (state.sealedOnly) {
+    const lookup = state.metadataIntents.get(id)
+    const saved = state.metadataObservations.get(id)
+    // Changed pins cannot classify saved evidence. Allow only unobserved work,
+    // unsealed transport uncertainty without timely metadata, or an exact seal.
+    if (!observation && !saved) return false
+    if (observation?.payload.raw.failure === 'outcome_unknown' && !terminal
+      && (!saved || (lookup && saved.payload.observedAt >= lookup.payload.deadline))) return false
+    return !(reconciled?.payload.status === 'still_unknown'
+      && reconciled.payload.observationDigest === (observation?.digest ?? null)
+      && reconciled.payload.lookupDigest === (lookup?.digest ?? null)
+      && reconciled.payload.metadataDigest === (saved?.digest ?? null))
+  }
   if (!observation) return false
-  // Changed pins cannot reinterpret a saved response. Only recorded transport
-  // uncertainty can be closed without restoring the original implementation.
-  if (state.sealedOnly) return !terminal && observation.payload.raw.failure !== 'outcome_unknown'
   const item = state.plan.find(item => item.blind.id === id)
   const { raw, terminalAt } = observation.payload
   if (liveOutcome(await evaluate(state, item, intent.payload, raw, terminalAt)) !== 'still_unknown') return true

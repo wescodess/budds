@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 import { registerScorerImports, forbidNetwork } from './lib/learn-v2-scorer/runtime.mjs'
+import { WriteOffRefusalError } from './lib/learn-v2-scorer/write-off-refusal.mjs'
 
 export const RUN_HALTED_MESSAGE = 'Scorer run halted: the provider refused access (quota, billing or authorization). This run cannot dispatch again; a fresh run needs separate owner approval.\n'
 
@@ -50,9 +51,11 @@ export async function cli(argv = process.argv.slice(2), { stdout = process.stdou
     if (argv[0] !== 'dispatch' || !result.halted) return 0
     stderr.write(RUN_HALTED_MESSAGE)
   }
-  catch {
+  catch (error) {
+    // Only fixed write-off guidance is safe; redact every other error.
     // No upstream bodies, source/response text, keys or approval contents in logs.
-    stderr.write('Scorer harness blocked; inspect local pins, sealed artifacts and required approvals.\n')
+    stderr.write(error instanceof WriteOffRefusalError ? `${error.message}\n`
+      : 'Scorer harness blocked; inspect local pins, sealed artifacts and required approvals.\n')
   }
   return 1
 }
