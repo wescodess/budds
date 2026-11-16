@@ -277,7 +277,7 @@ export async function reconcileLive(path, id, options = {}) {
         const knownRecord = state.notDispatched.has(id) || (terminal && liveOutcome(terminal.payload.result) !== 'still_unknown')
           || (reconciled && reconciled.payload.status !== 'still_unknown')
         throw new WriteOffRefusalError(state.sealedOnly && !knownRecord
-          ? `Only an unknown outcome can be written off. Restore the original implementation pins: check out commit ${state.pins.implementation.repositoryCommit} and use Node ${state.pins.implementation.node}. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
+          ? `Only an unknown outcome can be written off. Restore the original implementation pins: use a clean checkout of commit ${state.pins.implementation.repositoryCommit} on Node ${state.pins.implementation.node}, so the implementation file digests match manifest.json. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
           : 'Only an unknown outcome can be written off. The outcome is already known; no write-off is needed. Run reconcile without --write-off to close it.')
       }
       const writtenOffAt = Date.now()

@@ -2731,7 +2731,7 @@ test('B2 changed-pin write-off exhaustively follows the three conservative evide
 })
 
 const knownOutcomeMessage = 'Only an unknown outcome can be written off. The outcome is already known; no write-off is needed. Run reconcile without --write-off to close it.'
-const restorePinsMessage = setup => `Only an unknown outcome can be written off. Restore the original implementation pins: check out commit ${setup.state.pins.implementation.repositoryCommit} and use Node ${setup.state.pins.implementation.node}. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
+const restorePinsMessage = setup => `Only an unknown outcome can be written off. Restore the original implementation pins: use a clean checkout of commit ${setup.state.pins.implementation.repositoryCommit} on Node ${setup.state.pins.implementation.node}, so the implementation file digests match manifest.json. Run reconcile without --write-off there, then retry the write-off if the outcome is still unknown.`
 
 function originalCommitRecovery(setup) {
   const expected = restorePinsMessage(setup)
