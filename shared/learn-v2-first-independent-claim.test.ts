@@ -3,7 +3,9 @@ import {
   LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
   learnReportFactPayloadSchema, learnReportFactSchema, learnReportIndependentClaimV2Schema,
   learnReportFirstSlotLinkSchema, learnReportLinkedFirstSlotSchema, resolveLearnReportFirstSlotV2,
+  learnReportInputSnapshotSchema, validateLearnReportSourcePage, reconcileLearnReportSourceRows,
 } from './learn-v2-measurement-report'
+import { measurementReportIdentityFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const NOW = Date.parse('2027-03-07T17:00:00Z')
 function fixture() {
@@ -91,4 +93,79 @@ describe('first Independent claim v2', () => {
       expect(() => resolveLearnReportFirstSlotV2(claimFact, candidate)).toThrow()
     },
   )
+})
+
+describe('normalized first Independent claims', () => {
+  function normalizedFixture() {
+    const f = fixture()
+    const { kind: _kind, version, blueprintRevisionId: _blueprint, objectiveId: _objective,
+      policyPins, firstSlot, stratum, ...claim } = f.claim
+    const learnerKey = `sha256:${'c'.repeat(64)}`
+    const capabilityKey = `sha256:${'d'.repeat(64)}`
+    const row = { kind: 'first_check_claim_v2' as const, version, learnerKey, capabilityKey, claim, stratum, policyPins, firstSlot }
+    const watermark = { kind: 'owner_watermark' as const, learnerKey, sequence: 2, dueWorkThrough: NOW, historyCoverage: 'unknown' as const,
+      legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' as const } }
+    return { ...f, row, watermark }
+  }
+
+  it('admits unresolved claims into source pages and reconciliation without fabricated slot pins', () => {
+    const { row, watermark } = normalizedFixture()
+    const page = validateLearnReportSourcePage({ version: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, reportRunId: 'run',
+      sequence: 0, sourceWatermark: 2, rows: [watermark, row], cursor: null, isDone: true })
+    expect(page.rows[1]).toEqual(row)
+    expect(reconcileLearnReportSourceRows([row.learnerKey], page.rows)).toEqual({ status: 'complete', reasonCodes: [] })
+    expect(row.firstSlot).toEqual({ kind: 'unresolved', reason: 'no_qualifying_delayed_slot' })
+    for (const field of ['clock', 'firstCheckOpportunityId', 'scorerConfiguration']) expect(row.firstSlot).not.toHaveProperty(field)
+    expect(row.stratum).not.toHaveProperty('familyId')
+  })
+
+  it('carries the linked slot, eligibility state and outcome through the same normalized variant', () => {
+    const { row, watermark, slot } = normalizedFixture()
+    const linked = { ...row, firstSlot: { ...slot, stateAtEligibility: 'independent', stateAtAcceptance: null,
+      acceptance: null, result: null, unresolvedReason: 'missing_delayed' } }
+    const parsed = learnReportInputSnapshotSchema.parse(linked)
+    expect(parsed).toEqual(linked)
+    expect(reconcileLearnReportSourceRows([row.learnerKey], [watermark, parsed])).toEqual({ status: 'complete', reasonCodes: [] })
+    expect(learnReportInputSnapshotSchema.safeParse({ ...linked, firstSlot: { ...linked.firstSlot, clock: undefined } }).success).toBe(false)
+    expect(learnReportInputSnapshotSchema.safeParse({ ...linked, firstSlot: { ...linked.firstSlot, stateAtAcceptance: 'independent' } }).success).toBe(false)
+    expect(learnReportInputSnapshotSchema.safeParse({ ...linked, firstSlot: { ...linked.firstSlot, stratum: { ...slot.stratum, flow: 'v2_canvas' } } }).success).toBe(false)
+  })
+
+  it('reconciles linked outcomes against the episode inventory instead of omitting the versioned claim', async () => {
+    const { claim, episode, watermark, delayed } = await measurementReportIdentityFixture()
+    const { epoch, baselineSha, cohortVersion, flow, entryPoint, depth } = claim.stratum
+    const row = learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+      learnerKey: claim.learnerKey, capabilityKey: claim.capabilityKey, claim: claim.claim,
+      stratum: { epoch, baselineSha, cohortVersion, flow, entryPoint, depth }, policyPins: fixture().claim.policyPins,
+      firstSlot: { kind: 'linked', firstCheckOpportunityId: claim.firstCheckOpportunityId, checkSequence: 1,
+        linkedAt: claim.claim.firstIndependentAt, clock: claim.clock, stratum: claim.stratum,
+        stateAtEligibility: claim.stateAtEligibility, stateAtAcceptance: claim.stateAtAcceptance, acceptance: claim.acceptance,
+        result: delayed, unresolvedReason: null } })
+    expect(reconcileLearnReportSourceRows([claim.learnerKey], [watermark, episode, row])).toEqual({ status: 'complete', reasonCodes: [] })
+    if (row.kind !== 'first_check_claim_v2' || row.firstSlot.kind !== 'linked' || row.firstSlot.result === null) throw new Error('Expected linked result')
+    row.firstSlot.result.scorePercent++
+    expect(reconcileLearnReportSourceRows([claim.learnerKey], [watermark, episode, row]).reasonCodes).toContain('conflicting_outcome_snapshot')
+  })
+
+  it('rejects missing unresolved reasons and fabricated outcomes on an unresolved slot', () => {
+    const { row } = normalizedFixture()
+    expect(learnReportInputSnapshotSchema.safeParse({ ...row, firstSlot: { kind: 'unresolved' } }).success).toBe(false)
+    expect(learnReportInputSnapshotSchema.safeParse({ ...row, firstSlot: { ...row.firstSlot, acceptance: null } }).success).toBe(false)
+  })
+
+  it('reconciles distinct unresolved claims without sharing a null opportunity identity', () => {
+    const { row, watermark } = normalizedFixture()
+    const second = { ...row, capabilityKey: `sha256:${'e'.repeat(64)}`, claim: { ...row.claim, claimKey: 'another-claim', basisAttemptId: 'another-basis' } }
+    const rows = [watermark, row, second].map(value => learnReportInputSnapshotSchema.parse(value))
+    expect(reconcileLearnReportSourceRows([row.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
+  })
+
+  it('rejects a legacy and versioned normalized copy of the same claim', () => {
+    const { row, watermark, slot } = normalizedFixture()
+    const legacy = { kind: 'first_check_claim', learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, claim: row.claim,
+      stratum: slot.stratum, firstCheckOpportunityId: slot.firstCheckOpportunityId, checkSequence: 1, clock: slot.clock,
+      stateAtEligibility: 'independent', stateAtAcceptance: null, acceptance: null, result: null, unresolvedReason: 'missing_delayed' }
+    const rows = [watermark, row, legacy].map(value => learnReportInputSnapshotSchema.parse(value))
+    expect(reconcileLearnReportSourceRows([row.learnerKey], rows).reasonCodes).toContain('duplicate_claim_key')
+  })
 })

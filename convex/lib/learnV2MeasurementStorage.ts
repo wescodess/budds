@@ -374,7 +374,7 @@ export const reportRowFields = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), reportRunId: v.id('learnMeasurementReportRuns'),
   sequence: v.number(), sourceWatermark: v.number(), sourceVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION),
   assignmentId: v.optional(v.id('learnMeasurementAssignments')), horizonDays: v.optional(horizon),
-  rowKind: v.union(v.literal('owner_watermark'), v.literal('episode'), v.literal('first_check_claim')),
+  rowKind: v.union(v.literal('owner_watermark'), v.literal('episode'), v.literal('first_check_claim'), v.literal('first_check_claim_v2')),
   snapshot: reportInputSnapshot,
   // Normalized scalar inputs only; never a response, prompt or scorer payload.
   facts: v.object({ disposition: v.string(), coldScorePercent: v.union(v.number(), v.null()), delayedScorePercent: v.union(v.number(), v.null()), claimKey: v.union(v.string(), v.null()), claimSequence: v.union(v.number(), v.null()), checkSequence: v.union(v.number(), v.null()), admitted: v.boolean(), matured: v.boolean(), valid: v.boolean() }),

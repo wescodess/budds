@@ -18,7 +18,8 @@ import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION } from '../shared/learn-v2-responses'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, learnReportFirstSlotLinkSchema, learnReportFactPayloadSchema,
-  learnReportFactSchema, resolveLearnReportFirstSlotV2, type LearnReportLinkedFirstSlot } from '../shared/learn-v2-measurement-report'
+  learnReportFactSchema, learnReportInputSnapshotSchema, resolveLearnReportFirstSlotV2, type LearnReportLinkedFirstSlot,
+  type LearnReportIndependentClaimV2 } from '../shared/learn-v2-measurement-report'
 
 const OWNER = { tokenIdentifier: 'https://claim.example|owner', subject: 'owner' }
 const FOREIGN = { tokenIdentifier: 'https://foreign.example|owner', subject: 'owner' }
@@ -46,6 +47,7 @@ async function fixture() {
     validitySnapshot: { ...f.validitySnapshot, policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION, measurementEligible: false, masteryEligible: true } }))
   const stratum = { epoch: 'fixture-epoch', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1',
     flow: 'v2_today' as const, entryPoint: 'retained_check', depth: 'working' as const }
+  await t.run(ctx => ctx.db.patch(f.rows.learnMeasurementAssignments, { entryPoint: stratum.entryPoint }))
   const claimKey = await privacyDigest(['learn-v2.first-independent.v1', await masteryScopeKey(OWNER.tokenIdentifier, f.scope.blueprintRevisionId, f.scope.objectiveId), stratum.epoch])
   const claim = learnReportIndependentClaimV2Schema.parse({ kind: 'independent_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
     claimKey, claimSequence: 1, basisAttemptId, masteryRecordRevision: 2, firstIndependentAt: NOW,
@@ -87,6 +89,74 @@ async function fixture() {
 function envelope(row: Doc<'learnMeasurementReportFacts'>) {
   return { factVersion: row.factVersion, sequence: row.sequence, epoch: row.epoch, occurredAt: row.occurredAt, fact: row.fact }
 }
+function claimBasis(claim: LearnReportIndependentClaimV2) {
+  const { kind: _kind, version: _version, blueprintRevisionId: _blueprint, objectiveId: _objective,
+    policyPins: _policy, firstSlot: _slot, stratum: _stratum, ...basis } = claim
+  return basis
+}
+async function storeUnresolvedReportClaim(f: Awaited<ReturnType<typeof fixture>>) {
+  const snapshot = learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim_v2', version: f.claim.version, ...f.f.reportKeys,
+    claim: claimBasis(f.claim), stratum: f.claim.stratum, policyPins: f.claim.policyPins, firstSlot: f.claim.firstSlot })
+  await f.t.run(ctx => ctx.db.patch(f.f.rows.learnMeasurementReportRows, { rowKind: 'first_check_claim_v2', sourceWatermark: 2,
+    assignmentId: undefined, horizonDays: undefined, snapshot,
+    facts: { disposition: 'reconciliation_required', coldScorePercent: null, delayedScorePercent: null, claimKey: f.claim.claimKey,
+      claimSequence: 1, checkSequence: null, admitted: false, matured: false, valid: false } }))
+  return snapshot
+}
+
+test.each(['v1_then_v2', 'v2_then_v1', 'v2_link_then_v1', 'v1_then_v1'] as const)('rejects mixed-version duplicate claims: %s', async order => {
+  const f = await fixture()
+  const slot = await f.makeSlot()
+  const legacy = { kind: 'independent_claim' as const, ...claimBasis(f.claim), firstCheckOpportunityId: slot.firstCheckOpportunityId,
+    checkSequence: 1, stratum: slot.stratum }
+  await f.write(order.startsWith('v1_') ? legacy : f.claim)
+  if (order === 'v2_link_then_v1') await f.write(f.link(slot))
+  const before = await f.facts()
+  const next = order === 'v1_then_v2' ? { ...f.claim, claimFactSequence: before.length + 1 } : { ...legacy, claimFactSequence: before.length + 1 }
+  await expect(f.write(next)).rejects.toThrow('already recorded')
+  expect(await f.facts()).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').unique())).toMatchObject({ sequence: before.length })
+})
+
+test('competing legacy and v2 claims preserve one denominator authority', async () => {
+  const f = await fixture()
+  const slot = await f.makeSlot()
+  const legacy = { kind: 'independent_claim' as const, ...claimBasis(f.claim), firstCheckOpportunityId: slot.firstCheckOpportunityId,
+    checkSequence: 1, stratum: slot.stratum }
+  const results = await Promise.allSettled([f.write(legacy), f.write(f.claim)])
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+  expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim' || row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
+})
+
+test.each(['flow', 'entry_point', 'baseline', 'depth'] as const)('selects the earliest slot using each candidate\'s actual %s', async mismatch => {
+  const f = await fixture()
+  await f.write(f.claim)
+  const earlier = await f.makeSlot('measurement_delayed')
+  await f.t.run(async ctx => {
+    if (mismatch === 'flow') await ctx.db.patch(f.f.rows.learnMeasurementAssignments, { flow: 'v2_canvas' })
+    if (mismatch === 'entry_point') await ctx.db.patch(f.f.rows.learnMeasurementAssignments, { entryPoint: 'another_entry' })
+    if (mismatch === 'baseline') await ctx.db.patch(f.f.rows.learnMeasurementAssignments, { baselineSha: 'b'.repeat(40) })
+    if (mismatch === 'depth') await ctx.db.patch(earlier.firstCheckOpportunityId, { depth: 'advanced' })
+  })
+  const first = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 1_000 })
+  expect(await f.write(f.link(first))).toBe(3)
+  const rows = await f.facts()
+  expect(resolveLearnReportFirstSlotV2(envelope(rows[1]!), envelope(rows[2]!)).firstSlot).toEqual(first)
+})
+
+test('round-trips unresolved and linked claims through normalized report storage', async () => {
+  const f = await fixture()
+  await f.write(f.claim)
+  const pending = await storeUnresolvedReportClaim(f)
+  expect((await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRows)))?.snapshot).toEqual(pending)
+  const slot = await f.makeSlot()
+  await f.write(f.link(slot))
+  const linked = learnReportInputSnapshotSchema.parse({ ...pending, firstSlot: { ...slot, stateAtEligibility: 'independent',
+    stateAtAcceptance: null, acceptance: null, result: null, unresolvedReason: 'missing_delayed' } })
+  await f.t.run(ctx => ctx.db.patch(f.f.rows.learnMeasurementReportRows, { sourceWatermark: 3, horizonDays: 7, snapshot: linked }))
+  expect((await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRows)))?.snapshot).toEqual(linked)
+})
 
 test('records the ordinary first Independent basis without a delayed opportunity or cold pair, with all capabilities off', async () => {
   const f = await fixture()
@@ -234,6 +304,7 @@ test('refuses to select a first slot from a truncated opportunity inventory', as
 test('owner export omits the new fact payloads and telemetry stays empty', async () => {
   const f = await fixture()
   await f.write(f.claim)
+  await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
   const authorizationId = await authorizeExport(f.owner)
   const args = { authorizationId, collection: 'learnMeasurementReportFacts' as const, paginationOpts: { cursor: null, numItems: 8 } }
@@ -242,6 +313,10 @@ test('owner export omits the new fact payloads and telemetry stays empty', async
   for (const row of exported.page) expect(Object.keys(row).sort()).toEqual(['_creationTime', '_id', 'createdAt', 'epoch', 'factVersion', 'learningVoidId', 'occurredAt', 'sequence'].sort())
   expect(JSON.stringify(exported)).not.toContain(f.claim.claimKey)
   expect(JSON.stringify(exported)).not.toContain(f.basisAttemptId)
+  const rows = await f.owner.query(api.dataExport.getUserDataPage, { ...args, collection: 'learnMeasurementReportRows' })
+  expect(rows.page).toMatchObject([{ rowKind: 'first_check_claim_v2' }])
+  expect(JSON.stringify(rows)).not.toContain(f.claim.claimKey)
+  expect(rows.page[0]).not.toHaveProperty('snapshot')
   await expect(f.t.withIdentity(FOREIGN).query(api.dataExport.getUserDataPage, args)).rejects.toThrow()
   await expect(f.t.withIdentity(FOREIGN).mutation(appendRef, { learningVoidId: f.f.learningVoidId, epoch: f.claim.stratum.epoch, occurredAt: NOW, fact: f.claim })).rejects.toThrow('scope mismatch')
   expect(await f.t.run(ctx => ctx.db.query('learnActivityEvents').take(1))).toEqual([])
@@ -250,6 +325,7 @@ test('owner export omits the new fact payloads and telemetry stays empty', async
 test.each(['source_deleted', 'access_lost'] as const)('%s purge retains scalar claim/link history and invalidates cached reports', async reason => {
   const f = await fixture()
   await f.write(f.claim)
+  await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
   const before = (await f.facts()).slice(1)
   for (let batch = 0; batch < 20; batch++) {
@@ -259,6 +335,7 @@ test.each(['source_deleted', 'access_lost'] as const)('%s purge retains scalar c
   }
   expect((await f.facts()).slice(1)).toEqual(before)
   expect(await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRuns))).toMatchObject({ status: 'stale' })
+  expect(await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRows))).toMatchObject({ rowKind: 'first_check_claim_v2', invalidatedAt: NOW })
   expect(await f.t.run(ctx => ctx.db.get(f.f.rows.learnResponseBodies))).toBeNull()
   await f.t.finishInProgressScheduledFunctions()
 })
@@ -266,6 +343,7 @@ test.each(['source_deleted', 'access_lost'] as const)('%s purge retains scalar c
 test.each(['void', 'account'] as const)('%s deletion removes both fact copies and preserves another owner', async kind => {
   const f = await fixture()
   await f.write(f.claim)
+  await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
   const foreign = await f.t.run(ctx => seedMeasurementStorage(ctx, FOREIGN.tokenIdentifier))
   if (kind === 'void') {
@@ -288,6 +366,7 @@ test.each(['void', 'account'] as const)('%s deletion removes both fact copies an
     }
   }
   expect(await f.facts()).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRows))).toBeNull()
   expect(await f.t.run(ctx => ctx.db.get(foreign.rows.learnMeasurementReportFacts))).not.toBeNull()
   await f.t.finishInProgressScheduledFunctions()
 })

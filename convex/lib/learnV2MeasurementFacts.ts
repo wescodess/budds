@@ -5,12 +5,14 @@ import {
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema,
   deriveLearnReportLearnerKey,
   resolveLearnReportFirstSlotV2, qualifiesLearnReportFirstSlot,
+  learnReportFirstSlotStratumSchema,
   type LearnReportIndependentClaimV2, type LearnReportLinkedFirstSlot,
   type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, parseLearnContract } from '../../shared/learn-v2-responses'
-import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
+import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
+import { learnAssessmentClockSchema } from '../../shared/learn-v2-delayed-check'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
 
@@ -47,7 +49,7 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
           : await ctx.db.get(fact.submissionId)
   if (!source || source.userId !== userId
     || ('learningVoidId' in source && source.learningVoidId !== input.learningVoidId)) throw new Error('Learn fact scope mismatch')
-  if (fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') {
+  if (fact.kind === 'independent_claim' || fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') {
     await validateFirstIndependentFact(ctx, userId, value, input.learningVoidId)
   }
   const now = Date.now()
@@ -68,9 +70,9 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
 
 async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, value: LearnReportSourceFact, learningVoidId?: Id<'learningVoids'>) {
   const fact = value.fact
-  if (fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
+  if (fact.kind !== 'independent_claim' && fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
   const previous = await ctx.db.query('learnMeasurementReportFacts')
-    .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', 1)).take(3)
+    .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
   if (fact.kind === 'first_slot_link') {
     const saved = previous[0]
     if (previous.length !== 1 || !saved || saved.fact.kind !== 'independent_claim_v2'
@@ -82,6 +84,7 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
     return
   }
   if (previous.length) throw new Error('Learn first Independent claim already recorded')
+  if (fact.kind === 'independent_claim') return
   const claim = resolveLearnReportFirstSlotV2(value)
   const basis = await ctx.db.get(claim.basisAttemptId)
   const blueprint = await ctx.db.get(claim.blueprintRevisionId)
@@ -111,28 +114,16 @@ async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnR
   const opportunities = await ctx.db.query('learnAssessmentOpportunities')
     .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(65)
   if (opportunities.length > 64) throw new Error('Learn first-slot inventory exceeds its bound')
-  const candidates: Doc<'learnAssessmentOpportunities'>[] = []
+  const candidates: { row: Doc<'learnAssessmentOpportunities'>, slot: LearnReportLinkedFirstSlot }[] = []
   for (const row of opportunities) {
-    if (row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
-      || !row.originalSlot || row.replacesOpportunityId !== undefined || !('clock' in row.purpose)
-      || !qualifiesLearnReportFirstSlot(claim, { ...slot, clock: row.purpose.clock })) continue
-    if (row.purpose.kind === 'retained_transfer') {
-      if (row.purpose.basisAttemptId === claim.basisAttemptId) candidates.push(row)
-    }
-    else {
-      const assignment = await ctx.db.get(row.purpose.assignmentId)
-      if (assignment?.userId === userId && assignment.status === 'admitted' && assignment.epoch === claim.stratum.epoch
-        && assignment.learningVoidId === learningVoidId && assignment.blueprintRevisionId === claim.blueprintRevisionId
-        && assignment.objectiveId === claim.objectiveId && row.assignmentId === assignment._id) candidates.push(row)
-    }
+    const candidate = await readQualifyingFirstSlot(ctx, userId, claim, row)
+    if (candidate) candidates.push({ row, slot: candidate })
   }
-  candidates.sort((left, right) => left.openAt - right.openAt || left.delayedCheckId.localeCompare(right.delayedCheckId))
-  const first = candidates[0]
-  const firstClock = first && 'clock' in first.purpose ? first.purpose.clock : null
-  if (!first || !firstClock || first._id !== slot.firstCheckOpportunityId
+  candidates.sort((left, right) => left.row.openAt - right.row.openAt || left.row.delayedCheckId.localeCompare(right.row.delayedCheckId))
+  const selected = candidates[0]
+  const first = selected?.row
+  if (!first || first._id !== slot.firstCheckOpportunityId
     || first.createdAt > slot.linkedAt
-    || first.openAt !== slot.clock.openAt || first.closeAt !== slot.clock.closeAt || first.dueAt !== slot.clock.dueAt
-    || Object.entries(slot.clock).some(([key, pin]) => firstClock[key as keyof typeof slot.clock] !== pin)
     || first.submissionId !== undefined || first.authoritativeAttemptId !== undefined || first.scoringJobId !== undefined
     || !['preparing', 'ready', 'test_open'].includes(first.phase) || Date.now() >= first.closeAt
     || first.firstCheckClaim && (first.firstCheckClaim.claimKey !== claim.claimKey || first.checkSequence !== 1)) throw new Error('Learn earliest first slot unavailable')
@@ -142,23 +133,39 @@ async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnR
     ctx.db.query('masteryAttempts').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
   ])
   if (response || execution || attempt) throw new Error('Learn first slot outcome already started')
-  const assignment = first.purpose.kind === 'measurement_delayed' ? await ctx.db.get(first.purpose.assignmentId) : null
-  const flow = assignment?.flow ?? (first.contextPins.kind === 'session' && first.contextPins.canvas ? 'v2_canvas' : 'v2_today')
-  const configuration = await deriveLearnScorerConfiguration(first.scoringBinding)
-  if (configuration.scoringKind !== slot.stratum.scorerConfiguration.scoringKind
-    || configuration.configurationDigest !== slot.stratum.scorerConfiguration.configurationDigest
-    || configuration.scorerVersion !== slot.stratum.scorerConfiguration.scorerVersion
-    || first.depth !== slot.stratum.depth || flow !== slot.stratum.flow) throw new Error('Learn first-slot stratum mismatch')
-  if (first.assessmentPins.kind === 'measurement') {
-    const pins = first.assessmentPins.itemPins
-    const [family, item] = await Promise.all([ctx.db.get(pins.familyId), ctx.db.get(pins.itemId)])
-    if (family?.userId !== userId || item?.userId !== userId || item.familyId !== family._id
-      || slot.stratum.familyId !== family._id || slot.stratum.familyRevision !== pins.familyRevision
-      || slot.stratum.familyValidationStatus !== family.status || slot.stratum.equivalenceVersion !== pins.equivalenceVersion
-      || slot.stratum.responseKind !== item.responseSpec.kind) throw new Error('Learn first-slot stratum mismatch')
-  }
-  else if (slot.stratum.familyId !== null || slot.stratum.familyRevision !== null || slot.stratum.equivalenceVersion !== null
-    || slot.stratum.familyValidationStatus !== 'unknown' || slot.stratum.responseKind !== 'bounded_rubric') throw new Error('Learn first-slot stratum mismatch')
+  if (await privacyDigest(selected.slot) !== await privacyDigest(slot)) throw new Error('Learn first-slot stratum mismatch')
+}
+
+async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: LearnReportIndependentClaimV2,
+  row: Doc<'learnAssessmentOpportunities'>): Promise<LearnReportLinkedFirstSlot | null> {
+  if (row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
+    || !row.originalSlot || row.replacesOpportunityId !== undefined || !('clock' in row.purpose)) return null
+  const clock = learnAssessmentClockSchema.safeParse(row.purpose.clock)
+  const binding = learnScorerBindingSchema.safeParse(row.scoringBinding)
+  if (!clock.success || !binding.success || row.openAt !== clock.data.openAt || row.closeAt !== clock.data.closeAt || row.dueAt !== clock.data.dueAt) return null
+  const assignment = row.purpose.kind === 'measurement_delayed' ? await ctx.db.get(row.purpose.assignmentId) : null
+  if (row.purpose.kind === 'retained_transfer' ? row.purpose.basisAttemptId !== claim.basisAttemptId
+    : !assignment || assignment.userId !== userId || assignment.status !== 'admitted' || assignment.epoch !== claim.stratum.epoch
+      || assignment.learningVoidId !== row.learningVoidId || assignment.blueprintRevisionId !== claim.blueprintRevisionId
+      || assignment.objectiveId !== claim.objectiveId || row.assignmentId !== assignment._id) return null
+  const pins = row.assessmentPins.kind === 'measurement' ? row.assessmentPins.itemPins : null
+  const [family, item] = await Promise.all([pins ? ctx.db.get(pins.familyId) : null, pins ? ctx.db.get(pins.itemId) : null])
+  if (pins ? !family || family.userId !== userId || !item || item.userId !== userId || item.familyId !== family._id
+    || family.revision !== pins.familyRevision || item.familyRevision !== pins.familyRevision || family.equivalenceVersion !== pins.equivalenceVersion
+    : row.assessmentPins.kind !== 'session_application') return null
+  const stratum = learnReportFirstSlotStratumSchema.safeParse({
+    epoch: assignment?.epoch ?? claim.stratum.epoch, baselineSha: assignment?.baselineSha ?? claim.stratum.baselineSha,
+    cohortVersion: assignment?.cohortVersion ?? claim.stratum.cohortVersion,
+    flow: assignment?.flow ?? (row.contextPins.kind === 'session' && row.contextPins.canvas ? 'v2_canvas' : 'v2_today'),
+    entryPoint: assignment?.entryPoint ?? 'retained_check', depth: row.depth,
+    familyId: pins?.familyId ?? null, familyRevision: pins?.familyRevision ?? null,
+    familyValidationStatus: family?.status ?? 'unknown', equivalenceVersion: pins?.equivalenceVersion ?? null,
+    responseKind: item?.responseSpec.kind ?? 'bounded_rubric', scorerConfiguration: await deriveLearnScorerConfiguration(binding.data),
+  })
+  if (!stratum.success) return null
+  const candidate: LearnReportLinkedFirstSlot = { kind: 'linked', firstCheckOpportunityId: row._id, checkSequence: 1,
+    linkedAt: Date.now(), clock: clock.data, stratum: stratum.data }
+  return qualifiesLearnReportFirstSlot(claim, candidate) ? candidate : null
 }
 
 export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, userId: string, assignment: Doc<'learnMeasurementAssignments'>) {

@@ -164,8 +164,6 @@ export const learnReportFirstClaimSnapshotSchema = z.strictObject({
 function acceptedResultMatches(acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null) {
   return result === null || (acceptance !== null && result.submissionId === acceptance.submissionId && result.acceptedAt === acceptance.acceptedAt)
 }
-export const learnReportInputSnapshotSchema = z.discriminatedUnion('kind', [learnReportWatermarkSnapshotSchema, learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema])
-
 export function reconcileLearnReportSourceRows(roster: readonly string[], rows: readonly z.infer<typeof learnReportInputSnapshotSchema>[]) {
   const reasons = new Set<string>()
   const owners = new Set(roster)
@@ -203,7 +201,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const validatedRows = rows.map(input => learnReportInputSnapshotSchema.parse(input))
   for (const row of validatedRows) {
     const identity = JSON.stringify(row.kind === 'owner_watermark' ? [row.kind, row.learnerKey]
-      : row.kind === 'first_check_claim' ? [row.kind, row.learnerKey, row.capabilityKey, row.stratum.epoch]
+      : row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2' ? ['first_check_claim', row.learnerKey, row.capabilityKey, row.stratum.epoch]
         : [row.kind, row.assignmentId, row.horizonDays])
     const group = identities.get(identity) ?? { count: 0, snapshots: new Set<string>() }
     group.count += 1
@@ -234,18 +232,19 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
       reconcileOutcome({ ...binding, owner: episode, role: 'delayed' }, row.originalOpportunityId, row.delayedAcceptance, row.delayed, row.clock)
       reconcileOutcome({ ...binding, owner: episode, role: 'replacement' }, row.replacementOpportunityId, row.replacementAcceptance, row.replacement, row.replacementClock)
     }
-    if (row.kind === 'first_check_claim') {
+    if (row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2') {
+      const slot = row.kind === 'first_check_claim' ? row : row.firstSlot.kind === 'linked' ? row.firstSlot : null
       for (const [kind, value, reason] of [
         ['claim', row.claim.claimKey, 'duplicate_claim_key'],
         ['basis_attempt', row.claim.basisAttemptId, 'reused_claim_basis_attempt'],
-        ['first_opportunity', row.firstCheckOpportunityId, 'reused_first_check_opportunity'],
+        ...(slot ? [['first_opportunity', slot.firstCheckOpportunityId, 'reused_first_check_opportunity'] as const] : []),
       ] as const) {
         const key = JSON.stringify([kind, value])
         if (claimIdentities.has(key)) reasons.add(reason)
         else claimIdentities.add(key)
       }
-      reconcileOutcome({ learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, owner: null, role: 'claim' },
-        row.firstCheckOpportunityId, row.acceptance, row.result, row.clock)
+      if (slot) reconcileOutcome({ learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, owner: null, role: 'claim' },
+        slot.firstCheckOpportunityId, slot.acceptance, slot.result, slot.clock)
     }
   }
   for (const group of outcomes.values()) {
@@ -265,7 +264,7 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   // Only independent_application establishes Independent (#364 §5); no source endpoint admits that kind.
   // An absent ordinary V2 basis still requires canonical validation by the writer.
   for (const row of validatedRows) {
-    if (row.kind !== 'first_check_claim') continue
+    if (row.kind !== 'first_check_claim' && row.kind !== 'first_check_claim_v2') continue
     if (outcomes.has(JSON.stringify(['attempt', row.claim.basisAttemptId]))) reasons.add('invalid_claim_basis')
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
@@ -281,9 +280,8 @@ export const learnReportLinkedFirstSlotSchema = z.strictObject({
   checkSequence: z.literal(1), linkedAt: learnTimestampSchema, clock: learnAssessmentClockSchema,
   stratum: learnReportFirstSlotStratumSchema,
 }).refine(value => value.linkedAt < value.clock.closeAt, 'First slot must be linked before its window closes')
-export const learnReportFirstSlotSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('unresolved'), reason: learnCodeSchema }), learnReportLinkedFirstSlotSchema,
-])
+const unresolvedFirstSlot = z.strictObject({ kind: z.literal('unresolved'), reason: learnCodeSchema })
+export const learnReportFirstSlotSchema = z.discriminatedUnion('kind', [unresolvedFirstSlot, learnReportLinkedFirstSlotSchema])
 export const learnReportIndependentClaimV2Schema = learnFirstCheckClaimSchema.safeExtend({
   kind: z.literal('independent_claim_v2'), version: z.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
   claimSequence: z.literal(1),
@@ -300,6 +298,23 @@ export const learnReportFirstSlotLinkSchema = z.strictObject({
 })
 export type LearnReportIndependentClaimV2 = z.infer<typeof learnReportIndependentClaimV2Schema>
 export type LearnReportLinkedFirstSlot = z.infer<typeof learnReportLinkedFirstSlotSchema>
+const linkedFirstSlotSnapshot = learnReportLinkedFirstSlotSchema.safeExtend({
+  stateAtEligibility: z.union([masteryState, z.literal('unknown')]), stateAtAcceptance: z.union([masteryState, z.literal('unknown')]).nullable(),
+  acceptance: learnReportAcceptanceSnapshotSchema.nullable(), result: learnReportResultSnapshotSchema.nullable(), unresolvedReason: learnCodeSchema.nullable(),
+}).refine(value => acceptedResultMatches(value.acceptance, value.result)
+  && ((value.acceptance === null) === (value.stateAtAcceptance === null)), 'First-slot results and state require their accepted submission')
+  .refine(value => value.result === null || ['measurement_delayed', 'retained_transfer'].includes(value.result.kind), 'Incorrect first-check endpoint kind')
+export const learnReportFirstClaimV2SnapshotSchema = z.strictObject({
+  kind: z.literal('first_check_claim_v2'), version: z.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION), ...computationKeys,
+  claim: learnFirstCheckClaimSchema.safeExtend({ claimSequence: z.literal(1) }), stratum: claimStratum,
+  policyPins: learnReportIndependentClaimV2Schema.shape.policyPins,
+  firstSlot: z.discriminatedUnion('kind', [unresolvedFirstSlot, linkedFirstSlotSnapshot]),
+}).refine(value => value.firstSlot.kind === 'unresolved' || qualifiesLearnReportFirstSlot({ ...value.claim, stratum: value.stratum }, value.firstSlot),
+  'First slot must qualify for its Independent claim')
+export type LearnReportFirstClaimV2Snapshot = z.infer<typeof learnReportFirstClaimV2SnapshotSchema>
+export const learnReportInputSnapshotSchema = z.discriminatedUnion('kind', [
+  learnReportWatermarkSnapshotSchema, learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema, learnReportFirstClaimV2SnapshotSchema,
+])
 export function qualifiesLearnReportFirstSlot(
   claim: { firstIndependentAt: number, firstIndependentLocalDate: string, firstIndependentTimezone: string, stratum: z.infer<typeof claimStratum> },
   slot: z.infer<typeof learnReportLinkedFirstSlotSchema>,
