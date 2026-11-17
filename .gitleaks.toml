@@ -19,6 +19,11 @@ paths = [
 ]
 
 [[allowlists]]
+description = "Scorer corpus fixtures hold SHA-256 content digests, not credentials"
+targetRules = ["generic-api-key"]
+paths = ['''(?:^|/)tests/fixtures/learn-v2-scorer/(?:corpus|manifest)\.v1\.json$''']
+
+[[allowlists]]
 description = "Stitch identifiers are public design asset references, not credentials"
 targetRules = ["generic-api-key"]
 paths = ['''(?:^|/)stitch\.json$''']
