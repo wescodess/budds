@@ -22,8 +22,12 @@ export function defaultMapObjectiveContract(): LearnV2AssessmentContract {
     criteria: [{ key: 'correct', description: 'The response is correct and supported by the accepted evidence.', weightPercent: 100 }] }
 }
 
-function rejectMapEdit(reasonCode: 'assessment_contract_unavailable' | 'invalid_split_parent' | 'objective_identity_unavailable'): never {
+function rejectMapEdit(reasonCode: 'assessment_contract_unavailable' | 'invalid_split_parent' | 'objective_identity_unavailable' | 'revision_conflict'): never {
   throw new ConvexError({ version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode })
+}
+
+export function rejectStaleMapEdit(): never {
+  rejectMapEdit('revision_conflict')
 }
 
 export function requireServerAssessmentContract(value: unknown): asserts value is LearnV2AssessmentContract {

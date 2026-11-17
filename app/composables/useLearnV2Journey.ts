@@ -3,7 +3,7 @@ import { computed, ref, toValue, watch, type MaybeRef } from 'vue'
 import { api } from '#convex/api'
 import type { LearnHubSnapshot, LearnMissionSnapshot, LearnOutcomeDraft, LearnPlanSnapshot, LearnReadinessItem, LearnSourceSnapshot, LearnObjectiveSnapshot, LearnMapEdit, LearnMapSaveResult, LearnScheduleInput } from '~/types/learn-v2-journey'
 import { parseLearnV2PlanResult } from '~/utils/learn-v2-plan-result'
-import { applyLearnMapEdit, type LearnMapCandidate } from '~/utils/learn-v2-map-editor'
+import { applyLearnMapEdit, isLearnMapChangedError, LearnMapChangedError, type LearnMapCandidate } from '~/utils/learn-v2-map-editor'
 
 type Mission = any
 const key = (name: string) => `${name}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
@@ -20,7 +20,6 @@ const sourceFailureMessage = (reason?: string) => (({
 const retryableSourceMessage = (reason?: string) => reason === 'rate_limited' || reason === 'owner_capacity' || reason === 'global_capacity'
   ? 'Evidence checks are busy right now. Retry in a moment.'
   : 'The evidence check did not finish. Retry the source.'
-const mapChangedElsewhere = (cause: unknown) => cause instanceof Error && /revision conflict|no longer in this map|revision did not become available|revision is unavailable/i.test(cause.message)
 const mapStatus = (status: string): LearnMissionSnapshot['lifecycle'] => (({ draft: 'draft', sourcing: 'source_review', source_review: 'source_review', map_review: 'map_review', calibration: 'calibration', plan_review: 'plan_review', scheduled: 'active', active: 'active', needs_attention: 'blocked', failed: 'blocked', paused: 'blocked', archived: 'superseded', completed: 'superseded' } as const)[status as keyof Record<string, LearnMissionSnapshot['lifecycle']>] ?? 'draft')
 
 function nextAction(row: any) {
@@ -206,12 +205,12 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
     // The fork copies sources and the authoritative map. Wait for the subscription so
     // candidate source IDs are scoped to that new revision rather than the source map.
     await new Promise<void>((resolve, reject) => {
-      let settled = false; let stop = () => {}; const timer = setTimeout(() => { if (settled) return; settled = true; stop(); reject(new Error('The editable map revision did not become available. Refresh and try again.')) }, 5_000)
+      let settled = false; let stop = () => {}; const timer = setTimeout(() => { if (settled) return; settled = true; stop(); reject(new LearnMapChangedError('The editable map revision did not become available')) }, 5_000)
       const watcher = watch(mission, value => { if (!settled && String(value?.currentBlueprint?._id) === String(fork._id)) { settled = true; clearTimeout(timer); stop(); resolve() } }, { flush: 'sync', immediate: true })
       stop = watcher; if (settled) stop()
     })
     const row = mission.value
-    if (!row?.map || !row.currentBlueprint || String(row.currentBlueprint._id) !== String(fork._id)) throw new Error('The editable map revision is unavailable')
+    if (!row?.map || !row.currentBlueprint || String(row.currentBlueprint._id) !== String(fork._id)) throw new LearnMapChangedError('The editable map revision is unavailable')
     const milestoneKeys = new Map(row.map.milestones.map((item: any) => [String(item._id), item.stableKey ?? `milestone-${item.order + 1}`]))
     const objectiveKeys = new Map(row.map.objectives.map((item: any) => [String(item._id), item.stableKey ?? `objective-${item.order + 1}`]))
     const sourceIdByKey = Object.fromEntries((row.sources?.items ?? []).map((source: any) => [String(source.identity?._id ?? source.sourceIdentityId), String(source._id)]))
@@ -220,7 +219,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
     const edited = applyLearnMapEdit(candidate, edit, sourceIdByKey)
     await replaceMap.mutate({ blueprintRevisionId: row.currentBlueprint._id, expectedRecordRevision: row.currentBlueprint.recordRevision, expectedVoidRevision: row.learningVoid.revision, idempotencyKey: key('replace-map'), candidate: edited as never })
     return { ok: true }
-  } catch (cause) { return { ok: false, reason: mapChangedElsewhere(cause) ? 'changed' : 'failed' } } finally { busy.value = false } }
+  } catch (cause) { return { ok: false, reason: isLearnMapChangedError(cause) ? 'changed' : 'failed' } } finally { busy.value = false } }
   async function acceptPlan() { const row = mission.value; const preview = row?.plan?.preview; if (!row || !preview) return; return await run(() => acceptPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedVoidRevision: row.learningVoid.revision, expectedPlanRecordRevision: preview.recordRevision, idempotencyKey: key('accept-plan') })) }
   return { allowed, checkingAccess, hub, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults, defaultSchedule, planInput, saveOutcomeDraft, createMission, startMapGeneration, editLearningMap, acceptSource, prepareSource, rejectSource, addUrlSource, researchPublicSources, acceptLearningMap, submitCalibrationAttempt, completeCalibration, createPlanPreview, editPlanPreview, acceptPlan }
 }

@@ -80,18 +80,46 @@ describe('Learner map editor', () => {
     wrapper.unmount()
   })
 
-  it('splits straight away and holds a removal until save', async () => {
+  it('holds a split with the other changes and sends them in one save', async () => {
+    const { wrapper, save } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Recognise cancellation')
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="learn-v2-map-split-objective"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="learn-v2-map-remove-objective"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Not saved yet: wording and split.')
+
+    await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0]![0]).toMatchObject({ kind: 'save_objective', objective: { objectiveKey: 'objective-1', title: 'Recognise cancellation' }, split: { secondTitle: 'Recognise cancellation: apply' } })
+    wrapper.unmount()
+  })
+
+  it('discards a held split on Cancel', async () => {
     const { wrapper, save } = await mountTrail()
 
     await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
     await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
-    expect(save.mock.calls[0]![0]).toEqual({ kind: 'split_objective', objectiveKey: 'objective-1', firstTitle: 'Objective 1', secondTitle: 'Objective 1: apply' })
+    await wrapper.get('[data-testid="learn-v2-objective-close"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-objective"]').attributes('aria-pressed')).toBe('false')
+    expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Changes to this objective are saved together.')
+    expect(save).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 
+  it('holds a removal until save', async () => {
+    const { wrapper, save } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
     await wrapper.get('[data-testid="learn-v2-map-remove-objective"]').trigger('click')
     expect(wrapper.get('[data-testid="learn-v2-map-remove-objective"]').attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-objective"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Not saved yet: removal.')
     await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
-    expect(save.mock.calls[1]![0]).toEqual({ kind: 'remove_objective', objectiveKey: 'objective-1' })
+    expect(save.mock.calls[0]![0]).toEqual({ kind: 'remove_objective', objectiveKey: 'objective-1' })
     expect(wrapper.find('[data-testid="learn-v2-objective-editor"]').exists()).toBe(false)
     wrapper.unmount()
   })

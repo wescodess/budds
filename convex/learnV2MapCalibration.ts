@@ -6,7 +6,7 @@ import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
-import { mapEditCandidateValidator, requireServerAssessmentContract, resolveMapEditCandidate } from './lib/learnV2MapEdit'
+import { mapEditCandidateValidator, rejectStaleMapEdit, requireServerAssessmentContract, resolveMapEditCandidate } from './lib/learnV2MapEdit'
 import { deriveMastery } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
@@ -76,7 +76,7 @@ async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, lear
   return learningVoid
 }
 
-async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>) {
+async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>, rejectConflict = (): never => { throw new Error('Blueprint revision conflict') }) {
   const blueprint = await ctx.db.get(blueprintRevisionId)
   if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
   if (blueprint.status === 'accepted' || blueprint.status === 'active') {
@@ -86,7 +86,7 @@ async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: stri
   const latest = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId))
     .order('desc').first()
-  if (!latest || latest._id !== blueprint._id) throw new Error('Blueprint revision conflict')
+  if (!latest || latest._id !== blueprint._id) rejectConflict()
   return blueprint
 }
 
@@ -167,10 +167,10 @@ export const replaceDraftMap = mutation({
     const requestFingerprint = fingerprint('replaceDraftMap', args)
     const replay = await lifecycleReplay(ctx, userId, args.idempotencyKey, requestFingerprint)
     if (replay) return blueprintOutcome(replay)
-    const blueprint = await requireCurrentBlueprint(ctx, userId, args.blueprintRevisionId)
+    const blueprint = await requireCurrentBlueprint(ctx, userId, args.blueprintRevisionId, rejectStaleMapEdit)
     const learningVoid = await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
     if (!['draft', 'map_review'].includes(blueprint.status) || learningVoid.status !== 'map_review') throw new Error('Blueprint draft is not ready for map editing')
-    if (blueprint.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) throw new Error('Blueprint revision conflict')
+    if (blueprint.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) rejectStaleMapEdit()
     const sources = await scopedSources(ctx, userId, blueprint._id)
     const supportingSourceIds = []
     for (const source of sources) if (await sourceCanSupport(ctx, userId, blueprint, source)) supportingSourceIds.push(String(source._id))

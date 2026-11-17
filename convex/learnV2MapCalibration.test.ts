@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { isLearnMapChangedError } from '../app/utils/learn-v2-map-editor'
 
 vi.mock('../server/utils/ai-gateway', () => ({
   classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
@@ -122,6 +123,24 @@ describe('server-owned map assessment contracts', () => {
     const before = await mapState(f)
     await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).rejects.toThrow()
     expect(await mapState(f)).toEqual(before)
+  })
+
+  test('a stale map edit returns a structured revision conflict that the editor shows as changed elsewhere', async () => {
+    const f = await editableMap()
+    const before = await mapState(f)
+    const conflict = { data: { version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'revision_conflict' } }
+    const stale = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...editCommand(f), expectedRecordRevision: 7, idempotencyKey: 'stale-record' }).catch((error: unknown) => error)
+    expect(stale).toMatchObject(conflict)
+    expect(isLearnMapChangedError(stale)).toBe(true)
+    expect(await mapState(f)).toEqual(before)
+
+    await f.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-elsewhere' })
+    const superseded = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editCommand(f)).catch((error: unknown) => error)
+    expect(superseded).toMatchObject(conflict)
+    expect(isLearnMapChangedError(superseded)).toBe(true)
+    const staleFork = await f.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-stale' }).catch((error: unknown) => error)
+    expect(staleFork).toMatchObject(conflict)
+    expect(isLearnMapChangedError(staleFork)).toBe(true)
   })
 
   test('stable identities preserve exact private contracts through edits and repeated reorders', async () => {
@@ -388,7 +407,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         }
       })
       const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })
-      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map-stale' })).rejects.toThrow(/revision conflict/)
+      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
       expect(await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })).toEqual(fork)
       const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setup.blueprint._id })
       const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: fork!._id })

@@ -34,6 +34,7 @@ const draft = ref<LearnObjectiveDraft | null>(null)
 const baseline = ref<LearnObjectiveDraft | null>(null)
 const heldOrder = ref<string[] | null>(null)
 const removing = ref(false)
+const splitting = ref(false)
 const saving = ref(false)
 const failure = ref<{ number: number; reason: 'changed' | 'failed' } | null>(null)
 const panel = ref<Panel | null>(null)
@@ -120,6 +121,7 @@ const changes = computed(() => {
   if (!sameSet(value.prerequisiteKeys, original.prerequisiteKeys)) list.push('what comes first')
   if (value.coverage !== original.coverage || (value.gapReason ?? '') !== (original.gapReason ?? '') || !sameSet(value.supportingSourceKeys, original.supportingSourceKeys) || !sameSet(value.gapSourceKeys, original.gapSourceKeys)) list.push('sources')
   if (selectedKey.value !== NEW && (value.milestoneKey !== original.milestoneKey || placed.value.map(row => row.key).join() !== baselineOrder.value)) list.push('order')
+  if (splitting.value) list.push('split')
   return list
 })
 const pending = computed(() => changes.value.length > 0 || failure.value !== null)
@@ -192,6 +194,7 @@ function open(key: string, value: LearnObjectiveDraft) {
   baseline.value = copy(value)
   heldOrder.value = null
   removing.value = false
+  splitting.value = false
   failure.value = null
   panel.value = null
 }
@@ -203,6 +206,7 @@ function close(restoreFocus = true) {
   baseline.value = null
   heldOrder.value = null
   removing.value = false
+  splitting.value = false
   failure.value = null
   panel.value = null
   if (restoreFocus && key && key !== NEW && objectives.some(item => item.stableKey === key)) focusRow(key, '[data-objective-title]')
@@ -289,15 +293,9 @@ async function submit() {
   if (!value || !key || !canSave.value) return
   if (removing.value) return await commit({ kind: 'remove_objective', objectiveKey: key }, 'close')
   const objective = normalized(value)
-  await commit(key === NEW ? { kind: 'save_objective', objective } : { kind: 'save_objective', objective, order: placed.value.map(row => row.key) }, key === NEW ? 'close' : 'keep')
-}
-
-async function split() {
-  const value = draft.value
-  const key = selectedKey.value
-  if (!value || !key || key === NEW || pending.value || saving.value || busy || objectives.length >= 15) return
-  const title = value.title.trim()
-  await commit({ kind: 'split_objective', objectiveKey: key, firstTitle: title, secondTitle: `${title.slice(0, 193)}: apply` }, 'keep')
+  if (key === NEW) return await commit({ kind: 'save_objective', objective }, 'close')
+  const title = objective.title.trim()
+  await commit({ kind: 'save_objective', objective, order: placed.value.map(row => row.key), ...(splitting.value ? { split: { secondTitle: `${title.slice(0, 193)}: apply` } } : {}) }, 'keep')
 }
 
 function reload() {
@@ -391,8 +389,8 @@ function closeOrder() {
                       <div class="-mr-1 flex flex-wrap items-center gap-1">
                         <UiButton variant="ghost" size="icon-sm" aria-label="Move earlier" data-move="-1" :disabled="saving || !canMoveEarlier" :data-testid="`learn-v2-map-move-up-${row.key}`" @click="move(-1)"><ChevronUp /></UiButton>
                         <UiButton variant="ghost" size="icon-sm" aria-label="Move later" data-move="1" :disabled="saving || !canMoveLater" :data-testid="`learn-v2-map-move-down-${row.key}`" @click="move(1)"><ChevronDown /></UiButton>
-                        <UiButton variant="ghost" size="sm" :disabled="saving || busy || row.key === NEW || pending || objectives.length >= 15" data-testid="learn-v2-map-split-objective" @click="split"><Scissors />Split</UiButton>
-                        <UiButton variant="ghost" size="sm" :class="destructiveGhost" :aria-pressed="removing" :disabled="saving || row.key === NEW || objectives.length <= 6" data-testid="learn-v2-map-remove-objective" @click="removing = !removing"><Trash2 />Remove</UiButton>
+                        <UiButton variant="ghost" size="sm" :aria-pressed="splitting" :disabled="saving || removing || row.key === NEW || objectives.length >= 15" data-testid="learn-v2-map-split-objective" @click="splitting = !splitting"><Scissors />Split</UiButton>
+                        <UiButton variant="ghost" size="sm" :class="destructiveGhost" :aria-pressed="removing" :disabled="saving || splitting || row.key === NEW || objectives.length <= 6" data-testid="learn-v2-map-remove-objective" @click="removing = !removing"><Trash2 />Remove</UiButton>
                       </div>
                     </div>
                     <div class="mt-2 space-y-2">

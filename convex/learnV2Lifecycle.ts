@@ -7,6 +7,7 @@ import { isLearnV2TransitionAllowed } from '../shared/learn-v2-contract'
 import { cloneBlueprintChildren } from './lib/learnV2BlueprintClone'
 import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 import { blueprintSummary, pageFields, projectFields, voidSummary } from './lib/learnV2AssessmentDisclosure'
+import { rejectStaleMapEdit } from './lib/learnV2MapEdit'
 
 const voidStatus = v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived'))
 const blueprintStatus = v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded'))
@@ -200,12 +201,12 @@ export const forkBlueprintDraft = mutation({
     const source = await ctx.db.get(args.blueprintRevisionId)
     if (!source || source.userId !== userId) throw new Error('Blueprint revision not found')
     const learningVoid = await requireLiveOwnedVoid(ctx, userId, source.learningVoidId)
-    if (source.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) throw new Error('Blueprint revision conflict')
+    if (source.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) rejectStaleMapEdit()
     const latest = await ctx.db.query('learnBlueprintRevisions')
       .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', source.blueprintId))
       .order('desc').first()
     if (!latest) throw new Error('Blueprint revision not found')
-    if (latest._id !== source._id) throw new Error('Blueprint revision conflict')
+    if (latest._id !== source._id) rejectStaleMapEdit()
     if (!['draft', 'source_review', 'map_review', 'accepted', 'active'].includes(source.status)) throw new Error('Blueprint revision cannot be edited')
     if (!['draft', 'source_review', 'map_review', 'calibration'].includes(learningVoid.status)) throw new Error('Learning Void is not ready for a Blueprint edit')
     const now = Date.now()

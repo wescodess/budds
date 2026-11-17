@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
-import { applyLearnMapEdit, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
+import { ConvexError } from 'convex/values'
+import { applyLearnMapEdit, isLearnMapChangedError, LearnMapChangedError, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
 
 function candidate(): LearnMapCandidate {
   return {
@@ -46,6 +47,25 @@ describe('Learning map revision transform', () => {
       ['objective-1', 'milestone-1', 0], ['objective-3', 'milestone-1', 1], ['objective-2', 'milestone-1', 2],
       ['objective-4', 'milestone-2', 3], ['objective-5', 'milestone-3', 4], ['objective-6', 'milestone-3', 5],
     ])
+  })
+
+  it('applies a held split in the same save as the other changes', () => {
+    const objective = { objectiveKey: 'objective-2', title: 'Recognise cancellation', capability: 'Capability 2', milestoneKey: 'milestone-1', effortMinutes: 30, depth: 'working' as const, coverage: 'strong' as const, supportingSourceKeys: ['source-a'], gapSourceKeys: [], prerequisiteKeys: ['objective-1'] }
+    const order = ['objective-2', 'objective-1', 'objective-3', 'objective-4', 'objective-5', 'objective-6']
+    const edited = applyLearnMapEdit(candidate(), { kind: 'save_objective', objective, order, split: { secondTitle: 'Recognise cancellation: apply' } }, { 'source-a': 'snapshot-a' }, () => 'learner-split')
+    expect(edited.objectives.map(item => [item.key, item.title, item.estimatedMinutes, item.splitFromObjectiveKey])).toEqual([
+      ['objective-2', 'Recognise cancellation', 15, undefined], ['learner-split', 'Recognise cancellation: apply', 15, 'objective-2'],
+      ['objective-1', 'Objective 1', 20, undefined], ['objective-3', 'Objective 3', 20, undefined], ['objective-4', 'Objective 4', 20, undefined],
+      ['objective-5', 'Objective 5', 20, undefined], ['objective-6', 'Objective 6', 20, undefined],
+    ])
+    expect(edited.objectives.find(item => item.key === 'objective-3')?.prerequisiteObjectiveKeys).toEqual(['learner-split'])
+  })
+
+  it('marks a map that changed under the edit as changed elsewhere', () => {
+    expect(() => applyLearnMapEdit(candidate(), { kind: 'remove_objective', objectiveKey: 'objective-9' }, {})).toThrow(LearnMapChangedError)
+    expect(isLearnMapChangedError(new ConvexError({ version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'revision_conflict' }))).toBe(true)
+    expect(isLearnMapChangedError(new ConvexError({ version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'invalid_split_parent' }))).toBe(false)
+    expect(isLearnMapChangedError(new Error('Blueprint revision conflict'))).toBe(false)
   })
 
   it('rejects a held order that no longer matches the map', () => {
