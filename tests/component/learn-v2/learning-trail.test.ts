@@ -21,11 +21,11 @@ const sources: LearnSourceSnapshot[] = [
   { id: 'source-2', sourceKey: 'identity-2', title: 'Fetch specification', origin: 'user_url', publisher: 'fetch.spec.whatwg.org', retrievedLabel: 'Accepted', coverage: 'strong', lifecycle: 'user_accepted', objectives: [] },
 ]
 
-async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean } = {}) {
+async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean; loading?: boolean } = {}) {
   const Comp = await import(`${path}/LearningTrail.vue`)
   const save = vi.fn(options.save ?? (async () => ({ ok: true }) as LearnMapSaveResult))
   const wrapper = await mountSuspended(Comp.default, {
-    props: { objectives: options.objectives ?? Array.from({ length: 7 }, (_, index) => objective(index)), sources, canAccept: options.canAccept ?? true, save },
+    props: { objectives: options.objectives ?? Array.from({ length: 7 }, (_, index) => objective(index)), sources, canAccept: options.canAccept ?? true, loading: options.loading ?? false, save },
     attachTo: document.body,
   })
   return { wrapper, save }
@@ -108,6 +108,10 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[data-testid="learn-v2-save-objective"]').text()).toBe('Saving')
     expect(wrapper.get('[data-testid="learn-v2-objective-title"]').attributes('readonly')).toBeDefined()
     expect(wrapper.get('[data-testid="learn-v2-objective-editor"]').attributes('aria-busy')).toBe('true')
+    const sourcesChip = wrapper.get('[data-testid="learn-v2-objective-sources"]')
+    expect(sourcesChip.attributes('aria-disabled')).toBe('true')
+    await sourcesChip.trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     finish({ ok: true })
     wrapper.unmount()
   })
@@ -232,6 +236,29 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[data-testid="learn-v2-map-empty"]').text()).toContain('No objectives yet')
     expect(wrapper.find('[data-testid="learn-v2-accept-map"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="learn-v2-map-add-objective"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('shows the map loading without actions', async () => {
+    const { wrapper } = await mountTrail({ objectives: [], loading: true })
+
+    expect(wrapper.get('[data-testid="learn-v2-map-loading"]').attributes('role')).toBe('status')
+    expect(wrapper.text()).toContain('Loading your learning map…')
+    expect(wrapper.find('[data-testid="learn-v2-map-empty"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-v2-map-add-objective"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-v2-accept-map"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('holds up with a single objective', async () => {
+    const { wrapper } = await mountTrail({ objectives: [objective(0)] })
+
+    expect(wrapper.text()).toContain('Working fluency · 25 min · Start here')
+    expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('1 objective · about 25 min')
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    expect(wrapper.get('[data-testid="learn-v2-map-move-up-objective-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="learn-v2-map-move-down-objective-1"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="learn-v2-map-remove-objective"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 

@@ -7,10 +7,11 @@ type Depth = LearnObjectiveDraft['depth']
 type Panel = 'time' | 'depth' | 'first' | 'sources'
 type Row = { key: string; milestoneKey: string; view: LearnObjectiveDraft & { objectiveKey?: string } }
 
-const { objectives, sources = [], busy = false, canAccept = false, save } = defineProps<{
+const { objectives, sources = [], busy = false, loading = false, canAccept = false, save } = defineProps<{
   objectives: LearnObjectiveSnapshot[]
   sources?: LearnSourceSnapshot[]
   busy?: boolean
+  loading?: boolean
   canAccept?: boolean
   save: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>
 }>()
@@ -236,6 +237,7 @@ function move(direction: -1 | 1) {
 }
 
 function togglePanel(name: Panel) {
+  if (saving.value) return
   panel.value = panel.value === name ? null : name
   if (panel.value) {
     void nextTick(() => document.getElementById(`${uid}-panel`)?.querySelector<HTMLElement>('input:not(:disabled), textarea')?.focus())
@@ -363,12 +365,14 @@ function closeOrder() {
           <h2 class="font-dm-sans text-xl font-bold text-foreground">Your learning map</h2>
           <p class="mt-1 max-w-2xl text-sm text-muted-foreground">Change what each objective covers, the order and which sources back it. Changes stay in a draft until you accept this map.</p>
         </div>
-        <div v-if="objectives.length" class="flex shrink-0 flex-wrap gap-2">
+        <div v-if="objectives.length && !loading" class="flex shrink-0 flex-wrap gap-2">
           <UiButton variant="outline" size="sm" :disabled="busy || saving || pending || objectives.length >= 15" data-testid="learn-v2-map-add-objective" @click="addObjective"><Plus />Add objective</UiButton>
         </div>
       </header>
 
-      <div v-if="!objectives.length" class="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center" data-testid="learn-v2-map-empty">
+      <div v-if="loading && !objectives.length" role="status" aria-live="polite" class="mt-10 flex items-center justify-center gap-2 py-16 text-sm text-foreground" data-testid="learn-v2-map-loading"><LoaderCircle class="size-4 animate-spin text-primary motion-reduce:animate-none" />Loading your learning map…</div>
+
+      <div v-else-if="!objectives.length" class="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center" data-testid="learn-v2-map-empty">
         <h3 class="font-dm-sans text-lg font-semibold text-foreground">No objectives yet</h3>
         <p class="mx-auto mt-2 max-w-md text-sm text-foreground">Add something you want to be able to do. Budds sets up its questions from your sources.</p>
       </div>
@@ -398,10 +402,10 @@ function closeOrder() {
                     <div v-if="draft.coverage !== 'strong' && draft.gapReason?.trim()" class="mt-2 flex items-start gap-2 text-sm text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" /><span class="min-w-0">{{ draft.gapReason }}</span></div>
                     <div class="relative mt-3">
                       <div class="flex flex-wrap gap-1.5">
-                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :disabled="saving" @click="togglePanel('time')">{{ draft.effortMinutes }} min<span class="sr-only">, change time</span></button>
-                        <button :id="`${uid}-chip-depth`" type="button" :aria-expanded="panel === 'depth'" :class="[chipClass, panel === 'depth' ? 'border-primary bg-primary/5' : 'border-border']" :disabled="saving" @click="togglePanel('depth')">{{ depthLabel[draft.depth] }}<span class="sr-only">, change depth</span></button>
-                        <button :id="`${uid}-chip-first`" type="button" :aria-expanded="panel === 'first'" :class="[chipClass, panel === 'first' ? 'border-primary bg-primary/5' : 'border-border']" :disabled="saving" @click="togglePanel('first')">{{ afterLabel(draft) }}<span class="sr-only">, change what to learn first</span></button>
-                        <button :id="`${uid}-chip-sources`" type="button" :aria-expanded="panel === 'sources'" :class="[chipClass, panel === 'sources' ? 'border-primary bg-primary/5' : 'border-border']" :disabled="saving" data-testid="learn-v2-objective-sources" @click="togglePanel('sources')">
+                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('time')">{{ draft.effortMinutes }} min<span class="sr-only">, change time</span></button>
+                        <button :id="`${uid}-chip-depth`" type="button" :aria-expanded="panel === 'depth'" :class="[chipClass, panel === 'depth' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('depth')">{{ depthLabel[draft.depth] }}<span class="sr-only">, change depth</span></button>
+                        <button :id="`${uid}-chip-first`" type="button" :aria-expanded="panel === 'first'" :class="[chipClass, panel === 'first' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('first')">{{ afterLabel(draft) }}<span class="sr-only">, change what to learn first</span></button>
+                        <button :id="`${uid}-chip-sources`" type="button" :aria-expanded="panel === 'sources'" :class="[chipClass, panel === 'sources' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" data-testid="learn-v2-objective-sources" @click="togglePanel('sources')">
                           <template v-if="citations(draft).length">Sources<span class="inline-flex gap-0.5" aria-hidden="true"><span v-for="number in citations(draft)" :key="number" class="inline-flex h-5 min-w-5 items-center justify-center rounded-sm bg-primary px-1 text-[11px] text-primary-foreground">{{ number }}</span></span><span class="sr-only"> {{ citations(draft).join(' and ') }}</span></template>
                           <template v-else><Plus class="size-3.5" />Add a source</template>
                         </button>

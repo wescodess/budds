@@ -51,7 +51,7 @@ function nextAction() {
         <UiCard v-if="mission?.currentBlueprint" class="p-4"><p class="text-sm text-muted-foreground">When the accepted evidence is ready, generate an editable capability map.</p><p v-if="generation" class="mt-2 text-sm text-muted-foreground" data-testid="learn-v2-map-generation-status">Map generation: {{ generationStatusLabel(generation.status) }}<template v-if="generation.terminalReason"> · {{ generation.terminalReason.replaceAll('_', ' ') }}</template></p><UiButton class="mt-3" data-testid="learn-v2-generate-map" :disabled="busy || generationIsActive || !mission.sources.counts.accepted" @click="journey.startMapGeneration">{{ generationIsActive ? 'Generating learning map…' : 'Generate learning map' }}</UiButton></UiCard>
       </section>
       <section v-else-if="activeSection === 'map'" class="space-y-5">
-        <LearnV2LearningTrail :objectives="objectives" :sources="sources" :busy="busy" :can-accept="snapshot.lifecycle === 'map_review'" :save="journey.editLearningMap" @accept="journey.acceptLearningMap" @manage-sources="navigate('sources')" />
+        <LearnV2LearningTrail :objectives="objectives" :sources="sources" :busy="busy" :loading="generationIsActive" :can-accept="snapshot.lifecycle === 'map_review'" :save="journey.editLearningMap" @accept="journey.acceptLearningMap" @manage-sources="navigate('sources')" />
       </section>
       <section v-else-if="activeSection === 'plan'" class="space-y-5">
         <LearnV2StudyPlanEditor v-if="!plan || editingPlan" :input="journey.planInput()" :busy="busy" :error="error" :submit-label="plan ? 'Update plan preview' : 'Build plan preview'" @submit="savePlan" @cancel="editingPlan = false" />

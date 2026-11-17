@@ -7,7 +7,7 @@ useHead({ title: 'Learning map fixture', htmlAttrs: { lang: 'en' } })
 
 // Static, synthetic map fixtures for design captures. They are not learner data.
 // The production map editor and workspace shell render unchanged.
-const states = ['full', 'order', 'unsaved', 'sources', 'first', 'saving', 'failed', 'changed', 'long', 'empty'] as const
+const states = ['full', 'order', 'unsaved', 'sources', 'first', 'saving', 'failed', 'changed', 'long', 'empty', 'loading', 'one'] as const
 const route = useRoute()
 const state = states.find(value => value === route.query.state) ?? states[0]
 const ready = ref(false)
@@ -42,7 +42,8 @@ const rows: Row[] = [
   [2, 'Spot harms that a trial under-reports', 'Find where side effects were recorded, how they were reported and what’s left out.', 35, 'working', [1], [11], 'partial', 'Your sources mention how harms are reported, but not what a complete harms table looks like.'],
   [2, 'Summarise a trial for someone who has to act on it', 'Write a short, honest summary of what a trial found and who it applies to.', 30, 'advanced', [3, 4], [8, 11]],
 ]
-const objectives: LearnObjectiveSnapshot[] = state === 'empty' ? [] : rows.map(([milestone, title, capability, effortMinutes, depth, cited, after, coverage = 'strong', gapReason], index) => ({
+const fixtureRows = state === 'empty' || state === 'loading' ? [] : state === 'one' ? rows.slice(0, 1) : rows
+const objectives: LearnObjectiveSnapshot[] = fixtureRows.map(([milestone, title, capability, effortMinutes, depth, cited, after, coverage = 'strong', gapReason], index) => ({
   id: `objective_${index + 1}`, stableKey: `objective-${index + 1}`, title, capability, milestoneKey: `milestone-${milestone + 1}`, milestone: milestones[milestone]!,
   effortMinutes, depth, mastery: 'unseen', coverage, gapReason, prerequisiteIds: [], prerequisiteKeys: after.map(number => `objective-${number}`),
   sourceLinks: cited.map(number => ({ sourceKey: `identity-${number}`, title: sources[number - 1]!.title, origin: sources[number - 1]!.origin, coverage: 'strong', evidenceStatus: 'evidence_available' })),
@@ -103,7 +104,7 @@ onMounted(async () => {
 <template>
   <div data-testid="map-editor-harness" :data-state="state" :data-ready="ready">
     <LearnV2MissionWorkspaceShell :mission="mission" active-section="map" :readiness="readiness">
-      <LearnV2LearningTrail :objectives="objectives" :sources="sources" :can-accept="true" :save="save" />
+      <LearnV2LearningTrail :objectives="objectives" :sources="sources" :loading="state === 'loading'" :can-accept="true" :save="save" />
     </LearnV2MissionWorkspaceShell>
   </div>
 </template>
