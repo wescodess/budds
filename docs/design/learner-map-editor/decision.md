@@ -29,6 +29,16 @@ Everything else comes from what already exists in the app.
 - Remove keeps a `--destructive` icon, with a `text-foreground` label in light and a `--destructive` label in dark, because light `--destructive` on the selected tint measures below AA.
 - The selected objective's editor sits on `--card`. The current objective in the order pop-over and the sidebar's Learn item use the `DESIGN.md` active state: amber left rail and 8% amber tint.
 
+## Build choices the mockups don't draw
+
+Owner's words, 2026-11-17: `No Add on empty map, Time/depth pop-overs, One objective at a time, Warning-colour spinner`, and for Split: `Hold until Save (Recommended)`.
+
+- The empty map has no Add objective action, because a map saves only with 6 to 15 objectives.
+- Time and depth use the same pop-over shape as the other chips.
+- While one objective has unsaved changes, another can't be selected; the bar's Go to it returns to it.
+- The saving spinner uses `--learn-attention`, as `DESIGN.md` requires for in-progress states.
+- Split is held with the objective's other changes and sent on Save.
+
 ## Product decisions carried into the build
 
 - Learners never see or edit criteria, rubrics or weights. The editor has no assessment section, and learner copy never mentions one.
