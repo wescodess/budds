@@ -1886,6 +1886,8 @@ export default defineSchema({
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])
     .index('by_userId_and_fact_assessmentOpportunityId', ['userId', 'fact.assessmentOpportunityId'])
     .index('by_userId_and_fact_submissionId', ['userId', 'fact.submissionId'])
+    .index('by_fact_claimKey', ['fact.claimKey'])
+    .index('by_fact_basisAttemptId', ['fact.basisAttemptId'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
     .index('by_userId', ['userId'])

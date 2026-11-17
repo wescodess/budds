@@ -12,7 +12,7 @@ import {
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, parseLearnContract } from '../../shared/learn-v2-responses'
 import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
-import { learnAssessmentClockSchema } from '../../shared/learn-v2-delayed-check'
+import { learnAssessmentPurposeSchema } from '../../shared/learn-v2-delayed-check'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
 
@@ -71,9 +71,9 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
 async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, value: LearnReportSourceFact, learningVoidId?: Id<'learningVoids'>) {
   const fact = value.fact
   if (fact.kind !== 'independent_claim' && fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
-  const previous = await ctx.db.query('learnMeasurementReportFacts')
-    .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
   if (fact.kind === 'first_slot_link') {
+    const previous = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
     const saved = previous[0]
     if (previous.length !== 1 || !saved || saved.fact.kind !== 'independent_claim_v2'
       || saved.learningVoidId !== learningVoidId) throw new Error('Learn first slot already linked or claim unavailable')
@@ -83,7 +83,11 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
     await validateFirstSlot(ctx, userId, resolved, resolved.firstSlot, learningVoidId)
     return
   }
-  if (previous.length) throw new Error('Learn first Independent claim already recorded')
+  const [sameKey, sameBasis] = await Promise.all([
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', fact.claimKey)).first(),
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', fact.basisAttemptId)).first(),
+  ])
+  if (sameKey || sameBasis) throw new Error('Learn first Independent claim already recorded')
   if (fact.kind === 'independent_claim') return
   const claim = resolveLearnReportFirstSlotV2(value)
   const basis = await ctx.db.get(claim.basisAttemptId)
@@ -139,12 +143,16 @@ async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnR
 async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: LearnReportIndependentClaimV2,
   row: Doc<'learnAssessmentOpportunities'>): Promise<LearnReportLinkedFirstSlot | null> {
   if (row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
-    || !row.originalSlot || row.replacesOpportunityId !== undefined || !('clock' in row.purpose)) return null
-  const clock = learnAssessmentClockSchema.safeParse(row.purpose.clock)
+    || !row.originalSlot || row.replacesOpportunityId !== undefined) return null
+  const parsedPurpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
+  if (!parsedPurpose.success || !('clock' in parsedPurpose.data)) return null
+  const purpose = parsedPurpose.data
+  const clock = purpose.clock
   const binding = learnScorerBindingSchema.safeParse(row.scoringBinding)
-  if (!clock.success || !binding.success || row.openAt !== clock.data.openAt || row.closeAt !== clock.data.closeAt || row.dueAt !== clock.data.dueAt) return null
-  const assignment = row.purpose.kind === 'measurement_delayed' ? await ctx.db.get(row.purpose.assignmentId) : null
-  if (row.purpose.kind === 'retained_transfer' ? row.purpose.basisAttemptId !== claim.basisAttemptId
+  if (!binding.success || row.openAt !== clock.openAt || row.closeAt !== clock.closeAt || row.dueAt !== clock.dueAt
+    || row.horizonDays !== undefined && row.horizonDays !== clock.horizonDays) return null
+  const assignment = purpose.kind === 'measurement_delayed' ? await ctx.db.get(purpose.assignmentId) : null
+  if (purpose.kind === 'retained_transfer' ? purpose.basisAttemptId !== claim.basisAttemptId
     : !assignment || assignment.userId !== userId || assignment.status !== 'admitted' || assignment.epoch !== claim.stratum.epoch
       || assignment.learningVoidId !== row.learningVoidId || assignment.blueprintRevisionId !== claim.blueprintRevisionId
       || assignment.objectiveId !== claim.objectiveId || row.assignmentId !== assignment._id) return null
@@ -164,7 +172,7 @@ async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: Lea
   })
   if (!stratum.success) return null
   const candidate: LearnReportLinkedFirstSlot = { kind: 'linked', firstCheckOpportunityId: row._id, checkSequence: 1,
-    linkedAt: Date.now(), clock: clock.data, stratum: stratum.data }
+    linkedAt: Date.now(), clock, stratum: stratum.data }
   return qualifiesLearnReportFirstSlot(claim, candidate) ? candidate : null
 }
 
