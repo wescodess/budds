@@ -176,7 +176,6 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   const outcomes = new Map<string, (OutcomeBinding & {
     snapshot: string, slotWindow: string | null,
   })[]>()
-  const claimIdentities = new Set<string>()
   function reconcileOutcome(binding: OutcomeBinding, opportunityId: string | null,
     acceptance: z.infer<typeof learnReportAcceptanceSnapshotSchema> | null, result: z.infer<typeof learnReportResultSnapshotSchema> | null,
     clock: z.infer<typeof learnAssessmentClockSchema> | null = null) {
@@ -200,9 +199,8 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   if (owners.size !== roster.length) reasons.add('duplicate_roster_owner')
   const validatedRows = rows.map(input => learnReportInputSnapshotSchema.parse(input))
   for (const row of validatedRows) {
-    const identity = JSON.stringify(row.kind === 'owner_watermark' ? [row.kind, row.learnerKey]
-      : row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2' ? ['first_check_claim', row.learnerKey, row.capabilityKey, row.stratum.epoch]
-        : [row.kind, row.assignmentId, row.horizonDays])
+    if (row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2') continue
+    const identity = JSON.stringify(row.kind === 'owner_watermark' ? [row.kind, row.learnerKey] : [row.kind, row.assignmentId, row.horizonDays])
     const group = identities.get(identity) ?? { count: 0, snapshots: new Set<string>() }
     group.count += 1
     group.snapshots.add(JSON.stringify(row))
@@ -234,19 +232,16 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
     }
     if (row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2') {
       const slot = row.kind === 'first_check_claim' ? row : row.firstSlot.kind === 'linked' ? row.firstSlot : null
-      for (const [kind, value, reason] of [
-        ['claim', row.claim.claimKey, 'duplicate_claim_key'],
-        ['basis_attempt', row.claim.basisAttemptId, 'reused_claim_basis_attempt'],
-        ...(slot ? [['first_opportunity', slot.firstCheckOpportunityId, 'reused_first_check_opportunity'] as const] : []),
-      ] as const) {
-        const key = JSON.stringify([kind, value])
-        if (claimIdentities.has(key)) reasons.add(reason)
-        else claimIdentities.add(key)
-      }
       if (slot) reconcileOutcome({ learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, owner: null, role: 'claim' },
         slot.firstCheckOpportunityId, slot.acceptance, slot.result, slot.clock)
     }
   }
+  for (const reason of reconcileLearnReportFirstClaims(validatedRows.flatMap(row => row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2'
+    ? [{ owner: row.learnerKey, capability: row.capabilityKey, epoch: row.stratum.epoch, snapshot: JSON.stringify(row),
+        claimKey: row.claim.claimKey, basisAttemptId: row.claim.basisAttemptId,
+        firstCheckOpportunityId: row.kind === 'first_check_claim' ? row.firstCheckOpportunityId
+          : row.firstSlot.kind === 'linked' ? row.firstSlot.firstCheckOpportunityId : null }]
+    : []))) reasons.add(reason)
   for (const group of outcomes.values()) {
     const slots = group.filter(outcome => outcome.role !== 'claim')
     if (new Set(slots.map(slot => slot.owner)).size > 1) reasons.add('reused_outcome_identity')
@@ -269,6 +264,37 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   }
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
   return { status: reasons.size ? 'incomplete' as const : 'complete' as const, reasonCodes: [...reasons].sort() }
+}
+export type LearnReportFirstClaimIdentity = {
+  owner: string, capability: string, epoch: string, snapshot: string,
+  claimKey: string, basisAttemptId: string, firstCheckOpportunityId: string | null,
+}
+// One primary first-Independent claim per owner, capability and epoch (#366 §2); persistence applies the same rules before append.
+export function reconcileLearnReportFirstClaims(claims: readonly LearnReportFirstClaimIdentity[]) {
+  const reasons = new Set<string>()
+  const scopes = new Map<string, { count: number, snapshots: Set<string> }>()
+  const identities = new Set<string>()
+  for (const claim of claims) {
+    const scope = JSON.stringify(['first_check_claim', claim.owner, claim.capability, claim.epoch])
+    const group = scopes.get(scope) ?? { count: 0, snapshots: new Set<string>() }
+    group.count += 1
+    group.snapshots.add(claim.snapshot)
+    scopes.set(scope, group)
+    for (const [kind, value, reason] of [
+      ['claim', claim.claimKey, 'duplicate_claim_key'],
+      ['basis_attempt', claim.basisAttemptId, 'reused_claim_basis_attempt'],
+      ...(claim.firstCheckOpportunityId === null ? [] : [['first_opportunity', claim.firstCheckOpportunityId, 'reused_first_check_opportunity'] as const]),
+    ] as const) {
+      const key = JSON.stringify([kind, value])
+      if (identities.has(key)) reasons.add(reason)
+      else identities.add(key)
+    }
+  }
+  for (const group of scopes.values()) {
+    if (group.count > group.snapshots.size) reasons.add('duplicate_source_row')
+    if (group.snapshots.size > 1) reasons.add('conflicting_source_row')
+  }
+  return reasons
 }
 export const LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION = 'learn-v2.first-independent-claim.v2' as const
 const claimStratum = z.strictObject({

@@ -3,7 +3,7 @@ import {
   LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
   learnReportFactPayloadSchema, learnReportFactSchema, learnReportIndependentClaimV2Schema,
   learnReportFirstSlotLinkSchema, learnReportLinkedFirstSlotSchema, resolveLearnReportFirstSlotV2,
-  learnReportInputSnapshotSchema, validateLearnReportSourcePage, reconcileLearnReportSourceRows,
+  learnReportInputSnapshotSchema, validateLearnReportSourcePage, reconcileLearnReportSourceRows, reconcileLearnReportFirstClaims,
 } from './learn-v2-measurement-report'
 import { measurementReportIdentityFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
@@ -158,6 +158,32 @@ describe('normalized first Independent claims', () => {
     const second = { ...row, capabilityKey: `sha256:${'e'.repeat(64)}`, claim: { ...row.claim, claimKey: 'another-claim', basisAttemptId: 'another-basis' } }
     const rows = [watermark, row, second].map(value => learnReportInputSnapshotSchema.parse(value))
     expect(reconcileLearnReportSourceRows([row.learnerKey], rows)).toEqual({ status: 'complete', reasonCodes: [] })
+  })
+
+  it.each([
+    { name: 'identical copy', change: {}, reasons: ['duplicate_claim_key', 'duplicate_source_row', 'reused_claim_basis_attempt', 'reused_first_check_opportunity'] },
+    { name: 'same scope only', change: { claimKey: 'alias', basisAttemptId: 'alias-basis', firstCheckOpportunityId: 'alias-slot' }, reasons: ['conflicting_source_row'] },
+    { name: 'same key in another capability', change: { capabilityKey: `sha256:${'e'.repeat(64)}`, basisAttemptId: 'alias-basis', firstCheckOpportunityId: 'alias-slot' }, reasons: ['duplicate_claim_key'] },
+    { name: 'same basis in another epoch', change: { epoch: 'epoch.v2', claimKey: 'alias', firstCheckOpportunityId: 'alias-slot' }, reasons: ['reused_claim_basis_attempt'] },
+    { name: 'same slot in another capability', change: { capabilityKey: `sha256:${'e'.repeat(64)}`, claimKey: 'alias', basisAttemptId: 'alias-basis' }, reasons: ['reused_first_check_opportunity'] },
+    { name: 'distinct claims', change: { capabilityKey: `sha256:${'e'.repeat(64)}`, claimKey: 'alias', basisAttemptId: 'alias-basis', firstCheckOpportunityId: 'alias-slot' }, reasons: [] },
+  ])('reconciles legacy claim pairs exactly as before: $name', ({ change, reasons }) => {
+    const { row, watermark, slot } = normalizedFixture()
+    const legacy = (value: Partial<Record<'capabilityKey' | 'claimKey' | 'basisAttemptId' | 'firstCheckOpportunityId' | 'epoch', string>> = {}) => ({
+      kind: 'first_check_claim', learnerKey: row.learnerKey, capabilityKey: value.capabilityKey ?? row.capabilityKey,
+      claim: { ...row.claim, claimKey: value.claimKey ?? row.claim.claimKey, basisAttemptId: value.basisAttemptId ?? row.claim.basisAttemptId },
+      stratum: { ...slot.stratum, epoch: value.epoch ?? slot.stratum.epoch }, firstCheckOpportunityId: value.firstCheckOpportunityId ?? slot.firstCheckOpportunityId,
+      checkSequence: 1, clock: slot.clock, stateAtEligibility: 'independent', stateAtAcceptance: null, acceptance: null, result: null, unresolvedReason: 'missing_delayed' })
+    const rows = [watermark, legacy(), legacy(change)].map(value => learnReportInputSnapshotSchema.parse(value))
+    expect(reconcileLearnReportSourceRows([row.learnerKey], rows)).toEqual({ status: reasons.length ? 'incomplete' : 'complete', reasonCodes: reasons })
+  })
+
+  it('applies the same first-claim rules that persistence checks before append', () => {
+    const claim = { owner: 'owner', capability: 'capability', epoch: 'epoch.v1', snapshot: 'first', claimKey: 'key', basisAttemptId: 'basis', firstCheckOpportunityId: null }
+    expect([...reconcileLearnReportFirstClaims([claim, { ...claim, snapshot: 'second', claimKey: 'other', basisAttemptId: 'other' }])]).toEqual(['conflicting_source_row'])
+    expect([...reconcileLearnReportFirstClaims([claim, { ...claim, epoch: 'epoch.v2', snapshot: 'second', claimKey: 'other', basisAttemptId: 'other' }])]).toEqual([])
+    expect([...reconcileLearnReportFirstClaims([{ ...claim, firstCheckOpportunityId: 'slot' },
+      { ...claim, capability: 'other', snapshot: 'second', claimKey: 'other', basisAttemptId: 'other', firstCheckOpportunityId: 'slot' }])]).toEqual(['reused_first_check_opportunity'])
   })
 
   it('rejects a legacy and versioned normalized copy of the same claim', () => {

@@ -5,8 +5,8 @@ import {
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema,
   deriveLearnReportLearnerKey,
   resolveLearnReportFirstSlotV2, qualifiesLearnReportFirstSlot,
-  learnReportFirstSlotStratumSchema,
-  type LearnReportIndependentClaimV2, type LearnReportLinkedFirstSlot,
+  learnReportFirstSlotStratumSchema, reconcileLearnReportFirstClaims,
+  type LearnReportIndependentClaimV2, type LearnReportLinkedFirstSlot, type LearnReportFirstClaimIdentity,
   type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
@@ -42,14 +42,15 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
     epoch: input.epoch, occurredAt: input.occurredAt, fact: input.fact,
   })
   const fact = value.fact
+  if (fact.kind === 'independent_claim') throw new Error('Learn legacy Independent claims are read-only')
   const source = fact.kind === 'enrollment' ? await ctx.db.get(fact.assignmentId)
     : fact.kind === 'opportunity' ? await ctx.db.get(fact.assessmentOpportunityId)
-      : fact.kind === 'independent_claim' || fact.kind === 'independent_claim_v2' ? await ctx.db.get(fact.basisAttemptId)
+      : fact.kind === 'independent_claim_v2' ? await ctx.db.get(fact.basisAttemptId)
         : fact.kind === 'first_slot_link' ? await ctx.db.get(fact.slot.firstCheckOpportunityId)
           : await ctx.db.get(fact.submissionId)
   if (!source || source.userId !== userId
     || ('learningVoidId' in source && source.learningVoidId !== input.learningVoidId)) throw new Error('Learn fact scope mismatch')
-  if (fact.kind === 'independent_claim' || fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') {
+  if (fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') {
     await validateFirstIndependentFact(ctx, userId, value, input.learningVoidId)
   }
   const now = Date.now()
@@ -70,7 +71,7 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
 
 async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, value: LearnReportSourceFact, learningVoidId?: Id<'learningVoids'>) {
   const fact = value.fact
-  if (fact.kind !== 'independent_claim' && fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
+  if (fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
   if (fact.kind === 'first_slot_link') {
     const previous = await ctx.db.query('learnMeasurementReportFacts')
       .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
@@ -81,14 +82,10 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
       epoch: saved.epoch, occurredAt: saved.occurredAt, fact: saved.fact }, value)
     if (resolved.firstSlot.kind !== 'linked') throw new Error('Learn first slot unavailable')
     await validateFirstSlot(ctx, userId, resolved, resolved.firstSlot, learningVoidId)
+    await assertFirstClaimReconciles(ctx, userId, value.epoch, resolved, saved._id)
     return
   }
-  const [sameKey, sameBasis] = await Promise.all([
-    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', fact.claimKey)).first(),
-    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', fact.basisAttemptId)).first(),
-  ])
-  if (sameKey || sameBasis) throw new Error('Learn first Independent claim already recorded')
-  if (fact.kind === 'independent_claim') return
+  await assertFirstClaimReconciles(ctx, userId, value.epoch, fact)
   const claim = resolveLearnReportFirstSlotV2(value)
   const basis = await ctx.db.get(claim.basisAttemptId)
   const blueprint = await ctx.db.get(claim.blueprintRevisionId)
@@ -110,6 +107,52 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
     || claim.policyPins.validityPolicyVersion !== basis.validitySnapshot.policyVersion
     || claim.policyPins.thresholdVersion !== (basis.scoringBinding?.thresholdVersion ?? 'learn-v2.mastery-threshold.v1')) throw new Error('Learn first Independent basis is invalid')
   if (claim.firstSlot.kind === 'linked') await validateFirstSlot(ctx, userId, claim, claim.firstSlot, learningVoidId)
+}
+
+const FIRST_CLAIM_FACT_KINDS = ['independent_claim', 'independent_claim_v2', 'first_slot_link'] as const
+const FIRST_CLAIM_INVENTORY_LIMIT = 256
+
+// Reads every claim this append could collide with, so concurrent appends conflict and nothing persisted fails reconciliation later.
+async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoch: string,
+  candidate: LearnReportIndependentClaimV2, claimFactId?: Id<'learnMeasurementReportFacts'>) {
+  const [scoped, sameKey, sameBasis] = await Promise.all([
+    Promise.all(FIRST_CLAIM_FACT_KINDS.map(kind => ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_epoch_and_fact_kind', q => q.eq('userId', userId).eq('epoch', epoch).eq('fact.kind', kind))
+      .take(FIRST_CLAIM_INVENTORY_LIMIT + 1))),
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', candidate.claimKey)).take(4),
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', candidate.basisAttemptId)).take(4),
+  ])
+  if (scoped.some(rows => rows.length > FIRST_CLAIM_INVENTORY_LIMIT)) throw new Error('Learn first Independent claim inventory exceeds its bound')
+  const rows = new Map([...scoped.flat(), ...sameKey, ...sameBasis].map(row => [row._id, row]))
+  const links = new Map<string, string>()
+  for (const row of rows.values()) {
+    if (row.fact.kind === 'first_slot_link') links.set(JSON.stringify([row.userId, row.fact.claimKey]), row.fact.slot.firstCheckOpportunityId)
+  }
+  const proposed: LearnReportFirstClaimIdentity = { owner: userId, capability: JSON.stringify([candidate.blueprintRevisionId, candidate.objectiveId]),
+    epoch: candidate.stratum.epoch, snapshot: 'candidate', claimKey: candidate.claimKey, basisAttemptId: candidate.basisAttemptId,
+    firstCheckOpportunityId: candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null }
+  for (const row of rows.values()) {
+    if (row._id === claimFactId) continue
+    const existing = await readFirstClaimIdentity(ctx, row, links)
+    const reasons = existing ? reconcileLearnReportFirstClaims([existing, proposed]) : new Set<string>()
+    if (reasons.size) throw new Error(`Learn first Independent claim already recorded: ${[...reasons].sort().join(', ')}`)
+  }
+}
+
+async function readFirstClaimIdentity(ctx: MutationCtx, row: Doc<'learnMeasurementReportFacts'>,
+  links: ReadonlyMap<string, string>): Promise<LearnReportFirstClaimIdentity | null> {
+  const fact = row.fact
+  if (fact.kind === 'independent_claim_v2') return { owner: row.userId, capability: JSON.stringify([fact.blueprintRevisionId, fact.objectiveId]),
+    epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
+    firstCheckOpportunityId: fact.firstSlot.kind === 'linked' ? fact.firstSlot.firstCheckOpportunityId
+      : links.get(JSON.stringify([row.userId, fact.claimKey])) ?? null }
+  if (fact.kind !== 'independent_claim') return null
+  const opportunity = await ctx.db.get(fact.firstCheckOpportunityId)
+  const basis = opportunity ? null : await ctx.db.get(fact.basisAttemptId)
+  const scope = opportunity ?? (basis?.blueprintRevisionId && basis.objectiveId ? basis : null)
+  return { owner: row.userId, capability: JSON.stringify(scope ? [scope.blueprintRevisionId, scope.objectiveId] : ['unavailable', row._id]),
+    epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
+    firstCheckOpportunityId: fact.firstCheckOpportunityId }
 }
 
 async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnReportIndependentClaimV2,

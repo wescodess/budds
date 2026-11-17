@@ -15,10 +15,10 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
-import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION } from '../shared/learn-v2-responses'
 import { learnAssessmentPurposeSchema } from '../shared/learn-v2-delayed-check'
-import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, learnReportFirstSlotLinkSchema, learnReportFactPayloadSchema,
+import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportIndependentClaimV2Schema, learnReportFirstSlotLinkSchema, learnReportFactPayloadSchema,
   learnReportFactSchema, learnReportInputSnapshotSchema, resolveLearnReportFirstSlotV2, type LearnReportLinkedFirstSlot,
   type LearnReportIndependentClaimV2, reconcileLearnReportSourceRows, deriveLearnReportComputationKeys } from '../shared/learn-v2-measurement-report'
 
@@ -95,39 +95,80 @@ function claimBasis(claim: LearnReportIndependentClaimV2) {
     policyPins: _policy, firstSlot: _slot, stratum: _stratum, ...basis } = claim
   return basis
 }
-function legacyClaim(f: Awaited<ReturnType<typeof fixture>>, slot: LearnReportLinkedFirstSlot, overrides: {
-  claimKey?: string, claimSequence?: number, basisAttemptId?: Id<'masteryAttempts'>,
+type Fixture = Awaited<ReturnType<typeof fixture>>
+type ReportKeys = Fixture['f']['reportKeys']
+function legacyClaim(f: Fixture, slot: LearnReportLinkedFirstSlot, overrides: {
+  claimKey?: string, claimSequence?: number, basisAttemptId?: Id<'masteryAttempts'>, epoch?: string,
 } = {}) {
-  return { kind: 'independent_claim' as const, ...claimBasis(f.claim), ...overrides,
-    firstCheckOpportunityId: slot.firstCheckOpportunityId, checkSequence: 1, stratum: slot.stratum }
+  const { epoch, ...identity } = overrides
+  return { kind: 'independent_claim' as const, ...claimBasis(f.claim), ...identity,
+    firstCheckOpportunityId: slot.firstCheckOpportunityId, checkSequence: 1, stratum: { ...slot.stratum, epoch: epoch ?? slot.stratum.epoch } }
 }
-function reportClaim(f: Awaited<ReturnType<typeof fixture>>, input: unknown, clock: LearnReportLinkedFirstSlot['clock']) {
+async function seedLegacyClaim(f: Fixture, fact: ReturnType<typeof legacyClaim>, userId = OWNER.tokenIdentifier, learningVoidId = f.f.learningVoidId) {
+  return await f.t.run(async ctx => {
+    const watermark = (await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique())!
+    const sequence = watermark.sequence + 1
+    await ctx.db.insert('learnMeasurementReportFacts', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: NOW,
+      learningVoidId, sequence, epoch: f.claim.stratum.epoch, factVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, occurredAt: NOW,
+      fact: { ...fact, claimFactSequence: sequence } })
+    await ctx.db.patch(watermark._id, { sequence, updatedAt: NOW })
+    return { ...fact, claimFactSequence: sequence }
+  })
+}
+function reportClaim(f: Fixture, input: unknown, clock: LearnReportLinkedFirstSlot['clock'], keys: ReportKeys = f.f.reportKeys) {
   const fact = learnReportFactPayloadSchema.parse(input)
   if (fact.kind === 'independent_claim') {
     const { kind: _kind, firstCheckOpportunityId, checkSequence, stratum, ...claim } = fact
-    return learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim', ...f.f.reportKeys, claim, stratum,
+    return learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, claim, stratum,
       firstCheckOpportunityId, checkSequence, clock, stateAtEligibility: 'independent', stateAtAcceptance: null,
       acceptance: null, result: null, unresolvedReason: 'missing_delayed' })
   }
   if (fact.kind !== 'independent_claim_v2') throw new Error('Expected claim fact')
-  return learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim_v2', version: fact.version, ...f.f.reportKeys,
+  return learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim_v2', version: fact.version, ...keys,
     claim: claimBasis(fact), stratum: fact.stratum, policyPins: fact.policyPins,
     firstSlot: fact.firstSlot.kind === 'unresolved' ? fact.firstSlot : { ...fact.firstSlot, stateAtEligibility: 'independent',
       stateAtAcceptance: null, acceptance: null, result: null, unresolvedReason: 'missing_delayed' } })
 }
-async function anotherBasis(f: Awaited<ReturnType<typeof fixture>>, overrides: Partial<Pick<Doc<'masteryAttempts'>,
+async function anotherBasis(f: Fixture, overrides: Partial<Pick<Doc<'masteryAttempts'>,
   'userId' | 'blueprintRevisionId' | 'objectiveId'>> = {}) {
   return await f.t.run(async ctx => {
     const { _id: _id, _creationTime: _creationTime, ...fields } = (await ctx.db.get(f.basisAttemptId))!
     return await ctx.db.insert('masteryAttempts', { ...fields, ...overrides, idempotencyKey: 'another-basis' })
   })
 }
-function reconcileClaimFacts(f: Awaited<ReturnType<typeof fixture>>, claims: unknown[]) {
+function reconcileClaimFacts(f: Fixture, claims: (unknown | [unknown, ReportKeys])[]) {
   const watermark = { kind: 'owner_watermark' as const, learnerKey: f.f.reportKeys.learnerKey, sequence: 4,
     dueWorkThrough: NOW, historyCoverage: 'unknown' as const, legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' as const } }
-  return reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, ...claims.map(fact => reportClaim(f, fact, f.clock))])
+  return reconcileLearnReportSourceRows([watermark.learnerKey], [watermark,
+    ...claims.map(claim => Array.isArray(claim) ? reportClaim(f, claim[0], f.clock, claim[1]) : reportClaim(f, claim, f.clock))])
 }
-async function storeUnresolvedReportClaim(f: Awaited<ReturnType<typeof fixture>>) {
+async function anotherCapability(f: Fixture, title = 'Another capability') {
+  const objectiveId = await f.t.run(ctx => ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier,
+    blueprintRevisionId: f.claim.blueprintRevisionId, order: 1, title }))
+  const basisAttemptId = await anotherBasis(f, { objectiveId })
+  const slot = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 1_000, anchorEventId: basisAttemptId })
+  await f.t.run(ctx => ctx.db.patch(slot.firstCheckOpportunityId, { objectiveId,
+    purpose: { kind: 'retained_transfer', basisAttemptId, clock: slot.clock } }))
+  const claimKey = await privacyDigest(['learn-v2.first-independent.v1',
+    await masteryScopeKey(OWNER.tokenIdentifier, f.claim.blueprintRevisionId, objectiveId), f.claim.stratum.epoch])
+  const keys = await deriveLearnReportComputationKeys({ reportRunId: f.f.rows.learnMeasurementReportRuns,
+    ownerTokenIdentifier: OWNER.tokenIdentifier, blueprintRevisionId: f.claim.blueprintRevisionId, objectiveId })
+  const claim = (claimFactSequence: number) => learnReportIndependentClaimV2Schema.parse({ ...f.claim, claimKey, basisAttemptId, objectiveId, claimFactSequence })
+  return { objectiveId, basisAttemptId, slot, claimKey, keys, claim }
+}
+function claimRows(rows: Doc<'learnMeasurementReportFacts'>[]) {
+  return rows.filter(row => row.fact.kind === 'independent_claim' || row.fact.kind === 'independent_claim_v2')
+}
+async function expectUnchanged(f: Fixture, before: Doc<'learnMeasurementReportFacts'>[]) {
+  expect(await f.facts()).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks')
+    .withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())).toMatchObject({ sequence: before.length })
+}
+async function seedLegacyHistory(f: Fixture) {
+  const other = await anotherCapability(f, 'Legacy capability')
+  return await seedLegacyClaim(f, legacyClaim(f, other.slot, { claimKey: 'legacy-claim', basisAttemptId: other.basisAttemptId }))
+}
+async function storeUnresolvedReportClaim(f: Fixture) {
   const snapshot = learnReportInputSnapshotSchema.parse({ kind: 'first_check_claim_v2', version: f.claim.version, ...f.f.reportKeys,
     claim: claimBasis(f.claim), stratum: f.claim.stratum, policyPins: f.claim.policyPins, firstSlot: f.claim.firstSlot })
   await f.t.run(ctx => ctx.db.patch(f.f.rows.learnMeasurementReportRows, { rowKind: 'first_check_claim_v2', sourceWatermark: 2,
@@ -137,131 +178,121 @@ async function storeUnresolvedReportClaim(f: Awaited<ReturnType<typeof fixture>>
   return snapshot
 }
 
-test.each(['v1_then_v2', 'v2_then_v1', 'v2_link_then_v1', 'v1_then_v1'] as const)('rejects mixed-version duplicate claims: %s', async order => {
+test.each(['none', 'v2', 'v2_linked', 'v2_link'] as const)('rejects every new legacy claim append: prior %s', async prior => {
   const f = await fixture()
   const slot = await f.makeSlot()
-  const legacy = { kind: 'independent_claim' as const, ...claimBasis(f.claim), firstCheckOpportunityId: slot.firstCheckOpportunityId,
-    checkSequence: 1, stratum: slot.stratum }
-  await f.write(order.startsWith('v1_') ? legacy : f.claim)
-  if (order === 'v2_link_then_v1') await f.write(f.link(slot))
+  if (prior === 'v2' || prior === 'v2_link') await f.write(f.claim)
+  if (prior === 'v2_linked') await f.write({ ...f.claim, firstSlot: slot })
+  if (prior === 'v2_link') await f.write(f.link(slot))
   const before = await f.facts()
-  const next = order === 'v1_then_v2' ? { ...f.claim, claimFactSequence: before.length + 1 } : { ...legacy, claimFactSequence: before.length + 1 }
-  await expect(f.write(next)).rejects.toThrow('already recorded')
-  expect(await f.facts()).toEqual(before)
-  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').unique())).toMatchObject({ sequence: before.length })
+  const linked = { ...f.claim, firstSlot: slot }
+  for (const legacy of [
+    legacyClaim(f, slot),
+    legacyClaim(f, slot, { claimKey: 'alias-claim', basisAttemptId: await anotherBasis(f) }),
+    legacyClaim(f, slot, { claimKey: 'alias-claim', claimSequence: 2 }),
+  ]) {
+    if (prior !== 'none') expect(reconcileClaimFacts(f, [prior === 'v2' ? f.claim : linked, legacy]).status).toBe('incomplete')
+    await expect(f.write(legacy)).rejects.toThrow('legacy Independent claims are read-only')
+    await expectUnchanged(f, before)
+  }
+  expect(reconcileClaimFacts(f, claimRows(before).map(row => prior === 'v2_link' ? linked : row.fact)))
+    .toEqual({ status: 'complete', reasonCodes: [] })
 })
 
-test('competing legacy and v2 claims preserve one denominator authority', async () => {
+test.each(['legacy_first', 'v2_first'] as const)('concurrent legacy and v2 appends persist only the v2 claim: %s', async order => {
   const f = await fixture()
-  const slot = await f.makeSlot()
-  const legacy = { kind: 'independent_claim' as const, ...claimBasis(f.claim), firstCheckOpportunityId: slot.firstCheckOpportunityId,
-    checkSequence: 1, stratum: slot.stratum }
-  const results = await Promise.allSettled([f.write(legacy), f.write(f.claim)])
-  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
-  expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
-  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim' || row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
+  const legacy = legacyClaim(f, await f.makeSlot(), { claimKey: 'alias-claim', basisAttemptId: await anotherBasis(f) })
+  const writes = order === 'legacy_first' ? [f.write(legacy), f.write(f.claim)] : [f.write(f.claim), f.write(legacy)]
+  const results = await Promise.allSettled(writes)
+  const [legacyResult, claimResult] = order === 'legacy_first' ? results : [results[1], results[0]]
+  expect(claimResult).toMatchObject({ status: 'fulfilled', value: 2 })
+  expect(legacyResult?.status === 'rejected' && String(legacyResult.reason)).toContain('read-only')
+  expect(claimRows(await f.facts()).map(row => row.fact)).toEqual([f.claim])
 })
 
-const identityVariants = [
-  { name: 'same key and basis, another sequence', key: 'same', sequence: 2, basis: 'same', reason: 'duplicate_claim_key' },
-  { name: 'alias key, same basis', key: 'alias', sequence: 1, basis: 'same', reason: 'reused_claim_basis_attempt' },
-  { name: 'alias key and another sequence, same basis', key: 'alias', sequence: 2, basis: 'same', reason: 'reused_claim_basis_attempt' },
-  { name: 'same key, different basis and sequence', key: 'same', sequence: 2, basis: 'different', reason: 'duplicate_claim_key' },
-] as const
-const claimWriteOrders = ['v2_first', 'legacy_first', 'v2_link_first', 'concurrent_v2_first', 'concurrent_legacy_first', 'concurrent_link_legacy'] as const
-test.each(identityVariants.flatMap(variant => claimWriteOrders.map(order => ({ ...variant, order }))))(
-  'enforces reconciliation identities: $name / $order', async ({ key, sequence, basis, reason, order }) => {
+test.each((['identical', 'later_attainment'] as const).flatMap(second => (['sequential', 'concurrent'] as const).map(order => ({ second, order }))))(
+  'keeps one primary claim per owner, capability and epoch: $second / $order', async ({ second, order }) => {
     const f = await fixture()
-    const slot = await f.makeSlot()
-    const legacy = legacyClaim(f, slot, { claimKey: key === 'same' ? f.claim.claimKey : 'alias-claim', claimSequence: sequence,
-      basisAttemptId: basis === 'same' ? f.basisAttemptId : await anotherBasis(f) })
-    expect(reconcileClaimFacts(f, [f.claim, legacy]).reasonCodes).toContain(reason)
-    if (order === 'legacy_first') {
-      await f.write(legacy)
-      await expect(f.write({ ...f.claim, claimFactSequence: 3 })).rejects.toThrow('already recorded')
-    }
-    else if (order === 'v2_first' || order === 'v2_link_first') {
+    const candidate = second === 'identical' ? f.claim : { ...f.claim, basisAttemptId: await anotherBasis(f) }
+    expect(reconcileClaimFacts(f, [f.claim, { ...candidate, claimFactSequence: 3 }]).reasonCodes).toContain('conflicting_source_row')
+    if (order === 'sequential') {
       await f.write(f.claim)
-      if (order === 'v2_link_first') await f.write(f.link(slot))
-      await expect(f.write(legacy)).rejects.toThrow('already recorded')
+      const before = await f.facts()
+      await expect(f.write({ ...candidate, claimFactSequence: 3 })).rejects.toThrow('already recorded: conflicting_source_row')
+      await expectUnchanged(f, before)
     }
     else {
-      if (order === 'concurrent_link_legacy') await f.write(f.claim)
-      const v2 = order === 'concurrent_link_legacy' ? f.link(slot) : f.claim
-      const candidates = order === 'concurrent_legacy_first' ? [legacy, v2] : [v2, legacy]
-      const results = await Promise.allSettled(candidates.map(fact => f.write(fact)))
+      const results = await Promise.allSettled([f.write(f.claim), f.write(candidate)])
       expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
       const rejected = results.find(result => result.status === 'rejected')
       expect(rejected?.status === 'rejected' && String(rejected.reason)).toContain('already recorded')
     }
-    const claims = (await f.facts()).filter(row => row.fact.kind === 'independent_claim' || row.fact.kind === 'independent_claim_v2')
+    const claims = claimRows(await f.facts())
     expect(claims).toHaveLength(1)
     expect(reconcileClaimFacts(f, claims.map(row => row.fact))).toEqual({ status: 'complete', reasonCodes: [] })
   },
 )
 
-test.each(['claim_key', 'basis_attempt'] as const)('enforces %s uniqueness for legacy claims at higher sequences', async identity => {
+const legacyVariants = [
+  { name: 'same capability, different key and basis', reason: 'conflicting_source_row' },
+  { name: 'another capability, same key', reason: 'duplicate_claim_key' },
+  { name: 'another capability, same key at a higher sequence', reason: 'duplicate_claim_key' },
+  { name: 'another capability, same basis', reason: 'reused_claim_basis_attempt' },
+  { name: 'same first opportunity', reason: 'reused_first_check_opportunity' },
+] as const
+test.each(legacyVariants.flatMap(variant => (['claim', 'link'] as const)
+  .filter(mode => mode === 'claim' || variant.reason === 'reused_first_check_opportunity').map(mode => ({ ...variant, mode }))))(
+  'rejects a v2 append that reconciliation would reject beside an existing legacy row: $name / $mode', async ({ name, reason, mode }) => {
+    const f = await fixture()
+    const slot = await f.makeSlot()
+    const other = await anotherCapability(f)
+    const legacy = await seedLegacyClaim(f, name.startsWith('same capability')
+      ? legacyClaim(f, await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 2_000 }),
+        { claimKey: 'alias-claim', basisAttemptId: await anotherBasis(f) })
+      : name.startsWith('another capability, same key') ? legacyClaim(f, other.slot, { basisAttemptId: other.basisAttemptId,
+        claimSequence: name.endsWith('sequence') ? Number.MAX_SAFE_INTEGER : 1 })
+        : name.startsWith('another capability, same basis') ? legacyClaim(f, other.slot, { claimKey: 'alias-claim' })
+          : legacyClaim(f, slot, { claimKey: 'alias-claim', basisAttemptId: other.basisAttemptId, epoch: 'legacy-epoch' }))
+    const legacyKeys = name.startsWith('another') ? other.keys : f.f.reportKeys
+    const linked = { ...f.claim, firstSlot: slot }
+    const candidate = reason === 'reused_first_check_opportunity' ? linked : f.claim
+    expect(reconcileClaimFacts(f, [[legacy, legacyKeys], candidate]).reasonCodes).toContain(reason)
+    if (mode === 'link') expect(await f.write({ ...f.claim, claimFactSequence: 3 })).toBe(3)
+    const before = await f.facts()
+    await expect(f.write(mode === 'link' ? { ...f.link(slot), claimFactSequence: 3 } : { ...candidate, claimFactSequence: 3 }))
+      .rejects.toThrow(new RegExp(`already recorded: .*${reason}`))
+    await expectUnchanged(f, before)
+    expect(reconcileClaimFacts(f, claimRows(before).map(row => row.fact.kind === 'independent_claim' ? [row.fact, legacyKeys] : row.fact)))
+      .toEqual({ status: 'complete', reasonCodes: [] })
+  },
+)
+
+test('admits v2 claims in other capabilities beside existing legacy rows', async () => {
   const f = await fixture()
+  const other = await anotherCapability(f)
+  const legacy = await seedLegacyClaim(f, legacyClaim(f, other.slot, { claimKey: 'legacy-claim', basisAttemptId: other.basisAttemptId }))
+  expect(await f.write({ ...f.claim, claimFactSequence: 3 })).toBe(3)
   const slot = await f.makeSlot()
-  const first = legacyClaim(f, slot, { claimSequence: 2 })
-  const second = legacyClaim(f, slot, { claimSequence: Number.MAX_SAFE_INTEGER,
-    claimKey: identity === 'claim_key' ? first.claimKey : 'another-key',
-    basisAttemptId: identity === 'basis_attempt' ? first.basisAttemptId : await anotherBasis(f) })
-  await f.write(first)
-  await expect(f.write(second)).rejects.toThrow('already recorded')
-  expect(await f.facts()).toHaveLength(2)
+  expect(await f.write({ ...f.link(slot), claimFactSequence: 3 })).toBe(4)
+  await expect(f.write(other.claim(5))).rejects.toThrow('already recorded: conflicting_source_row, reused_claim_basis_attempt')
+  const third = await anotherCapability(f, 'Third capability')
+  expect(await f.write(third.claim(5))).toBe(5)
+  const rows = await f.facts()
+  expect(claimRows(rows)).toHaveLength(3)
+  expect(reconcileClaimFacts(f, [[legacy, other.keys], { ...f.claim, claimFactSequence: 3, firstSlot: slot }, [third.claim(5), third.keys]]))
+    .toEqual({ status: 'complete', reasonCodes: [] })
 })
 
-test.each(['sequential', 'concurrent'] as const)('claim-key uniqueness matches cross-owner reconciliation: %s', async order => {
+test('claim-key uniqueness matches cross-owner reconciliation', async () => {
   const f = await fixture()
   const slot = await f.makeSlot()
   const foreign = await f.t.run(ctx => seedMeasurementStorage(ctx, FOREIGN.tokenIdentifier))
   const foreignBasis = await anotherBasis(f, { userId: FOREIGN.tokenIdentifier,
     blueprintRevisionId: foreign.scope.blueprintRevisionId, objectiveId: foreign.scope.objectiveId })
-  const foreignSlotId = await f.t.run(async ctx => {
-    const { _id: _id, _creationTime: _creationTime, ...fields } = (await ctx.db.get(slot.firstCheckOpportunityId))!
-    return await ctx.db.insert('learnAssessmentOpportunities', { ...fields, ...foreign.base, ...foreign.scope,
-      purpose: { kind: 'retained_transfer', basisAttemptId: foreignBasis, clock: { ...f.clock, anchorEventId: foreignBasis } },
-      assessmentPins: { kind: 'session_application', caseId: foreign.itemPins.caseId, promptDigest: HASH,
-        rubricVersion: 'rubric.v1', rubricDigest: HASH, supportManifestDigest: HASH } })
-  })
-  const foreignClaim = { ...legacyClaim(f, slot, { basisAttemptId: foreignBasis, claimSequence: 2 }), firstCheckOpportunityId: foreignSlotId }
-  const writeForeign = () => f.t.withIdentity(FOREIGN).mutation(appendRef, { learningVoidId: foreign.learningVoidId,
-    epoch: f.claim.stratum.epoch, occurredAt: NOW, fact: foreignClaim })
-  if (order === 'sequential') {
-    await f.write(f.claim)
-    await expect(writeForeign()).rejects.toThrow('already recorded')
-  }
-  else {
-    const results = await Promise.allSettled([f.write(f.claim), writeForeign()])
-    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
-    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
-  }
-  const claims = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').take(8))
-  expect(claims.filter(row => row.fact.kind === 'independent_claim' || row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
-})
-
-test('permits independent claim and basis identities that reconcile without duplication', async () => {
-  const f = await fixture()
-  const firstSlot = await f.makeSlot()
-  const secondSlot = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 1_000 })
-  const objectiveId = await f.t.run(ctx => ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier,
-    blueprintRevisionId: f.claim.blueprintRevisionId, order: 1, title: 'Another capability' }))
-  const basisAttemptId = await anotherBasis(f, { objectiveId })
-  secondSlot.clock = { ...secondSlot.clock, anchorEventId: basisAttemptId }
-  await f.t.run(ctx => ctx.db.patch(secondSlot.firstCheckOpportunityId, { objectiveId,
-    purpose: { kind: 'retained_transfer', basisAttemptId, clock: secondSlot.clock } }))
-  const first = legacyClaim(f, firstSlot, { claimSequence: 2 })
-  const second = legacyClaim(f, secondSlot, { claimKey: 'another-key', claimSequence: 3, basisAttemptId })
-  const rows = [reportClaim(f, first, f.clock), reportClaim(f, second, secondSlot.clock)]
-  Object.assign(rows[1]!, await deriveLearnReportComputationKeys({ reportRunId: f.f.rows.learnMeasurementReportRuns,
-    ownerTokenIdentifier: OWNER.tokenIdentifier, blueprintRevisionId: f.claim.blueprintRevisionId, objectiveId }))
-  const watermark = { kind: 'owner_watermark' as const, learnerKey: f.f.reportKeys.learnerKey, sequence: 3,
-    dueWorkThrough: NOW, historyCoverage: 'unknown' as const, legacyIndependentAudit: { unknownCount: null, sourceCoverage: 'unknown' as const } }
-  expect(reconcileLearnReportSourceRows([watermark.learnerKey], [watermark, ...rows])).toEqual({ status: 'complete', reasonCodes: [] })
-  await f.write(first)
-  await f.write(second)
-  expect(await f.facts()).toHaveLength(3)
+  await seedLegacyClaim(f, legacyClaim(f, { ...slot, firstCheckOpportunityId: foreign.rows.learnAssessmentOpportunities }, { basisAttemptId: foreignBasis }),
+    FOREIGN.tokenIdentifier, foreign.learningVoidId)
+  await expect(f.write(f.claim)).rejects.toThrow('already recorded: duplicate_claim_key')
+  expect(claimRows(await f.facts())).toEqual([])
 })
 
 test.each((['purpose_horizon', 'opportunity_horizon', 'retained_horizon'] as const).flatMap(mismatch =>
@@ -510,13 +541,15 @@ test('owner export omits the new fact payloads and telemetry stays empty', async
   await f.write(f.claim)
   await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
+  const legacy = await seedLegacyHistory(f)
   const authorizationId = await authorizeExport(f.owner)
   const args = { authorizationId, collection: 'learnMeasurementReportFacts' as const, paginationOpts: { cursor: null, numItems: 8 } }
   const exported = await f.owner.query(api.dataExport.getUserDataPage, args)
-  expect(exported.page).toHaveLength(3)
+  expect(exported.page).toHaveLength(4)
   for (const row of exported.page) expect(Object.keys(row).sort()).toEqual(['_creationTime', '_id', 'createdAt', 'epoch', 'factVersion', 'learningVoidId', 'occurredAt', 'sequence'].sort())
   expect(JSON.stringify(exported)).not.toContain(f.claim.claimKey)
   expect(JSON.stringify(exported)).not.toContain(f.basisAttemptId)
+  expect(JSON.stringify(exported)).not.toContain(legacy.claimKey)
   const rows = await f.owner.query(api.dataExport.getUserDataPage, { ...args, collection: 'learnMeasurementReportRows' })
   expect(rows.page).toMatchObject([{ rowKind: 'first_check_claim_v2' }])
   expect(JSON.stringify(rows)).not.toContain(f.claim.claimKey)
@@ -531,7 +564,9 @@ test.each(['source_deleted', 'access_lost'] as const)('%s purge retains scalar c
   await f.write(f.claim)
   await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
+  await seedLegacyHistory(f)
   const before = (await f.facts()).slice(1)
+  expect(before.map(row => row.fact.kind)).toEqual(['independent_claim_v2', 'first_slot_link', 'independent_claim'])
   for (let batch = 0; batch < 20; batch++) {
     const result = await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER.tokenIdentifier, sourceIdentityId: f.f.sourceIdentityId, reason })
     if (!result.pending) break
@@ -549,6 +584,7 @@ test.each(['void', 'account'] as const)('%s deletion removes both fact copies an
   await f.write(f.claim)
   await storeUnresolvedReportClaim(f)
   await f.write(f.link(await f.makeSlot()))
+  await seedLegacyHistory(f)
   const foreign = await f.t.run(ctx => seedMeasurementStorage(ctx, FOREIGN.tokenIdentifier))
   if (kind === 'void') {
     for (let batch = 0; batch < 60; batch++) {
