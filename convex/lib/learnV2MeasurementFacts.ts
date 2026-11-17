@@ -9,7 +9,7 @@ import {
   type LearnReportIndependentClaimV2, type LearnReportLinkedFirstSlot, type LearnReportFirstClaimIdentity,
   type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
-import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_MEASUREMENT_STORAGE_LIMITS } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, parseLearnContract } from '../../shared/learn-v2-responses'
 import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
 import { learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins } from '../../shared/learn-v2-delayed-check'
@@ -43,6 +43,7 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
   })
   const fact = value.fact
   if (fact.kind === 'independent_claim') throw new Error('Learn legacy Independent claims are read-only')
+  if (fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') await assertNoLegacyFirstClaims(ctx, userId)
   const source = fact.kind === 'enrollment' ? await ctx.db.get(fact.assignmentId)
     : fact.kind === 'opportunity' ? await ctx.db.get(fact.assessmentOpportunityId)
       : fact.kind === 'independent_claim_v2' ? await ctx.db.get(fact.basisAttemptId)
@@ -81,10 +82,12 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
     const resolved = resolveLearnReportFirstSlotV2({ factVersion: saved.factVersion, sequence: saved.sequence,
       epoch: saved.epoch, occurredAt: saved.occurredAt, fact: saved.fact }, value)
     if (resolved.firstSlot.kind !== 'linked') throw new Error('Learn first slot unavailable')
-    await validateFirstSlot(ctx, userId, resolved, resolved.firstSlot, learningVoidId)
+    const inventory = await readFirstSlotInventory(ctx, userId, resolved)
+    await validateFirstSlot(ctx, userId, resolved, resolved.firstSlot, inventory, learningVoidId)
     await assertFirstClaimReconciles(ctx, userId, value.epoch, resolved, saved._id)
     return
   }
+  const inventory = await readFirstSlotInventory(ctx, userId, fact)
   await assertFirstClaimReconciles(ctx, userId, value.epoch, fact)
   const claim = resolveLearnReportFirstSlotV2(value)
   const basis = await ctx.db.get(claim.basisAttemptId)
@@ -106,18 +109,19 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
     || claim.policyPins.assistancePolicyVersion !== basis.assistanceSnapshot.policyVersion
     || claim.policyPins.validityPolicyVersion !== basis.validitySnapshot.policyVersion
     || claim.policyPins.thresholdVersion !== (basis.scoringBinding?.thresholdVersion ?? 'learn-v2.mastery-threshold.v1')) throw new Error('Learn first Independent basis is invalid')
-  if (claim.firstSlot.kind === 'linked') await validateFirstSlot(ctx, userId, claim, claim.firstSlot, learningVoidId)
+  if (claim.firstSlot.kind === 'linked') await validateFirstSlot(ctx, userId, claim, claim.firstSlot, inventory, learningVoidId)
 }
 
 const FIRST_CLAIM_IDENTITY_LIMIT = 2
-const FIRST_CLAIM_LEGACY_LIMIT = 64
+
+async function assertNoLegacyFirstClaims(ctx: MutationCtx, userId: string) {
+  const legacy = await ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_fact_kind', q => q.eq('userId', userId).eq('fact.kind', 'independent_claim')).first()
+  if (legacy) throw new Error('Learn legacy first-Independent claims must be reconciled before new claims')
+}
 
 async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoch: string,
   candidate: LearnReportIndependentClaimV2, claimFactId?: Id<'learnMeasurementReportFacts'>) {
-  const legacy = await ctx.db.query('learnMeasurementReportFacts')
-    .withIndex('by_userId_and_epoch_and_fact_kind', q => q.eq('userId', userId).eq('epoch', epoch).eq('fact.kind', 'independent_claim'))
-    .take(FIRST_CLAIM_LEGACY_LIMIT + 1)
-  if (legacy.length > FIRST_CLAIM_LEGACY_LIMIT) throw new Error('Learn frozen legacy claim inventory exceeds its bound')
   const opportunityId = candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null
   const proposed: LearnReportFirstClaimIdentity = { owner: userId, capability: JSON.stringify([candidate.blueprintRevisionId, candidate.objectiveId]),
     epoch: candidate.stratum.epoch, snapshot: 'candidate', claimKey: candidate.claimKey, basisAttemptId: candidate.basisAttemptId,
@@ -149,7 +153,7 @@ async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoc
           if (value.fact.kind === 'first_slot_link') links.set(JSON.stringify([value.userId, value.fact.claimKey]), value.fact.slot.firstCheckOpportunityId)
         }
       }
-      const existing = await readFirstClaimIdentity(ctx, row, links)
+      const existing = readFirstClaimIdentity(row, links)
       const reasons = existing ? reconcileLearnReportFirstClaims([existing, proposed]) : new Set<string>()
       if (reasons.size) throw new Error(`Learn first Independent claim already recorded: ${[...reasons].sort().join(', ')}`)
     }
@@ -168,56 +172,82 @@ async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoc
       q => q.eq('fact.slot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
   ])
   for (const rows of groups) await check(rows)
-  for (const row of legacy) await check([row])
 }
 
-async function readFirstClaimIdentity(ctx: MutationCtx, row: Doc<'learnMeasurementReportFacts'>,
-  links: ReadonlyMap<string, string>): Promise<LearnReportFirstClaimIdentity | null> {
+function readFirstClaimIdentity(row: Doc<'learnMeasurementReportFacts'>,
+  links: ReadonlyMap<string, string>): LearnReportFirstClaimIdentity | null {
   const fact = row.fact
   if (fact.kind === 'independent_claim_v2') return { owner: row.userId, capability: JSON.stringify([fact.blueprintRevisionId, fact.objectiveId]),
     epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
     firstCheckOpportunityId: fact.firstSlot.kind === 'linked' ? fact.firstSlot.firstCheckOpportunityId
       : links.get(JSON.stringify([row.userId, fact.claimKey])) ?? null }
   if (fact.kind !== 'independent_claim') return null
-  const opportunity = await ctx.db.get(fact.firstCheckOpportunityId)
-  const basis = opportunity ? null : await ctx.db.get(fact.basisAttemptId)
-  const scope = opportunity ?? (basis?.blueprintRevisionId && basis.objectiveId ? basis : null)
-  return { owner: row.userId, capability: JSON.stringify(scope ? [scope.blueprintRevisionId, scope.objectiveId] : ['unavailable', row._id]),
+  // Owner-local legacy claims are refused before source reads; only global identities apply here.
+  return { owner: row.userId, capability: row._id,
     epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
     firstCheckOpportunityId: fact.firstCheckOpportunityId }
 }
 
+async function readFirstSlotInventory(ctx: MutationCtx, userId: string, claim: LearnReportIndependentClaimV2) {
+  const rows = await ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_user_blueprintRevId_objectiveId_firstSlotEpoch_openAt_checkId', q => q.eq('userId', userId)
+      .eq('blueprintRevisionId', claim.blueprintRevisionId).eq('objectiveId', claim.objectiveId).eq('firstSlotEpoch', claim.stratum.epoch))
+    .take(LEARN_MEASUREMENT_STORAGE_LIMITS.maxFirstClaimSlots + 1)
+  if (rows.length > LEARN_MEASUREMENT_STORAGE_LIMITS.maxFirstClaimSlots) throw new Error('Learn first-slot protocol inventory exceeds its bound')
+  return rows
+}
+
+export async function registerLearnReportFirstSlot(ctx: MutationCtx, userId: string, claim: LearnReportIndependentClaimV2,
+  opportunityId: Id<'learnAssessmentOpportunities'>) {
+  await assertNoLegacyFirstClaims(ctx, userId)
+  const row = await ctx.db.get(opportunityId)
+  if (!row || row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
+    || row.firstSlotEpoch !== undefined && row.firstSlotEpoch !== claim.stratum.epoch) throw new Error('Learn first-slot scope mismatch')
+  const inventory = await readFirstSlotInventory(ctx, userId, claim)
+  if (row.firstSlotEpoch === claim.stratum.epoch) return
+  if (inventory.length >= LEARN_MEASUREMENT_STORAGE_LIMITS.maxFirstClaimSlots) throw new Error('Learn first-slot protocol inventory exceeds its bound')
+  const candidate = await readQualifyingFirstSlot(ctx, userId, claim, { ...row, firstSlotEpoch: claim.stratum.epoch })
+  if (!candidate) throw new Error('Learn first slot is not qualifying')
+  const purpose = learnAssessmentPurposeSchema.parse(row.purpose)
+  if (!('clock' in purpose) || inventory.some(existing => 'clock' in existing.purpose
+    && existing.purpose.kind === purpose.kind && existing.purpose.clock.horizonDays === purpose.clock.horizonDays)) throw new Error('Learn original protocol slot already registered')
+  if (row.firstCheckClaim && (row.firstCheckClaim.claimKey !== claim.claimKey || row.checkSequence !== 1)) throw new Error('Learn first slot belongs to another claim')
+  await assertFirstSlotOutcomeNotStarted(ctx, userId, row)
+  await ctx.db.patch(row._id, { firstSlotEpoch: claim.stratum.epoch, revision: row.revision + 1 })
+}
+
 async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnReportIndependentClaimV2,
-  slot: LearnReportLinkedFirstSlot, learningVoidId?: Id<'learningVoids'>) {
+  slot: LearnReportLinkedFirstSlot, inventory: Doc<'learnAssessmentOpportunities'>[], learningVoidId?: Id<'learningVoids'>) {
   if (!learningVoidId || slot.linkedAt !== Date.now() || !qualifiesLearnReportFirstSlot(claim, slot)) throw new Error('Learn first slot is not qualifying')
-  const opportunities = await ctx.db.query('learnAssessmentOpportunities')
-    .withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(65)
-  if (opportunities.length > 64) throw new Error('Learn first-slot inventory exceeds its bound')
-  const candidates: { row: Doc<'learnAssessmentOpportunities'>, slot: LearnReportLinkedFirstSlot }[] = []
-  for (const row of opportunities) {
+  let selected: { row: Doc<'learnAssessmentOpportunities'>, slot: LearnReportLinkedFirstSlot } | undefined
+  for (const row of inventory) {
     const candidate = await readQualifyingFirstSlot(ctx, userId, claim, row)
-    if (candidate) candidates.push({ row, slot: candidate })
+    if (candidate) { selected = { row, slot: candidate }; break }
   }
-  candidates.sort((left, right) => left.row.openAt - right.row.openAt || left.row.delayedCheckId.localeCompare(right.row.delayedCheckId))
-  const selected = candidates[0]
-  const first = selected?.row
-  if (!first || first._id !== slot.firstCheckOpportunityId
-    || first.createdAt > slot.linkedAt
-    || first.submissionId !== undefined || first.authoritativeAttemptId !== undefined || first.scoringJobId !== undefined
-    || !['preparing', 'ready', 'test_open'].includes(first.phase) || Date.now() >= first.closeAt
+  if (!selected) throw new Error('Learn earliest first slot unavailable')
+  const first = selected.row
+  if (first._id !== slot.firstCheckOpportunityId
+    || first.learningVoidId !== learningVoidId || first.createdAt > slot.linkedAt
     || first.firstCheckClaim && (first.firstCheckClaim.claimKey !== claim.claimKey || first.checkSequence !== 1)) throw new Error('Learn earliest first slot unavailable')
+  await assertFirstSlotOutcomeNotStarted(ctx, userId, first)
+  if (await privacyDigest(selected.slot) !== await privacyDigest(slot)) throw new Error('Learn first-slot stratum mismatch')
+}
+
+async function assertFirstSlotOutcomeNotStarted(ctx: MutationCtx, userId: string, first: Doc<'learnAssessmentOpportunities'>) {
+  if (first.createdAt > Date.now() || first.submissionId !== undefined || first.authoritativeAttemptId !== undefined || first.scoringJobId !== undefined
+    || !['preparing', 'ready', 'test_open'].includes(first.phase) || Date.now() >= first.closeAt) throw new Error('Learn first slot outcome already started')
   const [response, execution, attempt] = await Promise.all([
     ctx.db.query('learnResponses').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
     ctx.db.query('learnScoringExecutions').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
     ctx.db.query('masteryAttempts').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
   ])
   if (response || execution || attempt) throw new Error('Learn first slot outcome already started')
-  if (await privacyDigest(selected.slot) !== await privacyDigest(slot)) throw new Error('Learn first-slot stratum mismatch')
 }
 
 async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: LearnReportIndependentClaimV2,
   row: Doc<'learnAssessmentOpportunities'>): Promise<LearnReportLinkedFirstSlot | null> {
   if (row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
+    || row.firstSlotEpoch !== claim.stratum.epoch
     || !row.originalSlot || row.replacesOpportunityId !== undefined) return null
   const parsedPurpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
   if (!parsedPurpose.success || !('clock' in parsedPurpose.data)) return null

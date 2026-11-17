@@ -1830,6 +1830,7 @@ export default defineSchema({
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
     .index('by_userId', ['userId'])
+    .index('by_user_blueprintRevId_objectiveId_firstSlotEpoch_openAt_checkId', ['userId', 'blueprintRevisionId', 'objectiveId', 'firstSlotEpoch', 'openAt', 'delayedCheckId'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])
@@ -1892,7 +1893,7 @@ export default defineSchema({
     .index('by_fact_firstCheckOpportunityId', ['fact.firstCheckOpportunityId'])
     .index('by_fact_firstSlot_firstCheckOpportunityId', ['fact.firstSlot.firstCheckOpportunityId'])
     .index('by_fact_slot_firstCheckOpportunityId', ['fact.slot.firstCheckOpportunityId'])
-    .index('by_userId_and_epoch_and_fact_kind', ['userId', 'epoch', 'fact.kind'])
+    .index('by_userId_and_fact_kind', ['userId', 'fact.kind'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
     .index('by_userId', ['userId'])

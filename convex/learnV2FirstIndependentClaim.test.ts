@@ -8,14 +8,14 @@ import type { Doc, Id } from './_generated/dataModel'
 import { mutation } from './_generated/server'
 import schema from './schema'
 import { requireAuth } from './lib/auth'
-import { appendLearnMeasurementFact } from './lib/learnV2MeasurementFacts'
+import { appendLearnMeasurementFact, registerLearnReportFirstSlot } from './lib/learnV2MeasurementFacts'
 import { reportFactFields } from './lib/learnV2MeasurementStorage'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
-import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS, LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION } from '../shared/learn-v2-responses'
 import { learnAssessmentPurposeSchema } from '../shared/learn-v2-delayed-check'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportIndependentClaimV2Schema, learnReportFirstSlotLinkSchema, learnReportFactPayloadSchema,
@@ -31,12 +31,19 @@ const appendArgs = v.object({ learningVoidId: v.id('learningVoids'), epoch: v.st
 const append = mutation({ args: appendArgs, returns: v.number(), handler: async (ctx, args) =>
   await appendLearnMeasurementFact(ctx, await requireAuth(ctx), { ...args, fact: learnReportFactPayloadSchema.parse(args.fact) }) })
 const appendRef = makeFunctionReference<'mutation', Infer<typeof appendArgs>, number>('firstClaimFixture:append')
+const registerArgs = v.object({ claim: reportFactFields.fact, opportunityId: v.id('learnAssessmentOpportunities') })
+const register = mutation({ args: registerArgs, returns: v.null(), handler: async (ctx, args) => {
+  const claim = learnReportIndependentClaimV2Schema.parse(args.claim)
+  await registerLearnReportFirstSlot(ctx, await requireAuth(ctx), claim, args.opportunityId)
+  return null
+} })
+const registerRef = makeFunctionReference<'mutation', Infer<typeof registerArgs>, null>('firstClaimFixture:register')
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllEnvs() })
 
 async function fixture() {
-  const t = convexTest(schema, { ...modules, './firstClaimFixture.ts': async () => ({ append }) })
+  const t = convexTest(schema, { ...modules, './firstClaimFixture.ts': async () => ({ append, register }) })
   const owner = t.withIdentity(OWNER)
   const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
   const basisAttemptId = await t.run(ctx => ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier,
@@ -59,13 +66,13 @@ async function fixture() {
   const clock = { protocolVersion: 'protocol.fixture', schedulingPolicyVersion: 'schedule.v1', anchorKind: 'first_independent',
     anchorEventId: basisAttemptId, anchorAt: NOW, horizonDays: 7 as const, timezone: 'America/Toronto', dueLocalDate: '2027-03-14',
     dueAt: Date.parse('2027-03-14T16:00:00Z'), openAt: Date.parse('2027-03-14T05:00:00Z'), closeAt: Date.parse('2027-03-15T04:00:00Z') }
-  const makeSlot = async (kind: 'retained_transfer' | 'measurement_delayed' = 'retained_transfer', slotClock: LearnReportLinkedFirstSlot['clock'] = clock) => {
+  const makeSlot = async (kind: 'retained_transfer' | 'measurement_delayed' = 'retained_transfer', slotClock: LearnReportLinkedFirstSlot['clock'] = clock, firstSlotEpoch: string | null = stratum.epoch) => {
     const id = await t.run(async ctx => {
       const row = (await ctx.db.get(f.rows.learnAssessmentOpportunities))!
       const { _id: _id, _creationTime: _creationTime, submissionId: _submission, deliveryGrantId: _grant,
         assignmentId: _assignment, ...fields } = row
       return await ctx.db.insert('learnAssessmentOpportunities', { ...fields, createdAt: NOW,
-        delayedCheckId: `first-${slotClock.horizonDays}-${slotClock.openAt}`, phase: 'ready',
+        delayedCheckId: `first-${slotClock.horizonDays}-${slotClock.openAt}`, phase: 'ready', firstSlotEpoch: firstSlotEpoch ?? undefined,
         purpose: kind === 'retained_transfer' ? { kind, basisAttemptId, clock: slotClock }
           : { kind, assignmentId: f.rows.learnMeasurementAssignments, horizonDays: slotClock.horizonDays, clock: slotClock },
         ...(kind === 'measurement_delayed' ? { assignmentId: f.rows.learnMeasurementAssignments, horizonDays: slotClock.horizonDays } : {}),
@@ -85,7 +92,8 @@ async function fixture() {
   const link = (slot: LearnReportLinkedFirstSlot) => learnReportFirstSlotLinkSchema.parse({ kind: 'first_slot_link', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
     claimKey, claimSequence: 1, claimFactSequence: 2, slot })
   const facts = () => t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_sequence', q => q.eq('userId', OWNER.tokenIdentifier)).take(8))
-  return { t, owner, f, basisAttemptId, claim, clock, makeSlot, write, link, facts }
+  return { t, owner, f, basisAttemptId, claim, clock, makeSlot, write, link, facts,
+    register: (slot: LearnReportLinkedFirstSlot) => owner.mutation(registerRef, { claim, opportunityId: slot.firstCheckOpportunityId }) }
 }
 function envelope(row: Doc<'learnMeasurementReportFacts'>) {
   return { factVersion: row.factVersion, sequence: row.sequence, epoch: row.epoch, occurredAt: row.occurredAt, fact: row.fact }
@@ -97,22 +105,44 @@ function claimBasis(claim: LearnReportIndependentClaimV2) {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>
 type ReportKeys = Fixture['f']['reportKeys']
-async function writeMeasured(f: Fixture, fact: Infer<typeof appendArgs>['fact']) {
+function readCounts() { return { factQueries: 0, queries: 0, documents: 0, gets: 0, indexes: Array<string>() } }
+async function writeMeasured(f: Fixture, fact: Infer<typeof appendArgs>['fact'], counts = readCounts()) {
   return await f.t.run(async ctx => {
-    let factQueries = 0
-    let queries = 0
+    function measuredQuery(target: object): object {
+      return new Proxy(target, { get(target, property) {
+        const value: unknown = Reflect.get(target, property)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          if (property === 'withIndex') counts.indexes.push(String(args[0]))
+          const result: unknown = Reflect.apply(value, target, args)
+          if (['first', 'unique', 'take'].includes(String(property))) return Promise.resolve(result).then(rows => {
+            counts.documents += Array.isArray(rows) ? rows.length : rows ? 1 : 0
+            return rows
+          })
+          return result && typeof result === 'object' ? measuredQuery(result) : result
+        }
+      } })
+    }
     const db = new Proxy(ctx.db, { get(target, property) {
       const value: unknown = Reflect.get(target, property)
-      if (property !== 'query' || typeof value !== 'function') return typeof value === 'function' ? value.bind(target) : value
+      if (typeof value !== 'function') return value
+      if (property === 'get') return async (...args: unknown[]) => {
+        counts.gets++
+        const row: unknown = await Reflect.apply(value, target, args)
+        if (row) counts.documents++
+        return row
+      }
+      if (property !== 'query') return value.bind(target)
       return (...args: unknown[]) => {
-        queries++
-        if (args[0] === 'learnMeasurementReportFacts') factQueries++
-        return Reflect.apply(value, target, args)
+        counts.queries++
+        if (args[0] === 'learnMeasurementReportFacts') counts.factQueries++
+        return measuredQuery(Reflect.apply(value, target, args))
       }
     } })
     const sequence = await appendLearnMeasurementFact({ ...ctx, db }, OWNER.tokenIdentifier,
       { learningVoidId: f.f.learningVoidId, epoch: f.claim.stratum.epoch, occurredAt: NOW, fact: learnReportFactPayloadSchema.parse(fact) })
-    return { sequence, factQueries, queries }
+    const { indexes: _indexes, ...reads } = counts
+    return { sequence, ...reads }
   })
 }
 function legacyClaim(f: Fixture, slot: LearnReportLinkedFirstSlot, overrides: {
@@ -295,6 +325,7 @@ test.each(legacyVariants.flatMap(variant => (['claim', 'link'] as const)
     const f = await fixture()
     const slot = await f.makeSlot()
     const other = await anotherCapability(f)
+    if (mode === 'link') await f.write(f.claim)
     const legacy = await seedLegacyClaim(f, name.startsWith('same capability')
       ? legacyClaim(f, await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 2_000 }),
         { claimKey: 'alias-claim', basisAttemptId: await anotherBasis(f) })
@@ -306,31 +337,40 @@ test.each(legacyVariants.flatMap(variant => (['claim', 'link'] as const)
     const linked = { ...f.claim, firstSlot: slot }
     const candidate = reason === 'reused_first_check_opportunity' ? linked : f.claim
     expect(reconcileClaimFacts(f, [[legacy, legacyKeys], candidate]).reasonCodes).toContain(reason)
-    if (mode === 'link') expect(await f.write({ ...f.claim, claimFactSequence: 3 })).toBe(3)
     const before = await f.facts()
     await expect(f.write(mode === 'link' ? { ...f.link(slot), claimFactSequence: 3 } : { ...candidate, claimFactSequence: 3 }))
-      .rejects.toThrow(new RegExp(`already recorded: .*${reason}`))
+      .rejects.toThrow('legacy first-Independent claims must be reconciled before new claims')
     await expectUnchanged(f, before)
-    expect(reconcileClaimFacts(f, claimRows(before).map(row => row.fact.kind === 'independent_claim' ? [row.fact, legacyKeys] : row.fact)))
-      .toEqual({ status: 'complete', reasonCodes: [] })
   },
 )
 
-test('admits v2 claims in other capabilities beside existing legacy rows', async () => {
-  const f = await fixture()
-  const other = await anotherCapability(f)
-  const legacy = await seedLegacyClaim(f, legacyClaim(f, other.slot, { claimKey: 'legacy-claim', basisAttemptId: other.basisAttemptId }))
-  expect(await f.write({ ...f.claim, claimFactSequence: 3 })).toBe(3)
-  const slot = await f.makeSlot()
-  expect(await f.write({ ...f.link(slot), claimFactSequence: 3 })).toBe(4)
-  await expect(f.write(other.claim(5))).rejects.toThrow('already recorded: conflicting_source_row, reused_claim_basis_attempt')
-  const third = await anotherCapability(f, 'Third capability')
-  expect(await f.write(third.claim(5))).toBe(5)
-  const rows = await f.facts()
-  expect(claimRows(rows)).toHaveLength(3)
-  expect(reconcileClaimFacts(f, [[legacy, other.keys], { ...f.claim, claimFactSequence: 3, firstSlot: slot }, [third.claim(5), third.keys]]))
-    .toEqual({ status: 'complete', reasonCodes: [] })
-})
+test.each(([
+  { envelopeEpoch: 'fixture-epoch', stratumEpoch: 'fixture-epoch' },
+  { envelopeEpoch: 'previous-epoch', stratumEpoch: 'fixture-epoch' },
+  { envelopeEpoch: 'fixture-epoch', stratumEpoch: 'previous-epoch' },
+  { envelopeEpoch: 'previous-epoch', stratumEpoch: 'previous-epoch' },
+] as const).flatMap(epochs => (['unresolved', 'linked', 'link'] as const).map(mode => ({ ...epochs, mode }))))(
+  'refuses owner legacy rows without reading their sources: $envelopeEpoch / $stratumEpoch / $mode', async ({ envelopeEpoch, stratumEpoch, mode }) => {
+    const f = await fixture()
+    const slot = await f.makeSlot()
+    if (mode === 'link') await f.write(f.claim)
+    const other = await anotherCapability(f)
+    const legacy = await seedLegacyClaim(f, legacyClaim(f, other.slot, { claimKey: 'legacy-claim', basisAttemptId: other.basisAttemptId, epoch: stratumEpoch }))
+    await f.t.run(async ctx => {
+      const row = (await ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', legacy.claimKey)).unique())!
+      await ctx.db.patch(row._id, { epoch: envelopeEpoch })
+      await ctx.db.patch(other.slot.firstCheckOpportunityId, { eligibilityPolicyVersion: 'x'.repeat(300 * 1024) })
+      await ctx.db.delete(other.basisAttemptId)
+    })
+    const before = await f.facts()
+    const reads = readCounts()
+    await expect(writeMeasured(f, mode === 'link' ? f.link(slot)
+      : { ...f.claim, claimFactSequence: before.length + 1, ...(mode === 'linked' ? { firstSlot: slot } : {}) }, reads))
+      .rejects.toThrow('legacy first-Independent claims must be reconciled before new claims')
+    expect(reads).toEqual({ factQueries: 1, queries: 2, documents: 2, gets: 0, indexes: ['by_userId', 'by_userId_and_fact_kind'] })
+    await expectUnchanged(f, before)
+  },
+)
 
 test('claim-key uniqueness matches cross-owner reconciliation', async () => {
   const f = await fixture()
@@ -344,48 +384,49 @@ test('claim-key uniqueness matches cross-owner reconciliation', async () => {
   expect(claimRows(await f.facts())).toEqual([])
 })
 
-test.each([0, 4_100])('keeps append queries constant with %d historical attempts', async count => {
+async function seedOpportunityHistory(f: Fixture, count: number) {
+  await f.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(f.f.rows.learnAssessmentOpportunities))!
+    const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier,
+      blueprintRevisionId: f.claim.blueprintRevisionId, order: 2, title: 'Historical capability' })
+    for (let index = 0; index < count; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...fields,
+      delayedCheckId: `history-${index}`, phase: 'scored_pass',
+      objectiveId: index % 3 === 0 ? objectiveId : f.claim.objectiveId,
+      firstSlotEpoch: index % 3 === 0 ? f.claim.stratum.epoch : index % 3 === 1 ? 'previous-epoch' : undefined })
+  })
+}
+
+test.each([
+  { attempts: 0, opportunities: 0 }, { attempts: 4_100, opportunities: 0 }, { attempts: 0, opportunities: 4_100 },
+])('keeps append reads constant with $attempts historical attempts and $opportunities historical opportunities', async ({ attempts, opportunities }) => {
   const f = await fixture()
   await f.t.run(async ctx => {
     const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(f.basisAttemptId))!
-    for (let index = 0; index < count; index++) await ctx.db.insert('masteryAttempts', { ...fields,
+    for (let index = 0; index < attempts; index++) await ctx.db.insert('masteryAttempts', { ...fields,
       attemptedAt: NOW - (index + 1) * 86_400_000, acceptedAt: NOW - (index + 1) * 86_400_000, idempotencyKey: `history-${index}` })
   })
-  expect(await writeMeasured(f, f.claim)).toEqual({ sequence: 2, factQueries: 4, queries: 5 })
-  expect(await writeMeasured(f, f.link(await f.makeSlot()))).toEqual({ sequence: 3, factQueries: 8, queries: 13 })
+  await seedOpportunityHistory(f, opportunities)
+  expect(await writeMeasured(f, f.claim)).toEqual({ sequence: 2, factQueries: 4, queries: 6, documents: 5, gets: 4 })
+  expect(await writeMeasured(f, f.link(await f.makeSlot()))).toEqual({ sequence: 3, factQueries: 8, queries: 13, documents: 7, gets: 1 })
 }, 30_000)
 
-test('bounds queries for an initially linked claim', async () => {
+test('bounds reads for an initially linked claim', async () => {
   const f = await fixture()
-  expect(await writeMeasured(f, { ...f.claim, firstSlot: await f.makeSlot() })).toEqual({ sequence: 2, factQueries: 7, queries: 12 })
+  expect(await writeMeasured(f, { ...f.claim, firstSlot: await f.makeSlot() }))
+    .toEqual({ sequence: 2, factQueries: 7, queries: 12, documents: 6, gets: 4 })
 })
 
-test.each(['unresolved', 'linked'] as const)('refuses an over-cap frozen legacy owner before a first %s claim', async kind => {
+test.each([1, 65])('refuses an owner with %d frozen legacy rows from the start with one fact read', async count => {
   const f = await fixture()
-  const slot = await seedLegacyInventory(f, 65)
-  const before = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
-    .withIndex('by_userId_and_sequence', q => q.eq('userId', OWNER.tokenIdentifier)).take(70))
-  const candidate = { ...f.claim, claimFactSequence: 67, ...(kind === 'linked' ? { firstSlot: slot } : {}) }
-  await expect(f.write(candidate)).rejects.toThrow('frozen legacy claim inventory exceeds its bound')
-  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
-    .withIndex('by_userId_and_sequence', q => q.eq('userId', OWNER.tokenIdentifier)).take(70))).toEqual(before)
+  const slot = await seedLegacyInventory(f, count, 'previous-epoch')
+  for (const firstSlot of [f.claim.firstSlot, slot]) {
+    const reads = readCounts()
+    await expect(writeMeasured(f, { ...f.claim, claimFactSequence: count + 2, firstSlot }, reads))
+      .rejects.toThrow('legacy first-Independent claims must be reconciled before new claims')
+    expect(reads).toMatchObject({ factQueries: 1, queries: 2, documents: 2, gets: 0 })
+  }
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique()))
-    .toMatchObject({ sequence: 66 })
-})
-
-test('links at the frozen legacy cap while new legacy appends remain closed', async () => {
-  const f = await fixture()
-  const slot = await seedLegacyInventory(f, 64)
-  expect(await writeMeasured(f, { ...f.claim, claimFactSequence: 66 })).toEqual({ sequence: 66, factQueries: 4, queries: 5 })
-  await expect(f.write(legacyClaim(f, slot, { claimKey: 'new-legacy' }))).rejects.toThrow('legacy Independent claims are read-only')
-  expect(await writeMeasured(f, { ...f.link(slot), claimFactSequence: 66 })).toEqual({ sequence: 67, factQueries: 8, queries: 13 })
-})
-
-test('scopes the frozen legacy cap to the owner epoch', async () => {
-  const f = await fixture()
-  const slot = await seedLegacyInventory(f, 65, 'previous-epoch')
-  expect(await writeMeasured(f, { ...f.claim, claimFactSequence: 67 })).toEqual({ sequence: 67, factQueries: 4, queries: 5 })
-  expect(await writeMeasured(f, { ...f.link(slot), claimFactSequence: 67 })).toEqual({ sequence: 68, factQueries: 8, queries: 13 })
+    .toMatchObject({ sequence: count + 1 })
 })
 
 test('links an early claim after more than 256 primary claims across capabilities and Voids', async () => {
@@ -450,7 +491,7 @@ test.each(['opportunity', 'missing_opportunity'] as const)('finds same-capabilit
   if (source === 'missing_opportunity') await f.t.run(ctx => ctx.db.delete(slot.firstCheckOpportunityId))
   expect(reconcileClaimFacts(f, [legacy, f.claim]).reasonCodes).toContain('conflicting_source_row')
   const before = await f.facts()
-  await expect(f.write({ ...f.claim, claimFactSequence: 3 })).rejects.toThrow('already recorded: conflicting_source_row')
+  await expect(f.write({ ...f.claim, claimFactSequence: 3 })).rejects.toThrow('legacy first-Independent claims must be reconciled before new claims')
   await expectUnchanged(f, before)
 })
 
@@ -489,7 +530,7 @@ test.each(['claim', 'link'] as const)('fails closed on corrupt duplicate identit
   const before = await f.facts()
   expect(reconcileClaimFacts(f, claimRows(before).map(row => row.fact)).status).toBe('incomplete')
   await expect(f.write(mode === 'claim' ? { ...f.claim, claimFactSequence: before.length + 1 } : f.link(slot)))
-    .rejects.toThrow('claim identity exceeds its bound')
+    .rejects.toThrow('legacy first-Independent claims must be reconciled before new claims')
   await expectUnchanged(f, before)
 })
 
@@ -721,17 +762,75 @@ test('competing links produce one append and one watermark increment', async () 
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').unique())).toMatchObject({ sequence: 3 })
 })
 
-test('refuses to select a first slot from a truncated opportunity inventory', async () => {
+test.each(['unresolved', 'linked'] as const)('refuses an over-bound protocol inventory before inserting a %s claim', async kind => {
   const f = await fixture()
-  await f.write(f.claim)
   const slot = await f.makeSlot()
   await f.t.run(async ctx => {
-    const row = (await ctx.db.get(slot.firstCheckOpportunityId))!
-    const { _id: _id, _creationTime: _creationTime, ...fields } = row
-    for (let index = 0; index < 64; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...fields, delayedCheckId: `overflow-${index}` })
+    const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(slot.firstCheckOpportunityId))!
+    for (let index = 0; index < LEARN_MEASUREMENT_STORAGE_LIMITS.maxFirstClaimSlots; index++) {
+      await ctx.db.insert('learnAssessmentOpportunities', { ...fields, delayedCheckId: `overflow-${index}` })
+    }
   })
-  await expect(f.write(f.link(slot))).rejects.toThrow('inventory exceeds its bound')
-  expect(await f.facts()).toHaveLength(2)
+  const before = await f.facts()
+  await expect(f.write({ ...f.claim, ...(kind === 'linked' ? { firstSlot: slot } : {}) })).rejects.toThrow('protocol inventory exceeds its bound')
+  await expectUnchanged(f, before)
+})
+
+test('links an accepted claim after unrelated history grows beyond the former Void limit', async () => {
+  const f = await fixture()
+  await seedOpportunityHistory(f, 65)
+  expect(await f.write(f.claim)).toBe(2)
+  const slot = await f.makeSlot()
+  await seedOpportunityHistory(f, 65)
+  expect(await f.write(f.link(slot))).toBe(3)
+})
+
+test.each(['before_claim', 'after_claim'] as const)('bounds registration before scheduling can strand a claim: %s', async order => {
+  const f = await fixture()
+  if (order === 'after_claim') await f.write(f.claim)
+  const day30 = { ...f.clock, horizonDays: 30 as const, dueLocalDate: '2027-04-06', dueAt: Date.parse('2027-04-06T16:00:00Z'),
+    openAt: Date.parse('2027-04-06T04:00:00Z'), closeAt: Date.parse('2027-04-07T04:00:00Z') }
+  const first = await f.makeSlot('retained_transfer', f.clock, null)
+  for (const slot of [first, await f.makeSlot('measurement_delayed', { ...f.clock, openAt: f.clock.openAt + 1_000 }, null),
+    await f.makeSlot('retained_transfer', day30, null), await f.makeSlot('measurement_delayed', day30, null)]) {
+    await f.register(slot)
+    await f.register(slot)
+  }
+  if (order === 'before_claim') await f.write(f.claim)
+  const extra = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 2_000 }, null)
+  await expect(f.register(extra)).rejects.toThrow('protocol inventory exceeds its bound')
+  expect(await f.t.run(ctx => ctx.db.get(extra.firstCheckOpportunityId))).not.toHaveProperty('firstSlotEpoch')
+  expect(await f.write(f.link(first))).toBe(3)
+  const rows = await f.facts()
+  expect(resolveLearnReportFirstSlotV2(envelope(rows[1]!), envelope(rows[2]!)).firstSlot).toEqual(first)
+})
+
+test('concurrent registrations admit one original slot for a purpose and horizon', async () => {
+  const f = await fixture()
+  await f.write(f.claim)
+  const slots = [await f.makeSlot('retained_transfer', f.clock, null), await f.makeSlot('retained_transfer', f.clock, null)]
+  const results = await Promise.allSettled(slots.map(slot => f.register(slot)))
+  expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+  expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
+  const registered = await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_user_blueprintRevId_objectiveId_firstSlotEpoch_openAt_checkId', q => q.eq('userId', OWNER.tokenIdentifier)
+      .eq('blueprintRevisionId', f.claim.blueprintRevisionId).eq('objectiveId', f.claim.objectiveId).eq('firstSlotEpoch', f.claim.stratum.epoch)).take(5))
+  expect(registered).toHaveLength(1)
+  const slot = slots.find(slot => slot.firstCheckOpportunityId === registered[0]?._id)!
+  expect(await f.write(f.link(slot))).toBe(3)
+})
+
+test('selects equal-time slots in the indexed delayed-check order', async () => {
+  const f = await fixture()
+  await f.write(f.claim)
+  const second = await f.makeSlot()
+  const first = await f.makeSlot()
+  await f.t.run(async ctx => {
+    await ctx.db.patch(second.firstCheckOpportunityId, { delayedCheckId: 'b' })
+    await ctx.db.patch(first.firstCheckOpportunityId, { delayedCheckId: 'a' })
+  })
+  await expect(f.write(f.link(second))).rejects.toThrow('earliest first slot')
+  expect(await f.write(f.link(first))).toBe(3)
 })
 
 test('owner export omits the new fact payloads and telemetry stays empty', async () => {
