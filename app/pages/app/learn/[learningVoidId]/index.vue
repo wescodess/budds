@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /* eslint-disable @typescript-eslint/no-explicit-any -- session rows are an adapter boundary from the authoritative projection. */
 import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
-import type { LearnMapEdit, LearnScheduleInput, LearnWorkspaceSection } from '~/types/learn-v2-journey'
+import type { LearnScheduleInput, LearnWorkspaceSection } from '~/types/learn-v2-journey'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,7 +12,6 @@ const journey = useLearnV2Journey(id)
 const { allowed, checkingAccess, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults } = journey
 const editingPlan = ref(false)
 const selectedSourceId = ref<string | null>(null)
-function editMap(payload: LearnMapEdit) { void journey.editLearningMap(payload) }
 function generationStatusLabel(status: string) { return ({ queued: 'Queued', leased: 'Preparing', running: 'Generating', awaiting_approval: 'Ready for review', completed: 'Completed', failed: 'Needs attention' } as Record<string, string>)[status] ?? status.replaceAll('_', ' ') }
 async function savePlan(input: LearnScheduleInput) {
   try {
@@ -52,8 +51,7 @@ function nextAction() {
         <UiCard v-if="mission?.currentBlueprint" class="p-4"><p class="text-sm text-muted-foreground">When the accepted evidence is ready, generate an editable capability map.</p><p v-if="generation" class="mt-2 text-sm text-muted-foreground" data-testid="learn-v2-map-generation-status">Map generation: {{ generationStatusLabel(generation.status) }}<template v-if="generation.terminalReason"> · {{ generation.terminalReason.replaceAll('_', ' ') }}</template></p><UiButton class="mt-3" data-testid="learn-v2-generate-map" :disabled="busy || generationIsActive || !mission.sources.counts.accepted" @click="journey.startMapGeneration">{{ generationIsActive ? 'Generating learning map…' : 'Generate learning map' }}</UiButton></UiCard>
       </section>
       <section v-else-if="activeSection === 'map'" class="space-y-5">
-        <LearnV2LearningTrail :objectives="objectives" :sources="sources" :busy="busy" @edit-map="editMap" />
-        <UiButton v-if="snapshot.lifecycle === 'map_review'" data-testid="learn-v2-accept-map" :disabled="busy" @click="journey.acceptLearningMap">Accept learning map</UiButton>
+        <LearnV2LearningTrail :objectives="objectives" :sources="sources" :busy="busy" :can-accept="snapshot.lifecycle === 'map_review'" :save="journey.editLearningMap" @accept="journey.acceptLearningMap" @manage-sources="navigate('sources')" />
       </section>
       <section v-else-if="activeSection === 'plan'" class="space-y-5">
         <LearnV2StudyPlanEditor v-if="!plan || editingPlan" :input="journey.planInput()" :busy="busy" :error="error" :submit-label="plan ? 'Update plan preview' : 'Build plan preview'" @submit="savePlan" @cancel="editingPlan = false" />

@@ -1,4 +1,4 @@
-import type { LearnAssessmentContract, LearnMapEdit } from '~/types/learn-v2-journey'
+import type { LearnMapEdit } from '~/types/learn-v2-journey'
 
 export interface LearnMapCandidate {
   version: 'learn-v2.blueprint-candidate.v1'
@@ -17,7 +17,7 @@ export interface LearnMapCandidate {
     sourceSnapshotIds: string[]
     gapSourceSnapshotIds: string[]
     prerequisiteObjectiveKeys: string[]
-    assessmentContract: LearnAssessmentContract
+    splitFromObjectiveKey?: string
   }>
 }
 
@@ -34,10 +34,6 @@ function clone(candidate: LearnMapCandidate): LearnMapCandidate {
       sourceSnapshotIds: [...objective.sourceSnapshotIds],
       gapSourceSnapshotIds: [...objective.gapSourceSnapshotIds],
       prerequisiteObjectiveKeys: [...objective.prerequisiteObjectiveKeys],
-      assessmentContract: {
-        ...objective.assessmentContract,
-        criteria: objective.assessmentContract.criteria.map(criterion => ({ ...criterion })),
-      },
     })),
   }
 }
@@ -121,6 +117,7 @@ export function applyLearnMapEdit(
     second.title = edit.secondTitle
     second.estimatedMinutes = Math.max(5, Math.floor(second.estimatedMinutes / 2))
     second.prerequisiteObjectiveKeys = [original.key]
+    second.splitFromObjectiveKey = original.splitFromObjectiveKey ?? original.key
     for (const dependant of candidate.objectives) {
       if (dependant.key !== original.key && dependant.prerequisiteObjectiveKeys.includes(original.key)) {
         dependant.prerequisiteObjectiveKeys = dependant.prerequisiteObjectiveKeys.map(key => key === original.key ? secondKey : key)
@@ -133,10 +130,11 @@ export function applyLearnMapEdit(
     const existing = draft.objectiveKey ? candidate.objectives.find(objective => objective.key === draft.objectiveKey) : undefined
     const template = existing ?? candidate.objectives.at(-1)
     if (!template) throw new Error('A generated map is required before adding objectives')
-    const key = existing?.key ?? createObjectiveKey(existingKeys, nextKey)
+    const { splitFromObjectiveKey, ...base } = template
     const updated = {
-      ...template,
-      key,
+      ...base,
+      ...(existing && splitFromObjectiveKey ? { splitFromObjectiveKey } : {}),
+      key: existing?.key ?? createObjectiveKey(existingKeys, nextKey),
       milestoneKey: draft.milestoneKey,
       title: draft.title.trim(),
       capability: draft.capability.trim(),
@@ -147,12 +145,17 @@ export function applyLearnMapEdit(
       sourceSnapshotIds: draft.coverage === 'gap' ? [] : sourceIds(draft.supportingSourceKeys, sourceIdByKey),
       gapSourceSnapshotIds: draft.coverage === 'strong' ? [] : sourceIds(draft.gapSourceKeys, sourceIdByKey),
       prerequisiteObjectiveKeys: [...draft.prerequisiteKeys],
-      assessmentContract: structuredClone(draft.assessmentContract),
     }
-    if (existing) Object.assign(existing, updated)
+    if (existing) candidate.objectives.splice(candidate.objectives.indexOf(existing), 1, updated)
     else {
       if (candidate.objectives.length >= 15) throw new Error('This map already has the maximum of 15 objectives')
-      candidate.objectives.push(updated)
+      const lastInMilestone = candidate.objectives.findLastIndex(objective => objective.milestoneKey === updated.milestoneKey)
+      candidate.objectives.splice(lastInMilestone < 0 ? candidate.objectives.length : lastInMilestone + 1, 0, updated)
+    }
+    if (edit.order) {
+      const position = new Map(edit.order.map((key, index) => [key, index]))
+      if (position.size !== candidate.objectives.length || candidate.objectives.some(objective => !position.has(objective.key))) throw new Error('Objective is no longer in this map')
+      candidate.objectives.sort((a, b) => position.get(a.key)! - position.get(b.key)!)
     }
   }
 

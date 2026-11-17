@@ -128,14 +128,15 @@ describe('GET /api/export/me', () => {
     await f.owner.mutation(api.documents.deleteDocument, { id: f.documentId })
     await f.t.finishAllScheduledFunctions(vi.runAllTimers)
     const mission = await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoidId })
-    const assessmentContract = mission!.map!.objectives[0]!.assessmentContract
-    expect(assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    expect(mission!.map!.objectives[0]).not.toHaveProperty('assessmentContract')
     const candidate = { version: 'learn-v2.blueprint-candidate.v1' as const, generatorVersion: 'map-editor.v1',
       milestones: [0, 1, 2].map(order => ({ key: `stage-${order}`, order, title: `Stage ${order}` })),
       objectives: [0, 1, 2, 3, 4, 5].map(order => ({ key: `objective-${order}`, milestoneKey: `stage-${Math.floor(order / 2)}`,
         order, title: 'Retained objective', capability: 'Apply the rule', estimatedMinutes: 25, depth: 'working' as const,
-        coverage: 'gap' as const, sourceSnapshotIds: [], gapSourceSnapshotIds: [], prerequisiteObjectiveKeys: [], assessmentContract })) }
-    expect(() => applyLearnMapEdit(candidate, { kind: 'move_objective', objectiveKey: 'objective-0', direction: 'down' }, {})).not.toThrow()
+        coverage: 'gap' as const, sourceSnapshotIds: [], gapSourceSnapshotIds: [], prerequisiteObjectiveKeys: [] })) }
+    const edited = applyLearnMapEdit(candidate, { kind: 'move_objective', objectiveKey: 'objective-0', direction: 'down' }, {})
+    expect(edited.objectives.map(objective => objective.key).slice(0, 2)).toEqual(['objective-1', 'objective-0'])
+    expect(edited.objectives.every(objective => !('assessmentContract' in objective))).toBe(true)
   })
 
   test('ZIP resumes the same cursor after unrelated content invalidates authorization without losing or repeating entries', async () => {
