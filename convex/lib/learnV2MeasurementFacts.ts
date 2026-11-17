@@ -110,9 +110,14 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
 }
 
 const FIRST_CLAIM_IDENTITY_LIMIT = 2
+const FIRST_CLAIM_LEGACY_LIMIT = 64
 
 async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoch: string,
   candidate: LearnReportIndependentClaimV2, claimFactId?: Id<'learnMeasurementReportFacts'>) {
+  const legacy = await ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_epoch_and_fact_kind', q => q.eq('userId', userId).eq('epoch', epoch).eq('fact.kind', 'independent_claim'))
+    .take(FIRST_CLAIM_LEGACY_LIMIT + 1)
+  if (legacy.length > FIRST_CLAIM_LEGACY_LIMIT) throw new Error('Learn frozen legacy claim inventory exceeds its bound')
   const opportunityId = candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null
   const proposed: LearnReportFirstClaimIdentity = { owner: userId, capability: JSON.stringify([candidate.blueprintRevisionId, candidate.objectiveId]),
     epoch: candidate.stratum.epoch, snapshot: 'candidate', claimKey: candidate.claimKey, basisAttemptId: candidate.basisAttemptId,
@@ -163,19 +168,7 @@ async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoc
       q => q.eq('fact.slot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
   ])
   for (const rows of groups) await check(rows)
-  // Legacy capability comes from its opportunity, or its basis when the opportunity is unavailable.
-  for await (const opportunity of ctx.db.query('learnAssessmentOpportunities')
-    .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
-      .eq('blueprintRevisionId', candidate.blueprintRevisionId).eq('objectiveId', candidate.objectiveId))) {
-    await check(await ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstCheckOpportunityId',
-      q => q.eq('fact.firstCheckOpportunityId', opportunity._id)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
-  }
-  for await (const basis of ctx.db.query('masteryAttempts')
-    .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId)
-      .eq('blueprintRevisionId', candidate.blueprintRevisionId).eq('objectiveId', candidate.objectiveId))) {
-    await check(await ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId',
-      q => q.eq('fact.basisAttemptId', basis._id)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
-  }
+  for (const row of legacy) await check([row])
 }
 
 async function readFirstClaimIdentity(ctx: MutationCtx, row: Doc<'learnMeasurementReportFacts'>,

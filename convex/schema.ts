@@ -1830,7 +1830,6 @@ export default defineSchema({
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
     .index('by_userId', ['userId'])
-    .index('by_userId_and_blueprintRevisionId_and_objectiveId', ['userId', 'blueprintRevisionId', 'objectiveId'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])

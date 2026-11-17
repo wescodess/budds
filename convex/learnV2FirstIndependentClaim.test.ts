@@ -97,6 +97,24 @@ function claimBasis(claim: LearnReportIndependentClaimV2) {
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>
 type ReportKeys = Fixture['f']['reportKeys']
+async function writeMeasured(f: Fixture, fact: Infer<typeof appendArgs>['fact']) {
+  return await f.t.run(async ctx => {
+    let factQueries = 0
+    let queries = 0
+    const db = new Proxy(ctx.db, { get(target, property) {
+      const value: unknown = Reflect.get(target, property)
+      if (property !== 'query' || typeof value !== 'function') return typeof value === 'function' ? value.bind(target) : value
+      return (...args: unknown[]) => {
+        queries++
+        if (args[0] === 'learnMeasurementReportFacts') factQueries++
+        return Reflect.apply(value, target, args)
+      }
+    } })
+    const sequence = await appendLearnMeasurementFact({ ...ctx, db }, OWNER.tokenIdentifier,
+      { learningVoidId: f.f.learningVoidId, epoch: f.claim.stratum.epoch, occurredAt: NOW, fact: learnReportFactPayloadSchema.parse(fact) })
+    return { sequence, factQueries, queries }
+  })
+}
 function legacyClaim(f: Fixture, slot: LearnReportLinkedFirstSlot, overrides: {
   claimKey?: string, claimSequence?: number, basisAttemptId?: Id<'masteryAttempts'>, epoch?: string,
 } = {}) {
@@ -114,6 +132,37 @@ async function seedLegacyClaim(f: Fixture, fact: ReturnType<typeof legacyClaim>,
     await ctx.db.patch(watermark._id, { sequence, updatedAt: NOW })
     return { ...fact, claimFactSequence: sequence }
   })
+}
+async function seedLegacyInventory(f: Fixture, count: number, epoch = f.claim.stratum.epoch) {
+  const slot = await f.makeSlot()
+  await f.t.run(async ctx => {
+    const { _id: _voidId, _creationTime: _voidTime, ...voidFields } = (await ctx.db.get(f.f.learningVoidId))!
+    const { _id: _blueprintId, _creationTime: _blueprintTime, ...blueprintFields } = (await ctx.db.get(f.claim.blueprintRevisionId))!
+    const { _id: _basisId, _creationTime: _basisTime, ...basisFields } = (await ctx.db.get(f.basisAttemptId))!
+    const { _id: _slotId, _creationTime: _slotTime, ...slotFields } = (await ctx.db.get(slot.firstCheckOpportunityId))!
+    const watermark = (await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())!
+    let learningVoidId = f.f.learningVoidId
+    let blueprintRevisionId = f.claim.blueprintRevisionId
+    for (let index = 0; index < count; index++) {
+      if (index % 15 === 0) {
+        learningVoidId = await ctx.db.insert('learningVoids', voidFields)
+        blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { ...blueprintFields, learningVoidId })
+        await ctx.db.patch(learningVoidId, { activeBlueprintRevisionId: blueprintRevisionId })
+      }
+      const objectiveId = await ctx.db.insert('learnObjectives', { userId: OWNER.tokenIdentifier, blueprintRevisionId,
+        order: index % 15, title: `Legacy capability ${index}` })
+      const basisAttemptId = await ctx.db.insert('masteryAttempts', { ...basisFields, blueprintRevisionId, objectiveId, idempotencyKey: `legacy-basis-${index}` })
+      const firstCheckOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...slotFields, learningVoidId, blueprintRevisionId, objectiveId,
+        delayedCheckId: `legacy-slot-${index}`, purpose: { kind: 'retained_transfer', basisAttemptId, clock: { ...slot.clock, anchorEventId: basisAttemptId } } })
+      const sequence = watermark.sequence + index + 1
+      await ctx.db.insert('learnMeasurementReportFacts', { userId: OWNER.tokenIdentifier, learningVoidId,
+        storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: NOW, occurredAt: NOW,
+        factVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, sequence, epoch,
+        fact: { ...legacyClaim(f, { ...slot, firstCheckOpportunityId }, { claimKey: `legacy-${index}`, basisAttemptId, epoch }), claimFactSequence: sequence } })
+    }
+    await ctx.db.patch(watermark._id, { sequence: watermark.sequence + count, updatedAt: NOW })
+  })
+  return slot
 }
 function reportClaim(f: Fixture, input: unknown, clock: LearnReportLinkedFirstSlot['clock'], keys: ReportKeys = f.f.reportKeys) {
   const fact = learnReportFactPayloadSchema.parse(input)
@@ -293,6 +342,50 @@ test('claim-key uniqueness matches cross-owner reconciliation', async () => {
     FOREIGN.tokenIdentifier, foreign.learningVoidId)
   await expect(f.write(f.claim)).rejects.toThrow('already recorded: duplicate_claim_key')
   expect(claimRows(await f.facts())).toEqual([])
+})
+
+test.each([0, 4_100])('keeps append queries constant with %d historical attempts', async count => {
+  const f = await fixture()
+  await f.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(f.basisAttemptId))!
+    for (let index = 0; index < count; index++) await ctx.db.insert('masteryAttempts', { ...fields,
+      attemptedAt: NOW - (index + 1) * 86_400_000, acceptedAt: NOW - (index + 1) * 86_400_000, idempotencyKey: `history-${index}` })
+  })
+  expect(await writeMeasured(f, f.claim)).toEqual({ sequence: 2, factQueries: 4, queries: 5 })
+  expect(await writeMeasured(f, f.link(await f.makeSlot()))).toEqual({ sequence: 3, factQueries: 8, queries: 13 })
+}, 30_000)
+
+test('bounds queries for an initially linked claim', async () => {
+  const f = await fixture()
+  expect(await writeMeasured(f, { ...f.claim, firstSlot: await f.makeSlot() })).toEqual({ sequence: 2, factQueries: 7, queries: 12 })
+})
+
+test.each(['unresolved', 'linked'] as const)('refuses an over-cap frozen legacy owner before a first %s claim', async kind => {
+  const f = await fixture()
+  const slot = await seedLegacyInventory(f, 65)
+  const before = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_sequence', q => q.eq('userId', OWNER.tokenIdentifier)).take(70))
+  const candidate = { ...f.claim, claimFactSequence: 67, ...(kind === 'linked' ? { firstSlot: slot } : {}) }
+  await expect(f.write(candidate)).rejects.toThrow('frozen legacy claim inventory exceeds its bound')
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_sequence', q => q.eq('userId', OWNER.tokenIdentifier)).take(70))).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique()))
+    .toMatchObject({ sequence: 66 })
+})
+
+test('links at the frozen legacy cap while new legacy appends remain closed', async () => {
+  const f = await fixture()
+  const slot = await seedLegacyInventory(f, 64)
+  expect(await writeMeasured(f, { ...f.claim, claimFactSequence: 66 })).toEqual({ sequence: 66, factQueries: 4, queries: 5 })
+  await expect(f.write(legacyClaim(f, slot, { claimKey: 'new-legacy' }))).rejects.toThrow('legacy Independent claims are read-only')
+  expect(await writeMeasured(f, { ...f.link(slot), claimFactSequence: 66 })).toEqual({ sequence: 67, factQueries: 8, queries: 13 })
+})
+
+test('scopes the frozen legacy cap to the owner epoch', async () => {
+  const f = await fixture()
+  const slot = await seedLegacyInventory(f, 65, 'previous-epoch')
+  expect(await writeMeasured(f, { ...f.claim, claimFactSequence: 67 })).toEqual({ sequence: 67, factQueries: 4, queries: 5 })
+  expect(await writeMeasured(f, { ...f.link(slot), claimFactSequence: 67 })).toEqual({ sequence: 68, factQueries: 8, queries: 13 })
 })
 
 test('links an early claim after more than 256 primary claims across capabilities and Voids', async () => {
