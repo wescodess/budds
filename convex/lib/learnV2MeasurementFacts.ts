@@ -109,33 +109,72 @@ async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, va
   if (claim.firstSlot.kind === 'linked') await validateFirstSlot(ctx, userId, claim, claim.firstSlot, learningVoidId)
 }
 
-const FIRST_CLAIM_FACT_KINDS = ['independent_claim', 'independent_claim_v2', 'first_slot_link'] as const
-const FIRST_CLAIM_INVENTORY_LIMIT = 256
+const FIRST_CLAIM_IDENTITY_LIMIT = 2
 
-// Reads every claim this append could collide with, so concurrent appends conflict and nothing persisted fails reconciliation later.
 async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoch: string,
   candidate: LearnReportIndependentClaimV2, claimFactId?: Id<'learnMeasurementReportFacts'>) {
-  const [scoped, sameKey, sameBasis] = await Promise.all([
-    Promise.all(FIRST_CLAIM_FACT_KINDS.map(kind => ctx.db.query('learnMeasurementReportFacts')
-      .withIndex('by_userId_and_epoch_and_fact_kind', q => q.eq('userId', userId).eq('epoch', epoch).eq('fact.kind', kind))
-      .take(FIRST_CLAIM_INVENTORY_LIMIT + 1))),
-    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', candidate.claimKey)).take(4),
-    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', candidate.basisAttemptId)).take(4),
-  ])
-  if (scoped.some(rows => rows.length > FIRST_CLAIM_INVENTORY_LIMIT)) throw new Error('Learn first Independent claim inventory exceeds its bound')
-  const rows = new Map([...scoped.flat(), ...sameKey, ...sameBasis].map(row => [row._id, row]))
-  const links = new Map<string, string>()
-  for (const row of rows.values()) {
-    if (row.fact.kind === 'first_slot_link') links.set(JSON.stringify([row.userId, row.fact.claimKey]), row.fact.slot.firstCheckOpportunityId)
-  }
+  const opportunityId = candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null
   const proposed: LearnReportFirstClaimIdentity = { owner: userId, capability: JSON.stringify([candidate.blueprintRevisionId, candidate.objectiveId]),
     epoch: candidate.stratum.epoch, snapshot: 'candidate', claimKey: candidate.claimKey, basisAttemptId: candidate.basisAttemptId,
-    firstCheckOpportunityId: candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null }
-  for (const row of rows.values()) {
-    if (row._id === claimFactId) continue
-    const existing = await readFirstClaimIdentity(ctx, row, links)
-    const reasons = existing ? reconcileLearnReportFirstClaims([existing, proposed]) : new Set<string>()
-    if (reasons.size) throw new Error(`Learn first Independent claim already recorded: ${[...reasons].sort().join(', ')}`)
+    firstCheckOpportunityId: opportunityId }
+  const checked = new Set<Id<'learnMeasurementReportFacts'>>()
+  function bounded(rows: Doc<'learnMeasurementReportFacts'>[]) {
+    if (rows.length > FIRST_CLAIM_IDENTITY_LIMIT) throw new Error('Learn first Independent claim identity exceeds its bound')
+    return rows
+  }
+  async function byKey(key: string) {
+    return bounded(await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', key)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
+  }
+  async function check(rows: Doc<'learnMeasurementReportFacts'>[]): Promise<void> {
+    for (const row of bounded(rows)) {
+      if (row._id === claimFactId || checked.has(row._id)) continue
+      checked.add(row._id)
+      if (row.fact.kind === 'first_slot_link') {
+        const fact = row.fact
+        const parent = (await byKey(fact.claimKey)).find(value => value.fact.kind === 'independent_claim_v2')
+        if (!parent || parent.fact.kind !== 'independent_claim_v2' || parent.userId !== row.userId
+          || parent.sequence !== fact.claimFactSequence || parent.fact.claimSequence !== fact.claimSequence) throw new Error('Learn first slot claim unavailable')
+        await check([parent])
+        continue
+      }
+      const links = new Map<string, string>()
+      if (row.fact.kind === 'independent_claim_v2' && row.fact.firstSlot.kind === 'unresolved') {
+        for (const value of await byKey(row.fact.claimKey)) {
+          if (value.fact.kind === 'first_slot_link') links.set(JSON.stringify([value.userId, value.fact.claimKey]), value.fact.slot.firstCheckOpportunityId)
+        }
+      }
+      const existing = await readFirstClaimIdentity(ctx, row, links)
+      const reasons = existing ? reconcileLearnReportFirstClaims([existing, proposed]) : new Set<string>()
+      if (reasons.size) throw new Error(`Learn first Independent claim already recorded: ${[...reasons].sort().join(', ')}`)
+    }
+  }
+  const groups = await Promise.all([
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_blueprintRevisionId_objectiveId_stratum_epoch',
+      q => q.eq('userId', userId).eq('fact.blueprintRevisionId', candidate.blueprintRevisionId)
+        .eq('fact.objectiveId', candidate.objectiveId).eq('fact.stratum.epoch', epoch)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1),
+    byKey(candidate.claimKey),
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', candidate.basisAttemptId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1),
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstCheckOpportunityId',
+      q => q.eq('fact.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstSlot_firstCheckOpportunityId',
+      q => q.eq('fact.firstSlot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_slot_firstCheckOpportunityId',
+      q => q.eq('fact.slot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+  ])
+  for (const rows of groups) await check(rows)
+  // Legacy capability comes from its opportunity, or its basis when the opportunity is unavailable.
+  for await (const opportunity of ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId)
+      .eq('blueprintRevisionId', candidate.blueprintRevisionId).eq('objectiveId', candidate.objectiveId))) {
+    await check(await ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstCheckOpportunityId',
+      q => q.eq('fact.firstCheckOpportunityId', opportunity._id)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
+  }
+  for await (const basis of ctx.db.query('masteryAttempts')
+    .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', userId)
+      .eq('blueprintRevisionId', candidate.blueprintRevisionId).eq('objectiveId', candidate.objectiveId))) {
+    await check(await ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId',
+      q => q.eq('fact.basisAttemptId', basis._id)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
   }
 }
 

@@ -1,5 +1,5 @@
 import { deriveMastery } from './learn-v2-mastery'
-import { LEARN_MEASUREMENT_STORAGE_MANIFEST } from './learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_STORAGE_MANIFEST, learnMeasurementIndexName } from './learn-v2-measurement-storage-manifest'
 
 export type ContractIndex = {
   name: string
@@ -191,7 +191,7 @@ export type LearnV2Contract = {
 }
 
 const index = (...fields: string[]): ContractIndex => ({
-  name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`,
+  name: learnMeasurementIndexName(fields),
   fields,
 })
 
@@ -425,7 +425,7 @@ export const LEARN_V2_CONTRACT: LearnV2Contract = {
       table('learnJobs', 'Typed, leased, checkpointed, bounded V2 jobs.', 'operational_job', [index('userId', 'idempotencyKey'), index('userId', 'status', 'leaseExpiresAt'), index('type', 'status', 'leaseExpiresAt'), index('userId', 'learningVoidId', 'type'), index('userId', 'blueprintRevisionId', 'type', 'status'), index('userId', 'assessmentOpportunityId')], 'learningVoidId'),
       ...LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => table(
         entry.table, 'Inactive Phase C storage; bounded owner enumeration and explicit private payload policy.',
-        entry.retention, entry.indexes.map(fields => ({ name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields] })),
+        entry.retention, entry.indexes.map(fields => ({ name: learnMeasurementIndexName(fields), fields: [...fields] })),
         'parentField' in entry ? entry.parentField : undefined,
       )),
     ],
@@ -814,7 +814,7 @@ export function validateLearnV2Contract(contract: LearnV2Contract): string[] {
     if (contractTable.queryMode !== 'bounded') violations.push(`persistence.${contractTable.name}.queryMode must be bounded`)
     if (!contract.persistence.retentionClasses[contractTable.retentionClass]) violations.push(`persistence.${contractTable.name} has unknown retention class`)
     for (const contractIndex of contractTable.indexes) {
-      const expectedName = `by_${contractIndex.fields.map(field => field.replaceAll('.', '_')).join('_and_')}`
+      const expectedName = learnMeasurementIndexName(contractIndex.fields)
       if (contractIndex.name !== expectedName) violations.push(`persistence.${contractTable.name}.${contractIndex.name} must be named ${expectedName}`)
     }
   }
