@@ -296,6 +296,43 @@ test.each(['day_7', 'day_30', 'no_redundant_horizon'] as const)('accepts a canon
   expect(await f.write(f.link(slot))).toBe(3)
 })
 
+test.each(([
+  { purpose: 'measurement_delayed', pins: 'session_application' },
+  { purpose: 'measurement_delayed', pins: 'calibration' },
+  { purpose: 'retained_transfer', pins: 'measurement' },
+] as const).flatMap(pair => (['link', 'initial_claim', 'later_candidate'] as const).map(mode => ({ ...pair, mode }))))(
+  'rejects incompatible candidate pins: $purpose / $pins / $mode', async ({ purpose, pins, mode }) => {
+    const f = await fixture()
+    if (mode !== 'initial_claim') await f.write(f.claim)
+    const invalid = await f.makeSlot(pins === 'measurement' ? 'measurement_delayed' : 'retained_transfer')
+    await f.t.run(async ctx => {
+      const row = (await ctx.db.get(invalid.firstCheckOpportunityId))!
+      await ctx.db.patch(row._id, {
+        purpose: purpose === 'measurement_delayed'
+          ? { kind: purpose, assignmentId: f.f.rows.learnMeasurementAssignments, horizonDays: 7, clock: f.clock }
+          : { kind: purpose, basisAttemptId: f.basisAttemptId, clock: f.clock },
+        assignmentId: purpose === 'measurement_delayed' ? f.f.rows.learnMeasurementAssignments : undefined,
+        horizonDays: 7,
+        ...(pins === 'calibration' ? { assessmentPins: { kind: pins, caseId: f.f.itemPins.caseId, promptDigest: HASH,
+          assessmentContractVersion: row.assessmentContractVersion, assessmentContractDigest: row.assessmentContractDigest,
+          supportManifestDigest: HASH } } : {}),
+      })
+    })
+    const before = await f.facts()
+    if (mode === 'later_candidate') {
+      const valid = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + 1_000 })
+      expect(await f.write(f.link(valid))).toBe(3)
+      const rows = await f.facts()
+      expect(resolveLearnReportFirstSlotV2(envelope(rows[1]!), envelope(rows[2]!)).firstSlot).toEqual(valid)
+    }
+    else {
+      await expect(f.write(mode === 'initial_claim' ? { ...f.claim, firstSlot: invalid } : f.link(invalid))).rejects.toThrow('earliest first slot')
+      expect(await f.facts()).toEqual(before)
+      expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').unique())).toMatchObject({ sequence: before.length })
+    }
+  },
+)
+
 test.each(['flow', 'entry_point', 'baseline', 'depth'] as const)('selects the earliest slot using each candidate\'s actual %s', async mismatch => {
   const f = await fixture()
   await f.write(f.claim)

@@ -12,7 +12,7 @@ import {
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, parseLearnContract } from '../../shared/learn-v2-responses'
 import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
-import { learnAssessmentPurposeSchema } from '../../shared/learn-v2-delayed-check'
+import { learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins } from '../../shared/learn-v2-delayed-check'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
 
@@ -147,6 +147,7 @@ async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: Lea
   const parsedPurpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
   if (!parsedPurpose.success || !('clock' in parsedPurpose.data)) return null
   const purpose = parsedPurpose.data
+  if (!doesLearnAssessmentPurposeMatchPins(purpose, row.assessmentPins)) return null
   const clock = purpose.clock
   const binding = learnScorerBindingSchema.safeParse(row.scoringBinding)
   if (!binding.success || row.openAt !== clock.openAt || row.closeAt !== clock.closeAt || row.dueAt !== clock.dueAt
