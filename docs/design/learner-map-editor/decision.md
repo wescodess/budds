@@ -15,6 +15,7 @@ Spec: [#515](https://github.com/wescodess/budds/issues/515). Blocks C4: [#514](h
 
 - Round 1: `recommended answers` (Outline, with the orchestrator's recommended side effects).
 - Round 2: `reccommended answers` (3b).
+- States 3b does not draw follow 3a, with Accept only in the bar: `Yes, follow 3a (Recommended)`.
 
 **Date:** 2026-11-17
 
