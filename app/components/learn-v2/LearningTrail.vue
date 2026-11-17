@@ -457,7 +457,7 @@ function closeOrder() {
                     <div class="mt-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border pt-3">
                       <p role="status" class="flex min-w-0 flex-1 basis-52 items-start gap-2 text-sm text-foreground" data-testid="learn-v2-objective-status">
                         <CircleDot v-if="mode === 'dirty'" class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" />
-                        <LoaderCircle v-else-if="mode === 'saving'" class="mt-0.5 size-4 shrink-0 animate-spin text-foreground motion-reduce:animate-none" />
+                        <LoaderCircle v-else-if="mode === 'saving'" class="mt-0.5 size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
                         <CircleAlert v-else-if="mode === 'failed'" class="mt-0.5 size-4 shrink-0 text-destructive" />
                         <span class="min-w-0">{{ statusText }}</span>
                       </p>

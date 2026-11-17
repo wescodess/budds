@@ -3,6 +3,7 @@ import { nextTick, onMounted, ref } from 'vue'
 import type { LearnMapSaveResult, LearnObjectiveSnapshot, LearnSourceSnapshot } from '~/types/learn-v2-journey'
 
 definePageMeta({ layout: false })
+useHead({ title: 'Learning map fixture', htmlAttrs: { lang: 'en' } })
 
 // Static, synthetic map fixtures for design captures. They are not learner data.
 // The production map editor and workspace shell render unchanged.
