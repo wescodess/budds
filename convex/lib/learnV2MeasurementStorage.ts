@@ -227,7 +227,6 @@ const purpose = v.union(
 )
 export const assessmentOpportunityFields = {
   ...base, ...v2Scope, ...evidenceState, delayedCheckId: v.string(), purpose, assessmentPins, scoringBinding,
-  firstSlotEpoch: v.optional(v.string()),
   assignmentId: v.optional(v.id('learnMeasurementAssignments')), horizonDays: v.optional(horizon),
   phase: v.union(v.literal('preparing'), v.literal('ready'), v.literal('test_open'), v.literal('submitted_sealed'), v.literal('scoring_pending'), v.literal('scored_pass'), v.literal('scored_fail'), v.literal('retryable_failure'), v.literal('reconciliation_required'), v.literal('invalid'), v.literal('cancelled'), v.literal('abandoned')),
   revision: v.number(), eligibilityPolicyVersion: v.string(), operationalEligibility: v.union(v.literal('pending'), v.literal('eligible'), v.literal('blocked')),

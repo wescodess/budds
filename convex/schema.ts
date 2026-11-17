@@ -1830,7 +1830,6 @@ export default defineSchema({
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
     .index('by_userId', ['userId'])
-    .index('by_user_blueprintRevId_objectiveId_firstSlotEpoch_openAt_checkId', ['userId', 'blueprintRevisionId', 'objectiveId', 'firstSlotEpoch', 'openAt', 'delayedCheckId'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])
@@ -1889,7 +1888,7 @@ export default defineSchema({
     .index('by_userId_and_fact_submissionId', ['userId', 'fact.submissionId'])
     .index('by_fact_claimKey', ['fact.claimKey'])
     .index('by_fact_basisAttemptId', ['fact.basisAttemptId'])
-    .index('by_userId_blueprintRevisionId_objectiveId_stratum_epoch', ['userId', 'fact.blueprintRevisionId', 'fact.objectiveId', 'fact.stratum.epoch'])
+    .index('by_userId_and_fact_objectiveId_and_fact_stratum_epoch', ['userId', 'fact.objectiveId', 'fact.stratum.epoch'])
     .index('by_fact_firstCheckOpportunityId', ['fact.firstCheckOpportunityId'])
     .index('by_fact_firstSlot_firstCheckOpportunityId', ['fact.firstSlot.firstCheckOpportunityId'])
     .index('by_fact_slot_firstCheckOpportunityId', ['fact.slot.firstCheckOpportunityId'])

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
-import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, learnMeasurementIndexName, type LearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, type LearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from './lib/learnV2MeasurementRetention'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import type { Doc, Id } from './_generated/dataModel'
@@ -237,7 +237,7 @@ describe('inactive Phase C storage boundaries', () => {
     for (const entry of LEARN_MEASUREMENT_STORAGE_MANIFEST) {
       const definition = schema.tables[entry.table] as unknown as { export(): { indexes: Array<{ indexDescriptor: string, fields: string[] }> } }
       const actual = definition.export().indexes.map(item => ({ name: item.indexDescriptor, fields: item.fields }))
-      const expected = [['userId'], ...entry.indexes].map(fields => ({ name: learnMeasurementIndexName(fields), fields: [...fields] }))
+      const expected = [['userId'], ...entry.indexes].map(fields => ({ name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields] }))
       const sort = (indexes: typeof expected) => [...indexes].sort((left, right) => left.name.localeCompare(right.name))
       expect(sort(actual), entry.table).toEqual(sort(expected))
       expect(sort(LEARN_V2_CONTRACT.persistence.tables.find(table => table.name === entry.table)!.indexes)).toEqual(sort(expected))
@@ -291,14 +291,14 @@ describe('inactive Phase C storage boundaries', () => {
       const contract = LEARN_V2_CONTRACT.persistence.tables.find(table => table.name === entry.table)
       expect(contract?.retentionClass).toBe(entry.retention)
       const registered = [['userId'], ...entry.indexes].map(fields => ({
-        name: learnMeasurementIndexName(fields), fields: [...fields],
+        name: `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`, fields: [...fields],
       })).sort((a, b) => a.name.localeCompare(b.name))
       const declared = schema.tables[entry.table][' indexes']().map(index => ({ name: index.indexDescriptor, fields: index.fields }))
         .sort((a, b) => a.name.localeCompare(b.name))
       expect(registered, `${entry.table} index registry`).toEqual(declared)
       expect([...contract!.indexes].sort((a, b) => a.name.localeCompare(b.name)), `${entry.table} index matrix`).toEqual(declared)
       for (const fields of [['userId'], ...entry.indexes]) {
-        const name = learnMeasurementIndexName(fields)
+        const name = `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`
         const rows = await t.run(ctx => ctx.db.query(entry.table).withIndex(name as never).take(8))
         expect(rows.some(row => row._id === f.rows[entry.table]), `${entry.table}.${name}`).toBe(true)
       }
