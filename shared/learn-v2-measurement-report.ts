@@ -4,7 +4,7 @@ import {
   learnRevisionSchema, learnScoreSchema, learnObservationSchema, learnReasonCodesSchema, learnTimezoneSchema,
   learnAssistanceSnapshotSchema, learnValiditySnapshotSchema, parseLearnContract,
 } from './learn-v2-responses'
-import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema } from './learn-v2-delayed-check'
+import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema, isLearnRetainedPromotionTimeEligible } from './learn-v2-delayed-check'
 import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistoryStatusSchema, learnFamilyStatusSchema, learnMeasurementHorizonSchema, LEARN_V2_FORM_ORDERS } from './learn-v2-measurement'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
@@ -271,6 +271,44 @@ export function reconcileLearnReportSourceRows(roster: readonly string[], rows: 
   if (roster.some(owner => !watermarks.has(owner))) reasons.add('missing_owner_watermark')
   return { status: reasons.size ? 'incomplete' as const : 'complete' as const, reasonCodes: [...reasons].sort() }
 }
+export const LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION = 'learn-v2.first-independent-claim.v2' as const
+const claimStratum = z.strictObject({
+  epoch: learnVersionSchema, baselineSha: z.string().regex(/^[a-f0-9]{40}$/), cohortVersion: learnVersionSchema,
+  flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
+})
+export const learnReportLinkedFirstSlotSchema = z.strictObject({
+  kind: z.literal('linked'), firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
+  checkSequence: z.literal(1), linkedAt: learnTimestampSchema, clock: learnAssessmentClockSchema,
+  stratum: learnReportFirstSlotStratumSchema,
+}).refine(value => value.linkedAt < value.clock.closeAt, 'First slot must be linked before its window closes')
+export const learnReportFirstSlotSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('unresolved'), reason: learnCodeSchema }), learnReportLinkedFirstSlotSchema,
+])
+export const learnReportIndependentClaimV2Schema = learnFirstCheckClaimSchema.safeExtend({
+  kind: z.literal('independent_claim_v2'), version: z.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
+  claimSequence: z.literal(1),
+  blueprintRevisionId: learnIdSchema<'learnBlueprintRevisions'>(), objectiveId: learnIdSchema<'learnObjectives'>(),
+  stratum: claimStratum,
+  policyPins: z.strictObject({ assistancePolicyVersion: learnVersionSchema, validityPolicyVersion: learnVersionSchema,
+    thresholdVersion: learnVersionSchema, thresholdPercent: z.literal(80) }),
+  firstSlot: learnReportFirstSlotSchema,
+}).refine(value => value.firstSlot.kind === 'unresolved' || qualifiesLearnReportFirstSlot(value, value.firstSlot), 'First slot must qualify for its Independent claim')
+export const learnReportFirstSlotLinkSchema = z.strictObject({
+  kind: z.literal('first_slot_link'), version: z.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
+  claimKey: learnVersionSchema, claimSequence: z.literal(1), claimFactSequence: learnRevisionSchema,
+  slot: learnReportLinkedFirstSlotSchema,
+})
+export type LearnReportIndependentClaimV2 = z.infer<typeof learnReportIndependentClaimV2Schema>
+export type LearnReportLinkedFirstSlot = z.infer<typeof learnReportLinkedFirstSlotSchema>
+export function qualifiesLearnReportFirstSlot(
+  claim: { firstIndependentAt: number, firstIndependentLocalDate: string, firstIndependentTimezone: string, stratum: z.infer<typeof claimStratum> },
+  slot: z.infer<typeof learnReportLinkedFirstSlotSchema>,
+): boolean {
+  return slot.linkedAt >= claim.firstIndependentAt && slot.clock.openAt >= claim.firstIndependentAt
+    && isLearnRetainedPromotionTimeEligible({ previousState: 'independent', acceptedAt: slot.clock.openAt,
+      firstIndependentLocalDate: claim.firstIndependentLocalDate, firstIndependentTimezone: claim.firstIndependentTimezone })
+    && Object.keys(claim.stratum).every(key => claim.stratum[key as keyof typeof claim.stratum] === slot.stratum[key as keyof typeof claim.stratum])
+}
 export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('enrollment'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), recordRevision: learnRevisionSchema,
     status: z.enum(['considered', 'not_admitted', 'admitted']), snapshot: learnReportAssignmentSnapshotSchema })
@@ -283,6 +321,7 @@ export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
     executionId: learnIdSchema<'learnScoringExecutions'>(), scorePercent: learnScoreSchema, scoreCommittedAt: learnTimestampSchema, snapshot: learnReportResultSnapshotSchema }),
   z.strictObject({ kind: z.literal('independent_claim'), ...learnFirstCheckClaimSchema.shape,
     firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), checkSequence: learnRevisionSchema, stratum: learnReportFirstSlotStratumSchema }),
+  learnReportIndependentClaimV2Schema, learnReportFirstSlotLinkSchema,
   z.strictObject({ kind: z.literal('integrity'), submissionId: learnIdSchema<'learnResponses'>(), integrityEventId: learnIdSchema<'learnResponseIntegrityEvents'>(),
     currentEligibility: z.enum(['eligible', 'excluded', 'unknown']), evidenceAvailable: z.boolean(), bodyAvailability: z.enum(['available', 'purged']) }),
 ])
@@ -290,6 +329,21 @@ export const learnReportFactSchema = z.strictObject({
   factVersion: z.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), sequence: learnRevisionSchema,
   epoch: learnVersionSchema, occurredAt: learnTimestampSchema, fact: learnReportFactPayloadSchema,
 })
+export function resolveLearnReportFirstSlotV2(claimInput: unknown, linkInput: unknown = null) {
+  const claimFact = parseLearnContract(learnReportFactSchema, claimInput)
+  const claim = claimFact.fact
+  if (claim.kind !== 'independent_claim_v2' || claim.claimFactSequence !== claimFact.sequence
+    || claim.stratum.epoch !== claimFact.epoch || claimFact.occurredAt < claim.firstIndependentAt) throw new Error('Invalid Independent claim fact')
+  if (claim.firstSlot.kind === 'linked' && claim.firstSlot.linkedAt !== claimFact.occurredAt) throw new Error('Invalid first-slot link time')
+  if (linkInput === null) return claim
+  const linkFact = parseLearnContract(learnReportFactSchema, linkInput)
+  const link = linkFact.fact
+  if (claim.firstSlot.kind !== 'unresolved' || link.kind !== 'first_slot_link'
+    || link.claimKey !== claim.claimKey || link.claimSequence !== claim.claimSequence || link.claimFactSequence !== claimFact.sequence
+    || linkFact.epoch !== claimFact.epoch || linkFact.sequence <= claimFact.sequence || linkFact.occurredAt !== link.slot.linkedAt
+    || link.slot.linkedAt < claimFact.occurredAt || !qualifiesLearnReportFirstSlot(claim, link.slot)) throw new Error('Invalid first-slot link fact')
+  return { ...claim, firstSlot: link.slot }
+}
 export const learnReportSourceWatermarkSchema = z.strictObject({
   sourceVersion: z.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), sequence: learnSequenceSchema,
   dueWorkThrough: learnTimestampSchema.nullable(), historyCoverage: sourceCoverage, updatedAt: learnTimestampSchema,

@@ -1,5 +1,5 @@
 import { v } from 'convex/values'
-import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../shared/learn-v2-measurement-report'
+import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION } from '../../shared/learn-v2-measurement-report'
 import {
   learnReportMetricValidator, learnReportAssignmentSnapshotValidator as reportAssignmentSnapshot,
   learnReportResultSnapshotValidator as reportResultSnapshot, learnReportInputSnapshotValidator as reportInputSnapshot,
@@ -333,6 +333,10 @@ export const scoringExecutionFields = {
   authoritativeAttemptId: v.optional(v.id('masteryAttempts')), committedAt: v.optional(v.number()), integrityResult: v.string(),
 }
 
+const linkedFirstSlot = v.object({
+  kind: v.literal('linked'), firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.literal(1),
+  linkedAt: v.number(), clock, stratum: learnReportFirstSlotStratumValidator,
+})
 export const reportFactFields = {
   ...base, learningVoidId: v.optional(v.id('learningVoids')), sequence: v.number(), epoch: v.string(),
   factVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), occurredAt: v.number(),
@@ -342,6 +346,14 @@ export const reportFactFields = {
     v.object({ kind: v.literal('response'), submissionId: v.id('learnResponses'), acceptedAt: v.number(), measurementEligible: v.boolean(), masteryEligible: v.boolean(), assistanceSnapshot, validitySnapshot }),
     v.object({ kind: v.literal('score'), submissionId: v.id('learnResponses'), attemptId: v.id('masteryAttempts'), executionId: v.id('learnScoringExecutions'), scorePercent: v.number(), scoreCommittedAt: v.number(), snapshot: reportResultSnapshot }),
     v.object({ kind: v.literal('independent_claim'), ...firstCheckClaim.fields, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), stratum: learnReportFirstSlotStratumValidator }),
+    v.object({ kind: v.literal('independent_claim_v2'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
+      ...firstCheckClaim.fields, claimSequence: v.literal(1), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'),
+      stratum: v.object({ epoch: v.string(), baselineSha: v.string(), cohortVersion: v.string(),
+        flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')), entryPoint: v.string(), depth: capability.depth }),
+      policyPins: v.object({ assistancePolicyVersion: v.string(), validityPolicyVersion: v.string(), thresholdVersion: v.string(), thresholdPercent: v.literal(80) }),
+      firstSlot: v.union(v.object({ kind: v.literal('unresolved'), reason: v.string() }), linkedFirstSlot) }),
+    v.object({ kind: v.literal('first_slot_link'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
+      claimKey: v.string(), claimSequence: v.literal(1), claimFactSequence: v.number(), slot: linkedFirstSlot }),
     v.object({ kind: v.literal('integrity'), submissionId: v.id('learnResponses'), integrityEventId: v.id('learnResponseIntegrityEvents'), currentEligibility: v.string(), evidenceAvailable: v.boolean(), bodyAvailability: v.union(v.literal('available'), v.literal('purged')) }),
   ),
 }
