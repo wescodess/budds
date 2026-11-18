@@ -192,24 +192,37 @@ async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnR
   const candidate = row && await readQualifyingFirstSlot(ctx, userId, claim, row)
   if (!row || !candidate || row.learningVoidId !== learningVoidId
     || row.firstCheckClaim && (row.firstCheckClaim.claimKey !== claim.claimKey || row.checkSequence !== 1)) throw new Error('Learn first slot is not qualifying')
-  await assertFirstSlotOutcomeNotStarted(ctx, userId, row)
+  const first = await readEarliestLearnFirstSlot(ctx, userId, claim)
+  if (first?.firstCheckOpportunityId !== row._id) throw new Error('Learn first slot must be the earliest qualifying original')
   if (await privacyDigest(candidate) !== await privacyDigest(slot)) throw new Error('Learn first-slot stratum mismatch')
 }
 
-async function assertFirstSlotOutcomeNotStarted(ctx: MutationCtx, userId: string, first: Doc<'learnAssessmentOpportunities'>) {
-  if (first.createdAt > Date.now() || first.submissionId !== undefined || first.authoritativeAttemptId !== undefined || first.scoringJobId !== undefined
-    || !['preparing', 'ready', 'test_open'].includes(first.phase) || Date.now() >= first.closeAt) throw new Error('Learn first slot outcome already started')
-  const [response, execution, attempt] = await Promise.all([
-    ctx.db.query('learnResponses').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
-    ctx.db.query('learnScoringExecutions').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
-    ctx.db.query('masteryAttempts').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', first._id)).first(),
-  ])
-  if (response || execution || attempt) throw new Error('Learn first slot outcome already started')
+// Two assigned delayed originals and one ordinary retained original per epoch.
+// Each original may have one reserve; inherited markers never make it original.
+export async function readLearnFirstSlotInventory(ctx: QueryCtx | MutationCtx, userId: string,
+  blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>, epoch: string) {
+  const rows = await ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', q =>
+      q.eq('userId', userId).eq('objectiveId', objectiveId).eq('firstSlotEpoch', epoch)).take(7)
+  if (rows.some(row => row.blueprintRevisionId !== blueprintRevisionId)) throw new Error('Learn original slot capability mismatch')
+  const originals = rows.filter(row => row.originalSlot && row.replacesOpportunityId === undefined)
+  if (rows.length > 6 || originals.length > 3) throw new Error('Learn original slot inventory exceeds its protocol bound')
+  return originals.sort((a, b) => a.openAt - b.openAt || a.delayedCheckId.localeCompare(b.delayedCheckId))
+}
+
+export async function readEarliestLearnFirstSlot(ctx: QueryCtx | MutationCtx, userId: string, claim: LearnReportIndependentClaimV2) {
+  const rows = await readLearnFirstSlotInventory(ctx, userId, claim.blueprintRevisionId, claim.objectiveId, claim.stratum.epoch)
+  for (const row of rows) {
+    const slot = await readQualifyingFirstSlot(ctx, userId, claim, row)
+    if (slot) return slot
+  }
+  return null
 }
 
 async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: LearnReportIndependentClaimV2,
   row: Doc<'learnAssessmentOpportunities'>): Promise<LearnReportLinkedFirstSlot | null> {
   if (row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
+    || row.firstSlotEpoch !== claim.stratum.epoch || row.createdAt > Date.now()
     || !row.originalSlot || row.replacesOpportunityId !== undefined) return null
   const parsedPurpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
   if (!parsedPurpose.success || !('clock' in parsedPurpose.data)) return null

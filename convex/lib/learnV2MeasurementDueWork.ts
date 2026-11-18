@@ -6,7 +6,7 @@ import {
 } from './learnV2MeasurementAssignment'
 import {
   measurementScopeReason, measurementFlowReason, measurementItemReason, measurementCaseExposed,
-  writeMeasurementOpportunityFact, type AdmittedAssignment,
+  writeMeasurementOpportunityFact, registerLearnFirstSlotForOwner, linkFirstIndependentClaimForOwner, type AdmittedAssignment,
 } from './learnV2Measurement'
 import { privacyDigest, liveResponseAggregate } from './learnV2ResponsePrivacy'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
@@ -160,18 +160,20 @@ export async function materializeLearnMeasurementAssignment(ctx: MutationCtx, as
         assessmentPins: { kind: 'measurement', itemPins: slot.pins }, scoringBinding: assignment.scoringBinding,
         assignmentId: assignment._id, horizonDays: slot.horizonDays, phase: 'preparing', revision: 1,
         eligibilityPolicyVersion: LEARN_MEASUREMENT_ELIGIBILITY_VERSION, operationalEligibility: 'pending',
-        dueAt: clock.dueAt, openAt: clock.openAt, closeAt: clock.closeAt, checkSequence: 0, originalSlot: true,
+        dueAt: clock.dueAt, openAt: clock.openAt, closeAt: clock.closeAt, checkSequence: 0, originalSlot: true, firstSlotEpoch: assignment.epoch,
       })
       row = (await ctx.db.get(id))!
       await writeMeasurementOpportunityFact(ctx, assignment, row)
     }
     if (row.assignmentId !== assignment._id || row.assessmentPins.kind !== 'measurement'
       || row.assessmentPins.itemPins.itemId !== slot.pins.itemId || row.horizonDays !== slot.horizonDays || !row.originalSlot) throw new Error('Learn original opportunity identity conflicts')
+    await registerLearnFirstSlotForOwner(ctx, row, assignment.epoch, false)
     await processDueOpportunity(ctx, assignment, protocol, row, through)
     const replacementKey = await privacyDigest([row._id, 'reserve'])
     const replacement = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_delayedCheckId', q => q.eq('userId', assignment.userId).eq('delayedCheckId', replacementKey)).unique()
     if (replacement) await processDueOpportunity(ctx, assignment, protocol, replacement, through)
   }
+  await linkFirstIndependentClaimForOwner(ctx, assignment.userId, assignment.blueprintRevisionId, assignment.objectiveId, assignment.epoch)
   return 'processed'
 }
 

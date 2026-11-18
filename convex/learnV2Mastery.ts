@@ -1,11 +1,11 @@
-import { v } from 'convex/values'
+import { v, type Infer } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { action, internalMutation, internalQuery, mutation, type ActionCtx, type MutationCtx, type QueryCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
 import { requireOwnedSubmission } from './lib/learnV2PublicAccess'
 import {
-  acceptMasterySubmissionArgs, acceptMasterySubmissionSchema, disabledLearnV2Result, parsePublicLearnRequest,
+  acceptMasterySubmissionArgs, acceptMasterySubmissionSchema, parsePublicLearnRequest,
   responseReceiptValidator, scoreMasterySubmissionArgs, scoreMasterySubmissionSchema, scoreMasterySubmissionValidator,
   type LearnV2AcceptMasterySubmission, type LearnV2ScoreMasterySubmission, type LearnV2SubmissionScore,
 } from './lib/learnV2PublicContract'
@@ -13,13 +13,13 @@ import { acceptResponseForOwner } from './learnV2Responses'
 import type { LearnResponseReceipt } from '../shared/learn-v2-responses'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
-import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, LEARN_V2_MASTERY_THRESHOLD, masteryAttemptTime, scoreCriteria } from '../shared/learn-v2-mastery'
+import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, LEARN_V2_MASTERY_THRESHOLD, masteryAttemptTime, scoreCriteria, deriveEligibleMeasurementMastery, localDateAt } from '../shared/learn-v2-mastery'
 import { representativeNextAction } from '../shared/learn-adaptive-completion'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
-import { buildBaselineMasteryScoringPayload, buildBaselineMasteryScoringRequest, parseBaselineMasteryScoringResponse } from '../server/utils/learn-v2-mastery-scorer'
+import { buildBaselineMasteryScoringPayload, buildBaselineMasteryScoringRequest, parseBaselineMasteryScoringResponse, scorerCanonicalJson } from '../server/utils/learn-v2-mastery-scorer'
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
-import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
+import { matchesLegacyFingerprint, privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision, validateAdaptiveProviderPayload } from '../shared/adaptive-v2-pilot-policy'
 import {
@@ -30,8 +30,22 @@ import {
   renderControlledFeedbackTemplate,
   type ControlledFeedbackProjection,
 } from '../shared/adaptive-controlled-feedback'
-import { findCurrentAdaptiveActivityForSessionContent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
+import { findCurrentAdaptiveActivityForSessionContent, writeLearnActivityEvent, writeLearnMeasurementEvent } from './lib/learnAdaptiveEvents'
 import { ADAPTIVE_PROVIDER_OPERATIONAL_STORAGE_MANIFEST } from '../shared/adaptive-learn-storage-manifest'
+
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION, learnTimezoneSchema } from '../shared/learn-v2-responses'
+import { isLearnRetainedPromotionTimeEligible } from '../shared/learn-v2-delayed-check'
+import { isLearnScoringReceiptCommittable, learnMeasurementItemPinsSchema, deriveLearnScorerConfiguration, LEARN_V2_SCORER_IDENTITY_POLICY_VERSION } from '../shared/learn-v2-measurement'
+import { canEmitLearnMeasurementOutcomeEvent, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../shared/learn-adaptive-events'
+import { freezeFirstIndependentClaimForOwner, writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
+import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork'
+import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
+import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
+import { requireSavedLearnScoringInput, reserveSavedLearnScoring, readSavedLearnScoringState, prepareSavedLearnModelScoring,
+  deterministicLearnScoringReceipt, saveLearnScoringExecution, saveLearnModelScoringResult, receiptFields, getLearnMeasurementScorer } from './lib/learnV2MeasurementScoring'
+import type { LearnScoringExecutionResult } from '../server/utils/learn-v2-mastery-scorer'
 
 const MAX_RESPONSE = 12_000
 const MAX_MISCONCEPTIONS = ADAPTIVE_MISCONCEPTION_TAGS.length
@@ -164,44 +178,16 @@ async function digest(value: unknown) {
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 function feedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProjection {
-  if (attempt.feedbackTemplateVersion === ADAPTIVE_FEEDBACK_TEMPLATE_VERSION
-    && attempt.misconceptionTaxonomyVersion === ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION
-    && attempt.feedbackProjectionJson) {
-    const persisted = JSON.parse(attempt.feedbackProjectionJson) as ControlledFeedbackProjection
-    if (persisted?.templateVersion !== attempt.feedbackTemplateVersion || persisted?.taxonomyVersion !== attempt.misconceptionTaxonomyVersion
-      || !Array.isArray(persisted.criterionResults) || !Array.isArray(persisted.misconceptionTags) || !Array.isArray(persisted.misconceptionFeedback)) throw new Error('Committed feedback projection is invalid')
-    return persisted
-  }
-  let criterionResults: Array<{ key: string, awarded: boolean }> = []
-  let misconceptionTags: string[] = []
-  let criteria: Array<{ key: string, description?: string }> = []
+  let tags: unknown = []
   try {
-    const parsed = JSON.parse(attempt.criterionResultsJson ?? '[]') as unknown
-    if (Array.isArray(parsed)) criterionResults = parsed.flatMap((row) => {
-      if (!row || typeof row !== 'object' || Array.isArray(row)) return []
-      const item = row as Record<string, unknown>
-      return typeof item.key === 'string' && typeof item.awarded === 'boolean' ? [{ key: item.key, awarded: item.awarded }] : []
-    })
-  }
-  catch { /* persisted rows before feedback */ }
-  try { misconceptionTags = JSON.parse(attempt.misconceptionTagsJson ?? '[]') } catch { /* persisted rows before feedback */ }
-  try {
-    const rubric = JSON.parse(attempt.rubricSnapshot ?? 'null') as { criteria?: Array<{ key?: unknown, description?: unknown }> } | null
-    if (rubric?.criteria && Array.isArray(rubric.criteria)) criteria = rubric.criteria.flatMap(row => typeof row.key === 'string' ? [{ key: row.key, ...(typeof row.description === 'string' ? { description: row.description } : {}) }] : [])
-  }
-  catch { /* persisted rows before feedback */ }
+    tags = attempt.feedbackTemplateVersion === ADAPTIVE_FEEDBACK_TEMPLATE_VERSION
+      && attempt.misconceptionTaxonomyVersion === ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION && attempt.feedbackProjectionJson
+      ? (JSON.parse(attempt.feedbackProjectionJson) as { misconceptionTags?: unknown }).misconceptionTags
+      : JSON.parse(attempt.misconceptionTagsJson ?? '[]')
+  } catch { /* legacy feedback may be unavailable */ }
   const allowed = new Set<string>(ADAPTIVE_MISCONCEPTION_TAGS)
-  const safeTags = [...new Set(misconceptionTags.filter(tag => typeof tag === 'string' && allowed.has(tag)))].slice(0, MAX_MISCONCEPTIONS)
-  try {
-    return projectControlledFeedback({
-      criteria: criteria.map(row => ({ key: row.key, label: row.description?.trim() || row.key })),
-      outcomes: criterionResults,
-      misconceptionTags: safeTags,
-    })
-  }
-  catch {
-    return { templateVersion: ADAPTIVE_FEEDBACK_TEMPLATE_VERSION, taxonomyVersion: ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION, criterionResults: [], misconceptionTags: [], misconceptionFeedback: [] }
-  }
+  const safeTags = Array.isArray(tags) ? [...new Set(tags.filter((tag): tag is string => typeof tag === 'string' && allowed.has(tag)))].slice(0, MAX_MISCONCEPTIONS) : []
+  return projectControlledFeedback({ criteria: [], outcomes: [], misconceptionTags: safeTags })
 }
 
 async function sessionScope(ctx: MutationCtx | QueryCtx, userId: string, sessionId: Id<'studySessions'>) {
@@ -338,7 +324,8 @@ async function projectAdaptiveFeedback(ctx: MutationCtx, job: Doc<'learnJobs'>, 
   if (!job.adaptiveActivityId || !job.adaptiveThreadId) return
   const activity = await ctx.db.get(job.adaptiveActivityId)
   if (!activity || activity.userId !== job.userId || activity.threadId !== job.adaptiveThreadId || (activity.scoringJobId && activity.scoringJobId !== job._id)) throw new Error('Adaptive scoring projection is unavailable')
-  if (activity.masteryAttemptId === attemptId && activity.scoringJobId === job._id) return
+  if (activity.masteryAttemptId === attemptId && activity.scoringJobId === job._id
+    && canonicalJson(activity.feedbackProjection ?? null) === canonicalJson(projection)) return
   await ctx.db.patch(activity._id, {
     status: 'feedback',
     scoringJobId: job._id,
@@ -522,7 +509,7 @@ function localDayAtNineUtcMs(localDate: string, timezone: string) {
   return instant
 }
 
-async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Awaited<ReturnType<typeof sessionScope>>, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
+async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Pick<Awaited<ReturnType<typeof sessionScope>>, 'plan' | 'objective' | 'voidRow' | 'blueprint'>, testOnly?: boolean, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
   const kind = input.outcome.remediation ? 'review' as const : input.outcome.state === 'guided' ? 'review' as const : input.outcome.setFirstIndependent ? 'retained_review' as const : null
   if (!kind) return null
   const priority = input.outcome.remediation ? 'prerequisite_remediation' : input.outcome.state === 'guided' ? 'due_review' : 'overdue_retained_review'
@@ -530,6 +517,7 @@ async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: 
   const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now
   const durationMinutes = Math.max(15, Math.min(60, input.scope.objective.estimatedMinutes ?? 30))
   const sessionId = await ctx.db.insert('studySessions', { userId: input.userId, studyPlanRevisionId: input.scope.plan._id, primaryObjectiveId: input.scope.objective._id, status: 'planned', revision: 1, scheduledStartAt, scheduledEndAt: scheduledStartAt + durationMinutes * 60_000, timezone: input.timezone, placementKind: kind, schedulingPriority: priority, schedulerVersion: 'learn-v2.mastery-followup.v1', auditReasonCode: `mastery_followup:${input.attemptId}` })
+  if (kind === 'retained_review' && input.testOnly) return { sessionId, scheduledStartAt }
   const inputDigest = await digest({ attemptId: String(input.attemptId), planRevisionId: String(input.scope.plan._id), sessionId: String(sessionId), objectiveId: String(input.scope.objective._id), sourceIds: input.sourceIds.map(String).sort() })
   const jobId = await ctx.db.insert('learnJobs', { userId: input.userId, learningVoidId: input.scope.voidRow._id, blueprintRevisionId: input.scope.blueprint._id, studyPlanRevisionId: input.scope.plan._id, studySessionId: sessionId, type: FOLLOW_UP_JOB_TYPE, status: 'queued', revision: 1, idempotencyKey: `mastery-followup:${input.attemptId}`, requestFingerprint: inputDigest, inputDigest, expectedVoidRevision: input.scope.voidRow.revision, expectedBlueprintRecordRevision: input.scope.blueprint.recordRevision, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: input.sourceIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: input.now, updatedAt: input.now })
   await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: input.userId, jobId, expectedRevision: 1 })
@@ -541,6 +529,8 @@ export const recordAssistanceUse = mutation({
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx)
     const scope = await sessionScope(ctx, userId, args.studySessionId)
+    const assessments = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', scope.session._id)).take(3)
+    if (assessments.length > 2 || assessments.some(row => !row.submissionId && ['retained_transfer', 'measurement_cold', 'measurement_delayed'].includes(row.purpose.kind))) throw new Error('Assessment assistance is unavailable before sealing')
     const blockKind = args.kind === 'substantive_hint' ? 'faded_example' : 'worked_example'
     const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', scope.content._id)).take(16)
     const matches = blocks.filter(block => block.kind === blockKind && block.content?.trim())
@@ -587,6 +577,7 @@ export const beginMasteryScoring = internalMutation({
       throw new Error('Learn V2 access denied')
     }
     validateAttemptRequest(args)
+    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
     const fingerprints = await requestFingerprints(args)
     let scope: Awaited<ReturnType<typeof sessionScope>> | undefined
     let adaptiveActivity: Doc<'learningThreadActivities'> | undefined
@@ -841,6 +832,7 @@ export const getMasteryScoringInput = internalQuery({
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     validateAttemptRequest(args)
+    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
     const fingerprints = await requestFingerprints(args)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
@@ -894,6 +886,16 @@ export async function submitMasteryAttemptForOwner(
   args: MasteryAttemptRequest,
   adaptiveAdmission?: AdaptiveAdmissionContext,
 ): Promise<MasteryAttemptActionResult> {
+    if (LEARN_MEASUREMENT_CAPABILITIES.scoring) {
+      const accepted = await ctx.runMutation(internal.learnV2Mastery.acceptCompatibilityMasterySubmission, { tokenIdentifier, ...args,
+        ...(adaptiveAdmission ? { adaptiveAdmission } : {}) })
+      if (accepted.kind !== 'accepted') return { status: 'invalid', code: accepted.reasonCode, message: 'The response could not be accepted.', retryable: false }
+      const result = await scoreMasterySubmissionForOwner(ctx, tokenIdentifier, { version: LEARN_V2_PUBLIC_API_VERSION, submissionId: accepted.submissionId,
+        idempotencyKey: (await privacyDigest(args.idempotencyKey)).slice(7) })
+      if (result.status !== 'scored') return { status: 'blocked', code: result.status, message: 'Scoring is pending.', retryable: result.status === 'retryable_failure' }
+      const outcome = await ctx.runQuery(internal.learnV2Mastery.getSealedMasteryAttemptOutcome, { tokenIdentifier, attemptId: result.result.attemptId })
+      return { status: 'completed', ...outcome, scorePercent: result.result.scorePercent, replayed: accepted.replayed }
+    }
     if (adaptiveAdmission) {
       const gate: { allowed: boolean } = await ctx.runQuery(internal.lib.adaptiveLearnAccess.checkAdaptiveJobAdmission, { tokenIdentifier })
       if (!gate.allowed) return { status: 'denied', code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false }
@@ -1006,7 +1008,40 @@ export async function acceptMasterySubmissionForOwner(
   ctx: MutationCtx, tokenIdentifier: string, input: LearnV2AcceptMasterySubmission,
 ): Promise<LearnResponseReceipt> {
   const request = parsePublicLearnRequest(acceptMasterySubmissionSchema, input)
-  return await acceptResponseForOwner(ctx, tokenIdentifier, request.submission)
+  const entry = 'response' in request.submission ? request.submission.response : request.submission.application
+  const target = 'assessmentOpportunityId' in entry.target ? await ctx.db.get(entry.target.assessmentOpportunityId) : null
+  const existed = target?.submissionId !== undefined
+  const receipt = await acceptResponseForOwner(ctx, tokenIdentifier, request.submission)
+  if (receipt.kind !== 'accepted') return receipt
+  const response = await ctx.db.get(receipt.submissionId)
+  if (!response || response.scopeKind !== 'v2' || !('assessmentOpportunityId' in response)) throw new Error('Learn submission unavailable')
+  const opportunity = (await ctx.db.get(response.assessmentOpportunityId))!
+  if (existed && !response.masteryAtAcceptance) return receipt
+  if (!response.masteryAtAcceptance) {
+    const { record } = await getScopedMasteryRecord(ctx, tokenIdentifier, response.blueprintRevisionId, response.objectiveId)
+    const session = response.contextPins.kind === 'session' ? await ctx.db.get(response.contextPins.studySessionId) : null
+    const revision = response.contextPins.kind !== 'calibration' ? await ctx.db.get(response.contextPins.studyPlanRevisionId) : null
+    const performanceTimezone = learnTimezoneSchema.parse('clock' in opportunity.purpose
+      ? record?.firstIndependentTimezone ?? opportunity.purpose.clock.timezone : session?.timezone ?? revision?.timezone ?? 'UTC')
+    await ctx.db.patch(response._id, { masteryAtAcceptance: { performanceTimezone, opportunityRevision: ('response' in request.submission ? request.submission.response : request.submission.application).expectedRevision, state: record?.state ?? 'unseen', recordRevision: record?.recordRevision ?? 0,
+      firstIndependentLocalDate: record?.firstIndependentLocalDate ?? null, firstIndependentTimezone: record?.firstIndependentTimezone ?? null } })
+  }
+  const protocol = getFrozenLearnMeasurementProtocol()
+  if (!response.masteryAtAcceptance && !opportunity.assignmentId && protocol) await writeLearnResponseAcceptanceFact(ctx, tokenIdentifier, response, protocol.epoch)
+  if ('clock' in opportunity.purpose) await writeLearnMeasurementEvent(ctx, tokenIdentifier, {
+    taxonomyVersion: LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION, eventType: 'delayed_check_attempt', eventVersion: 'delayed_check_attempt.v2',
+    sourceVersion: 'learn-v2.sealed-scoring.v1', contractVersion: opportunity.eligibilityPolicyVersion, occurredAt: response.acceptedAt,
+    learningVoidId: response.learningVoidId, blueprintRevisionId: response.blueprintRevisionId, objectiveId: response.objectiveId,
+    assessmentOpportunityId: opportunity._id, submissionId: response._id, horizonDays: opportunity.purpose.clock.horizonDays,
+    measurementEligible: response.validitySnapshot.measurementEligible, masteryEligible: response.validitySnapshot.masteryEligible,
+    metadata: { masteryState: response.masteryAtAcceptance?.state ?? (await getScopedMasteryRecord(ctx, tokenIdentifier, response.blueprintRevisionId, response.objectiveId)).record?.state ?? 'unseen' },
+    ...(response.contextPins.kind === 'session' && response.contextPins.canvas ? { threadId: response.contextPins.canvas.threadId, activityId: response.contextPins.canvas.activityId } : {}),
+  })
+  if (opportunity.assignmentId && protocol) {
+    const assignment = await ctx.db.get(opportunity.assignmentId)
+    if (assignment?.status === 'admitted') await materializeLearnMeasurementAssignment(ctx, assignment, protocol, Date.now())
+  }
+  return receipt
 }
 
 export const acceptMasterySubmission = mutation({
@@ -1019,7 +1054,7 @@ export const getMasterySubmissionScoringState = internalQuery({
   handler: async (ctx, args): Promise<LearnV2SubmissionScore> => {
     const request = parsePublicLearnRequest(scoreMasterySubmissionSchema, args)
     await requireOwnedSubmission(ctx, request.submissionId)
-    return disabledLearnV2Result()
+    return await readSavedLearnScoringState(ctx, await requireAuth(ctx), request.submissionId)
   },
 })
 
@@ -1028,13 +1063,297 @@ export async function scoreMasterySubmissionForOwner(
 ): Promise<LearnV2SubmissionScore> {
   if (await requireAuth(ctx) !== tokenIdentifier) throw new Error('Learn access denied')
   const request = parsePublicLearnRequest(scoreMasterySubmissionSchema, args)
-  const result: LearnV2SubmissionScore = await ctx.runQuery(internal.learnV2Mastery.getMasterySubmissionScoringState, request)
-  return result
+  const reservation = await ctx.runMutation(internal.learnV2Mastery.beginSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId })
+  if (reservation.kind === 'receipt') {
+    await ctx.runMutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { tokenIdentifier, submissionId: request.submissionId, executionId: reservation.executionId })
+  } else if (reservation.kind === 'acquired') {
+    try {
+      const input = await ctx.runQuery(internal.learnV2Mastery.getSealedMasteryScoringInput, { tokenIdentifier, submissionId: request.submissionId })
+      const context = { dispatchedAt: Date.now(), dispatchOrdinal: (input.job.attempts ?? 0) + 1, leaseIdentityHash: await privacyDigest(reservation.leaseToken) }
+      if (input.response.scoringBinding.kind === 'deterministic') {
+        const receipt = await deterministicLearnScoringReceipt(input, context)
+        const executionId = await ctx.runMutation(internal.learnV2Mastery.registerSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId, receiptJson: JSON.stringify(receipt) })
+        await ctx.runMutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { tokenIdentifier, submissionId: request.submissionId, executionId })
+      } else {
+        const { service, prepared } = await prepareSavedLearnModelScoring(input, context)
+        const executionId = await ctx.runMutation(internal.learnV2Mastery.registerSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId, receiptJson: JSON.stringify(prepared.receipt) })
+        const result = await service.dispatch(prepared)
+        const verified = await ctx.runMutation(internal.learnV2Mastery.recordMasteryScoringReceipt, { tokenIdentifier, executionId, resultJson: JSON.stringify(result) })
+        if (verified) await ctx.runMutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { tokenIdentifier, submissionId: request.submissionId, executionId })
+      }
+    } catch {
+      await ctx.runMutation(internal.learnV2Mastery.failSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId, leaseToken: reservation.leaseToken })
+    }
+  }
+  return await ctx.runQuery(internal.learnV2Mastery.getMasterySubmissionScoringState, request)
 }
 
 export const scoreMasterySubmission = action({
   args: scoreMasterySubmissionArgs, returns: scoreMasterySubmissionValidator,
   handler: async (ctx, args): Promise<LearnV2SubmissionScore> => await scoreMasterySubmissionForOwner(ctx, await requireAuth(ctx), args),
+})
+
+const sealedScoringArgs = { tokenIdentifier: v.string(), submissionId: v.id('learnResponses') }
+export const beginSealedMasteryScoring = internalMutation({
+  args: sealedScoringArgs,
+  handler: async (ctx, args) => {
+    const result = await reserveSavedLearnScoring(ctx, args.tokenIdentifier, args.submissionId)
+    if (result.kind === 'blocked') {
+      const response = await ctx.db.get(args.submissionId)
+      const opportunity = response && 'assessmentOpportunityId' in response ? await ctx.db.get(response.assessmentOpportunityId) : null
+      const job = opportunity?.scoringJobId ? await ctx.db.get(opportunity.scoringJobId) : null
+      if (job?.terminalReason === 'provider_outcome_requires_reconciliation') await settleAdaptiveProductReservation(ctx, job, true, Date.now())
+    }
+    return result
+  },
+})
+export const getSealedMasteryScoringInput = internalQuery({
+  args: sealedScoringArgs,
+  handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.scoring) throw new Error('Learn scoring disabled')
+    return await requireSavedLearnScoringInput(ctx, args.tokenIdentifier, args.submissionId)
+  },
+})
+export const registerSealedMasteryScoring = internalMutation({
+  args: { ...sealedScoringArgs, receiptJson: v.string() },
+  handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.scoring || args.receiptJson.length > 128_000) throw new Error('Learn scoring unavailable')
+    const input = await requireSavedLearnScoringInput(ctx, args.tokenIdentifier, args.submissionId)
+    const pins = input.response.contextPins
+    if (pins.kind === 'session' && pins.canvas && input.response.scoringBinding.kind === 'model') {
+      const canvas = pins.canvas
+      const activity = await ctx.db.get(canvas.activityId)
+      if (!activity) throw new Error('Adaptive scoring authority unavailable')
+      const admission = { threadId: canvas.threadId, activityId: activity.activityId, manifestVersion: canvas.pilotConfigurationVersion }
+      const ledger = await masteryScoringLedger({ studySessionId: pins.studySessionId, expectedSessionRevision: pins.sessionRevision,
+        expectedContentRevision: pins.contentRevision, expectedPlanRecordRevision: pins.planRecordRevision,
+        expectedBlueprintRecordRevision: input.response.blueprintRecordRevision, response: input.scoringInput.learnerResponse,
+        confidence: input.response.confidence ?? 1, idempotencyKey: `submission:${input.response._id}` }, admission)
+      const daily = await ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId_and_createdAt', q =>
+        q.eq('userId', args.tokenIdentifier).gt('createdAt', Date.now() - ADAPTIVE_V2_PILOT_MANIFEST.limits.dailyQuotaWindowMs)).take(ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay + 1)
+      if (daily.length >= ADAPTIVE_V2_PILOT_MANIFEST.limits.maxProviderDispatchesPerDay) throw new Error('Adaptive daily scoring quota reached')
+      const fields = { ...ledger, providerModel: input.response.scoringBinding.requestedModel, adaptiveThreadId: canvas.threadId, adaptiveActivityId: canvas.activityId }
+      await ctx.db.patch(input.job._id, fields)
+      const product = await admitAdaptiveProductDispatch(ctx, { ...input.job, ...fields }, true)
+      if (product.kind !== 'allowed') throw new Error('Adaptive scoring budget unavailable')
+    }
+    return await saveLearnScoringExecution(ctx, args.tokenIdentifier, input, JSON.parse(args.receiptJson))
+  },
+})
+export const recordMasteryScoringReceipt = internalMutation({
+  args: { tokenIdentifier: v.string(), executionId: v.id('learnScoringExecutions'), resultJson: v.string() },
+  handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.scoring || args.resultJson.length > 128_000) throw new Error('Learn scoring unavailable')
+    const verified = await saveLearnModelScoringResult(ctx, args.tokenIdentifier, args.executionId, JSON.parse(args.resultJson) as LearnScoringExecutionResult)
+    if (!verified) {
+      const execution = (await ctx.db.get(args.executionId))!
+      const job = (await ctx.db.get(execution.jobId))!
+      await settleAdaptiveProductReservation(ctx, job, job.status === 'blocked', Date.now())
+    }
+    return verified
+  },
+})
+export const failSealedMasteryScoring = internalMutation({
+  args: { ...sealedScoringArgs, leaseToken: v.string() },
+  handler: async (ctx, args) => {
+    const input = await requireSavedLearnScoringInput(ctx, args.tokenIdentifier, args.submissionId)
+    const { job, opportunity } = input
+    if (job.leaseToken !== args.leaseToken || !['leased', 'running'].includes(job.status)) return
+    const dispatched = job.status === 'running'
+    await settleAdaptiveProductReservation(ctx, job, dispatched, Date.now())
+    await ctx.db.patch(job._id, { status: dispatched ? 'blocked' : 'queued', leaseToken: undefined, leaseExpiresAt: undefined,
+      terminalReason: dispatched ? 'provider_outcome_requires_reconciliation' : 'scorer_unavailable', revision: job.revision + 1, updatedAt: Date.now() })
+    await ctx.db.patch(opportunity._id, { phase: dispatched ? 'reconciliation_required' : 'retryable_failure',
+      reasonCode: dispatched ? 'provider_outcome_requires_reconciliation' : 'scorer_unavailable', revision: opportunity.revision + 1 })
+  },
+})
+export const getSealedMasteryAttemptOutcome = internalQuery({
+  args: { tokenIdentifier: v.string(), attemptId: v.id('masteryAttempts') },
+  handler: async (ctx, args) => {
+    if (await requireAuth(ctx) !== args.tokenIdentifier || !await hasLearnV2Access(ctx, args.tokenIdentifier)) throw new Error('Learn access denied')
+    const attempt = await ctx.db.get(args.attemptId)
+    if (!attempt || attempt.userId !== args.tokenIdentifier) throw new Error('Learn attempt unavailable')
+    return { attemptId: attempt._id, state: attempt.masteryStateAfter, nextReviewAt: null }
+  },
+})
+
+export const acceptCompatibilityMasterySubmission = internalMutation({
+  args: { tokenIdentifier: v.string(), ...masteryAttemptArgs,
+    adaptiveAdmission: v.optional(v.object({ threadId: v.id('learningThreads'), activityId: v.string(), manifestVersion: v.string() })) },
+  handler: async (ctx, args) => {
+    if (await requireAuth(ctx) !== args.tokenIdentifier) throw new Error('Learn access denied')
+    validateAttemptRequest(args)
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+      q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).take(3)
+    if (rows.length !== 1) throw new Error('Learn assessment opportunity unavailable')
+    const opportunity = rows[0]!
+    const pins = opportunity.contextPins
+    if (pins.kind !== 'session' || pins.sessionRevision !== args.expectedSessionRevision || pins.contentRevision !== args.expectedContentRevision
+      || pins.planRecordRevision !== args.expectedPlanRecordRevision || opportunity.blueprintRecordRevision !== args.expectedBlueprintRecordRevision) throw new Error('Started session revision conflict')
+    if (pins.canvas || args.adaptiveAdmission) {
+      if (!pins.canvas || !args.adaptiveAdmission || pins.canvas.threadId !== args.adaptiveAdmission.threadId) throw new Error('Adaptive scoring authority unavailable')
+      const scope = await sessionScope(ctx, args.tokenIdentifier, args.studySessionId)
+      const authority = await adaptiveScoringAuthority(ctx, args.tokenIdentifier,
+        { ...scope, content: { ...scope.content, providerModel: opportunity.scoringBinding.kind === 'model' ? opportunity.scoringBinding.requestedModel : '' } }, args.adaptiveAdmission)
+      if (!authority.allowed || authority.activity._id !== pins.canvas.activityId) throw new Error('Adaptive scoring authority unavailable')
+    }
+    const receipt = await acceptMasterySubmissionForOwner(ctx, args.tokenIdentifier, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: (await privacyDigest(args.idempotencyKey)).slice(7), response: { target: { assessmentOpportunityId: opportunity._id },
+        expectedRevision: opportunity.submissionId ? (await ctx.db.get(opportunity.submissionId))?.masteryAtAcceptance?.opportunityRevision ?? opportunity.revision : opportunity.revision,
+        payload: { kind: 'text', text: args.response }, ...(opportunity.deliveryPins?.confidenceRequested ? { confidence: args.confidence } : {}) } } })
+    return { ...receipt, replayed: opportunity.submissionId !== undefined }
+  },
+})
+
+export const commitSealedMasteryAttempt = internalMutation({
+  args: { ...sealedScoringArgs, executionId: v.id('learnScoringExecutions') },
+  handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.scoring) throw new Error('Learn scoring disabled')
+    const input = await requireSavedLearnScoringInput(ctx, args.tokenIdentifier, args.submissionId)
+    const { response, opportunity, job } = input
+    const execution = await ctx.db.get(args.executionId)
+    if (!execution || execution.userId !== args.tokenIdentifier || execution.submissionId !== response._id
+      || execution.assessmentOpportunityId !== opportunity._id || execution.jobId !== job._id
+      || execution.responseDigest !== response.payloadDigest || execution.invalidatedAt !== undefined || execution.evidenceStatus !== 'available'
+      || scorerCanonicalJson(execution.assessmentPins) !== scorerCanonicalJson(response.assessmentPins)
+      || scorerCanonicalJson(execution.scoringBinding) !== scorerCanonicalJson(response.scoringBinding)) throw new Error('Learn execution receipt mismatch')
+    if (opportunity.authoritativeAttemptId) {
+      if (execution.authoritativeAttemptId !== opportunity.authoritativeAttemptId) throw new Error('Learn receipt already consumed')
+      return opportunity.authoritativeAttemptId
+    }
+    const policy = response.scoringBinding.kind === 'model' ? (await getLearnMeasurementScorer(response.scoringBinding)).registry.identityPolicy
+      : { version: LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, verifiedModelAliases: [] }
+    const receipt = receiptFields(execution)
+    if (!isLearnScoringReceiptCommittable(receipt, policy) || !receipt.verdict || job.status !== 'running'
+      || !job.leaseToken || receipt.leaseIdentityHash !== await privacyDigest(job.leaseToken)) throw new Error('Learn verified receipt required')
+    const scorePercent = receipt.verdict.scorePercent
+    if (response.scoringBinding.kind === 'deterministic') {
+      const expected = await deterministicLearnScoringReceipt(input, receipt)
+      if (scorerCanonicalJson(expected.verdict) !== scorerCanonicalJson(receipt.verdict)) throw new Error('Learn deterministic receipt mismatch')
+    } else if (scoreCriteria(input.scoringInput.rubric.criteria, receipt.verdict.criterionResults) !== scorePercent) throw new Error('Learn rubric receipt mismatch')
+    const { record } = await getScopedMasteryRecord(ctx, args.tokenIdentifier, response.blueprintRevisionId, response.objectiveId)
+    const previousState = record?.state ?? 'unseen'
+    const kind = opportunity.purpose.kind
+    if (kind === 'calibration') {
+      const learningVoid = await ctx.db.get(response.learningVoidId)
+      if (learningVoid?.status !== 'calibration') throw new Error('Blueprint is not in calibration')
+      const attempts = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_blueprintRevisionId_and_kind', q =>
+        q.eq('userId', args.tokenIdentifier).eq('blueprintRevisionId', response.blueprintRevisionId).eq('kind', 'calibration')).take(8)
+      if (attempts.length >= 7 || attempts.some(row => row.objectiveId === response.objectiveId)) throw new Error('Calibration objective already attempted or inventory exhausted')
+    }
+    const measured = kind === 'measurement_cold' || kind === 'measurement_delayed'
+    const delayed = kind === 'measurement_delayed' || kind === 'retained_transfer'
+    const attemptTimezone = response.masteryAtAcceptance!.performanceTimezone
+    const attemptLocalDate = localDateAt(response.acceptedAt, attemptTimezone)
+    const clean = response.validitySnapshot.status === 'valid' && response.currentEligibility === 'eligible'
+    const retainedEligible = !delayed || response.masteryAtAcceptance !== undefined && isLearnRetainedPromotionTimeEligible({
+      previousState: response.masteryAtAcceptance.state, acceptedAt: response.acceptedAt,
+      firstIndependentLocalDate: response.masteryAtAcceptance.firstIndependentLocalDate,
+      firstIndependentTimezone: response.masteryAtAcceptance.firstIndependentTimezone })
+      && isLearnRetainedPromotionTimeEligible({ previousState, acceptedAt: response.acceptedAt,
+        firstIndependentLocalDate: record?.firstIndependentLocalDate ?? null, firstIndependentTimezone: record?.firstIndependentTimezone ?? null })
+    const masteryEligible = clean && response.validitySnapshot.masteryEligible && retainedEligible
+    const outcome = measured ? deriveEligibleMeasurementMastery({ kind, scorePercent, previousState,
+      measurementEligible: clean && response.validitySnapshot.measurementEligible, masteryEligible,
+      firstIndependentLocalDate: record?.firstIndependentLocalDate, attemptLocalDate })
+      : masteryEligible ? deriveMastery({ kind, scorePercent, previousState,
+        assisted: response.assistanceSnapshot.state !== 'unassisted', firstIndependentLocalDate: record?.firstIndependentLocalDate, attemptLocalDate }) : null
+    const now = Date.now()
+    const masteryRecordRevision = outcome ? (record?.recordRevision ?? 0) + 1 : record?.recordRevision ?? 0
+    const pins = response.contextPins
+    const identity = receipt.observedIdentity
+    const common = { userId: args.tokenIdentifier, blueprintRevisionId: response.blueprintRevisionId, objectiveId: response.objectiveId,
+      attemptedAt: response.acceptedAt, acceptedAt: response.acceptedAt, scoreCommittedAt: now, attemptLocalDate, attemptTimezone,
+      idempotencyKey: `submission:${response._id}`, requestFingerprint: response.payloadDigest, serverScorePercent: scorePercent,
+      submissionId: response._id, assessmentOpportunityId: opportunity._id, scoringExecutionId: execution._id,
+      scoringBinding: response.scoringBinding, assessmentPins: response.assessmentPins, assistanceSnapshot: response.assistanceSnapshot,
+      validitySnapshot: response.validitySnapshot, usedHint: response.assistanceSnapshot.substantiveHintUsedAt !== null,
+      usedReveal: response.assistanceSnapshot.answerRevealedAt !== null, confidence: response.confidence,
+      requestedScorerModel: response.scoringBinding.kind === 'model' ? response.scoringBinding.requestedModel : null,
+      returnedScorerModel: identity.status === 'deterministic' ? null : identity.returnedScorerModel,
+      scorerVersion: response.scoringBinding.kind === 'model' ? response.scoringBinding.scorerVersion : response.scoringBinding.engineVersion,
+      criterionResultsJson: JSON.stringify(receipt.verdict.criterionResults), misconceptionTagsJson: JSON.stringify(receipt.verdict.misconceptionTags),
+      masteryStateBefore: previousState, masteryStateAfter: outcome?.state ?? previousState,
+      masteryTransitionVersion: 'learn-v2.mastery-transition.v1' as const, masteryTransitionReason: outcome?.reason,
+      masteryRecordRevision, result: outcome?.state ?? previousState,
+      ...(pins.kind === 'session' ? { studySessionId: pins.studySessionId, sessionContentId: pins.sessionContentId, studyPlanRevisionId: pins.studyPlanRevisionId } : {}),
+    }
+    let attemptId: Id<'masteryAttempts'>
+    if (measured && response.assessmentPins.kind === 'measurement') {
+      attemptId = await ctx.db.insert('masteryAttempts', { ...common, ...(kind === 'measurement_delayed' ? { kind, horizonDays: opportunity.horizonDays! } : { kind }),
+        measurementStorage: { version: 'learn-v2.measurement-storage.v1', scope: { scopeKind: 'v2', learningVoidId: response.learningVoidId,
+          blueprintRevisionId: response.blueprintRevisionId, objectiveId: response.objectiveId, blueprintRecordRevision: response.blueprintRecordRevision,
+          assessmentContractVersion: response.assessmentContractVersion, assessmentContractDigest: response.assessmentContractDigest, depth: response.depth, contextPins: pins },
+          assessmentOpportunityId: opportunity._id, submissionId: response._id, executionId: execution._id, itemPins: response.assessmentPins.itemPins,
+          scoringBinding: response.scoringBinding, assistanceSnapshot: response.assistanceSnapshot, validitySnapshot: response.validitySnapshot,
+          acceptedAt: response.acceptedAt, scoreCommittedAt: now, requestedScorerModel: common.requestedScorerModel, returnedScorerModel: common.returnedScorerModel,
+          ...(opportunity.firstCheckClaim ? { firstCheckClaim: opportunity.firstCheckClaim, checkSequence: opportunity.checkSequence } : {}) } })
+    } else if (!measured) attemptId = await ctx.db.insert('masteryAttempts', { ...common, kind })
+    else throw new Error('Learn measurement pins unavailable')
+    await settleAdaptiveProductReservation(ctx, job, false, now)
+    await ctx.db.patch(execution._id, { authoritativeAttemptId: attemptId, committedAt: now })
+    await ctx.db.patch(job._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, revision: job.revision + 1, updatedAt: now })
+    await ctx.db.patch(opportunity._id, { authoritativeAttemptId: attemptId, phase: scorePercent >= 80 ? 'scored_pass' : 'scored_fail', revision: opportunity.revision + 1 })
+    let followUp: { sessionId: Id<'studySessions'>, scheduledStartAt: number } | null = null
+    if (outcome && kind !== 'calibration' && pins.kind !== 'calibration') {
+      const plan = await ctx.db.get(pins.studyPlanRevisionId)
+      const objective = await ctx.db.get(response.objectiveId)
+      const blueprint = await ctx.db.get(response.blueprintRevisionId)
+      const voidRow = await ctx.db.get(response.learningVoidId)
+      const links = await ctx.db.query('learnResponseEvidenceLinks').withIndex('by_userId_and_submissionId', q => q.eq('userId', args.tokenIdentifier).eq('submissionId', response._id)).take(65)
+      if (!plan || !objective || !blueprint || !voidRow || links.length > 64) throw new Error('Learn follow-up scope unavailable')
+      followUp = await createFollowUp(ctx, { userId: args.tokenIdentifier, scope: { plan, objective, blueprint, voidRow }, testOnly: true,
+        attemptId, outcome, now, timezone: attemptTimezone, firstIndependentLocalDate: outcome.setFirstIndependent ? attemptLocalDate : record?.firstIndependentLocalDate,
+        sourceIds: links.flatMap(row => row.dependency.kind === 'snapshot' ? [row.dependency.sourceSnapshotId] : []) })
+    }
+    if (outcome) {
+      await transitionScopedMasteryRecord(ctx, { userId: args.tokenIdentifier, blueprintRevisionId: response.blueprintRevisionId,
+        objectiveId: response.objectiveId, historyAttemptId: attemptId, transition: { state: outcome.state, recordRevision: masteryRecordRevision,
+          schedulingPriority: outcome.remediation ? 'remediation' : 'standard', nextReviewAt: followUp?.scheduledStartAt, remediationAttemptId: outcome.remediation ? attemptId : undefined, lastAttemptAt: response.acceptedAt, lastAttemptId: attemptId,
+          ...(outcome.setFirstIndependent ? { firstIndependentPassAt: response.acceptedAt, firstIndependentLocalDate: attemptLocalDate, firstIndependentTimezone: attemptTimezone } : {}), updatedAt: now } })
+      if (!measured && kind !== 'calibration' && pins.kind === 'session') {
+        const session = await ctx.db.get(pins.studySessionId)
+        if (session) await ctx.db.patch(session._id, { status: 'completed', revision: session.revision + 1 })
+      }
+    }
+    const protocol = getFrozenLearnMeasurementProtocol()
+    const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
+    const epoch = assignment?.epoch ?? protocol?.epoch
+    if (epoch && kind !== 'calibration') {
+      const configuration = await deriveLearnScorerConfiguration(response.scoringBinding)
+      const item = response.assessmentPins.kind === 'measurement' ? response.assessmentPins.itemPins : null
+      await appendLearnMeasurementFact(ctx, args.tokenIdentifier, { epoch, learningVoidId: response.learningVoidId, occurredAt: now,
+        fact: { kind: 'score', submissionId: response._id, attemptId, executionId: execution._id, scorePercent, scoreCommittedAt: now,
+          snapshot: { submissionId: response._id, attemptId, executionId: execution._id, kind, acceptedAt: response.acceptedAt,
+            scoreCommittedAt: now, scorePercent, thresholdPercent: 80, caseId: item?.caseId ?? (response.assessmentPins.kind !== 'measurement' ? response.assessmentPins.caseId : '' as Id<'learnAssessmentCases'>),
+            itemId: item?.itemId ?? null, familyRevision: item?.familyRevision ?? null, formLabel: item ? learnMeasurementItemPinsSchema.parse(item).formLabel : null,
+            ...configuration, observedModel: common.returnedScorerModel, observedUpstream: identity.status === 'deterministic' ? null : identity.servingProvider,
+            identityVersion: LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, identityStatus: identity.status, comparisonContractDigest: response.assessmentContractDigest,
+            supportManifestDigest: item?.supportManifestDigest ?? (response.assessmentPins.kind !== 'measurement' ? response.assessmentPins.supportManifestDigest : ''),
+            assistanceState: response.assistanceSnapshot.state, assistancePolicyVersion: response.assistanceSnapshot.policyVersion,
+            validityStatus: clean ? response.validitySnapshot.status : 'excluded', exclusionReasons: clean ? response.validitySnapshot.exclusionReasons : [...new Set([...response.validitySnapshot.exclusionReasons, 'current_integrity_excluded'])],
+            measurementEligible: clean && response.validitySnapshot.measurementEligible, masteryEligible,
+            evidenceAvailable: true, pasteObserved: response.assistanceSnapshot.pasteObserved, focusLossObserved: response.assistanceSnapshot.focusLossObserved,
+            instrumentationVersion: response.assistanceSnapshot.instrumentationVersion, masteryStateBefore: previousState, masteryStateAfter: outcome?.state ?? previousState } } })
+      if (outcome?.setFirstIndependent && response.assistanceSnapshot.state === 'unassisted') await freezeFirstIndependentClaimForOwner(ctx, args.tokenIdentifier, { basisAttemptId: attemptId,
+        ...(assignment?.status === 'admitted' ? { assignmentId: assignment._id } : {}) })
+      await writeMeasurementOpportunityFact(ctx, { userId: args.tokenIdentifier, epoch, learningVoidId: response.learningVoidId }, (await ctx.db.get(opportunity._id))!)
+    }
+    const eventBasis = { kind, gradingStatus: 'scored' as const, scorePercent, assistanceSnapshot: response.assistanceSnapshot,
+      validitySnapshot: response.validitySnapshot, masteryStateBefore: previousState, masteryStateAfter: outcome?.state ?? previousState }
+    for (const eventType of ['representative_pass', 'representative_fail', 'retained'] as const) {
+      if (!clean || !canEmitLearnMeasurementOutcomeEvent(eventType, eventBasis)) continue
+      await writeLearnMeasurementEvent(ctx, args.tokenIdentifier, { taxonomyVersion: LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION,
+        eventType, eventVersion: `${eventType}.v2`, sourceVersion: 'learn-v2.sealed-scoring.v1', contractVersion: opportunity.eligibilityPolicyVersion,
+        occurredAt: now, learningVoidId: response.learningVoidId, blueprintRevisionId: response.blueprintRevisionId, objectiveId: response.objectiveId,
+        assessmentOpportunityId: opportunity._id, submissionId: response._id, attemptId, measurementEligible: response.validitySnapshot.measurementEligible,
+        masteryEligible, ...(opportunity.horizonDays ? { horizonDays: opportunity.horizonDays } : {}),
+        ...(pins.kind === 'session' && pins.canvas ? { threadId: pins.canvas.threadId, activityId: pins.canvas.activityId } : {}),
+        metadata: { masteryState: outcome?.state ?? previousState, ...(response.assistanceSnapshot.state === 'unknown' ? {} : { assistanceLevel: response.assistanceSnapshot.answerRevealedAt !== null ? 'reveal' as const
+          : response.assistanceSnapshot.state === 'assisted' ? 'hint' as const : 'none' as const }) } })
+    }
+    return attemptId
+  },
 })
 
 export const submitMasteryAttempt = action({
@@ -1046,15 +1365,16 @@ export const submitMasteryAttempt = action({
   },
 })
 
-export const recordMasteryAttempt = internalMutation({
-  args: {
+export const legacyMasteryAttemptArgs = {
     tokenIdentifier: v.string(), studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), expectedContentRevision: v.number(), expectedPlanRecordRevision: v.number(), expectedBlueprintRecordRevision: v.number(),
     response: v.string(), confidence: v.number(), idempotencyKey: v.string(), scorerVerdict: scorerVerdictValidator,
     scoringJobId: v.optional(v.id('learnJobs')), scoringLeaseToken: v.optional(v.string()), providerResponseId: v.optional(v.string()),
     scoredSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))),
     scoredContentRevisionPins: v.optional(v.array(v.object({ claimId: v.string(), supportId: v.string(), sourceExcerptId: v.string(), sourceSnapshotId: v.string(), sourceRevisionNumber: v.number(), sourceRecordRevision: v.number(), sourceRevision: v.union(v.string(), v.null()), excerptLocator: v.string(), verifierVersion: v.string() }))),
-  },
-  handler: async (ctx, args) => {
+  }
+const legacyMasteryAttemptValidator = v.object(legacyMasteryAttemptArgs)
+
+export async function recordLegacyMasteryAttemptForOwner(ctx: MutationCtx, args: Infer<typeof legacyMasteryAttemptValidator>) {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     validateAttemptRequest(args)
     if (args.scorerVerdict.scorerVersion !== LEARN_V2_MASTERY_SCORER_VERSION || args.scorerVerdict.misconceptionTags.length > MAX_MISCONCEPTIONS || args.scorerVerdict.verifierVersions.length > MAX_SOURCES) throw new Error('Server scorer verdict is invalid')
@@ -1092,8 +1412,8 @@ export const recordMasteryAttempt = internalMutation({
     if (canonicalJson(rubric) !== canonicalJson(scope.objective.assessmentContract)) throw new Error('Started session rubric is no longer pinned to the objective')
     const scorePercent = scoreCriteria(rubric.criteria, args.scorerVerdict.criterionResults)
     const controlledFeedback = projectControlledFeedback({
-      criteria: rubric.criteria.map(criterion => ({ key: criterion.key, label: criterion.description?.trim() || criterion.key })),
-      outcomes: args.scorerVerdict.criterionResults,
+      criteria: [],
+      outcomes: [],
       misconceptionTags: args.scorerVerdict.misconceptionTags,
     })
     const evidence = await exactContentEvidence(ctx, args.tokenIdentifier, scope.content)
@@ -1124,5 +1444,14 @@ export const recordMasteryAttempt = internalMutation({
     await ctx.db.patch(scope.session._id, { status: 'completed', revision: scope.session.revision + 1, auditReasonCode: 'mastery_attempt_recorded' })
     await ctx.db.insert('learnPlanAuditEvents', { userId: args.tokenIdentifier, learningVoidId: scope.voidRow._id, studyPlanRevisionId: scope.plan._id, studySessionId: scope.session._id, reasonCode: 'mastery_attempt_recorded', details: JSON.stringify({ attemptId, kind, scorePercent, state: outcome.state, assisted }), createdAt: now })
     return { attemptId, scorePercent, state: outcome.state, nextReviewAt: followUp?.scheduledStartAt ?? null, feedback: controlledFeedback, replayed: false }
+}
+
+export const recordMasteryAttempt = internalMutation({
+  args: legacyMasteryAttemptValidator.fields,
+  handler: async (ctx, args) => {
+    if (!args.scoringJobId || !args.scoringLeaseToken) throw new Error('Saved submission and verified execution receipt required')
+    if (LEARN_MEASUREMENT_CAPABILITIES.scoring) throw new Error('Saved submission and verified execution receipt required')
+    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
+    return await recordLegacyMasteryAttemptForOwner(ctx, args)
   },
 })

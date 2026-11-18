@@ -76,7 +76,18 @@ describe('first Independent claim v2', () => {
     expect(() => resolveLearnReportFirstSlotV2(claimFact, { ...linkFact, fact: { ...linkFact.fact, slot: early } })).toThrow()
   })
 
-  it.each(['claimKey', 'claimSequence', 'claimFactSequence', 'epoch', 'sequence', 'occurredAt', 'stratum', 'closed_window'] as const)(
+  it.each([0, 1, 86_400_000])('accepts an honest late link at closeAt plus %s without moving the original clock', offset => {
+    const { claim, slot, claimFact, linkFact } = fixture()
+    const linkedAt = slot.clock.closeAt + offset
+    const late = { ...slot, linkedAt }
+    const appended = resolveLearnReportFirstSlotV2(claimFact, { ...linkFact, occurredAt: linkedAt, fact: { ...linkFact.fact, slot: late } })
+    const initial = resolveLearnReportFirstSlotV2({ ...claimFact, occurredAt: linkedAt, fact: { ...claim, firstSlot: late } })
+    expect(appended.firstSlot).toEqual(late)
+    expect(initial.firstSlot).toEqual(late)
+    expect(appended.firstSlot.kind === 'linked' && appended.firstSlot.clock).toEqual(slot.clock)
+  })
+
+  it.each(['claimKey', 'claimSequence', 'claimFactSequence', 'epoch', 'sequence', 'occurredAt', 'stratum'] as const)(
     'rejects a link with conflicting %s', field => {
       const { claimFact, linkFact } = fixture()
       const candidate = structuredClone(linkFact)
@@ -87,9 +98,6 @@ describe('first Independent claim v2', () => {
       if (field === 'sequence') candidate.sequence = 1
       if (field === 'occurredAt') candidate.occurredAt++
       if (field === 'stratum') candidate.fact.slot.stratum.flow = 'v2_canvas'
-      if (field === 'closed_window') {
-        candidate.occurredAt = candidate.fact.slot.linkedAt = candidate.fact.slot.clock.closeAt
-      }
       expect(() => resolveLearnReportFirstSlotV2(claimFact, candidate)).toThrow()
     },
   )

@@ -65,7 +65,7 @@ async function fixture() {
       const { _id: _id, _creationTime: _creationTime, submissionId: _submission, deliveryGrantId: _grant,
         assignmentId: _assignment, ...fields } = row
       return await ctx.db.insert('learnAssessmentOpportunities', { ...fields, createdAt: NOW,
-        delayedCheckId: `first-${slotClock.horizonDays}-${slotClock.openAt}`, phase: 'ready',
+        delayedCheckId: `first-${slotClock.horizonDays}-${slotClock.openAt}`, phase: 'ready', firstSlotEpoch: stratum.epoch,
         purpose: kind === 'retained_transfer' ? { kind, basisAttemptId, clock: slotClock }
           : { kind, assignmentId: f.rows.learnMeasurementAssignments, horizonDays: slotClock.horizonDays, clock: slotClock },
         ...(kind === 'measurement_delayed' ? { assignmentId: f.rows.learnMeasurementAssignments, horizonDays: slotClock.horizonDays } : {}),
@@ -384,13 +384,13 @@ test.each([0, 4_100])('keeps append reads constant with %d historical attempts',
       attemptedAt: NOW - (index + 1) * 86_400_000, acceptedAt: NOW - (index + 1) * 86_400_000, idempotencyKey: `history-${index}` })
   })
   expect(await writeMeasured(f, f.claim)).toEqual({ sequence: 2, factQueries: 4, queries: 5, documents: 5, gets: 4 })
-  expect(await writeMeasured(f, f.link(await f.makeSlot()))).toEqual({ sequence: 3, factQueries: 8, queries: 12, documents: 7, gets: 2 })
+  expect(await writeMeasured(f, f.link(await f.makeSlot()))).toEqual({ sequence: 3, factQueries: 8, queries: 10, documents: 8, gets: 2 })
 }, 30_000)
 
 test('bounds reads for an initially linked claim', async () => {
   const f = await fixture()
   expect(await writeMeasured(f, { ...f.claim, firstSlot: await f.makeSlot() }))
-    .toEqual({ sequence: 2, factQueries: 7, queries: 11, documents: 6, gets: 5 })
+    .toEqual({ sequence: 2, factQueries: 7, queries: 9, documents: 7, gets: 5 })
 })
 
 test.each([1, 65])('refuses an owner with %d frozen legacy rows from the start with one fact read', async count => {
@@ -659,7 +659,7 @@ test.each(['too_early', 'replacement', 'cold', 'wrong_basis', 'wrong_scope', 'st
   },
 )
 
-test.each(['submission', 'execution', 'attempt', 'scored_phase', 'expired'] as const)('rejects linkage after %s even with stale opportunity projections', async outcome => {
+test.each(['submission', 'execution', 'attempt', 'scored_phase', 'expired'] as const)('links the earliest original after %s with honest mutation time', async outcome => {
   const f = await fixture()
   await f.write(f.claim)
   const slot = await f.makeSlot()
@@ -670,20 +670,19 @@ test.each(['submission', 'execution', 'attempt', 'scored_phase', 'expired'] as c
     if (outcome === 'scored_phase') await ctx.db.patch(slot.firstCheckOpportunityId, { phase: 'scored_fail' })
   })
   if (outcome === 'expired') vi.setSystemTime(slot.clock.closeAt)
-  await expect(f.write(f.link(slot))).rejects.toThrow()
-  expect((await f.facts()).map(row => row.fact.kind)).toEqual(['enrollment', 'independent_claim_v2'])
+  slot.linkedAt = Date.now()
+  expect(await f.write(f.link(slot))).toBe(3)
+  expect((await f.facts())[2]?.fact).toMatchObject({ kind: 'first_slot_link', slot: { linkedAt: Date.now() } })
 })
 
-test('accepts a later qualifying slot until C5.3 (#434) selects the earliest one', async () => {
+test('rejects a later qualifying original even before its outcome', async () => {
   const f = await fixture()
   await f.write(f.claim)
   const earliest = await f.makeSlot()
   const later = await f.makeSlot('retained_transfer', { ...earliest.clock, horizonDays: 30, dueLocalDate: '2027-04-06',
     dueAt: Date.parse('2027-04-06T16:00:00Z'), openAt: Date.parse('2027-04-06T04:00:00Z'), closeAt: Date.parse('2027-04-07T04:00:00Z') })
-  expect(await f.write(f.link(later))).toBe(3)
-  const rows = await f.facts()
-  expect(resolveLearnReportFirstSlotV2(envelope(rows[1]!), envelope(rows[2]!)).firstSlot).toEqual(later)
-  await expect(f.write(f.link(earliest))).rejects.toThrow('already linked')
+  await expect(f.write(f.link(later))).rejects.toThrow('earliest qualifying original')
+  expect(await f.write(f.link(earliest))).toBe(3)
 })
 
 test('preserves the original link through failure and a later passing retry', async () => {
@@ -799,4 +798,62 @@ test.each(['void', 'account'] as const)('%s deletion removes both fact copies an
   expect(await f.t.run(ctx => ctx.db.get(f.f.rows.learnMeasurementReportRows))).toBeNull()
   expect(await f.t.run(ctx => ctx.db.get(foreign.rows.learnMeasurementReportFacts))).not.toBeNull()
   await f.t.finishInProgressScheduledFunctions()
+})
+
+
+test('an unresolved claim fixes the missed original materialized after close', async () => {
+  const f = await fixture()
+  await f.write(f.claim)
+  vi.setSystemTime(f.clock.closeAt + 1)
+  const slot = await f.makeSlot()
+  await f.t.run(ctx => ctx.db.patch(slot.firstCheckOpportunityId, { createdAt: Date.now(), phase: 'abandoned', reasonCode: 'missed_window' }))
+  expect(await f.write(f.link(slot))).toBe(3)
+  const rows = await f.facts()
+  const resolved = resolveLearnReportFirstSlotV2(envelope(rows[1]!), envelope(rows[2]!))
+  expect(resolved.firstSlot).toMatchObject({ kind: 'linked', firstCheckOpportunityId: slot.firstCheckOpportunityId, linkedAt: Date.now() })
+  if (resolved.firstSlot.kind !== 'linked') throw new Error('Expected fixed original')
+  expect(resolved.firstSlot.clock.closeAt).toBeLessThan(resolved.firstSlot.linkedAt)
+  const snapshot = reportClaim(f, resolved, f.clock)
+  expect(snapshot).toMatchObject({ firstSlot: { acceptance: null, result: null, unresolvedReason: 'missing_delayed' } })
+})
+
+test('a delayed score commit fixes an already registered missed original', async () => {
+  const f = await fixture()
+  const slot = await f.makeSlot()
+  vi.setSystemTime(f.clock.closeAt + 1)
+  await f.t.run(ctx => ctx.db.patch(slot.firstCheckOpportunityId, { phase: 'abandoned', reasonCode: 'missed_window' }))
+  slot.linkedAt = Date.now()
+  expect(await f.write({ ...f.claim, firstSlot: slot })).toBe(2)
+  const rows = await f.facts()
+  const resolved = resolveLearnReportFirstSlotV2(envelope(rows[1]!))
+  expect(reportClaim(f, resolved, f.clock)).toMatchObject({ firstSlot: { firstCheckOpportunityId: slot.firstCheckOpportunityId,
+    linkedAt: Date.now(), acceptance: null, result: null, unresolvedReason: 'missing_delayed' } })
+})
+
+test.each([false, true])('rejects reserves and later originals after an outcome, initially linked=%s', async initially => {
+  const f = await fixture()
+  const first = await f.makeSlot()
+  const later = await f.makeSlot('retained_transfer', { ...first.clock, horizonDays: 30, dueLocalDate: '2027-04-06',
+    dueAt: Date.parse('2027-04-06T16:00:00Z'), openAt: Date.parse('2027-04-06T04:00:00Z'), closeAt: Date.parse('2027-04-07T04:00:00Z') })
+  await f.t.run(ctx => ctx.db.patch(first.firstCheckOpportunityId, { phase: 'scored_fail' }))
+  if (!initially) await f.write(f.claim)
+  await expect(f.write(initially ? { ...f.claim, firstSlot: later } : f.link(later))).rejects.toThrow('earliest qualifying original')
+  await f.t.run(ctx => ctx.db.patch(later.firstCheckOpportunityId, { replacesOpportunityId: first.firstCheckOpportunityId }))
+  await expect(f.write(initially ? { ...f.claim, firstSlot: later } : f.link(later))).rejects.toThrow('not qualifying')
+  expect(await f.write(initially ? { ...f.claim, firstSlot: first } : f.link(first))).toBe(initially ? 2 : 3)
+})
+
+test('inherited reserve markers do not consume the three-original allowance', async () => {
+  const f = await fixture()
+  const slots = []
+  for (let index = 0; index < 3; index++) {
+    const slot = await f.makeSlot('retained_transfer', { ...f.clock, openAt: f.clock.openAt + index })
+    slots.push(slot)
+    await f.t.run(async ctx => {
+      const { _id, _creationTime, ...original } = (await ctx.db.get(slot.firstCheckOpportunityId))!
+      await ctx.db.insert('learnAssessmentOpportunities', { ...original, delayedCheckId: `reserve-${index}`,
+        replacesOpportunityId: slot.firstCheckOpportunityId, replacementReason: 'evidence_unavailable' })
+    })
+  }
+  expect(await f.write({ ...f.claim, firstSlot: slots[0]! })).toBe(2)
 })

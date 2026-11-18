@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { legacyScoringModules, legacyCalibrationAttempt } from '../tests/fixtures/learn-v2-legacy-scoring'
 import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -13,7 +14,7 @@ vi.mock('../server/utils/learn-v2-folder-evidence', () => ({
   retrieveLearnV2FolderEvidence: vi.fn(async ({ sources }: { sources: Array<{ alias: string }> }) => new Map(sources.map(source => [source.alias, 'Transient pinned folder evidence.']))),
 }))
 
-const modules = import.meta.glob('./**/*.ts')
+const modules = { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules }
 const identity = { tokenIdentifier: 'https://auth.example.com|map-owner', name: 'Map Owner' }
 const assessment = {
   version: 'learn-v2.assessment.v1' as const,
@@ -228,7 +229,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const objectiveIds = child!.objectives.slice(0, 3).map(row => row._id)
       const outcomes = []
       for (let index = 0; index < objectiveIds.length; index++) {
-        outcomes.push(await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: fork!._id, objectiveId: objectiveIds[index]!, expectedBlueprintRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: `calibration-${index}`, serverScorePercent: index === 0 ? 100 : 79, usedHint: index === 2, usedReveal: false, confidence: 5, rubricVersion: 'rubric.v1' }))
+        outcomes.push(await setup.t.mutation(legacyCalibrationAttempt, { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: fork!._id, objectiveId: objectiveIds[index]!, expectedBlueprintRecordRevision: 3, expectedVoidRevision: 5, idempotencyKey: `calibration-${index}`, serverScorePercent: index === 0 ? 100 : 79, usedHint: index === 2, usedReveal: false, confidence: 5, rubricVersion: 'rubric.v1' }))
       }
       expect(outcomes.map(row => row.result)).toEqual(['provisionally_known', 'learning', 'learning'])
       const records = await setup.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id)).collect())
@@ -249,8 +250,8 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       const setup = await setupMap()
       const accepted = await setup.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'direct-accept' })
       const args = { tokenIdentifier: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId: setup.objectives[0]!, expectedBlueprintRecordRevision: accepted.recordRevision, expectedVoidRevision: 3, idempotencyKey: 'single-attempt', serverScorePercent: 80, usedHint: false, usedReveal: false, confidence: 3, rubricVersion: 'rubric.v1' }
-      const attempt = await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)
-      expect((await setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, args)).attemptId).toBe(attempt.attemptId)
+      const attempt = await setup.t.mutation(legacyCalibrationAttempt, args)
+      expect((await setup.t.mutation(legacyCalibrationAttempt, args)).attemptId).toBe(attempt.attemptId)
       expect(await setup.t.run(ctx => ctx.db.get(attempt.attemptId))).toMatchObject({
         masteryStateBefore: 'unseen',
         masteryStateAfter: 'provisionally_known',
@@ -258,8 +259,8 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         masteryTransitionVersion: 'learn-v2.mastery-transition.v1',
         masteryRecordRevision: 1,
       })
-      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, serverScorePercent: 100 })).rejects.toThrow(/different request/)
-      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...args, idempotencyKey: 'duplicate-objective' })).rejects.toThrow(/already attempted/)
+      await expect(setup.t.mutation(legacyCalibrationAttempt, { ...args, serverScorePercent: 100 })).rejects.toThrow(/different request/)
+      await expect(setup.t.mutation(legacyCalibrationAttempt, { ...args, idempotencyKey: 'duplicate-objective' })).rejects.toThrow(/already attempted/)
       await setup.t.run(async (ctx) => {
         for (const [index, objectiveId] of setup.objectives.slice(1, 3).entries()) {
           await ctx.db.insert('masteryAttempts', { userId: identity.tokenIdentifier, blueprintRevisionId: setup.blueprint._id, objectiveId, attemptedAt: index + 1, idempotencyKey: `legacy-${index}`, result: 'passed' })
@@ -322,7 +323,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         const excerpt = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', identity.tokenIdentifier).eq('sourceSnapshotId', setup.sourceSnapshotId)).unique()
         await ctx.db.patch(excerpt!._id, { excerpt: 'Mutated evidence after dispatch.' })
       })
-      await expect(setup.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, {
+      await expect(setup.t.mutation(legacyCalibrationAttempt, {
         ...request,
         serverScorePercent: 100,
         rubricVersion: 'learn-v2.assessment.v1',
