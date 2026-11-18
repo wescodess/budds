@@ -5,25 +5,32 @@ import { v } from 'convex/values'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import schema from './schema'
 import { mutation } from './_generated/server'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
+import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
+import { deterministicLearnScoringReceipt } from './lib/learnV2MeasurementScoring'
+import { scorerDigest, scorerCanonicalJson } from '../server/utils/learn-v2-mastery-scorer'
+import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { requireAuth } from './lib/auth'
+import { recordLearnResponseIntegrityForOwner } from './lib/learnV2Responses'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
-import { freezeFirstIndependentClaimForOwner, recordLearnMeasurementInstructionForOwner, type EnrollmentRequest } from './lib/learnV2Measurement'
+import { freezeFirstIndependentClaimForOwner, recordLearnMeasurementInstructionForOwner, registerLearnFirstSlotForOwner, type EnrollmentRequest } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementDueBatch, replaceLearnMeasurementOpportunityForOwner } from './lib/learnV2MeasurementDueWork'
 import { learnMeasurementProtocolSchema, measurementClock, type LearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { LEARN_V2_FORM_ORDERS } from '../shared/learn-v2-measurement'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../shared/learn-v2-responses'
 import type { Id } from './_generated/dataModel'
 
-const policy = vi.hoisted(() => ({ enrollment: true, protocol: null as unknown }))
+const policy = vi.hoisted(() => ({ enrollment: true, scoring: false, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
-  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, responses: true, get enrollment() { return policy.enrollment } } }
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, responses: true, get scoring() { return policy.scoring }, get enrollment() { return policy.enrollment } } }
 })
 vi.mock('./lib/learnV2MeasurementAssignment', async original => {
   const value = await original<typeof import('./lib/learnV2MeasurementAssignment')>()
   return { ...value, getFrozenLearnMeasurementProtocol: () => policy.protocol }
 })
+vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementScorer: async () => policy.scorer }))
 const NOW = Date.parse('2027-03-07T15:00:00Z')
 const OWNER = { tokenIdentifier: 'https://owner.example|prospect', subject: 'prospect' }
 const HASH = `sha256:${'a'.repeat(64)}`
@@ -31,6 +38,7 @@ const modules = import.meta.glob('./**/*.ts')
 const enroll = makeFunctionReference<'mutation', EnrollmentRequest, { status: string, assignmentId: Id<'learnMeasurementAssignments'> | null, reasonCodes: string[] }>('learnV2Measurement:enrollProspect')
 const due = makeFunctionReference<'mutation', { userId: string, through?: number }, Awaited<ReturnType<typeof materializeLearnMeasurementDueBatch>>>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
 const claim = makeFunctionReference<'mutation', { assignmentId?: Id<'learnMeasurementAssignments'>, basisAttemptId: Id<'masteryAttempts'> }, Awaited<ReturnType<typeof freezeFirstIndependentClaimForOwner>>>('measurementFixture:claim')
+const integrity = makeFunctionReference<'mutation', { submissionId: Id<'learnResponses'>, effectiveAt: number }, Id<'learnResponseIntegrityEvents'> | null>('measurementFixture:integrity')
 const replace = makeFunctionReference<'mutation', Parameters<typeof replaceLearnMeasurementOpportunityForOwner>[2], Awaited<ReturnType<typeof replaceLearnMeasurementOpportunityForOwner>>>('measurementFixture:replace')
 const instruction = makeFunctionReference<'mutation', Parameters<typeof recordLearnMeasurementInstructionForOwner>[2], Id<'learnAssessmentExposures'>>('measurementFixture:instruction')
 const batch = makeFunctionReference<'mutation', { cursor: string | null, through: number, expectedSequence?: number, coverageComplete?: boolean }, Awaited<ReturnType<typeof materializeLearnMeasurementDueBatch>>>('measurementFixture:batch')
@@ -44,13 +52,15 @@ function syntheticProtocol(anchorKind: 'enrollment' | 'sealed_cold' = 'enrollmen
     scoringBinding: { kind: 'deterministic', engineVersion: 'synthetic.keyed.v1', thresholdVersion: 'threshold.v1', thresholdPercent: 80, transitionVersion: 'learn-v2.mastery-transition.v1' } })
 }
 
-beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); vi.stubEnv('LEARN_V2_ENABLED', 'true'); policy.enrollment = true; policy.protocol = syntheticProtocol() })
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers() })
+beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); vi.stubEnv('LEARN_V2_ENABLED', 'true'); policy.enrollment = true; policy.scoring = false; policy.scorer = null; policy.protocol = syntheticProtocol() })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers() })
 
 async function fixture(coreCount: 2 | 3 = 3, reserve = false) {
   const t = convexTest(schema, { ...modules, './measurementFixture.ts': async () => ({
     claim: mutation({ args: { assignmentId: v.optional(v.id('learnMeasurementAssignments')), basisAttemptId: v.id('masteryAttempts') },
       handler: async (ctx, args) => await freezeFirstIndependentClaimForOwner(ctx, await requireAuth(ctx), args) }),
+    integrity: mutation({ args: { submissionId: v.id('learnResponses'), effectiveAt: v.number() }, handler: async (ctx, args) =>
+      await recordLearnResponseIntegrityForOwner(ctx, await requireAuth(ctx), { ...args, kind: 'pre_seal_contamination', reasonCode: 'synthetic_contamination', policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION }) }),
     replace: mutation({ args: { assessmentOpportunityId: v.id('learnAssessmentOpportunities'), reason: v.union(v.literal('novel_item_unavailable'), v.literal('evidence_unavailable'), v.literal('contaminated'), v.literal('abandoned')) },
       handler: async (ctx, args) => await replaceLearnMeasurementOpportunityForOwner(ctx, await requireAuth(ctx), args) }),
     instruction: mutation({ args: { assignmentId: v.id('learnMeasurementAssignments'), studySessionId: v.id('studySessions'), flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')),
@@ -366,18 +376,20 @@ test.each([true, false])('first Independent claim freezes its next slot and repl
   let expectedId = day7._id
   if (!measured) expectedId = await f.t.run(async ctx => {
     const { _id, _creationTime, ...fields } = day7
+    await ctx.db.patch(assignment._id, { assignmentKey: 'another_epoch_assignment' })
     return await ctx.db.insert('learnAssessmentOpportunities', { ...fields, assignmentId: undefined, delayedCheckId: 'synthetic_retained_slot',
+      assessmentPins: { kind: 'session_application', caseId: assignment.allocation.cold.caseId, promptDigest: HASH, rubricVersion: 'rubric.v1', rubricDigest: HASH, supportManifestDigest: HASH },
       purpose: { kind: 'retained_transfer', basisAttemptId, clock: measurementClock(syntheticProtocol(), { at: NOW, eventId: basisAttemptId }, 'America/Toronto', 7) } })
   })
   const request = { ...(measured ? { assignmentId: assignment._id } : {}), basisAttemptId }
   const first = await f.owner.mutation(claim, request)
-  expect(first.kind).toBe('independent_claim')
-  if (first.kind !== 'independent_claim') throw new Error('Expected first claim')
-  expect(first.firstCheckOpportunityId).toBe(expectedId)
+  expect(first?.kind).toBe('independent_claim_v2')
+  if (!first || first.kind !== 'independent_claim_v2' || first.firstSlot.kind !== 'linked') throw new Error('Expected first claim')
+  expect(first.firstSlot.firstCheckOpportunityId).toBe(expectedId)
   vi.setSystemTime(day7.closeAt)
   await f.work()
   expect(await f.owner.mutation(claim, request)).toEqual(first)
-  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim')).toHaveLength(1)
+  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
 })
 
 test('ready history predating instrumentation never becomes clean on a new request or title', async () => {
@@ -495,4 +507,404 @@ test('due-work resumes bounded pages, restarts on source changes and preserves i
   const restart = await f.owner.mutation(batch, { cursor: first.cursor, through: NOW, expectedSequence: 0 })
   expect(restart).toMatchObject({ processed: 1, complete: false })
   expect(restart.cursor).not.toBeNull()
+})
+
+
+async function acceptFixtureCheck(f: Awaited<ReturnType<typeof fixture>>, opportunityId: Id<'learnAssessmentOpportunities'>,
+  payload: { kind: 'keyed', keys: string[] } | { kind: 'text', text: string } | { kind: 'numeric', value: number, unit: string } | { kind: 'ordered', entries: string[] } = { kind: 'keyed', keys: ['correct'] }) {
+  const revision = await f.grant(opportunityId)
+  const request = { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: `accept_${opportunityId}`,
+    response: { target: { assessmentOpportunityId: opportunityId }, expectedRevision: revision, payload } } }
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, request)
+  if (accepted.kind !== 'accepted') throw new Error(`Expected acceptance: ${JSON.stringify(accepted)}`)
+  const score = () => f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: `score_${opportunityId}` })
+  return { accepted, score, request }
+}
+
+async function seedIndependent(f: Pick<Awaited<ReturnType<typeof fixture>>, 't' | 'f'>) {
+  await f.t.run(async ctx => ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: f.f.capability.blueprintRevisionId,
+    objectiveId: f.f.capability.objectiveId, state: 'independent', recordRevision: 1,
+    scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, f.f.capability.blueprintRevisionId, f.f.capability.objectiveId),
+    firstIndependentPassAt: NOW, firstIndependentLocalDate: '2027-03-07', firstIndependentTimezone: 'America/Toronto', updatedAt: NOW }))
+}
+
+async function configureModelFixture(f: Awaited<ReturnType<typeof fixture>>) {
+  const definition = { configurationId: 'synthetic.legacy', configurationVersion: 'synthetic.config.v1', kind: 'legacy_baseline' as const,
+    requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
+      family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
+  const saved = await sealLearnScorerConfiguration(definition)
+  const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1',
+    configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }], legacyAllowlist: [definition.configurationId], prospectiveConfigurationId: null })
+  policy.scorer = { registry, saved }
+  policy.protocol = { ...syntheticProtocol(), scoringBinding: saved.binding }
+  vi.stubEnv('OPENROUTER_API_KEY', 'synthetic-unused')
+  vi.stubEnv('CF_ACCOUNT_ID', 'synthetic-unused')
+  vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'synthetic-unused')
+  await f.t.run(async ctx => {
+    for (const id of f.f.itemIds) {
+      const item = (await ctx.db.get(id))!
+      await ctx.db.patch(id, { responseSpec: { kind: 'bounded_rubric', version: 'response.v1', maxCodeUnits: 12000 } })
+      await ctx.db.patch(item.scoringSpecId!, { scoringBinding: saved.binding, payload: { kind: 'bounded_rubric', keyInsufficientReason: 'Reasoning is required.',
+        criteria: [{ key: 'rule', description: 'PRIVATE CRITERION DESCRIPTION', weightPercent: 100 }] } })
+    }
+  })
+  return saved
+}
+function modelReply(model = 'synthetic/model', provider = 'Synthetic Provider') {
+  return new Response(JSON.stringify({ id: 'synthetic-execution', model, choices: [{ index: 0, finish_reason: 'stop',
+    message: { role: 'assistant', content: JSON.stringify({ criterionResults: [{ key: 'rule', awarded: true }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider, model, selected: true }] }, pipeline: [] } }))
+}
+
+test.each([['keyed', 'correct'], ['keyed', 'wrong']] as const)('sealed deterministic %s answer %s scores exactly once without a provider or cold mastery', async (_kind, answer) => {
+  const f = await fixture()
+  policy.scoring = true
+  const network = vi.fn(() => { throw new Error('Unexpected provider call') })
+  vi.stubGlobal('fetch', network)
+  await f.admitted()
+  const cold = (await f.opportunities())[0]!
+  const response = await acceptFixtureCheck(f, cold._id, { kind: 'keyed', keys: [answer] })
+  vi.setSystemTime(NOW + 120_000)
+  const result = await response.score()
+  expect(result).toMatchObject({ status: 'scored', result: { scorePercent: answer === 'correct' ? 100 : 0, scoreCommittedAt: Date.now() } })
+  expect(await response.score()).toEqual(result)
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))
+  expect(attempts).toHaveLength(1)
+  expect(attempts[0]).toMatchObject({ kind: 'measurement_cold', acceptedAt: NOW, attemptedAt: NOW, scoreCommittedAt: Date.now() })
+  expect(attempts[0]?.response).toBeUndefined()
+  expect(await f.t.run(ctx => ctx.db.query('masteryRecords').take(8))).toHaveLength(0)
+  expect(await f.t.run(ctx => ctx.db.get(f.f.studySessionId))).toMatchObject({ status: 'ready' })
+  expect((await f.facts()).filter(row => row.fact.kind === 'score')).toHaveLength(1)
+  expect((await f.events()).filter(row => row.eventType === 'representative_pass')).toHaveLength(0)
+  expect(network).not.toHaveBeenCalled()
+})
+
+test.each([false, true])('a valid delayed failure preserves measurement below Independent and applies only eligible remediation: independent=%s', async independent => {
+  const f = await fixture()
+  policy.scoring = true
+  if (independent) await seedIndependent(f)
+  await f.admitted()
+  await f.work()
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt)
+  await f.work()
+  const response = await acceptFixtureCheck(f, day7._id, { kind: 'keyed', keys: ['wrong'] })
+  expect(await response.score()).toMatchObject({ status: 'scored', result: { scorePercent: 0 } })
+  expect(await response.score()).toMatchObject({ status: 'scored' })
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))
+  expect(attempts).toHaveLength(1)
+  expect(attempts[0]).toMatchObject({ kind: 'measurement_delayed', horizonDays: 7, masteryStateAfter: independent ? 'needs_review' : 'unseen' })
+  const records = await f.t.run(ctx => ctx.db.query('masteryRecords').take(8))
+  expect(records).toHaveLength(independent ? 1 : 0)
+  if (independent) expect(records[0]).toMatchObject({ state: 'needs_review', schedulingPriority: 'remediation', remediationAttemptId: attempts[0]!._id })
+  expect((await f.events()).map(row => row.eventVersion)).toEqual(['delayed_check_eligible.v2', 'delayed_check_attempt.v2', 'representative_fail.v2'])
+})
+
+test('competing commits consume one deterministic receipt and emit one retained transition', async () => {
+  const f = await fixture()
+  policy.scoring = true
+  await seedIndependent(f)
+  await f.admitted()
+  await f.work()
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt)
+  await f.work()
+  const response = await acceptFixtureCheck(f, day7._id)
+  const command = { tokenIdentifier: OWNER.tokenIdentifier, submissionId: response.accepted.submissionId }
+  const reservation = await f.owner.mutation(internal.learnV2Mastery.beginSealedMasteryScoring, command)
+  if (reservation.kind !== 'acquired') throw new Error('Expected lease')
+  const input = await f.owner.query(internal.learnV2Mastery.getSealedMasteryScoringInput, command)
+  const receipt = await deterministicLearnScoringReceipt(input, { dispatchedAt: Date.now(), dispatchOrdinal: 1, leaseIdentityHash: await privacyDigest(reservation.leaseToken) })
+  await expect(f.owner.mutation(internal.learnV2Mastery.registerSealedMasteryScoring, { ...command, receiptJson: JSON.stringify({ ...receipt, responseDigest: HASH }) })).rejects.toThrow()
+  const executionId = await f.owner.mutation(internal.learnV2Mastery.registerSealedMasteryScoring, { ...command, receiptJson: JSON.stringify(receipt) })
+  const commits = await Promise.all([f.owner.mutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { ...command, executionId }),
+    f.owner.mutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { ...command, executionId })])
+  expect(commits[0]).toBe(commits[1])
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(1)
+  expect((await f.events()).filter(row => row.eventType === 'retained')).toHaveLength(1)
+  expect((await f.events()).filter(row => row.eventType === 'representative_pass')).toHaveLength(1)
+})
+
+test('a saved answer survives a provider failure and scores with its bound model after the default changes', async () => {
+  const f = await fixture()
+  policy.scoring = true
+  await configureModelFixture(f)
+  const network = vi.fn<typeof fetch>(async () => new Response('Definitive fixture failure', { status: 400 }))
+  vi.stubGlobal('fetch', network)
+  await f.admitted()
+  const cold = (await f.opportunities())[0]!
+  const response = await acceptFixtureCheck(f, cold._id, { kind: 'text', text: 'Original immutable answer.' })
+  expect(await response.score()).toMatchObject({ status: 'retryable_failure' })
+  expect(await f.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toMatchObject([{ payload: { text: 'Original immutable answer.' } }])
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(0)
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { ...response.request.submission,
+    response: { ...response.request.submission.response, payload: { kind: 'text', text: 'Changed answer.' } } } })).toMatchObject({ kind: 'rejected', reasonCode: 'idempotency_conflict' })
+  vi.stubEnv('LEARN_V2_MASTERY_MODEL', 'another/model')
+  network.mockImplementation(async () => modelReply())
+  const result = await response.score()
+  expect(result).toMatchObject({ status: 'scored', result: { scorePercent: 100, feedbackCodes: ['pass'] } })
+  expect(JSON.stringify(result)).not.toContain('PRIVATE CRITERION DESCRIPTION')
+  expect(network).toHaveBeenCalledTimes(2)
+  expect(JSON.parse(String(network.mock.calls[1]![1]?.body)).model).toBe('synthetic/model')
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))
+  expect(attempts[0]).toMatchObject({ requestedScorerModel: 'synthetic/model', returnedScorerModel: 'synthetic/model', acceptedAt: NOW })
+})
+
+test.each(['model', 'upstream', 'terminal'] as const)('a %s mismatch stays unscored and cannot redispatch the answer', async mismatch => {
+  const f = await fixture()
+  policy.scoring = true
+  await configureModelFixture(f)
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    const response = modelReply(mismatch === 'model' ? 'another/model' : 'synthetic/model', mismatch === 'upstream' ? '' : 'Synthetic Provider')
+    if (mismatch !== 'terminal') return response
+    const value = await response.json()
+    value.choices[0].finish_reason = 'length'
+    return new Response(JSON.stringify(value))
+  }))
+  await f.admitted()
+  const response = await acceptFixtureCheck(f, (await f.opportunities())[0]!._id, { kind: 'text', text: 'A saved answer.' })
+  expect(await response.score()).toMatchObject({ status: 'reconciliation_required' })
+  expect(await response.score()).toMatchObject({ status: 'reconciliation_required' })
+  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(0)
+  expect((await f.facts()).filter(row => row.fact.kind === 'score')).toHaveLength(0)
+})
+
+
+async function ordinaryFixture() {
+  const f = await fixture()
+  policy.scoring = true
+  const saved = await configureModelFixture(f)
+  const args = await f.t.run(async ctx => {
+    const userId = OWNER.tokenIdentifier
+    const session = (await ctx.db.get(f.f.studySessionId))!
+    const plan = (await ctx.db.get(f.f.studyPlanRevisionId))!
+    const objective = (await ctx.db.get(f.f.capability.objectiveId))!
+    const prompt = 'Apply the source rule to this ordinary case.'
+    const rubricSnapshot = JSON.stringify(objective.assessmentContract)
+    const contentId = await ctx.db.insert('sessionContent', { userId, studySessionId: session._id, studyPlanRevisionId: plan._id,
+      blueprintRevisionId: f.f.capability.blueprintRevisionId, objectiveId: objective._id, revision: 1, status: 'published',
+      inputDigest: HASH, generatorVersion: 'synthetic.generator.v1', providerModel: 'different/generator', assessmentRubricSnapshot: rubricSnapshot, createdAt: NOW, publishedAt: NOW })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: contentId, order: 0, kind: 'transfer_challenge', content: prompt })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: contentId, order: 1, kind: 'worked_example', content: 'Separate-case support.' })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: contentId, order: 2, kind: 'faded_example', content: 'Separate-case hint.' })
+    const excerpt = (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', f.f.sourceSnapshotId)).first())!
+    const claimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId: contentId, order: 0, claim: 'The rule applies.', verifierVersion: 'synthetic.verifier.v1', confidence: 1 })
+    await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId: claimId, sourceExcerptId: excerpt._id,
+      sourceSnapshotId: f.f.sourceSnapshotId, entailment: 'entailed', verifierVersion: 'synthetic.verifier.v1', confidence: 1, conflictStatus: 'clear', evidenceStatus: 'evidence_available' })
+    const validation = (await ctx.db.get(f.f.itemIds[0]!))!.publicationValidationId!
+    const caseId = await ctx.db.insert('learnAssessmentCases', { ...f.f.base, caseKey: 'ordinary-case', scenarioFingerprint: HASH,
+      solutionFingerprint: HASH, identityPolicyVersion: 'synthetic.identity.v1', identityValidationId: validation, usageClass: 'instructional' })
+    const opportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...f.f.base, ...f.f.capability, scopeKind: 'v2', evidenceStatus: 'available',
+      contextPins: { kind: 'session', studyPlanId: plan.studyPlanId, studyPlanRevisionId: plan._id, planRevision: plan.revision,
+        planRecordRevision: plan.recordRevision ?? 1, studySessionId: session._id, sessionRevision: 1, sessionContentId: contentId, contentRevision: 1,
+        contentInputDigest: HASH, generatorVersion: 'synthetic.generator.v1' }, purpose: { kind: 'independent_application' },
+      assessmentPins: { kind: 'session_application', caseId, promptDigest: await privacyDigest(prompt), rubricVersion: 'learn-v2.assessment.v1',
+        rubricDigest: await privacyDigest(objective.assessmentContract), supportManifestDigest: HASH }, scoringBinding: saved.binding,
+      delayedCheckId: 'ordinary-original', phase: 'test_open', revision: 1, eligibilityPolicyVersion: 'synthetic.ordinary.v1', operationalEligibility: 'eligible',
+      openAt: NOW, closeAt: NOW + 86_400_000, checkSequence: 0, originalSlot: true,
+      deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
+    const grantId = await ctx.db.insert('learnAssessmentExposures', { ...f.f.base, caseId, learningVoidId: f.f.capability.learningVoidId,
+      blueprintRevisionId: f.f.capability.blueprintRevisionId, objectiveId: objective._id, assessmentOpportunityId: opportunityId,
+      purpose: 'practice', status: 'granted', serverTime: NOW, projectionDigest: await privacyDigest(prompt), deliveryReceiptHash: HASH,
+      policyVersion: 'synthetic.disclosure.v1', provenanceVersion: 'synthetic.grant.v1' })
+    await ctx.db.patch(opportunityId, { deliveryGrantId: grantId })
+    await ctx.db.patch(session._id, { status: 'in_progress', startedSessionContentId: contentId, startedSessionContentRevision: 1, assistanceRevision: 0 })
+    return { studySessionId: session._id, expectedSessionRevision: 1, expectedContentRevision: 1, expectedPlanRecordRevision: 1,
+      expectedBlueprintRecordRevision: 1, response: 'The ordinary application response.', confidence: 4, idempotencyKey: 'ordinary:compatibility:key', opportunityId }
+  })
+  const { opportunityId, ...request } = args
+  return { ...f, request, opportunityId }
+}
+
+test('the ordinary compatibility wrapper seals before scoring and atomically writes one v2 Independent claim at acceptance time', async () => {
+  const f = await ordinaryFixture()
+  const network = vi.fn<typeof fetch>(async () => modelReply())
+  vi.stubGlobal('fetch', network)
+  const first = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, f.request)
+  expect(first).toMatchObject({ status: 'completed', scorePercent: 100, state: 'independent' })
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, f.request)).toMatchObject({ status: 'completed', attemptId: 'attemptId' in first ? first.attemptId : undefined })
+  expect(network).toHaveBeenCalledTimes(1)
+  const claims = (await f.facts()).filter(row => row.fact.kind === 'independent_claim_v2')
+  expect(claims).toHaveLength(1)
+  expect(claims[0]?.fact).toMatchObject({ firstIndependentAt: NOW, firstSlot: { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' } })
+  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim')).toHaveLength(0)
+  expect((await f.facts()).filter(row => row.fact.kind === 'response')).toHaveLength(1)
+  expect((await f.events()).filter(row => row.eventType === 'representative_pass')).toHaveLength(1)
+  expect((await f.events())[0]?.threadId).toBeUndefined()
+  expect(JSON.stringify(first)).not.toContain('Apply the rule.')
+})
+
+test('post-seal help and its replay cannot change frozen ordinary assistance or create a second claim', async () => {
+  const f = await ordinaryFixture()
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const { tokenIdentifier: _owner, ...noToken } = { tokenIdentifier: OWNER.tokenIdentifier, ...f.request }
+  const accepted = await f.owner.mutation(internal.learnV2Mastery.acceptCompatibilityMasterySubmission, { tokenIdentifier: OWNER.tokenIdentifier, ...noToken })
+  if (accepted.kind !== 'accepted') throw new Error('Expected acceptance')
+  await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId, expectedSessionRevision: 1, kind: 'substantive_hint' })
+  await f.t.run(ctx => ctx.db.patch(f.f.studySessionId, { timezone: 'Pacific/Auckland' }))
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION, submissionId: accepted.submissionId, idempotencyKey: 'score_saved_ordinary_123456' })
+  expect(result).toMatchObject({ status: 'scored', result: { feedbackCodes: ['pass'] } })
+  expect(await f.t.run(ctx => ctx.db.get(accepted.submissionId))).toMatchObject({ assistanceSnapshot: { state: 'unassisted', substantiveHintUsedAt: null } })
+  expect((await f.facts()).find(row => row.fact.kind === 'independent_claim_v2')?.fact).toMatchObject({ firstIndependentTimezone: 'America/Toronto', firstIndependentLocalDate: '2027-03-07' })
+})
+
+test('test-only assistance is gated before an old help replay returns its content', async () => {
+  const f = await ordinaryFixture()
+  await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId, expectedSessionRevision: 1, kind: 'substantive_hint' })
+  const basisAttemptId = await f.t.run(ctx => ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier,
+    objectiveId: f.f.capability.objectiveId, blueprintRevisionId: f.f.capability.blueprintRevisionId, attemptedAt: NOW, idempotencyKey: 'test-only-basis' }))
+  await f.t.run(ctx => ctx.db.patch(f.opportunityId, { purpose: { kind: 'retained_transfer', basisAttemptId,
+    clock: measurementClock(syntheticProtocol(), { at: NOW, eventId: basisAttemptId }, 'America/Toronto', 7) } }))
+  await expect(f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId,
+    expectedSessionRevision: 2, kind: 'substantive_hint' })).rejects.toThrow('before sealing')
+})
+
+test.each(['numeric', 'ordered'] as const)('sealed %s checks use their private deterministic key without a provider', async kind => {
+  const f = await fixture()
+  policy.scoring = true
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected model') }))
+  await f.t.run(async ctx => {
+    for (const id of f.f.itemIds) {
+      const item = (await ctx.db.get(id))!
+      await ctx.db.patch(id, { responseSpec: kind === 'numeric' ? { kind, version: 'response.v1', unit: 'm' } : { kind, version: 'response.v1', maxEntries: 3 } })
+      await ctx.db.patch(item.scoringSpecId!, { payload: kind === 'numeric' ? { kind, expected: 10, unit: 'm', absoluteTolerance: 0.1, relativeTolerance: 0, normalizationVersion: 'normalization.v1' }
+        : { kind, expected: ['first', 'second'], normalizationVersion: 'normalization.v1' } })
+    }
+  })
+  await f.admitted()
+  const response = await acceptFixtureCheck(f, (await f.opportunities())[0]!._id,
+    kind === 'numeric' ? { kind, value: 10.05, unit: 'm' } : { kind, entries: ['first', 'second'] })
+  expect(await response.score()).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+test('scheduling an ordinary retained original links an existing unresolved v2 claim once, even after a miss', async () => {
+  const f = await ordinaryFixture()
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const result = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, f.request)
+  if (result.status !== 'completed') throw new Error('Expected Independent')
+  vi.setSystemTime(NOW + 9 * 86_400_000)
+  const originalId = await f.t.run(async ctx => {
+    const { _id, _creationTime, submissionId: _submission, scoringJobId: _job, authoritativeAttemptId: _attempt, ...row } = (await ctx.db.get(f.opportunityId))!
+    const clock = measurementClock(syntheticProtocol(), { at: NOW, eventId: result.attemptId }, 'America/Toronto', 7)
+    const id = await ctx.db.insert('learnAssessmentOpportunities', { ...row, delayedCheckId: 'retained-original', createdAt: Date.now(),
+      purpose: { kind: 'retained_transfer', basisAttemptId: result.attemptId, clock }, openAt: clock.openAt, closeAt: clock.closeAt, dueAt: clock.dueAt,
+      firstSlotEpoch: undefined, phase: 'abandoned', reasonCode: 'missed_window' })
+    await registerLearnFirstSlotForOwner(ctx, (await ctx.db.get(id))!, syntheticProtocol().epoch)
+    return id
+  })
+  const rows = await f.facts()
+  expect(rows.filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
+  expect(rows.filter(row => row.fact.kind === 'first_slot_link')).toHaveLength(1)
+  expect(rows.find(row => row.fact.kind === 'first_slot_link')?.fact).toMatchObject({ slot: { firstCheckOpportunityId: originalId, linkedAt: Date.now() } })
+  await f.t.run(async ctx => registerLearnFirstSlotForOwner(ctx, (await ctx.db.get(originalId))!, syntheticProtocol().epoch))
+  expect((await f.facts()).filter(row => row.fact.kind === 'first_slot_link')).toHaveLength(1)
+})
+
+test('new scoring cannot commit a raw job-less verdict or downgrade a sealed opportunity when the capability is off', async () => {
+  const f = await ordinaryFixture()
+  const raw = { tokenIdentifier: OWNER.tokenIdentifier, ...f.request, scorerVerdict: { scorerVersion: 'learn-v2.mastery-scorer.v1',
+    criterionResults: [{ key: 'rule', awarded: true }], misconceptionTags: [], verifierVersions: ['synthetic.verifier.v1'] } }
+  await expect(f.owner.mutation(internal.learnV2Mastery.recordMasteryAttempt, raw)).rejects.toThrow('verified execution receipt required')
+  policy.scoring = false
+  await expect(f.owner.mutation(internal.learnV2Mastery.recordMasteryAttempt, raw)).rejects.toThrow('verified execution receipt required')
+  await expect(f.owner.action(api.learnV2Mastery.submitMasteryAttempt, f.request)).rejects.toThrow('verified execution receipt required')
+})
+
+test('assisted preservation of Independent creates no new claim', async () => {
+  const f = await ordinaryFixture()
+  await seedIndependent(f)
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId, expectedSessionRevision: 1, kind: 'substantive_hint' })
+  await f.t.run(async ctx => {
+    const row = (await ctx.db.get(f.opportunityId))!
+    if (row.contextPins.kind !== 'session') throw new Error('Expected session')
+    await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, sessionRevision: 2 } })
+  })
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { ...f.request, expectedSessionRevision: 2 })).toMatchObject({ status: 'completed', state: 'independent' })
+  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(0)
+})
+
+async function calibrationFixture() {
+  const f = await ordinaryFixture()
+  const old = (await f.t.run(ctx => ctx.db.get(f.opportunityId)))!
+  if (old.assessmentPins.kind !== 'session_application') throw new Error('Expected ordinary pins')
+  await f.t.run(async ctx => {
+    await ctx.db.patch(f.f.capability.learningVoidId, { status: 'calibration' })
+    await ctx.db.insert('learnObjectiveSources', { userId: OWNER.tokenIdentifier, objectiveId: f.f.capability.objectiveId, sourceSnapshotId: f.f.sourceSnapshotId, coverage: 'strong' })
+    await ctx.db.patch(f.opportunityId, { purpose: { kind: 'calibration' }, contextPins: { kind: 'calibration', origin: 'today' },
+      assessmentPins: { kind: 'calibration', caseId: old.assessmentPins.kind === 'session_application' ? old.assessmentPins.caseId : '' as Id<'learnAssessmentCases'>,
+        promptDigest: old.assessmentPins.kind === 'session_application' ? old.assessmentPins.promptDigest : HASH,
+        assessmentContractVersion: old.assessmentContractVersion, assessmentContractDigest: old.assessmentContractDigest, supportManifestDigest: HASH } })
+  })
+  const args = { blueprintRevisionId: f.f.capability.blueprintRevisionId, objectiveId: f.f.capability.objectiveId,
+    expectedBlueprintRecordRevision: 1, expectedVoidRevision: 1, response: 'A retained calibration answer.', confidence: 4, idempotencyKey: 'calibration:legacy:key' }
+  return { ...f, calibrationArgs: args }
+}
+
+test('calibration compatibility seals the answer before an unavailable scorer and rejects a raw score commit', async () => {
+  const f = await calibrationFixture()
+  vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected provider') }))
+  const args = { blueprintRevisionId: f.f.capability.blueprintRevisionId, objectiveId: f.f.capability.objectiveId,
+    expectedBlueprintRecordRevision: 1, expectedVoidRevision: 1, response: 'A retained calibration answer.', confidence: 4, idempotencyKey: 'calibration:legacy:key' }
+  expect(await f.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, args)).toMatchObject({ status: 'retryable_failure' })
+  expect(await f.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toMatchObject([{ payload: { text: args.response } }])
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(0)
+  await expect(f.owner.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: OWNER.tokenIdentifier,
+    ...args, serverScorePercent: 100, usedHint: false, usedReveal: false, rubricVersion: 'learn-v2.assessment.v1' })).rejects.toThrow('verified execution receipt required')
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+test('a verified calibration execution preserves its baseline request and numerical result', async () => {
+  const f = await calibrationFixture()
+  const base = policy.scorer as { registry: Awaited<ReturnType<typeof createLearnScorerRegistry>>, saved: Awaited<ReturnType<typeof sealLearnScorerConfiguration>> }
+  const snapshot = JSON.stringify({ baseline: 'learn-v2.calibration-score.v1', requestedModel: 'synthetic/model', threshold: 80 })
+  const configurationDigest = await scorerDigest(snapshot)
+  const saved = { binding: { ...base.saved.binding, configurationId: 'synthetic.calibration', scorerVersion: 'learn-v2.calibration-scorer.v1', configurationDigest },
+    frozenConfiguration: { digest: configurationDigest, snapshot } }
+  policy.scorer = { saved, registry: { ...base.registry, verifySaved: async (candidate: typeof saved) => {
+    if (scorerCanonicalJson(candidate) !== scorerCanonicalJson(saved)) throw new Error('Unregistered calibration fixture')
+    return saved
+  } } }
+  await f.t.run(ctx => ctx.db.patch(f.opportunityId, { scoringBinding: saved.binding }))
+  const network = vi.fn<typeof fetch>(async () => modelReply())
+  vi.stubGlobal('fetch', network)
+  const result = await f.owner.action(api.learnV2MapCalibration.submitCalibrationAttempt, f.calibrationArgs)
+  expect(result.status, JSON.stringify(result)).toBe('scored')
+  const request = JSON.parse(String(network.mock.calls[0]![1]?.body))
+  expect(request.model).toBe('synthetic/model')
+  expect(request.temperature).toBe(0)
+  expect(request.max_tokens).toBe(2000)
+  expect(request.response_format.json_schema.name).toBe('learn_v2_calibration_score')
+  expect(JSON.parse(request.messages[1].content)).toMatchObject({ contract: 'learn-v2.calibration-score.v1', learnerResponse: f.calibrationArgs.response })
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))
+  expect(attempts).toHaveLength(1)
+  expect(attempts[0]).toMatchObject({ kind: 'calibration', serverScorePercent: 100, masteryStateAfter: 'provisionally_known', acceptedAt: NOW })
+  expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(0)
+  expect((await f.events()).filter(row => row.eventType === 'retained' || row.eventType === 'representative_pass')).toHaveLength(0)
+})
+
+
+test('later confirmed pre-seal contamination preserves acceptance but excludes score events and mastery', async () => {
+  const f = await fixture()
+  policy.scoring = true
+  await seedIndependent(f)
+  await f.admitted()
+  await f.work()
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt)
+  await f.work()
+  const response = await acceptFixtureCheck(f, day7._id)
+  await f.owner.mutation(integrity, { submissionId: response.accepted.submissionId, effectiveAt: response.accepted.acceptedAt })
+  expect(await response.score()).toMatchObject({ status: 'scored', result: { scorePercent: 100, feedbackCodes: ['excluded_result'] } })
+  expect(await f.t.run(ctx => ctx.db.get(response.accepted.submissionId))).toMatchObject({ currentEligibility: 'excluded', assistanceSnapshot: { state: 'unassisted' } })
+  expect((await f.t.run(ctx => ctx.db.query('masteryRecords').take(8)))[0]).toMatchObject({ state: 'independent', recordRevision: 1 })
+  expect((await f.events()).map(row => row.eventType)).toEqual(['delayed_check_eligible', 'delayed_check_attempt'])
+  expect((await f.facts()).find(row => row.fact.kind === 'score')?.fact).toMatchObject({ snapshot: { validityStatus: 'excluded', measurementEligible: false, masteryEligible: false } })
 })
