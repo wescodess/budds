@@ -156,6 +156,21 @@ describe('Learn V2 journey workspace seams', () => {
     expect(wrapper.emitted('navigate')?.[0]).toEqual(['sources'])
   })
 
+  it('names the folder and every lifecycle in sentence case', async () => {
+    const Comp = await import(`${path}/MissionWorkspaceShell.vue`)
+    const labels = { draft: 'Draft', source_review: 'Source review', map_review: 'Map review', calibration: 'Calibration', plan_review: 'Plan review', active: 'Active', blocked: 'Blocked', superseded: 'Superseded' } as const
+    for (const [lifecycle, label] of Object.entries(labels)) {
+      const wrapper = await mountSuspended(Comp.default, { props: { mission: { ...mission, lifecycle: lifecycle as keyof typeof labels }, activeSection: 'map', readiness: [] } })
+      const badge = wrapper.get('[data-slot="badge"]')
+      expect(badge.text()).toBe(label)
+      expect(badge.classes()).not.toContain('capitalize')
+      const folder = wrapper.get('header > p')
+      expect(folder.text()).toBe('Frontend foundations')
+      expect(folder.classes()).not.toContain('uppercase')
+      wrapper.unmount()
+    }
+  })
+
   it('gives the learning map the full width without the side cards', async () => {
     const Comp = await import(`${path}/MissionWorkspaceShell.vue`)
     const props = { mission: { ...mission, lifecycle: 'map_review' as const }, readiness: [{ id: 'outcome', label: 'Outcome', state: 'complete' as const }] }
