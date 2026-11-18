@@ -69,7 +69,8 @@ onMounted(async () => {
   await nextTick()
   if (state === 'order') {
     await click('[data-testid=learn-v2-map-select-objective-10]')
-    await click('[data-testid=learn-v2-map-order]')
+    find('[data-testid=learn-v2-map-order]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    await nextTick()
   }
   if (state === 'unsaved' || state === 'sources') {
     await click('[data-testid=learn-v2-map-select-objective-10]')

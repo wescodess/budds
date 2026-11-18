@@ -330,14 +330,15 @@ function reveal(id: string) {
   target?.focus({ preventScroll: true })
 }
 
-function toggleOrder() {
+function toggleOrder(pointer = false) {
   orderOpen.value = !orderOpen.value
   if (!orderOpen.value) return
   void nextTick(() => {
     const region = document.getElementById(`${uid}-order`)
     const current = region?.querySelector<HTMLElement>('[aria-current="true"]')
     if (region && current) region.scrollTop += current.getBoundingClientRect().top - region.getBoundingClientRect().top - region.clientHeight / 2
-    ;(current ?? region?.querySelector<HTMLElement>('a'))?.focus({ preventScroll: true })
+    const target = pointer ? document.getElementById(`${uid}-order-dialog`) : current ?? region?.querySelector<HTMLElement>('a')
+    target?.focus({ preventScroll: true })
   })
 }
 
@@ -350,12 +351,13 @@ function closeOrder() {
 <template>
   <section data-testid="learn-v2-learning-trail">
     <article class="mx-auto max-w-3xl">
-      <p v-if="failure" role="alert" class="mb-4 rounded-lg border border-destructive/40 p-3 text-sm text-destructive" :class="failure.reason === 'changed' ? 'flex flex-wrap items-center gap-x-3 gap-y-2' : ''" data-testid="learn-v2-map-save-error">
-        <template v-if="failure.reason === 'changed'">
-          <span class="min-w-0 flex-1 basis-64">The map changed somewhere else, so objective {{ failure.number }} wasn’t saved. Your changes are still here.</span>
-          <UiButton variant="outline" size="sm" class="text-foreground" data-testid="learn-v2-map-reload" @click="reload">Reload and keep my changes</UiButton>
-        </template>
-        <template v-else>Couldn’t save objective {{ failure.number }}. Your changes are still here. Try again.</template>
+      <p v-if="failure" role="alert" class="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-destructive/40 p-3 text-sm text-foreground" data-testid="learn-v2-map-save-error">
+        <span class="flex min-w-0 flex-1 basis-64 items-start gap-2">
+          <CircleAlert class="mt-0.5 size-4 shrink-0 text-destructive" />
+          <span v-if="failure.reason === 'changed'" class="min-w-0">The map changed somewhere else, so objective {{ failure.number }} wasn’t saved. Your changes are still here.</span>
+          <span v-else class="min-w-0">Couldn’t save objective {{ failure.number }}. Your changes are still here. Try again.</span>
+        </span>
+        <UiButton v-if="failure.reason === 'changed'" variant="outline" size="sm" data-testid="learn-v2-map-reload" @click="reload">Reload and keep my changes</UiButton>
       </p>
 
       <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -373,7 +375,7 @@ function closeOrder() {
 
       <div v-else-if="!objectives.length" class="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center" data-testid="learn-v2-map-empty">
         <h3 class="font-dm-sans text-lg font-semibold text-foreground">No objectives yet</h3>
-        <p class="mx-auto mt-2 max-w-md text-sm text-foreground">Budds builds this map from the sources you accept. Go to Sources to generate it.</p>
+        <p class="mx-auto mt-2 max-w-md text-sm text-foreground">Budds builds this map from the sources you accept. <button type="button" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-empty-sources" @click="emit('manageSources')">Go to Sources</button> to generate it.</p>
       </div>
 
       <template v-else>
@@ -464,9 +466,9 @@ function closeOrder() {
                         <CircleAlert v-else-if="mode === 'failed'" class="mt-0.5 size-4 shrink-0 text-destructive" />
                         <span class="min-w-0">{{ statusText }}</span>
                       </p>
-                      <div class="flex shrink-0 gap-2">
-                        <UiButton variant="ghost" :disabled="saving" data-testid="learn-v2-objective-close" @click="close()">{{ mode === 'clean' ? 'Close' : 'Cancel' }}</UiButton>
-                        <UiButton :variant="mode === 'clean' ? 'secondary' : 'default'" :disabled="!canSave" data-testid="learn-v2-save-objective" @click="submit"><LoaderCircle v-if="saving" class="size-4 animate-spin motion-reduce:animate-none" />{{ saving ? 'Saving' : 'Save changes' }}</UiButton>
+                      <div class="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
+                        <UiButton variant="ghost" class="max-sm:px-4" :disabled="saving" data-testid="learn-v2-objective-close" @click="close()">{{ mode === 'clean' ? 'Close' : 'Cancel' }}</UiButton>
+                        <UiButton :variant="mode === 'clean' ? 'secondary' : 'default'" class="max-sm:px-4" :disabled="!canSave" data-testid="learn-v2-save-objective" @click="submit"><LoaderCircle v-if="saving" class="size-4 animate-spin motion-reduce:animate-none" />{{ saving ? 'Saving' : 'Save changes' }}</UiButton>
                       </div>
                     </div>
                   </div>
@@ -503,16 +505,17 @@ function closeOrder() {
 
         <div class="sticky bottom-0 z-20 bg-background pt-2 pb-4">
           <div class="relative flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card p-2">
-            <button :id="`${uid}-order-button`" type="button" :aria-expanded="orderOpen" class="inline-flex min-h-9 min-w-0 items-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-order" @click="toggleOrder">
+            <button :id="`${uid}-order-button`" type="button" :aria-expanded="orderOpen" class="inline-flex min-h-9 min-w-0 items-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-order" @click="toggleOrder($event.detail > 0)">
               <ListOrdered class="size-4 shrink-0 text-primary" /><span>Order</span><span class="hidden font-inter text-xs font-medium text-muted-foreground sm:inline">{{ objectiveCount(placed.length) }} · {{ duration(totalMinutes) }}</span><ChevronDown v-if="orderOpen" class="size-4 shrink-0" /><ChevronUp v-else class="size-4 shrink-0" />
             </button>
             <p v-if="selectedKey && pending" role="status" class="flex min-w-0 flex-1 basis-48 items-center gap-2 text-sm text-foreground" data-testid="learn-v2-map-pending">
-              <CircleDot class="size-4 shrink-0 text-[var(--learn-attention)]" />
-              <span>Objective {{ selectedNumber }} isn’t saved yet. <a :href="`#${rowId(selectedKey)}`" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" @click.prevent="reveal(rowId(selectedKey))">Go to it</a></span>
+              <LoaderCircle v-if="saving" class="size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
+              <CircleDot v-else class="size-4 shrink-0 text-[var(--learn-attention)]" />
+              <span>{{ saving ? `Saving objective ${selectedNumber}…` : `Objective ${selectedNumber} isn’t saved yet.` }} <a :href="`#${rowId(selectedKey)}`" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" @click.prevent="reveal(rowId(selectedKey))">Go to it</a></span>
             </p>
             <span v-else class="flex-1" />
             <UiButton v-if="canAccept" :variant="pending ? 'secondary' : 'default'" class="ml-auto" :disabled="busy || saving || pending" data-testid="learn-v2-accept-map" @click="emit('accept')">Accept learning map</UiButton>
-            <div v-if="orderOpen" role="dialog" aria-label="Order of objectives" class="absolute bottom-full left-0 z-30 mb-2 flex w-full flex-col rounded-lg border bg-popover text-popover-foreground shadow-md sm:w-[26rem]" @keydown.esc.stop="closeOrder">
+            <div v-if="orderOpen" :id="`${uid}-order-dialog`" role="dialog" tabindex="-1" aria-label="Order of objectives" class="outline-none absolute bottom-full left-0 z-30 mb-2 flex w-full flex-col rounded-lg border bg-popover text-popover-foreground shadow-md sm:w-[26rem]" @keydown.esc.stop="closeOrder">
               <p class="border-b border-border px-3 py-2.5 text-sm font-medium text-foreground">Order · {{ objectiveCount(placed.length) }}</p>
               <div :id="`${uid}-order`" role="region" tabindex="0" aria-label="Order of objectives, scrolls" class="max-h-[min(30rem,calc(100dvh-12rem))] overflow-y-auto overscroll-contain px-1 py-2 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset">
                 <div v-for="(group, groupIndex) in groups" :key="group.key" :class="groupIndex ? 'mt-3' : ''">
