@@ -194,6 +194,33 @@ test.each(['units', 'different-units'])('numeric response unit %s must match the
   expect(result).toMatchObject(unit === 'units' ? { kind: 'accepted' } : { kind: 'rejected', reasonCode: 'invalid_payload' })
 })
 
+test.each(['measurement', 'session_application'] as const)('canonical delayed acceptance requires compatible %s pins', async kind => {
+  const f = await fixture('measurement')
+  await f.t.run(async ctx => {
+    const assignment = (await ctx.db.get(f.f.rows.learnMeasurementAssignments))!
+    if (assignment.status !== 'admitted' || assignment.allocation.kind !== 'three_case') throw new Error('Expected admitted three-case allocation')
+    const itemPins = assignment.allocation.day7
+    await ctx.db.patch(itemPins.publicationValidationId, { ...f.capability, subject: { kind: 'item', itemId: itemPins.itemId } })
+    await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, {
+      contextPins: f.context,
+      purpose: { kind: 'measurement_delayed', assignmentId: assignment._id, horizonDays: 7,
+        clock: { protocolVersion: 'protocol.fixture', schedulingPolicyVersion: 'schedule.fixture', anchorKind: 'cold_acceptance',
+          anchorEventId: 'cold-acceptance', anchorAt: NOW - 7 * 86_400_000, horizonDays: 7, timezone: 'UTC',
+          dueLocalDate: new Date(NOW).toISOString().slice(0, 10), dueAt: NOW, openAt: NOW - 1_000, closeAt: NOW + 100_000 } },
+      horizonDays: 7,
+      assessmentPins: kind === 'measurement' ? { kind, itemPins }
+        : { kind, caseId: itemPins.caseId, promptDigest: itemPins.promptDigest, rubricVersion: 'rubric.v1',
+            rubricDigest: HASH, supportManifestDigest: HASH },
+    })
+    await ctx.db.patch(f.f.rows.learnAssessmentExposures, { purpose: 'delayed_measurement', caseId: itemPins.caseId,
+      itemId: itemPins.itemId, itemRevision: itemPins.itemRevision, familyId: itemPins.familyId, formLabel: itemPins.formLabel,
+      projectionDigest: itemPins.promptDigest })
+  })
+  const result = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })
+  if (kind === 'measurement') expect(result.kind, JSON.stringify(result)).toBe('accepted')
+  else expect(result).toMatchObject({ kind: 'rejected', reasonCode: 'pins_mismatch' })
+})
+
 async function ledger(t: Awaited<ReturnType<typeof fixture>>['t']) {
   return await t.run(async ctx => ({ responses: await ctx.db.query('learnResponses').take(8), bodies: await ctx.db.query('learnResponseBodies').take(8),
     receipts: await ctx.db.query('learnResponseCommandReceipts').take(16), facts: await ctx.db.query('learnMeasurementReportFacts').take(8),

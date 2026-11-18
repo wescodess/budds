@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "kind": "html",
+  "file": "docs/design/learner-map-editor/approved.html",
+  "notes": "Approved design \"Outline with an order bar\" for #515 (round 2 of the gate). An html surface loads one static file for every case, so the single case stacks all four drawn states as labelled sections inside one main element; each capture covers every state in one theme and viewport. States: Long map, top of the page; Order open, mid-page; Unsaved changes, scrolled away; End of the page. Synthetic copy only, with no learner data. Review annotations above each frame are not product UI.",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 832
+    },
+    {
+      "width": 390,
+      "height": 844
+    },
+    {
+      "width": 320,
+      "height": 640
+    }
+  ],
+  "readySelector": "main[data-ready=true][data-concept=outline-overview]",
+  "contentSelector": "main[data-concept=outline-overview]",
+  "requiredFonts": [
+    "DM Sans",
+    "Inter"
+  ],
+  "cases": [
+    {
+      "kind": "concept",
+      "state": "all-states"
+    }
+  ]
+}
