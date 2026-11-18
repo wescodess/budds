@@ -355,19 +355,25 @@ describe('Learner map editor', () => {
     wrapper.unmount()
   })
 
-  it('marks the objective in view in the order list, not the selected one', async () => {
+  it('marks the objective in view in the order list, not the selected one, and follows scrolling', async () => {
     const { wrapper } = await mountTrail()
 
     await wrapper.get('[data-testid="learn-v2-map-select-objective-3"]').trigger('click')
+    let shift = 0
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains('sticky')) return rect(680, 768)
-      if (this.id.endsWith('-objective-objective-6')) return rect(300, 420)
-      if (this.id.endsWith('-objective-objective-7')) return rect(420, 540)
+      if (this.id.endsWith('-objective-objective-6')) return rect(300 - shift, 420 - shift)
+      if (this.id.endsWith('-objective-objective-7')) return rect(420 - shift, 540 - shift)
       return this.id.includes('-objective-') ? rect(1200, 1300) : rect(0, 0)
     })
     await wrapper.get('[data-testid="learn-v2-map-order"]').trigger('click', { detail: 1 })
     await wrapper.vm.$nextTick()
     expect(wrapper.get('[aria-label="Order of objectives"] [aria-current="true"]').text()).toContain('Objective 6')
+
+    shift = 120
+    window.dispatchEvent(new Event('scroll'))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[aria-label="Order of objectives"] [aria-current="true"]').text()).toContain('Objective 7')
     wrapper.unmount()
   })
 

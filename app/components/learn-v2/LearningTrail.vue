@@ -29,7 +29,7 @@ const citeClass = 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center 
 const numberClass = 'flex size-6 shrink-0 items-center justify-center rounded-full border border-border font-inter text-xs'
 const checkBoxClass = 'mt-0.5 grid size-4 shrink-0 place-content-center rounded-[4px] border border-input text-transparent shadow-xs peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50 peer-disabled:opacity-50'
 const segmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center rounded-lg px-3 py-1 text-sm font-medium whitespace-nowrap text-foreground has-[:checked]:bg-accent has-[:checked]:text-accent-foreground has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50'
-const coverageSegmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border-2 border-transparent px-2 py-1 text-sm whitespace-nowrap text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/8 has-[:checked]:font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-popover'
+const coverageSegmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border-2 border-transparent px-1.5 py-1 text-sm whitespace-nowrap text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/8 has-[:checked]:font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-popover'
 
 const selectedKey = ref<string | null>(null)
 const draft = ref<LearnObjectiveDraft | null>(null)
@@ -362,16 +362,27 @@ function findInView() {
   return nearest?.key ?? selectedKey.value
 }
 
-useEventListener('scroll', () => { if (orderOpen.value) viewKey.value = findInView() }, { capture: true, passive: true })
+function centerCurrent() {
+  const region = document.getElementById(`${uid}-order`)
+  const current = region?.querySelector<HTMLElement>('[aria-current="true"]')
+  if (region && current) region.scrollTop += current.getBoundingClientRect().top - region.getBoundingClientRect().top - region.clientHeight / 2
+  return { region, current }
+}
+
+useEventListener('scroll', () => {
+  if (!orderOpen.value) return
+  const key = findInView()
+  if (key === viewKey.value) return
+  viewKey.value = key
+  void nextTick(centerCurrent)
+}, { capture: true, passive: true })
 
 function toggleOrder(pointer = false) {
   orderOpen.value = !orderOpen.value
   if (!orderOpen.value) return
   viewKey.value = findInView()
   void nextTick(() => {
-    const region = document.getElementById(`${uid}-order`)
-    const current = region?.querySelector<HTMLElement>('[aria-current="true"]')
-    if (region && current) region.scrollTop += current.getBoundingClientRect().top - region.getBoundingClientRect().top - region.clientHeight / 2
+    const { region, current } = centerCurrent()
     const target = pointer ? document.getElementById(`${uid}-order-dialog`) : current ?? region?.querySelector<HTMLElement>('a')
     target?.focus({ preventScroll: true })
   })
