@@ -95,7 +95,7 @@ onMounted(async () => {
   }
   if (state === 'long') {
     await click('[data-testid=learn-v2-map-select-objective-5]')
-    await type('[data-testid=learn-v2-objective-title]', `${longTitle.slice(0, 160)}, and what you’d ask the authors`)
+    await type('[data-testid=learn-v2-objective-title]', 'Work out why a trial’s registered endpoint, its analysis plan and the results it finally reports can disagree, what that should change about how far you trust it, and what you’d ask the authors')
   }
   await new Promise(resolve => setTimeout(resolve, 0))
   ready.value = true

@@ -37,6 +37,8 @@ async function scrollEditor(inView: boolean) {
   await nextTick()
 }
 
+const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
+
 async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean; loading?: boolean } = {}) {
   const Comp = await import(`${path}/LearningTrail.vue`)
   const save = vi.fn(options.save ?? (async () => ({ ok: true }) as LearnMapSaveResult))
@@ -51,6 +53,7 @@ describe('Learner map editor', () => {
   beforeEach(() => vi.stubGlobal('IntersectionObserver', EditorObserver))
   afterEach(() => {
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
     observe = undefined
   })
 
@@ -81,7 +84,7 @@ describe('Learner map editor', () => {
     wrapper.unmount()
   })
 
-  it('narrows Order to its icon so the bar stays on one row', async () => {
+  it('narrows Order to its icon and disclosure chevron so the bar stays on one row', async () => {
     const { wrapper } = await mountTrail()
 
     const order = wrapper.get('[data-testid="learn-v2-map-order"]')
@@ -90,7 +93,9 @@ describe('Learner map editor', () => {
     expect(order.find('svg.text-primary').exists()).toBe(true)
     const label = order.findAll('span').find(span => span.text() === 'Order')!
     expect(label.classes()).toContain('@max-[21rem]:sr-only')
-    order.findAll('svg:not(.text-primary)').forEach(chevron => expect(chevron.classes()).toContain('@max-[21rem]:hidden'))
+    const chevron = order.get('svg.lucide-chevron-up')
+    expect(chevron.classes()).not.toContain('@max-[21rem]:hidden')
+    expect(order.text()).toContain('Order')
     wrapper.unmount()
   })
 
@@ -117,6 +122,42 @@ describe('Learner map editor', () => {
     const edit = save.mock.calls[0]![0]
     expect(edit).toMatchObject({ kind: 'save_objective', objective: { objectiveKey: 'objective-2', title: 'Explain cancellation safely', supportingSourceKeys: ['identity-1'] }, order: ['objective-1', 'objective-2', 'objective-3', 'objective-4', 'objective-5', 'objective-6', 'objective-7'] })
     expect(JSON.stringify(edit)).not.toMatch(/assessment|criteri|rubric|weight/i)
+    wrapper.unmount()
+  })
+
+  it('names the objective in the bar while its status is under the bar', async () => {
+    const { wrapper } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-2"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Explain cancellation safely')
+    const status = wrapper.get('[data-testid="learn-v2-objective-status"]').element.parentElement!
+    const bar = wrapper.get('[data-testid="learn-v2-accept-map"]').element.closest<HTMLElement>('.sticky')!
+    let statusRect = rect(700, 740)
+    vi.spyOn(status, 'getBoundingClientRect').mockImplementation(() => statusRect)
+    vi.spyOn(bar, 'getBoundingClientRect').mockImplementation(() => rect(680, 768))
+    window.dispatchEvent(new Event('scroll'))
+    await nextTick()
+    expect(wrapper.get('[data-testid="learn-v2-map-pending"]').text()).toContain('Objective 2 isn’t saved yet.')
+
+    statusRect = rect(500, 540)
+    window.dispatchEvent(new Event('scroll'))
+    await nextTick()
+    expect(wrapper.find('[data-testid="learn-v2-map-pending"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps held source changes out of the sources list until save', async () => {
+    const { wrapper } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-2"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-sources"]').trigger('click')
+    await wrapper.get('input[type="checkbox"][value="identity-2"]').setValue(true)
+    await wrapper.get('[role="dialog"] [data-slot="button"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="learn-v2-objective-sources"]').text()).toContain('1 and 2')
+    expect(wrapper.text()).toContain('Added by you · fetch.spec.whatwg.org')
+    expect(wrapper.text()).not.toContain('fetch.spec.whatwg.org · backs')
+    expect(wrapper.text()).toContain('Your folder · backs 1, 2, 3, 4, 5, 6, 7')
     wrapper.unmount()
   })
 
@@ -250,10 +291,15 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[role="dialog"]').text()).toContain('Sources for objective 3')
     await wrapper.get('input[type="radio"][value="partial"]').setValue(true)
     const partly = wrapper.get('input[type="radio"][value="partial"]').element.parentElement!
+    expect(partly.className).toContain('border-2')
     expect(partly.className).toContain('has-[:checked]:border-primary')
     expect(partly.className).toContain('has-[:checked]:bg-primary/8')
+    expect(partly.className).toContain('has-[:checked]:font-medium')
     expect(partly.className).toContain('text-foreground')
+    expect(partly.className).toContain('has-[:focus-visible]:ring-offset-2')
     expect(partly.className).not.toMatch(/has-\[:checked\]:bg-(accent|primary)(\s|$)/)
+    const coverage = wrapper.findAll('[role="radiogroup"][aria-label="Do your sources cover this?"] label')
+    expect(coverage.map(segment => segment.find('svg.lucide-check').exists())).toEqual([false, true, false])
     await wrapper.get('[data-testid="learn-v2-objective-gap-reason"]').setValue('No source covers retries.')
     await wrapper.get('input[type="checkbox"][value="identity-2"]').setValue(true)
     expect(wrapper.get('[role="dialog"]').text()).not.toContain('Looked at, but not enough')
@@ -306,6 +352,22 @@ describe('Learner map editor', () => {
     await wrapper.get('[data-testid="learn-v2-map-order"]').trigger('click')
     await wrapper.vm.$nextTick()
     expect(document.activeElement).toBe(wrapper.get('[role="dialog"][aria-label="Order of objectives"] [aria-current="true"]').element)
+    wrapper.unmount()
+  })
+
+  it('marks the objective in view in the order list, not the selected one', async () => {
+    const { wrapper } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-3"]').trigger('click')
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('sticky')) return rect(680, 768)
+      if (this.id.endsWith('-objective-objective-6')) return rect(300, 420)
+      if (this.id.endsWith('-objective-objective-7')) return rect(420, 540)
+      return this.id.includes('-objective-') ? rect(1200, 1300) : rect(0, 0)
+    })
+    await wrapper.get('[data-testid="learn-v2-map-order"]').trigger('click', { detail: 1 })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[aria-label="Order of objectives"] [aria-current="true"]').text()).toContain('Objective 6')
     wrapper.unmount()
   })
 

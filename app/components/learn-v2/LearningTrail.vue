@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, shallowRef, useId, watch } from 'vue'
-import { useIntersectionObserver } from '@vueuse/core'
+import { useElementBounding, useEventListener, useIntersectionObserver } from '@vueuse/core'
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, CircleDot, ListOrdered, LoaderCircle, Pencil, Plus, Scissors, Trash2 } from '@lucide/vue'
 import type { LearnCoverage, LearnMapEdit, LearnMapSaveResult, LearnObjectiveDraft, LearnObjectiveSnapshot, LearnSourceOrigin, LearnSourceSnapshot } from '~/types/learn-v2-journey'
 
@@ -29,7 +29,7 @@ const citeClass = 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center 
 const numberClass = 'flex size-6 shrink-0 items-center justify-center rounded-full border border-border font-inter text-xs'
 const checkBoxClass = 'mt-0.5 grid size-4 shrink-0 place-content-center rounded-[4px] border border-input text-transparent shadow-xs peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50 peer-disabled:opacity-50'
 const segmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center rounded-lg px-3 py-1 text-sm font-medium whitespace-nowrap text-foreground has-[:checked]:bg-accent has-[:checked]:text-accent-foreground has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50'
-const coverageSegmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center rounded-lg border border-transparent px-3 py-1 text-sm font-medium whitespace-nowrap text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/8 has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50'
+const coverageSegmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center gap-1 rounded-lg border-2 border-transparent px-2 py-1 text-sm whitespace-nowrap text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/8 has-[:checked]:font-medium has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring/50 has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-popover'
 
 const selectedKey = ref<string | null>(null)
 const draft = ref<LearnObjectiveDraft | null>(null)
@@ -41,11 +41,16 @@ const saving = ref(false)
 const failure = ref<{ number: number; reason: 'changed' | 'failed' } | null>(null)
 const panel = ref<Panel | null>(null)
 const orderOpen = ref(false)
-const editor = shallowRef<HTMLElement | null>(null)
-const editorInView = ref(true)
+const viewKey = ref<string | null>(null)
+const bar = shallowRef<HTMLElement | null>(null)
+const editorStatus = shallowRef<HTMLElement | null>(null)
+const statusIntersecting = ref(true)
 
-useIntersectionObserver(editor, ([entry]) => { editorInView.value = entry?.isIntersecting ?? true })
-const setEditor = (element: unknown) => { editor.value = element instanceof HTMLElement ? element : null }
+useIntersectionObserver(editorStatus, ([entry]) => { statusIntersecting.value = entry?.isIntersecting ?? true })
+const { bottom: statusBottom } = useElementBounding(editorStatus)
+const { top: barTop } = useElementBounding(bar)
+const editorInView = computed(() => statusIntersecting.value && !(barTop.value > 0 && statusBottom.value > barTop.value))
+const setEditorStatus = (element: unknown) => { editorStatus.value = element instanceof HTMLElement ? element : null }
 
 const rowId = (key: string) => `${uid}-objective-${key}`
 const sourceId = (number: number) => `${uid}-source-${number}`
@@ -110,6 +115,11 @@ const baselineOrder = computed(() => milestones.value.flatMap(milestone => objec
 const selectedNumber = computed(() => selectedKey.value ? numberOf.value.get(selectedKey.value) ?? 0 : 0)
 
 const supporting = (view: LearnObjectiveDraft) => view.coverage === 'gap' ? [] : view.supportingSourceKeys
+const backers = computed(() => new Map(acceptedSources.value.map(source => [source.sourceKey, objectives
+  .filter(item => supporting(draftFrom(item)).includes(source.sourceKey))
+  .map(item => numberOf.value.get(item.stableKey))
+  .filter((value): value is number => value !== undefined)
+  .sort((a, b) => a - b)])))
 const citations = (view: LearnObjectiveDraft) => supporting(view).map(key => sourceNumber.value.get(key)).filter((value): value is number => value !== undefined).sort((a, b) => a - b)
 function afterLabel(view: LearnObjectiveDraft) {
   const numbers = view.prerequisiteKeys.map(key => numberOf.value.get(key)).filter((value): value is number => value !== undefined).sort((a, b) => a - b)
@@ -338,9 +348,26 @@ function reveal(id: string) {
   target?.focus({ preventScroll: true })
 }
 
+function findInView() {
+  const limit = bar.value?.getBoundingClientRect().top || window.innerHeight
+  const middle = limit / 2
+  let nearest: { key: string; distance: number } | null = null
+  for (const row of rows.value) {
+    const rect = document.getElementById(rowId(row.key))?.getBoundingClientRect()
+    if (!rect || rect.bottom <= 0 || rect.top >= limit) continue
+    if (row.key === selectedKey.value) return row.key
+    const distance = Math.max(rect.top - middle, middle - rect.bottom, 0)
+    if (!nearest || distance < nearest.distance) nearest = { key: row.key, distance }
+  }
+  return nearest?.key ?? selectedKey.value
+}
+
+useEventListener('scroll', () => { if (orderOpen.value) viewKey.value = findInView() }, { capture: true, passive: true })
+
 function toggleOrder(pointer = false) {
   orderOpen.value = !orderOpen.value
   if (!orderOpen.value) return
+  viewKey.value = findInView()
   void nextTick(() => {
     const region = document.getElementById(`${uid}-order`)
     const current = region?.querySelector<HTMLElement>('[aria-current="true"]')
@@ -392,7 +419,7 @@ function closeOrder() {
             <h3 :id="`${uid}-milestone-${groupIndex}`" class="font-dm-sans text-lg font-semibold text-foreground">{{ group.title }}</h3>
             <ol class="mt-1 divide-y divide-border">
               <template v-for="row in group.rows" :key="row.key">
-                <li v-if="row.key === selectedKey && draft" :id="rowId(row.key)" :ref="setEditor" tabindex="-1" aria-current="true" :aria-busy="saving || undefined" class="flex scroll-mb-32 gap-3 border-l-2 border-primary bg-card py-4 pr-3 pl-3 outline-none" data-testid="learn-v2-objective-editor">
+                <li v-if="row.key === selectedKey && draft" :id="rowId(row.key)"  tabindex="-1" aria-current="true" :aria-busy="saving || undefined" class="flex scroll-mb-32 gap-3 border-l-2 border-primary bg-card py-4 pr-3 pl-3 outline-none" data-testid="learn-v2-objective-editor">
                   <span :class="numberClass" class="text-foreground">{{ row.number }}</span>
                   <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -436,7 +463,7 @@ function closeOrder() {
                           <template v-else>
                             <p class="text-sm font-medium text-foreground">Do your sources cover this?</p>
                             <div class="mt-2"><div role="radiogroup" aria-label="Do your sources cover this?" class="flex flex-wrap gap-1 rounded-xl border border-input p-1">
-                              <label v-for="(label, value) in coverageLabel" :key="value" :class="coverageSegmentClass"><input v-model="draft.coverage" type="radio" class="sr-only" :name="`${uid}-coverage`" :value="value">{{ label }}</label>
+                              <label v-for="(label, value) in coverageLabel" :key="value" :class="coverageSegmentClass"><input v-model="draft.coverage" type="radio" class="sr-only" :name="`${uid}-coverage`" :value="value"><Check v-if="draft.coverage === value" class="size-3.5 shrink-0" />{{ label }}</label>
                             </div></div>
                             <div v-if="draft.coverage !== 'strong'" class="mt-4"><label class="block text-sm font-medium text-foreground">What’s missing?<span class="mt-1.5 block font-normal"><UiTextarea v-model="draft.gapReason" maxlength="500" data-testid="learn-v2-objective-gap-reason" /></span></label></div>
                             <div v-if="draft.coverage !== 'gap'" class="mt-4">
@@ -467,7 +494,7 @@ function closeOrder() {
                         <div class="flex justify-end border-t border-border p-2"><UiButton variant="outline" size="sm" @click="closePanel">Done</UiButton></div>
                       </div>
                     </div>
-                    <div class="mt-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border pt-3">
+                    <div :ref="setEditorStatus" class="mt-4 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border pt-3">
                       <p role="status" class="flex min-w-0 flex-1 basis-52 items-start gap-2 text-sm text-foreground" data-testid="learn-v2-objective-status">
                         <CircleDot v-if="mode === 'dirty'" class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" />
                         <LoaderCircle v-else-if="mode === 'saving'" class="mt-0.5 size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
@@ -504,17 +531,17 @@ function closeOrder() {
                 <span :class="citeClass" aria-hidden="true">{{ index + 1 }}</span>
                 <span class="min-w-0 flex-1">
                   <span class="block text-sm font-medium text-foreground"><span class="sr-only">Source {{ index + 1 }}: </span>{{ source.title }}</span>
-                  <span class="block font-inter text-xs font-medium text-muted-foreground">{{ originLabel[source.origin] }}<template v-if="source.publisher"> · {{ source.publisher }}</template><template v-if="placed.some(row => supporting(row.view).includes(source.sourceKey))"> · backs {{ placed.filter(row => supporting(row.view).includes(source.sourceKey)).map(row => row.number).join(', ') }}</template></span>
+                  <span class="block font-inter text-xs font-medium text-muted-foreground">{{ originLabel[source.origin] }}<template v-if="source.publisher"> · {{ source.publisher }}</template><template v-if="backers.get(source.sourceKey)?.length"> · backs {{ backers.get(source.sourceKey)!.join(', ') }}</template></span>
                 </span>
               </li>
             </ol>
           </section>
         </div>
 
-        <div class="@container sticky bottom-0 z-20 bg-background pt-2 pb-4">
+        <div ref="bar" class="@container sticky bottom-0 z-20 bg-background pt-2 pb-4">
           <div class="relative flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card p-2">
             <button :id="`${uid}-order-button`" type="button" :aria-expanded="orderOpen" class="inline-flex min-h-9 min-w-9 items-center justify-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-order" @click="toggleOrder($event.detail > 0)">
-              <ListOrdered class="size-4 shrink-0 text-primary" /><span class="@max-[21rem]:sr-only">Order</span><span class="hidden font-inter text-xs font-medium text-muted-foreground sm:inline">{{ objectiveCount(placed.length) }} · {{ duration(totalMinutes) }}</span><ChevronDown v-if="orderOpen" class="size-4 shrink-0 @max-[21rem]:hidden" /><ChevronUp v-else class="size-4 shrink-0 @max-[21rem]:hidden" />
+              <ListOrdered class="size-4 shrink-0 text-primary" /><span class="@max-[21rem]:sr-only">Order</span><span class="hidden font-inter text-xs font-medium text-muted-foreground sm:inline">{{ objectiveCount(placed.length) }} · {{ duration(totalMinutes) }}</span><ChevronDown v-if="orderOpen" class="size-4 shrink-0" /><ChevronUp v-else class="size-4 shrink-0" />
             </button>
             <p v-if="selectedKey && waitingAway" role="status" class="flex min-w-0 flex-1 basis-48 items-center gap-2 text-sm text-foreground" data-testid="learn-v2-map-pending">
               <LoaderCircle v-if="saving" class="size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
@@ -530,7 +557,7 @@ function closeOrder() {
                   <p class="px-2 font-inter text-xs font-medium text-foreground">{{ group.title }}</p>
                   <ol class="mt-1">
                     <li v-for="row in group.rows" :key="row.key">
-                      <a :href="`#${rowId(row.key)}`" :aria-current="row.key === selectedKey ? 'true' : undefined" class="flex items-start gap-2 border-l-2 border-transparent py-1.5 pr-2 pl-2 text-sm text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-[current=true]:border-primary aria-[current=true]:bg-primary/8" @click.prevent="reveal(rowId(row.key))">
+                      <a :href="`#${rowId(row.key)}`" :aria-current="row.key === viewKey ? 'true' : undefined" class="flex items-start gap-2 border-l-2 border-transparent py-1.5 pr-2 pl-2 text-sm text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset aria-[current=true]:border-primary aria-[current=true]:bg-primary/8" @click.prevent="reveal(rowId(row.key))">
                         <span :class="numberClass" class="text-foreground">{{ row.number }}</span>
                         <span class="line-clamp-2 min-w-0 flex-1 pt-0.5">{{ row.view.title }}</span>
                         <span v-if="row.view.coverage !== 'strong'" class="mt-1 shrink-0" :title="row.view.coverage === 'gap' ? 'Not covered yet' : 'Partly covered'"><CircleAlert class="size-3.5 text-[var(--learn-attention)]" /><span class="sr-only">{{ row.view.coverage === 'gap' ? 'Not covered yet' : 'Partly covered' }}</span></span>
