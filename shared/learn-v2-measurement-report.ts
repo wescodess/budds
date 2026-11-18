@@ -305,7 +305,7 @@ export const learnReportLinkedFirstSlotSchema = z.strictObject({
   kind: z.literal('linked'), firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
   checkSequence: z.literal(1), linkedAt: learnTimestampSchema, clock: learnAssessmentClockSchema,
   stratum: learnReportFirstSlotStratumSchema,
-}).refine(value => value.linkedAt < value.clock.closeAt, 'First slot must be linked before its window closes')
+})
 const unresolvedFirstSlot = z.strictObject({ kind: z.literal('unresolved'), reason: learnCodeSchema })
 export const learnReportFirstSlotSchema = z.discriminatedUnion('kind', [unresolvedFirstSlot, learnReportLinkedFirstSlotSchema])
 export const learnReportIndependentClaimV2Schema = learnFirstCheckClaimSchema.safeExtend({

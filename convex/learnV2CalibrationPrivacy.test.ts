@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { legacyScoringModules, legacyCalibrationAttempt } from '../tests/fixtures/learn-v2-legacy-scoring'
 import { convexTest } from 'convex-test'
 import { afterEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -12,7 +13,7 @@ test('identity tombstone stops calibration before byte cleanup finishes', async 
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   vi.stubEnv('LEARN_V2_CALIBRATION_MODEL', 'fixture-model')
   const userId = 'https://auth.example|c2-425-probe'
-  const t = convexTest(schema, import.meta.glob('./**/*.ts'))
+  const t = convexTest(schema, { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules })
   await t.withIdentity({ tokenIdentifier: userId }).mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
   const f = await t.run(ctx => seedMeasurementStorage(ctx, userId))
@@ -38,7 +39,7 @@ test('completed purge prevents calibration from recreating a raw fingerprint', a
   vi.useFakeTimers()
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const userId = 'https://auth.example|c2-425-replay-probe'
-  const t = convexTest(schema, import.meta.glob('./**/*.ts'))
+  const t = convexTest(schema, { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules })
   await t.withIdentity({ tokenIdentifier: userId }).mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
   const f = await t.run(ctx => seedMeasurementStorage(ctx, userId))
@@ -69,7 +70,7 @@ async function calibrationFixture() {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   vi.stubEnv('LEARN_V2_CALIBRATION_MODEL', 'fixture-model')
   const userId = 'https://auth.example|calibration-controls'
-  const t = convexTest(schema, import.meta.glob('./**/*.ts'))
+  const t = convexTest(schema, { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules })
   await t.withIdentity({ tokenIdentifier: userId }).mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
   const f = await t.run(ctx => seedMeasurementStorage(ctx, userId))
@@ -95,7 +96,7 @@ test.each(['identity', 'snapshot', 'excerpt', 'document', 'document_hash', 'docu
     blueprintRevisionId: request.blueprintRevisionId, objectiveId: request.objectiveId, response: request.response }
   await expect(t.query(internal.learnV2MapCalibration.getCalibrationScoringInput, input)).resolves.toHaveProperty('evidence')
   const commit = { ...request, serverScorePercent: 80, rubricVersion: 'rubric.v1' }
-  const saved = await t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)
+  const saved = await t.mutation(legacyCalibrationAttempt, commit)
   const before = await t.run(ctx => ctx.db.get(saved.attemptId))
   if (kind === 'document_hash') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', contentHash: 'b'.repeat(64) })
   if (kind === 'document_object') await t.mutation(internal.documents.updateDocumentStatus, { id: f.documentId, status: 'success', r2Key: 'calibration/relocated.txt' })
@@ -110,7 +111,7 @@ test.each(['identity', 'snapshot', 'excerpt', 'document', 'document_hash', 'docu
   await expect(t.mutation(internal.learnV2MapCalibration.markCalibrationScoringDispatched, dispatch)).rejects.toThrow(/evidence.*unavailable/i)
   await t.run(ctx => ctx.db.patch(reservation.jobId, { status: 'running' }))
   await expect(t.query(internal.learnV2MapCalibration.getCalibrationScoringInput, input)).rejects.toThrow(/evidence.*unavailable/i)
-  await expect(t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)).rejects.toThrow(/evidence.*unavailable/i)
+  await expect(t.mutation(legacyCalibrationAttempt, commit)).rejects.toThrow(/evidence.*unavailable/i)
   expect(await t.run(ctx => ctx.db.get(saved.attemptId))).toEqual(before)
 })
 
@@ -128,17 +129,17 @@ test('writes only canonical digests and compares legacy command fingerprints in 
   await expect(t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, request)).resolves.toMatchObject({ kind: 'pending' })
   await expect(t.mutation(internal.learnV2MapCalibration.reserveCalibrationScoring, { ...request, response: 'Changed answer.' })).rejects.toThrow(/different request/)
   const commit = { ...request, serverScorePercent: 80, rubricVersion: 'rubric.v1' }
-  const saved = await t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)
+  const saved = await t.mutation(legacyCalibrationAttempt, commit)
   const attempt = await t.run(ctx => ctx.db.get(saved.attemptId))
   expect(attempt?.requestFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/)
   await t.run(ctx => ctx.db.patch(saved.attemptId, { requestFingerprint: JSON.stringify({ command: 'recordCalibrationAttempt', ...commit }) }))
-  await expect(t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)).resolves.toMatchObject({ attemptId: saved.attemptId, replayed: true })
+  await expect(t.mutation(legacyCalibrationAttempt, commit)).resolves.toMatchObject({ attemptId: saved.attemptId, replayed: true })
 })
 
 test.each(['purge_first', 'score_first', 'concurrent'] as const)('source purge versus score commit: %s', async ordering => {
   const { t, f, userId, request } = await calibrationFixture()
   const commit = { ...request, serverScorePercent: 80, rubricVersion: 'rubric.v1', rubricSnapshot: 'private-score-rubric' }
-  const score = () => t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, commit)
+  const score = () => t.mutation(legacyCalibrationAttempt, commit)
   const purge = () => t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId, sourceIdentityId: f.sourceIdentityId })
   let scored = false
   if (ordering === 'purge_first') {

@@ -112,9 +112,9 @@ function validCriteria(criteria: PreparedLearnScoringExecution['criteria']) {
     && criteria.reduce((sum, row) => sum + row.weightPercent, 0) === 100
 }
 
-function terminalVerdict(content: string, criteria: PreparedLearnScoringExecution['criteria']): CriterionVector | null {
+function terminalVerdict(content: string, criteria: PreparedLearnScoringExecution['criteria'], parse = parseBaselineMasteryScoringResponse): CriterionVector | null {
   try {
-    const verdict = parseBaselineMasteryScoringResponse(content)
+    const verdict = parse(content)
     if (!validCriteria(criteria) || verdict.criterionResults.length !== criteria.length
       || verdict.misconceptionTags.length > ADAPTIVE_MISCONCEPTION_TAGS.length
       || new Set(verdict.misconceptionTags).size !== verdict.misconceptionTags.length
@@ -147,7 +147,11 @@ async function finiteScoringIo<T>(timeoutMs: number, operation: (signal: AbortSi
 export function createLearnMasteryScorerService(registry: LearnScorerRegistry, transport: {
   infer: (request: GenerateParams) => Promise<GenerateResponse | ScoringGenerateResponse>
   metadata: (generationId: string, signal: AbortSignal) => Promise<GatewayGenerationMetadata>
-} = { infer: generateCompletion, metadata: lookupScoringGeneration }, clock: () => number = Date.now) {
+} = { infer: generateCompletion, metadata: lookupScoringGeneration }, clock: () => number = Date.now, protocol?: {
+  request: (model: string, input: BaselineMasteryScoringInput, signal: AbortSignal) => GenerateParams
+  parse: typeof parseBaselineMasteryScoringResponse
+  read: (payload: string) => BaselineMasteryScoringInput
+}) {
   const handles = new WeakMap<PreparedLearnScoringExecution, { dispatched: boolean, metadataLookups: number, integrityDigest: string }>()
   let inFlight = false
   const limits = ADAPTIVE_V2_PILOT_MANIFEST.limits
@@ -163,10 +167,11 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
     await registry.verifySaved({ binding, frozenConfiguration: prepared.receipt.frozenConfiguration })
     const payload = prepared.request.messages[1]?.content
     let payloadCriteria: unknown
-    try { payloadCriteria = JSON.parse(payload ?? '').rubric.criteria }
+    try { payloadCriteria = protocol ? protocol.read(payload ?? '').rubric.criteria : JSON.parse(payload ?? '').rubric.criteria }
     catch { throw new Error('Scoring request integrity mismatch') }
     if (typeof payload !== 'string') throw new Error('Scoring request integrity mismatch')
-    const expected = buildBaselineMasteryScoringRequest(binding.requestedModel, payload, prepared.request.signal!)
+    const expected = protocol ? protocol.request(binding.requestedModel, protocol.read(payload), prepared.request.signal!)
+      : buildBaselineMasteryScoringRequest(binding.requestedModel, payload, prepared.request.signal!)
     expected.captureScoringProvenance = true
     if (binding.routingMode === 'strict') expected.providerOrder = [binding.endpoint!]
     const body = serializeCompletionRequest(prepared.request)
@@ -261,7 +266,8 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
         evidence: scoringInput.evidence.map(row => `${row.alias}: ${row.claim}\n${row.excerpt ?? ''}`),
         rubric: scoringInput.rubric.criteria.map(row => `${row.key}: ${row.description ?? ''}`) })
       if (!privacy.allowed) throw new Error('Scoring payload is unavailable under the privacy policy')
-      const request = buildBaselineMasteryScoringRequest(saved.binding.requestedModel, buildBaselineMasteryScoringPayload(scoringInput), new AbortController().signal)
+      const request = protocol ? protocol.request(saved.binding.requestedModel, scoringInput, new AbortController().signal)
+        : buildBaselineMasteryScoringRequest(saved.binding.requestedModel, buildBaselineMasteryScoringPayload(scoringInput), new AbortController().signal)
       request.captureScoringProvenance = true
       if (saved.binding.routingMode === 'strict') request.providerOrder = [saved.binding.endpoint!]
       const body = serializeCompletionRequest(request)
@@ -291,7 +297,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
           const content = checked.choices[0]!.message.content
           if (new TextEncoder().encode(content).byteLength > limits.maxResponseBytes) throw Object.assign(new Error('Scoring response exceeded the byte limit'), { aiGatewayFailureKind: 'invalid_response' })
           terminal = { generationId: checked.id, returnedModel: checked.model, provenance: checked.scoringProvenance ?? null,
-            verdict: terminalVerdict(content, prepared.criteria), outputDigest: await scorerDigest(content), failure: null }
+            verdict: terminalVerdict(content, prepared.criteria, protocol?.parse), outputDigest: await scorerDigest(content), failure: null }
         }
         catch (error) {
           terminal = { generationId: null, returnedModel: null, provenance: null, verdict: null, outputDigest: null, failure: classifyAiGatewayFailure(error) }
