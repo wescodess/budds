@@ -46,6 +46,11 @@ Owner's words, 2026-11-18: `Keep disabled + note (Recommended)`.
 
 - At 15 objectives, Add objective stays disabled, with the note "A map holds up to 15 objectives. Remove one to add another."
 
+Owner's words, 2026-11-18: `Tint + border (Recommended)`.
+
+- In the sources pop-over, the selected answer to "Do your sources cover this?" uses the `DESIGN.md` active state: an amber `--primary` border and the same 8% amber tint as the order pop-over's current row and the sidebar's Learn item, with `text-foreground`. Keyboard focus is the ring only, and Accept learning map stays the only filled amber action in view.
+- This replaces 3a's filled amber segment.
+
 ## Product decisions carried into the build
 
 - Learners never see or edit criteria, rubrics or weights. The editor has no assessment section, and learner copy never mentions one.

@@ -29,6 +29,7 @@ const citeClass = 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center 
 const numberClass = 'flex size-6 shrink-0 items-center justify-center rounded-full border border-border font-inter text-xs'
 const checkBoxClass = 'mt-0.5 grid size-4 shrink-0 place-content-center rounded-[4px] border border-input text-transparent shadow-xs peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50 peer-disabled:opacity-50'
 const segmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center rounded-lg px-3 py-1 text-sm font-medium whitespace-nowrap text-foreground has-[:checked]:bg-accent has-[:checked]:text-accent-foreground has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50'
+const coverageSegmentClass = 'inline-flex min-h-7 flex-1 cursor-pointer items-center justify-center rounded-lg border border-transparent px-3 py-1 text-sm font-medium whitespace-nowrap text-foreground has-[:checked]:border-primary has-[:checked]:bg-primary/8 has-[:focus-visible]:ring-[3px] has-[:focus-visible]:ring-ring/50'
 
 const selectedKey = ref<string | null>(null)
 const draft = ref<LearnObjectiveDraft | null>(null)
@@ -435,7 +436,7 @@ function closeOrder() {
                           <template v-else>
                             <p class="text-sm font-medium text-foreground">Do your sources cover this?</p>
                             <div class="mt-2"><div role="radiogroup" aria-label="Do your sources cover this?" class="flex flex-wrap gap-1 rounded-xl border border-input p-1">
-                              <label v-for="(label, value) in coverageLabel" :key="value" :class="segmentClass"><input v-model="draft.coverage" type="radio" class="sr-only" :name="`${uid}-coverage`" :value="value">{{ label }}</label>
+                              <label v-for="(label, value) in coverageLabel" :key="value" :class="coverageSegmentClass"><input v-model="draft.coverage" type="radio" class="sr-only" :name="`${uid}-coverage`" :value="value">{{ label }}</label>
                             </div></div>
                             <div v-if="draft.coverage !== 'strong'" class="mt-4"><label class="block text-sm font-medium text-foreground">What’s missing?<span class="mt-1.5 block font-normal"><UiTextarea v-model="draft.gapReason" maxlength="500" data-testid="learn-v2-objective-gap-reason" /></span></label></div>
                             <div v-if="draft.coverage !== 'gap'" class="mt-4">

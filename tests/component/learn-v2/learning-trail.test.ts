@@ -249,6 +249,11 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[role="dialog"]').attributes('aria-labelledby')).toBeDefined()
     expect(wrapper.get('[role="dialog"]').text()).toContain('Sources for objective 3')
     await wrapper.get('input[type="radio"][value="partial"]').setValue(true)
+    const partly = wrapper.get('input[type="radio"][value="partial"]').element.parentElement!
+    expect(partly.className).toContain('has-[:checked]:border-primary')
+    expect(partly.className).toContain('has-[:checked]:bg-primary/8')
+    expect(partly.className).toContain('text-foreground')
+    expect(partly.className).not.toMatch(/has-\[:checked\]:bg-(accent|primary)(\s|$)/)
     await wrapper.get('[data-testid="learn-v2-objective-gap-reason"]').setValue('No source covers retries.')
     await wrapper.get('input[type="checkbox"][value="identity-2"]').setValue(true)
     expect(wrapper.get('[role="dialog"]').text()).not.toContain('Looked at, but not enough')
