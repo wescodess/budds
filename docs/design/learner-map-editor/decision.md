@@ -40,6 +40,12 @@ Owner's words, 2026-11-17: `No Add on empty map, Time/depth pop-overs, One objec
 - The saving spinner uses `--learn-attention`, as `DESIGN.md` requires for in-progress states.
 - Split is held with the objective's other changes and sent on Save.
 
+## Approved differences from `approved.html`
+
+Owner's words, 2026-11-18: `Keep disabled + note (Recommended)`.
+
+- At 15 objectives, Add objective stays disabled, with the note "A map holds up to 15 objectives. Remove one to add another."
+
 ## Product decisions carried into the build
 
 - Learners never see or edit criteria, rubrics or weights. The editor has no assessment section, and learner copy never mentions one.
