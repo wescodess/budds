@@ -235,6 +235,7 @@ describe('Learner map editor', () => {
   it('adds a new objective to the end of the map', async () => {
     const { wrapper, save } = await mountTrail()
 
+    expect(wrapper.find('[data-testid="learn-v2-map-full"]').exists()).toBe(false)
     await wrapper.get('[data-testid="learn-v2-map-add-objective"]').trigger('click')
     expect(wrapper.get('[data-testid="learn-v2-objective-editor"]').text()).toContain('8')
     await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Compare abort signals')
@@ -250,7 +251,11 @@ describe('Learner map editor', () => {
   it('stops adding and splitting at fifteen objectives', async () => {
     const { wrapper } = await mountTrail({ objectives: Array.from({ length: 15 }, (_, index) => objective(index)) })
 
-    expect(wrapper.get('[data-testid="learn-v2-map-add-objective"]').attributes('disabled')).toBeDefined()
+    const add = wrapper.get('[data-testid="learn-v2-map-add-objective"]')
+    expect(add.attributes('disabled')).toBeDefined()
+    const reason = wrapper.get('[data-testid="learn-v2-map-full"]')
+    expect(reason.text()).toBe('A map holds up to 15 objectives. Remove one to add another.')
+    expect(add.attributes('aria-describedby')).toBe(reason.attributes('id'))
     expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('15 objectives · about 6 hr 15 min')
     await wrapper.get('[data-testid="learn-v2-map-select-objective-15"]').trigger('click')
     expect(wrapper.get('[data-testid="learn-v2-map-split-objective"]').attributes('disabled')).toBeDefined()
@@ -261,7 +266,10 @@ describe('Learner map editor', () => {
   it('explains an empty map without offering Accept', async () => {
     const { wrapper } = await mountTrail({ objectives: [] })
 
-    expect(wrapper.get('[data-testid="learn-v2-map-empty"]').text()).toContain('No objectives yet')
+    const empty = wrapper.get('[data-testid="learn-v2-map-empty"]')
+    expect(empty.text()).toContain('No objectives yet')
+    expect(empty.text()).toContain('Go to Sources to generate it.')
+    expect(empty.text()).not.toMatch(/\badd\b/i)
     expect(wrapper.find('[data-testid="learn-v2-accept-map"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="learn-v2-map-add-objective"]').exists()).toBe(false)
     wrapper.unmount()

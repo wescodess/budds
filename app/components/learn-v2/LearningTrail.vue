@@ -363,8 +363,9 @@ function closeOrder() {
           <h2 class="font-dm-sans text-xl font-bold text-foreground">Your learning map</h2>
           <p class="mt-1 max-w-2xl text-sm text-muted-foreground">Change what each objective covers, the order and which sources back it. Changes stay in a draft until you accept this map.</p>
         </div>
-        <div v-if="objectives.length && !loading" class="flex shrink-0 flex-wrap gap-2">
-          <UiButton variant="outline" size="sm" :disabled="busy || saving || pending || objectives.length >= 15" data-testid="learn-v2-map-add-objective" @click="addObjective"><Plus />Add objective</UiButton>
+        <div v-if="objectives.length && !loading" class="flex shrink-0 flex-col items-start gap-1.5 sm:items-end">
+          <UiButton variant="outline" size="sm" :disabled="busy || saving || pending || objectives.length >= 15" :aria-describedby="objectives.length >= 15 ? `${uid}-full` : undefined" data-testid="learn-v2-map-add-objective" @click="addObjective"><Plus />Add objective</UiButton>
+          <p v-if="objectives.length >= 15" :id="`${uid}-full`" class="font-inter text-xs font-medium text-foreground sm:max-w-56 sm:text-right" data-testid="learn-v2-map-full">A map holds up to 15 objectives. Remove one to add another.</p>
         </div>
       </header>
 
@@ -372,7 +373,7 @@ function closeOrder() {
 
       <div v-else-if="!objectives.length" class="mt-6 rounded-xl border border-dashed border-border px-6 py-12 text-center" data-testid="learn-v2-map-empty">
         <h3 class="font-dm-sans text-lg font-semibold text-foreground">No objectives yet</h3>
-        <p class="mx-auto mt-2 max-w-md text-sm text-foreground">Add something you want to be able to do. Budds sets up its questions from your sources.</p>
+        <p class="mx-auto mt-2 max-w-md text-sm text-foreground">Budds builds this map from the sources you accept. Go to Sources to generate it.</p>
       </div>
 
       <template v-else>
