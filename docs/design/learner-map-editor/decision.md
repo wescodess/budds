@@ -16,6 +16,7 @@ Spec: [#515](https://github.com/wescodess/budds/issues/515). Blocks C4: [#514](h
 - Round 1: `recommended answers` (Outline, with the orchestrator's recommended side effects).
 - Round 2: `reccommended answers` (3b).
 - States 3b does not draw follow 3a, with Accept only in the bar: `Yes, follow 3a (Recommended)`.
+- 2026-11-18: `fit`. At 320 wide the bar stays on one row: Order becomes an icon-only button (its existing icon, named "Order", 36px) next to Accept, so the first objective's citations stay in view. It narrows only when the bar is under 21rem; wider bars keep the approved Order button.
 
 **Date:** 2026-11-17
 

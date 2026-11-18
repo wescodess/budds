@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import type { LearnMapEdit, LearnMapSaveResult, LearnObjectiveSnapshot, LearnSourceSnapshot } from '~/types/learn-v2-journey'
 
@@ -21,6 +22,21 @@ const sources: LearnSourceSnapshot[] = [
   { id: 'source-2', sourceKey: 'identity-2', title: 'Fetch specification', origin: 'user_url', publisher: 'fetch.spec.whatwg.org', retrievedLabel: 'Accepted', coverage: 'strong', lifecycle: 'user_accepted', objectives: [] },
 ]
 
+let observe: ((entries: Array<{ isIntersecting: boolean }>) => void) | undefined
+
+class EditorObserver {
+  constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) { observe = callback }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() { return [] }
+}
+
+async function scrollEditor(inView: boolean) {
+  observe?.([{ isIntersecting: inView }])
+  await nextTick()
+}
+
 async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean; loading?: boolean } = {}) {
   const Comp = await import(`${path}/LearningTrail.vue`)
   const save = vi.fn(options.save ?? (async () => ({ ok: true }) as LearnMapSaveResult))
@@ -32,6 +48,12 @@ async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save
 }
 
 describe('Learner map editor', () => {
+  beforeEach(() => vi.stubGlobal('IntersectionObserver', EditorObserver))
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    observe = undefined
+  })
+
   it('reads as an outline grouped by milestone with numbered citations and the sources list', async () => {
     const { wrapper } = await mountTrail({ objectives: [objective(0), objective(1), objective(2, { coverage: 'partial', gapReason: 'Your sources skip timeouts.' }), objective(3), objective(4), objective(5)] })
 
@@ -46,6 +68,32 @@ describe('Learner map editor', () => {
     wrapper.unmount()
   })
 
+  it('lists citations in ascending order in the outline and on the sources chip', async () => {
+    const reversed = [sources[1]!, sources[0]!].map(source => ({ sourceKey: source.sourceKey, title: source.title, origin: source.origin, coverage: 'strong' as const, evidenceStatus: 'evidence_available' as const }))
+    const { wrapper } = await mountTrail({ objectives: Array.from({ length: 7 }, (_, index) => objective(index, index === 1 ? { sourceLinks: reversed } : {})) })
+
+    const row = wrapper.get('[data-testid="learn-v2-map-select-objective-2"]').element.closest('li')!
+    expect([...row.querySelectorAll('a[aria-label^="Source"]')].map(link => link.textContent)).toEqual(['1', '2'])
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-2"]').trigger('click')
+    const chip = wrapper.get('[data-testid="learn-v2-objective-sources"]')
+    expect(chip.findAll('[aria-hidden="true"] > span').map(number => number.text())).toEqual(['1', '2'])
+    expect(chip.text()).toContain('1 and 2')
+    wrapper.unmount()
+  })
+
+  it('narrows Order to its icon so the bar stays on one row', async () => {
+    const { wrapper } = await mountTrail()
+
+    const order = wrapper.get('[data-testid="learn-v2-map-order"]')
+    expect(order.element.parentElement!.parentElement!.classList).toContain('@container')
+    expect(order.classes()).toEqual(expect.arrayContaining(['min-h-9', 'min-w-9']))
+    expect(order.find('svg.text-primary').exists()).toBe(true)
+    const label = order.findAll('span').find(span => span.text() === 'Order')!
+    expect(label.classes()).toContain('@max-[21rem]:sr-only')
+    order.findAll('svg:not(.text-primary)').forEach(chevron => expect(chevron.classes()).toContain('@max-[21rem]:hidden'))
+    wrapper.unmount()
+  })
+
   it('edits the words in place and saves one change without any assessment fields', async () => {
     const { wrapper, save } = await mountTrail()
 
@@ -55,8 +103,15 @@ describe('Learner map editor', () => {
     await wrapper.get('[data-testid="learn-v2-objective-title"]').setValue('Explain cancellation safely')
 
     expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Not saved yet: wording.')
-    expect(wrapper.get('[data-testid="learn-v2-map-pending"]').text()).toContain('Objective 2 isn’t saved yet.')
+    expect(wrapper.find('[data-testid="learn-v2-map-pending"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="learn-v2-accept-map"]').attributes('disabled')).toBeDefined()
+
+    await scrollEditor(false)
+    const pending = wrapper.get('[data-testid="learn-v2-map-pending"]')
+    expect(pending.text()).toContain('Objective 2 isn’t saved yet.')
+    expect(pending.get('a').text()).toBe('Go to it')
+    await scrollEditor(true)
+    expect(wrapper.find('[data-testid="learn-v2-map-pending"]').exists()).toBe(false)
 
     await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
     const edit = save.mock.calls[0]![0]
@@ -133,6 +188,8 @@ describe('Learner map editor', () => {
     await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
 
     expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Saving your changes…')
+    expect(wrapper.find('[data-testid="learn-v2-map-pending"]').exists()).toBe(false)
+    await scrollEditor(false)
     expect(wrapper.get('[data-testid="learn-v2-map-pending"]').text()).toContain('Saving objective 1…')
     expect(wrapper.get('[data-testid="learn-v2-map-pending"]').text()).not.toContain('isn’t saved')
     expect(wrapper.get('[data-testid="learn-v2-save-objective"]').text()).toBe('Saving')

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch } from 'vue'
+import { computed, nextTick, ref, shallowRef, useId, watch } from 'vue'
+import { useIntersectionObserver } from '@vueuse/core'
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, CircleDot, ListOrdered, LoaderCircle, Pencil, Plus, Scissors, Trash2 } from '@lucide/vue'
 import type { LearnCoverage, LearnMapEdit, LearnMapSaveResult, LearnObjectiveDraft, LearnObjectiveSnapshot, LearnSourceOrigin, LearnSourceSnapshot } from '~/types/learn-v2-journey'
 
@@ -39,6 +40,11 @@ const saving = ref(false)
 const failure = ref<{ number: number; reason: 'changed' | 'failed' } | null>(null)
 const panel = ref<Panel | null>(null)
 const orderOpen = ref(false)
+const editor = shallowRef<HTMLElement | null>(null)
+const editorInView = ref(true)
+
+useIntersectionObserver(editor, ([entry]) => { editorInView.value = entry?.isIntersecting ?? true })
+const setEditor = (element: unknown) => { editor.value = element instanceof HTMLElement ? element : null }
 
 const rowId = (key: string) => `${uid}-objective-${key}`
 const sourceId = (number: number) => `${uid}-source-${number}`
@@ -103,7 +109,7 @@ const baselineOrder = computed(() => milestones.value.flatMap(milestone => objec
 const selectedNumber = computed(() => selectedKey.value ? numberOf.value.get(selectedKey.value) ?? 0 : 0)
 
 const supporting = (view: LearnObjectiveDraft) => view.coverage === 'gap' ? [] : view.supportingSourceKeys
-const citations = (view: LearnObjectiveDraft) => supporting(view).map(key => sourceNumber.value.get(key)).filter((value): value is number => value !== undefined)
+const citations = (view: LearnObjectiveDraft) => supporting(view).map(key => sourceNumber.value.get(key)).filter((value): value is number => value !== undefined).sort((a, b) => a - b)
 function afterLabel(view: LearnObjectiveDraft) {
   const numbers = view.prerequisiteKeys.map(key => numberOf.value.get(key)).filter((value): value is number => value !== undefined).sort((a, b) => a - b)
   return numbers.length ? `After ${numbers.join(', ')}` : 'Start here'
@@ -125,6 +131,7 @@ const changes = computed(() => {
   return list
 })
 const pending = computed(() => changes.value.length > 0 || failure.value !== null)
+const waitingAway = computed(() => Boolean(selectedKey.value) && pending.value && !editorInView.value)
 const mode = computed(() => saving.value ? 'saving' : failure.value ? 'failed' : changes.value.length ? 'dirty' : 'clean')
 const valid = computed(() => {
   const value = draft.value
@@ -384,7 +391,7 @@ function closeOrder() {
             <h3 :id="`${uid}-milestone-${groupIndex}`" class="font-dm-sans text-lg font-semibold text-foreground">{{ group.title }}</h3>
             <ol class="mt-1 divide-y divide-border">
               <template v-for="row in group.rows" :key="row.key">
-                <li v-if="row.key === selectedKey && draft" :id="rowId(row.key)" tabindex="-1" aria-current="true" :aria-busy="saving || undefined" class="flex gap-3 border-l-2 border-primary bg-card py-4 pr-3 pl-3 outline-none" data-testid="learn-v2-objective-editor">
+                <li v-if="row.key === selectedKey && draft" :id="rowId(row.key)" :ref="setEditor" tabindex="-1" aria-current="true" :aria-busy="saving || undefined" class="flex scroll-mb-32 gap-3 border-l-2 border-primary bg-card py-4 pr-3 pl-3 outline-none" data-testid="learn-v2-objective-editor">
                   <span :class="numberClass" class="text-foreground">{{ row.number }}</span>
                   <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -503,12 +510,12 @@ function closeOrder() {
           </section>
         </div>
 
-        <div class="sticky bottom-0 z-20 bg-background pt-2 pb-4">
+        <div class="@container sticky bottom-0 z-20 bg-background pt-2 pb-4">
           <div class="relative flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border bg-card p-2">
-            <button :id="`${uid}-order-button`" type="button" :aria-expanded="orderOpen" class="inline-flex min-h-9 min-w-0 items-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-order" @click="toggleOrder($event.detail > 0)">
-              <ListOrdered class="size-4 shrink-0 text-primary" /><span>Order</span><span class="hidden font-inter text-xs font-medium text-muted-foreground sm:inline">{{ objectiveCount(placed.length) }} · {{ duration(totalMinutes) }}</span><ChevronDown v-if="orderOpen" class="size-4 shrink-0" /><ChevronUp v-else class="size-4 shrink-0" />
+            <button :id="`${uid}-order-button`" type="button" :aria-expanded="orderOpen" class="inline-flex min-h-9 min-w-9 items-center justify-center gap-2 rounded-lg px-2 text-left text-sm font-medium text-foreground hover:bg-accent/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" data-testid="learn-v2-map-order" @click="toggleOrder($event.detail > 0)">
+              <ListOrdered class="size-4 shrink-0 text-primary" /><span class="@max-[21rem]:sr-only">Order</span><span class="hidden font-inter text-xs font-medium text-muted-foreground sm:inline">{{ objectiveCount(placed.length) }} · {{ duration(totalMinutes) }}</span><ChevronDown v-if="orderOpen" class="size-4 shrink-0 @max-[21rem]:hidden" /><ChevronUp v-else class="size-4 shrink-0 @max-[21rem]:hidden" />
             </button>
-            <p v-if="selectedKey && pending" role="status" class="flex min-w-0 flex-1 basis-48 items-center gap-2 text-sm text-foreground" data-testid="learn-v2-map-pending">
+            <p v-if="selectedKey && waitingAway" role="status" class="flex min-w-0 flex-1 basis-48 items-center gap-2 text-sm text-foreground" data-testid="learn-v2-map-pending">
               <LoaderCircle v-if="saving" class="size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
               <CircleDot v-else class="size-4 shrink-0 text-[var(--learn-attention)]" />
               <span>{{ saving ? `Saving objective ${selectedNumber}…` : `Objective ${selectedNumber} isn’t saved yet.` }} <a :href="`#${rowId(selectedKey)}`" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" @click.prevent="reveal(rowId(selectedKey))">Go to it</a></span>
