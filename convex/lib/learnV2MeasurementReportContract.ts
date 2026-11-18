@@ -3,6 +3,7 @@ import type { z } from 'zod'
 import {
   LEARN_V2_REPORT_RESPONSE_KINDS, LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION, LEARN_V2_REPORT_STARTING_BANDS,
   LEARN_V2_REPORT_STATUSES, LEARN_V2_REPORT_DISPOSITIONS, type learnReportMetricSchema,
+  LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
   type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema, type learnReportInputSnapshotSchema,
 } from '../../shared/learn-v2-measurement-report'
 
@@ -127,5 +128,16 @@ export const learnReportInputSnapshotValidator = v.union(
     firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), clock: reportClock,
     stateAtEligibility: masteryState, stateAtAcceptance: v.union(masteryState, v.null()), acceptance: nullableAcceptance,
     result: nullableResult, unresolvedReason: nullableString,
+  }),
+  v.object({ kind: v.literal('first_check_claim_v2'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION), ...computationKeys,
+    claim: v.object({ ...firstCheckClaim.fields, claimSequence: v.literal(1) }),
+    stratum: v.object({ epoch: v.string(), baselineSha: v.string(), cohortVersion: v.string(), flow: literals(['v2_today', 'v2_canvas']),
+      entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']) }),
+    policyPins: v.object({ assistancePolicyVersion: v.string(), validityPolicyVersion: v.string(), thresholdVersion: v.string(), thresholdPercent: v.literal(80) }),
+    firstSlot: v.union(v.object({ kind: v.literal('unresolved'), reason: v.string() }),
+      v.object({ kind: v.literal('linked'), firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.literal(1),
+        linkedAt: v.number(), clock: reportClock, stratum: learnReportFirstSlotStratumValidator,
+        stateAtEligibility: v.union(masteryState, v.literal('unknown')), stateAtAcceptance: v.union(masteryState, v.literal('unknown'), v.null()),
+        acceptance: nullableAcceptance, result: nullableResult, unresolvedReason: nullableString })),
   }),
 ) satisfies Validator<z.infer<typeof learnReportInputSnapshotSchema>, 'required', string>

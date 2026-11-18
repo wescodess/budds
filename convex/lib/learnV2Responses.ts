@@ -26,7 +26,7 @@ import {
   learnScorerBindingSchema, learnMeasurementAllocationSchema, type LearnResponseScope,
 } from '../../shared/learn-v2-measurement'
 import {
-  learnAssessmentPurposeSchema, evaluateLearnAssessmentEligibility, isLearnAssessmentTestOnly,
+  learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins, evaluateLearnAssessmentEligibility, isLearnAssessmentTestOnly,
 } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } from '../../shared/learn-v2-assessment-disclosure'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
@@ -289,9 +289,7 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
   if (row.operationalEligibility !== 'eligible') reject('unavailable')
   const pins = parseLearnContract(learnAssessmentPinsSchema, row.assessmentPins)
   const measurement = pins.kind === 'measurement'
-  if (measurement !== purpose.kind.startsWith('measurement_')
-    || (purpose.kind === 'calibration' && pins.kind !== 'calibration')
-    || (purpose.kind === 'independent_application' && pins.kind !== 'session_application')) reject('pins_mismatch')
+  if (!doesLearnAssessmentPurposeMatchPins(purpose, pins)) reject('pins_mismatch')
   const caseId = measurement ? pins.itemPins.caseId : pins.caseId
   const caseRow = await ctx.db.get(caseId)
   if (!caseRow || caseRow.userId !== userId) reject('pins_mismatch')

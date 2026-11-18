@@ -289,7 +289,7 @@ jobs:
           key: convex-local-${{ runner.os }}-${{ runner.arch }}-${{ steps.convex.outputs.cli-version }}-${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
       - name: Download Convex backend and dashboard with retries
         if: steps.convex-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 15
+        timeout-minutes: 20
         env:
           BUDDS_E2E_CONVEX_BACKEND_VERSION: ${{ steps.convex.outputs.BUDDS_E2E_CONVEX_BACKEND_VERSION }}
         run: |

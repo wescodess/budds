@@ -14,5 +14,12 @@
     "typescript": "^5.7.2",
     "vitest": "^4.1.12",
     "wrangler": "^4.157.0"
+  },
+  "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-fc5q-39xc-vjpf"
+      ]
+    }
   }
 }

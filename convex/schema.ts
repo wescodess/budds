@@ -1886,6 +1886,13 @@ export default defineSchema({
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])
     .index('by_userId_and_fact_assessmentOpportunityId', ['userId', 'fact.assessmentOpportunityId'])
     .index('by_userId_and_fact_submissionId', ['userId', 'fact.submissionId'])
+    .index('by_fact_claimKey', ['fact.claimKey'])
+    .index('by_fact_basisAttemptId', ['fact.basisAttemptId'])
+    .index('by_userId_and_fact_objectiveId_and_fact_stratum_epoch', ['userId', 'fact.objectiveId', 'fact.stratum.epoch'])
+    .index('by_fact_firstCheckOpportunityId', ['fact.firstCheckOpportunityId'])
+    .index('by_fact_firstSlot_firstCheckOpportunityId', ['fact.firstSlot.firstCheckOpportunityId'])
+    .index('by_fact_slot_firstCheckOpportunityId', ['fact.slot.firstCheckOpportunityId'])
+    .index('by_userId_and_fact_kind', ['userId', 'fact.kind'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
     .index('by_userId', ['userId'])
