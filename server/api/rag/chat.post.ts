@@ -1,11 +1,12 @@
-import { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { ChatMessage } from '../../utils/ai-gateway'
 import type { AISearchChunk } from '../../utils/ai-search'
-import { readConfiguredRuntimeValue } from '../../utils/runtime-config'
 import { requireRateLimit } from '../../utils/rate-limit'
 import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
+import { makeConvexClient } from '../../utils/convex-client'
+import { loadTeachingScope, assertTeachingSourcePins, TeachingSourceError } from '../../utils/teaching-source-scope'
+import { messageProvenance, StreamMessageContent } from '../../utils/message-provenance'
 import type { LearnHelpReference } from '../../../convex/lib/learnV2HelpContract'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
@@ -18,7 +19,7 @@ Do not include a trailing "References" or "Sources" section in the answer.
 Do not repeat source filenames in the answer body unless the user explicitly asks for them.`
 
 function folderDocToChunk(
-  doc: { key: string; documentId: string; folderId?: string; filename?: string; content: string },
+  doc: { key: string; documentId: string; folderId?: string; filename?: string; content: string; contentHash?: string; sourceRevision?: string },
   userId: string,
 ): AISearchChunk {
   return {
@@ -30,6 +31,8 @@ function folderDocToChunk(
       folderId: doc.folderId,
       documentId: doc.documentId,
       userId,
+      contentHash: doc.contentHash,
+      sourceRevision: doc.sourceRevision,
     },
   }
 }
@@ -109,7 +112,9 @@ export default defineEventHandler(async (event) => {
         ...(body.scope?.fileIds ?? []).map(id => ({ kind: 'document' as const, id: id as Id<'documents'> }))]
     : [{ kind: 'folder', id: body.folderId as Id<'folders'> }]
   // Unbound client history may originate outside the selected scope.
-  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: body.history?.length ? null : { references } })
+  const client = makeConvexClient(event)
+  if (!client) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: body.history?.length ? null : { references } }, client)
   await authorizeHelp()
   let scopedDocumentIds: Set<string> | null = hasScope ? new Set() : null
   let scopedDocuments: Array<{
@@ -119,18 +124,6 @@ export default defineEventHandler(async (event) => {
     r2Key?: string
   }> = []
   if (hasScope) {
-    const token = event.context.convexToken as string | undefined
-    const runtimeConfig = useRuntimeConfig(event)
-    const convexUrl = readConfiguredRuntimeValue(
-      runtimeConfig.public?.convex?.url,
-      'NUXT_PUBLIC_CONVEX_URL',
-      'CONVEX_URL',
-    )
-    if (!token || !convexUrl) {
-      throw createError({ statusCode: 500, message: 'Convex client not configured' })
-    }
-    const client = new ConvexHttpClient(convexUrl)
-    client.setAuth(token)
     const resolved = await client.query(api.folders.resolveScope, {
       folderIds: body.scope?.folderIds as Id<'folders'>[] | undefined,
       fileIds: body.scope?.fileIds as Id<'documents'>[] | undefined,
@@ -145,8 +138,20 @@ export default defineEventHandler(async (event) => {
     }))
   }
 
-  await authorizeHelp()
+  const teachingScope = await loadTeachingScope(client, hasScope
+    ? { documentIds: [...(scopedDocumentIds ?? [])] as Id<'documents'>[] }
+    : { folderId: body.folderId as Id<'folders'> })
+  let usedChunks: AISearchChunk[] = []
+  const authorizeContent = async () => {
+    const current = await loadTeachingScope(client, { documentIds: teachingScope.map(source => source.documentId) })
+    for (const source of teachingScope) assertTeachingSourcePins(current, source)
+    for (const chunk of usedChunks) assertTeachingSourcePins(current, chunk.attributes)
+    await authorizeHelp()
+  }
+
+  await authorizeContent()
   const searchResults = await searchDocuments({
+    teachingScope,
     query: body.query,
     userId,
     ...(hasScope ? {} : { folderId: body.folderId }),
@@ -155,6 +160,7 @@ export default defineEventHandler(async (event) => {
     score_threshold: body.score_threshold ?? 0.05,
   })
 
+  await authorizeContent()
   const allChunks = (searchResults.data ?? []) as AISearchChunk[]
   const chunks = scopedDocumentIds
     ? allChunks.filter((c) => {
@@ -185,11 +191,12 @@ export default defineEventHandler(async (event) => {
         : []
 
       if (missingExplicitDocuments.length > 0) {
-        await authorizeHelp()
+        await authorizeContent()
         try {
           const explicitFolderDocs = await fetchFolderDocs({
             userId,
             documents: missingExplicitDocuments,
+            teachingScope: teachingScope.filter(source => missingExplicitDocuments.some(doc => doc.documentId === source.documentId)),
             maxChars: 80_000,
           })
           if (explicitFolderDocs.length > 0) {
@@ -198,7 +205,8 @@ export default defineEventHandler(async (event) => {
               ...explicitFolderDocs.map((doc) => folderDocToChunk(doc, userId)),
             ]
           }
-        } catch {
+        } catch (error) {
+          if (error instanceof TeachingSourceError) throw error
           console.error('[rag/chat] Explicit scoped document retrieval failed')
         }
       }
@@ -208,14 +216,16 @@ export default defineEventHandler(async (event) => {
     else {
       let scopedFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
       if (scopedDocuments.length > 0) {
-        await authorizeHelp()
+        await authorizeContent()
         try {
           scopedFolderDocs = await fetchFolderDocs({
             userId,
             documents: scopedDocuments,
+            teachingScope,
             maxChars: 80_000,
           })
-        } catch {
+        } catch (error) {
+          if (error instanceof TeachingSourceError) throw error
           console.error('[rag/chat] Scoped document retrieval failed')
         }
       }
@@ -224,8 +234,9 @@ export default defineEventHandler(async (event) => {
         citationChunks = scopedFolderDocs.map((doc) => folderDocToChunk(doc, userId))
         context = buildFolderDocContext(scopedFolderDocs)
       } else if (chunks.length < 8 && summarizationIntent) {
-        await authorizeHelp()
+        await authorizeContent()
         const deepSearch = await searchDocuments({
+          teachingScope,
           query: body.query,
           userId,
           ...(hasScope ? {} : { folderId: body.folderId }),
@@ -242,11 +253,12 @@ export default defineEventHandler(async (event) => {
       }
     }
   } else if (needsFallback) {
-    await authorizeHelp()
+    await authorizeContent()
     let rawFolderDocs: Awaited<ReturnType<typeof fetchFolderDocs>> = []
     try {
-      rawFolderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
-    } catch {
+      rawFolderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 80_000 })
+    } catch (error) {
+      if (error instanceof TeachingSourceError) throw error
       console.error('[rag/chat] Folder document retrieval failed')
     }
     const folderDocs = scopedDocumentIds
@@ -257,8 +269,9 @@ export default defineEventHandler(async (event) => {
       context = buildFolderDocContext(folderDocs)
     }
     else if (chunks.length < 8 && summarizationIntent) {
-      await authorizeHelp()
+      await authorizeContent()
       const deepSearch = await searchDocuments({
+          teachingScope,
         query: body.query,
         userId,
         folderId: body.folderId,
@@ -280,6 +293,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const responseSources = citationChunks.map(chunkToSource)
+  usedChunks = citationChunks
 
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
@@ -313,13 +327,13 @@ export default defineEventHandler(async (event) => {
   }
 
   if (body.stream) {
-    await authorizeHelp()
+    await authorizeContent()
     let stream: ReadableStream
     try {
       stream = await generateCompletionStream({ model: body.model, ...completionParams, stream: true })
     } catch {
       if (body.model !== SERVER_DEFAULT_MODEL) {
-        await authorizeHelp()
+        await authorizeContent()
         modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
         stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true }).catch(() => {
           throw createError({ statusCode: 502, message: 'Help generation unavailable' })
@@ -335,27 +349,42 @@ export default defineEventHandler(async (event) => {
       : ''
     const sourcesEvent = `event: sources\ndata: ${JSON.stringify(responseSources)}\n\n`
 
+    const reader = stream.getReader()
+    const answer = new StreamMessageContent()
+    let started = false
     const transformedStream = new ReadableStream({
-      async start(controller) {
-        try { await authorizeHelp() }
-        catch (error) {
-          await stream.cancel().catch(() => {})
-          controller.error(error)
-          return
-        }
-        if (fallbackEvent) controller.enqueue(encoder.encode(fallbackEvent))
-        controller.enqueue(encoder.encode(sourcesEvent))
-        const reader = stream.getReader()
+      async pull(controller) {
         try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            controller.enqueue(value)
+          if (!started) {
+            await authorizeContent()
+            if (fallbackEvent) controller.enqueue(encoder.encode(fallbackEvent))
+            controller.enqueue(encoder.encode(sourcesEvent))
+            started = true
+            return
           }
-          controller.close()
-        } catch {
-          controller.error(createError({ statusCode: 502, message: 'Help stream unavailable' }))
+          const { done, value } = await reader.read()
+          if (done) {
+            const text = answer.value()
+            const provenance = text === null ? undefined : await messageProvenance(event, userId, text, citationChunks, Boolean(body.history?.length))
+            await authorizeContent()
+            if (provenance) controller.enqueue(encoder.encode(`event: provenance\ndata: ${JSON.stringify(provenance)}\n\n`))
+            controller.close()
+            reader.releaseLock()
+            return
+          }
+          await authorizeContent()
+          answer.append(value)
+          controller.enqueue(value)
+        } catch (error) {
+          await reader.cancel().catch(() => {})
+          reader.releaseLock()
+          controller.error((error as { data?: { status?: string } }).data?.status === 'denied'
+            ? error : createError({ statusCode: 502, message: 'Help stream unavailable' }))
         }
+      },
+      async cancel(reason) {
+        await reader.cancel(reason).catch(() => {})
+        reader.releaseLock()
       },
     })
 
@@ -367,12 +396,12 @@ export default defineEventHandler(async (event) => {
   }
 
   let completion: Awaited<ReturnType<typeof generateCompletion>>
-  await authorizeHelp()
+  await authorizeContent()
   try {
     completion = await generateCompletion({ model: body.model, ...completionParams })
   } catch (err) {
     if (body.model !== SERVER_DEFAULT_MODEL) {
-      await authorizeHelp()
+      await authorizeContent()
       modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
       completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })
     } else {
@@ -380,9 +409,12 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  await authorizeHelp()
+  const answer = completion.choices[0]?.message?.content ?? ''
+  const provenance = await messageProvenance(event, userId, answer, citationChunks, Boolean(body.history?.length))
+  await authorizeContent()
   return {
-    answer: completion.choices[0]?.message?.content ?? '',
+    answer,
+    ...(provenance ? { provenance } : {}),
     model: completion.model,
     usage: completion.usage,
     sources: responseSources,

@@ -1,6 +1,13 @@
 import { v, type Infer } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema, learnResponseIdempotencyKeySchema } from '../../shared/learn-v2-responses'
+import { MESSAGE_PROVENANCE_VERSION } from '../../shared/learn-v2-message-provenance'
+
+export const messageScopeReference = v.union(
+  v.object({ kind: v.literal('document'), id: v.id('documents') }),
+  v.object({ kind: v.literal('folder'), id: v.id('folders') }),
+)
+export const messageHelpScope = { version: v.literal(MESSAGE_PROVENANCE_VERSION), references: v.array(messageScopeReference) }
 
 export const LEARN_HELP_ADMISSION_VERSION = 'learn-v2.help-admission.v1' as const
 export const LEARN_HELP_LIMITS = { openOpportunities: 8, references: 64, sources: 64, folderDepth: 8 } as const
@@ -8,6 +15,7 @@ export const LEARN_HELP_OPEN_PHASES = ['preparing', 'ready', 'test_open'] as con
 const kind = v.union(v.literal('chat'), v.literal('search'), v.literal('source'), v.literal('audio'), v.literal('replay'))
 export const helpReference = v.union(
   v.object({ kind: v.literal('conversation'), id: v.id('conversations') }),
+  v.object({ kind: v.literal('course'), id: v.id('courses') }),
   v.object({ kind: v.literal('folder'), id: v.id('folders') }),
   v.object({ kind: v.literal('document'), id: v.id('documents') }),
   v.object({ kind: v.literal('source_snapshot'), id: v.id('learnSourceSnapshots') }),
@@ -18,6 +26,7 @@ export const helpReference = v.union(
 )
 const referenceSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('conversation'), id: learnIdSchema<'conversations'>() }),
+  z.strictObject({ kind: z.literal('course'), id: learnIdSchema<'courses'>() }),
   z.strictObject({ kind: z.literal('folder'), id: learnIdSchema<'folders'>() }),
   z.strictObject({ kind: z.literal('document'), id: learnIdSchema<'documents'>() }),
   z.strictObject({ kind: z.literal('source_snapshot'), id: learnIdSchema<'learnSourceSnapshots'>() }),
@@ -29,11 +38,13 @@ const referenceSchema = z.discriminatedUnion('kind', [
 export const admitHelpArgs = {
   version: v.literal(LEARN_HELP_ADMISSION_VERSION), kind, idempotencyKey: v.string(),
   scope: v.union(v.null(), v.object({ references: v.array(helpReference) })),
+  ordinaryOnly: v.optional(v.boolean()),
 }
 export const admitHelpSchema = z.strictObject({
   version: z.literal(LEARN_HELP_ADMISSION_VERSION), kind: z.enum(['chat', 'search', 'source', 'audio', 'replay']),
   idempotencyKey: learnResponseIdempotencyKeySchema,
   scope: z.strictObject({ references: z.array(referenceSchema).min(1).max(LEARN_HELP_LIMITS.references) }).nullable(),
+  ordinaryOnly: z.boolean().optional(),
 })
 export const helpAdmissionValidator = v.union(
   v.object({ version: v.literal(LEARN_HELP_ADMISSION_VERSION), status: v.literal('ordinary') }),

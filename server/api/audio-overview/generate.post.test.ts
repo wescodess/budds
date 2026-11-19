@@ -1,6 +1,8 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { getFunctionName, type FunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const mockMutation = vi.fn();

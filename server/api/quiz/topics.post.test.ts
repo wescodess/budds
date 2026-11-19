@@ -1,4 +1,6 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 const query = vi.hoisted(() => vi.fn())
 vi.mock('../../utils/convex-client', () => ({ makeConvexClient: () => ({ query }) }))

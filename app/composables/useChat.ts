@@ -5,6 +5,7 @@ import { api } from '#convex/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { normalizeAssistantCitations } from '~/utils/normalize-assistant-citations'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
+import type { MessageProvenance } from '../../shared/learn-v2-message-provenance'
 
 import { DEFAULT_MODEL, isValidModel, getModelLabel } from '~/constants/models'
 
@@ -27,6 +28,7 @@ export interface UIChatMessage {
   content: string
   sources?: Source[]
   interjectionContext?: InterjectionContext
+  provenance?: MessageProvenance
 }
 
 interface ChatResponse {
@@ -39,6 +41,7 @@ interface ChatResponse {
     attributes: { filename?: string }
   }>
   modelFallback?: { requested: string; actual: string }
+  provenance?: MessageProvenance
 }
 
 interface RawSource {
@@ -129,7 +132,7 @@ export function useChat(
     conversationIdValue: Id<'conversations'>,
     role: 'user' | 'assistant',
     content: string,
-    extras: { sources?: Source[]; model?: string; interjectionContext?: InterjectionContext } = {},
+    extras: { sources?: Source[]; model?: string; interjectionContext?: InterjectionContext; provenance?: MessageProvenance } = {},
   ) {
     if (!import.meta.client) return
     await appendMessageMutation.mutate({
@@ -227,6 +230,12 @@ export function useChat(
               continue
             }
 
+            if (currentEventType === 'provenance') {
+              try { assistantMsg.provenance = JSON.parse(data) as MessageProvenance } catch { /* unavailable */ }
+              currentEventType = ''
+              continue
+            }
+
             try {
               const parsed = JSON.parse(data)
               const token = parsed.choices?.[0]?.delta?.content
@@ -282,6 +291,7 @@ export function useChat(
       role: 'assistant',
       content: normalizeAssistantMessageContent(data.answer ?? ''),
       sources: mapSources(data.sources ?? []),
+      provenance: data.provenance,
     })
   }
 
@@ -349,6 +359,7 @@ export function useChat(
         void persistMessage(convoId, 'assistant', normalizedContent, {
           sources: assistantMsg.sources,
           model: selectedModel.value,
+          provenance: assistantMsg.provenance,
         })
       }
 

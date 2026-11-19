@@ -10,9 +10,11 @@ export const listByCourse = query({
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return []
 
-    return await ctx.db
+    const rows = await ctx.db
       .query('courseSourceDocs')
       .withIndex('by_courseId', (q) => q.eq('courseId', args.courseId))
-      .collect()
+      .take(65)
+    if (rows.length > 64) throw new Error('Teaching input is unavailable')
+    return rows
   },
 })

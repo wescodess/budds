@@ -5,6 +5,8 @@ import { internalMutation, internalQuery, mutation, query } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
+import { admitLearnHelpForAudioJob } from './lib/learnV2HelpAdmission'
+import { helpAdmissionValidator } from './lib/learnV2HelpContract'
 import {
   AUDIO_OVERVIEW_DAILY_CAP,
   AUDIO_OVERVIEW_ENTAILMENT_VERIFICATION_BUDGET_MICRO_USD,
@@ -295,6 +297,17 @@ export const request = mutation({
       quota: reservation.quota,
       budget: { reservedMicrousd },
     }
+  },
+})
+
+export const admitTeachingHelp = mutation({
+  args: { jobId: v.id('audioOverviewJobs'), capability: v.string() },
+  returns: helpAdmissionValidator,
+  handler: async (ctx, args) => {
+    const job = await requireCapability(ctx, args.jobId, args.capability)
+    const admission = await admitLearnHelpForAudioJob(ctx, job)
+    if (admission.status === 'ordinary') await assertAudioJobSources(ctx, job)
+    return admission
   },
 })
 

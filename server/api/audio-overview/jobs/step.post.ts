@@ -1,4 +1,5 @@
 import { assertTeachingCommand } from '../../../utils/teaching-source-scope'
+import { assertHelpAdmission } from '../../../utils/learn-v2-help-admission'
 import { getErrorMessage } from '../../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -141,6 +142,10 @@ async function activeContext(client: ConvexHttpClient, jobId: Id<'audioOverviewJ
   return { active: !context.cancelled && !terminal, context }
 }
 
+async function authorizeJobHelp(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, capability: string) {
+  assertHelpAdmission(await client.mutation(api.audioOverviewJobs.admitTeachingHelp, { jobId, capability }), true)
+}
+
 function minimumGroundedCharacters(request: AudioOverviewRequest): number {
   const lengthMinutes: unknown = request.preferences?.lengthMinutes
   const complexity: unknown = request.preferences?.complexity
@@ -151,7 +156,7 @@ function minimumGroundedCharacters(request: AudioOverviewRequest): number {
   return lengthMinutes * MIN_GROUNDED_CHARACTERS_PER_MINUTE[complexity]
 }
 
-async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: string): Promise<AISearchChunk[]> {
+async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: string, authorizeHelp: () => Promise<void>): Promise<AISearchChunk[]> {
   const teachingScope = request.documents.map(({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }) => ({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }))
   const minimumCharacters = minimumGroundedCharacters(request)
   const scopeDocIds = request.documents.map(document => String(document.documentId))
@@ -173,6 +178,7 @@ async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: str
   let searchUnavailable = false
   let indexedRevisionUnavailable = false
   const searchOrEmpty = async (scoreThreshold: number) => {
+    await authorizeHelp()
     try {
       const result = await searchDocuments({
         teachingScope,
@@ -202,6 +208,7 @@ async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: str
     if (deeper.length > chunks.length) chunks = deeper
   }
   if (chunks.reduce((sum, chunk) => sum + chunk.content.trim().length, 0) < minimumCharacters) {
+    await authorizeHelp()
     const exactTextSources = await fetchFolderDocs({
       teachingScope,
       userId,
@@ -243,7 +250,7 @@ async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: str
   return chunks
 }
 
-async function buildManifest(request: AudioOverviewRequest) {
+async function buildManifest(request: AudioOverviewRequest, authorizeHelp: () => Promise<void>) {
   const entries: Array<{
     sourceId: string
     documentId: Id<'documents'>
@@ -252,6 +259,7 @@ async function buildManifest(request: AudioOverviewRequest) {
     displayReference: string
     objectKey?: string
   }> = await Promise.all(request.documents.map(async document => {
+    await authorizeHelp()
     const frozenHash = typeof document.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(document.contentHash)
       ? document.contentHash.toLowerCase()
       : null
@@ -406,6 +414,8 @@ function planScenes(
 }
 
 async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, capability: string) {
+  const authorizeHelp = () => authorizeJobHelp(client, jobId, capability)
+  await authorizeHelp()
   const existing = await client.query(api.audioOverviewV2.getForWorkflow, { jobId, capability })
   if (existing) return { cancelled: false, sceneCount: existing.episode.sceneCount }
   const checked = await activeContext(client, jobId, capability)
@@ -414,8 +424,8 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
   const progress = await client.mutation(api.audioOverviewJobs.setProgress, { jobId, capability, progress: 'Retrieving sources…', stage: 'preparing' })
   if (!progress.active) return { cancelled: true, sceneCount: 0 }
   const [chunks, manifest] = await Promise.all([
-    retrieveGroundedChunks(request, checked.context.job.userId),
-    buildManifest(request),
+    retrieveGroundedChunks(request, checked.context.job.userId, authorizeHelp),
+    buildManifest(request, authorizeHelp),
   ])
   const beforePaid = await activeContext(client, jobId, capability)
   if (!beforePaid.active) return { cancelled: true, sceneCount: 0 }
@@ -443,8 +453,10 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
       }
 
       let completion: Awaited<ReturnType<typeof generateCompletion>>
+      await authorizeHelp()
       try {
         completion = await generateCompletion({
+          redactUpstreamErrorBody: true,
           model: SCRIPT_MODEL,
           messages: dialogueMessages,
           temperature: dialogueTemperature,
@@ -552,7 +564,9 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
     const verificationDecisions: ReturnType<typeof parseClaimEntailmentResponse>['decisions'] = []
     try {
       for (const batch of batchClaimEntailmentInputs(entailmentInput)) {
+        await authorizeHelp()
         const completion = await generateCompletion({
+          redactUpstreamErrorBody: true,
           model: SCRIPT_MODEL,
           messages: buildClaimEntailmentPrompt(batch),
           temperature: 0,
@@ -663,6 +677,7 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
   }))
   let commitError: unknown
   for (let attempt = 0; attempt < 3; attempt++) {
+    await authorizeHelp()
     try {
       await client.mutation(api.audioOverviewV2.createPlan, {
         jobId,
@@ -704,6 +719,7 @@ async function sceneContext(client: ConvexHttpClient, jobId: Id<'audioOverviewJo
     .filter(row => row.sceneId === scene._id)
     .sort((left, right) => left.sceneOrder - right.sceneOrder)
     .map(row => ({ speaker: row.speaker, text: row.text, emotionalIntent: row.emotionalIntent, deliveryIntent: row.deliveryIntent, pauseAfterMs: row.pauseAfterMs }))
+  await authorizeJobHelp(client, jobId, capability)
   return {
     cancelled: false,
     scene: {
@@ -874,9 +890,11 @@ async function align(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, c
     for (const scene of [...context.scenes].sort((left, right) => left.order - right.order)) {
       const artifact = context.artifacts.find(row => row._id === scene.audioArtifactId)
       if (!artifact || !scene.durationMs) throw new Error('Published Scene media is unavailable for alignment')
+      await authorizeJobHelp(client, jobId, capability)
       const response = await fetchPrivateR2Object(artifact.objectKey)
       if (!response.ok) throw new Error(`Published Scene media returned ${response.status}`)
       const pcm = new Uint8Array(await response.arrayBuffer())
+      await authorizeJobHelp(client, jobId, capability)
       const transcription = await transcribeAudio(wavFromPcm(pcm))
       if (transcription.words.length === 0) throw new Error('Alignment provider returned no word timings')
       const utterances = context.utterances.filter(row => row.sceneId === scene._id).sort((left, right) => left.sceneOrder - right.sceneOrder)
@@ -901,6 +919,7 @@ async function align(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, c
     return { skipped: false }
   }
   catch (error) {
+    if ((error as { data?: { status?: string } }).data?.status === 'denied') throw error
     await client.mutation(api.audioOverviewV2.failAlignment, {
       jobId,
       capability,
@@ -922,6 +941,7 @@ export default defineEventHandler(async (event) => {
   const client = makeJobClient(event)
   const jobId = body.jobId as Id<'audioOverviewJobs'>
   try {
+    if (body.stage !== 'fail') await authorizeJobHelp(client, jobId, capability)
     if (body.stage === 'prepare') return { ok: true, ...await prepare(client, jobId, capability) }
     if (body.stage === 'scene-context') {
       if (!Number.isInteger(body.sceneOrder) || body.sceneOrder! < 0) throw createError({ statusCode: 400, message: 'sceneOrder is required' })
@@ -952,6 +972,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, message: 'Invalid audio overview job stage' })
   }
   catch (error: unknown) {
+    const denial = (error as { data?: { status?: string, reasonCode?: string } }).data
+    if (denial?.status === 'denied') return { ok: false, retryable: false, ...denial }
     console.error('[audio-overview/jobs/step] failed', body.stage, error)
     return { ok: false, ...classifyRetry(error) }
   }

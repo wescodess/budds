@@ -6,6 +6,7 @@ import schema from './schema'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, type LearnHelpReference } from './lib/learnV2HelpContract'
+import { MESSAGE_PROVENANCE_VERSION } from '../shared/learn-v2-message-provenance'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -91,6 +92,9 @@ describe('registered server-derived help admission', () => {
             : kind === 'thread' ? { kind: 'thread', id: s.f.threadId }
               : kind === 'audio' ? { kind: 'audio_overview', id: audioId! }
                 : { kind: 'conversation', id: await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Old conversation' }) }
+    if (reference.kind === 'conversation') await s.t.run(ctx => ctx.db.insert('messages', { userId: OWNER.tokenIdentifier,
+      conversationId: reference.id, role: 'assistant', content: 'Teaching answer', helpScope: { version: MESSAGE_PROVENANCE_VERSION,
+        references: [{ kind: 'document', id: s.f.documentId }] } }))
     const before = (await s.exposures()).length
     expect(await s.admit([reference])).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
     expect(await s.admit([reference])).toMatchObject({ status: 'denied', reasonCode: 'test_open' })

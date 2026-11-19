@@ -6,6 +6,7 @@ import { orchestrateSourceFetch } from './learnV2SourceActions'
 import { orchestratePublicSearch } from './learnV2SearchActions'
 import { LEARN_HELP_LIMITS } from './lib/learnV2HelpContract'
 import { HELP_OWNER, helpConsumerFixture } from '../tests/fixtures/learn-v2-help-consumers'
+import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -14,7 +15,7 @@ vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal 
     get responses() { return policy.responses } } }
 })
 const modules = import.meta.glob('./**/*.ts')
-beforeEach(() => { policy.responses = true; vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
+beforeEach(() => { policy.responses = true; vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.stubEnv('NUXT_BETTER_AUTH_SECRET', 'message-provenance-fixture-secret'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 describe('registered message and source help consumers', () => {
@@ -173,7 +174,7 @@ describe('registered message and source help consumers', () => {
     const args = { conversationId, idempotencyKey: 'message-replay-key' }
     for (let replay = 0; replay < 2; replay++) {
       const response = await s.owner.mutation(api.messages.replayByConversation, args)
-      expect(response.admission).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
+      expect(response.admission).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
       expect(response.messages).toEqual(rows)
     }
     expect(rows.map(row => row.content)).toEqual(['My own question', ''])
@@ -189,7 +190,9 @@ describe('registered message and source help consumers', () => {
     const s = await helpConsumerFixture(modules, false)
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Teaching' })
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Separate case teaching',
-      sources: [{ content: 'Teaching source', score: 1, filename: 'case.pdf' }] })
+      sources: [{ content: 'Teaching source', score: 1, filename: 'case.pdf' }],
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, 'Separate case teaching',
+        [{ content: 'Teaching source', score: 1, filename: 'case.pdf' }], [{ kind: 'document', id: s.f.documentId }]) })
     const before = (await s.exposures()).length
     const args = { conversationId, idempotencyKey: 'message-replay-key' }
     const first = await s.owner.mutation(api.messages.replayByConversation, args)
@@ -209,11 +212,68 @@ describe('registered message and source help consumers', () => {
     const s = await helpConsumerFixture(modules)
     const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
-    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer' })
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, 'Other course answer', [], [{ kind: 'folder', id: folderId }]) })
     const before = await s.exposures()
     const result = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unrelated-replay-key' })
     expect(result.admission.status).toBe('ordinary')
     expect(result.messages[0]?.content).toBe('Other course answer')
     expect(await s.exposures()).toEqual(before)
+  })
+  test.each([true, false])('cross-folder replay uses known=%s content provenance and never the conversation folder', async known => {
+    const s = await helpConsumerFixture(modules)
+    const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Unrelated conversation' })
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Old conversation' })
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'user', content: 'My question' })
+    const content = 'CROSS_FOLDER_ANSWER'
+    const sources = [{ content: 'CROSS_FOLDER_SOURCE', score: 1, filename: 'fixture.txt' }]
+    const provenance = known ? await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+      content, sources, [{ kind: 'document', id: s.f.documentId }, { kind: 'folder', id: s.f.folderId }]) : undefined
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources, provenance })
+    const args = { conversationId, idempotencyKey: 'cross_folder_replay_123' }
+    const result = await s.owner.mutation(api.messages.replayByConversation, args)
+    expect(result.admission).toMatchObject({ status: 'denied', reasonCode: known ? 'test_open' : 'disclosure_unknown' })
+    expect(result.messages.map(row => row.content)).toEqual(['My question', ''])
+    expect(JSON.stringify(result)).not.toContain('CROSS_FOLDER_')
+    expect((await s.exposures()).at(-1)?.status).toBe('requested_denied')
+    await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+    const replay = await s.owner.mutation(api.messages.replayByConversation, args)
+    expect(replay.admission.status).toBe('ordinary')
+    expect(replay.messages[1]?.content).toBe(content)
+  })
+  test('message provenance is bound to its owner, exact answer, sources and scope', async () => {
+    const s = await helpConsumerFixture(modules)
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Teaching' })
+    const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
+    const content = 'Answer [Source 1: fixture.txt]'
+    const sources = [{ content: 'Source', score: 1, filename: 'fixture.txt' }]
+    const provenance = (await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+      content, sources, [{ kind: 'document', id: s.f.documentId }]))!
+    for (const changed of [{ content: 'Changed answer' }, { sources: [] },
+      { provenance: { ...provenance, references: [{ kind: 'folder' as const, id: folderId }] } },
+      { provenance: { ...provenance, signature: '0'.repeat(64) } }]) {
+      const id = await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources, provenance, ...changed })
+      expect((await s.t.run(ctx => ctx.db.get(id)))?.helpScope).toBeUndefined()
+    }
+    const id = await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Answer [1]', sources, provenance })
+    expect((await s.t.run(ctx => ctx.db.get(id)))?.helpScope?.references).toEqual(provenance.references)
+    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toContain('helpScope')
+    expect((await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'invalid_receipt_replay' })).admission)
+      .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+  })
+  test('missing provenance verification configuration preserves ordinary history with unknown scope', async () => {
+    const s = await helpConsumerFixture(modules)
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Teaching' })
+    const content = 'Existing ordinary answer'
+    const provenance = await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+      content, [], [{ kind: 'document', id: s.f.documentId }])
+    vi.stubEnv('NUXT_BETTER_AUTH_SECRET', '')
+    vi.stubEnv('BETTER_AUTH_SECRET', '')
+    const id = await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, provenance })
+    expect((await s.t.run(ctx => ctx.db.get(id)))?.helpScope).toBeUndefined()
+    expect((await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unverified_scope_replay' })).admission)
+      .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+    policy.responses = false
+    expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe(content)
   })
 })

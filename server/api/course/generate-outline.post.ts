@@ -1,4 +1,4 @@
-import { assertTeachingCommand, loadTeachingScope } from '../../utils/teaching-source-scope'
+import { assertTeachingCommand, createTeachingHelpGuard } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -47,7 +47,8 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, message: 'Failed to initialize Convex client' })
   }
 
-  const teachingScope = await loadTeachingScope(convexClient, { courseId })
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { courseId })
+  const teachingScope = await authorizeTeaching()
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -88,6 +89,7 @@ export default defineEventHandler(async (event) => {
           .map(d => d.documentId)
           .filter(Boolean) as string[]
 
+        await authorizeTeaching()
         const results = await searchDocuments({
           teachingScope,
           query: course.title,
@@ -108,6 +110,7 @@ export default defineEventHandler(async (event) => {
       }
 
       if (!documentContent.trim() && docIds.length > 0) {
+        await authorizeTeaching()
         const broadResults = await searchDocuments({
           teachingScope,
           query: course.title,
@@ -133,7 +136,9 @@ export default defineEventHandler(async (event) => {
       ? 'openai/gpt-4o'
       : SERVER_DEFAULT_MODEL
 
+    await authorizeTeaching()
     const completion = await generateCompletion({
+      redactUpstreamErrorBody: true,
       model,
       messages,
       temperature: 0.4,
@@ -156,6 +161,7 @@ export default defineEventHandler(async (event) => {
       ? { docCount: 0, webPercent: 100 }
       : { docCount, webPercent: 0 }
 
+    await authorizeTeaching()
     await convexClient.mutation(api.courses.finalizeOutline, {
       courseId,
       outlineSections: sections.map(s => ({
@@ -175,6 +181,7 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    await authorizeTeaching()
     return {
       courseId,
       sectionCount: sections.length,

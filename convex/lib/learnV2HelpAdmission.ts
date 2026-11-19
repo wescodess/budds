@@ -6,6 +6,7 @@ import { prepareLearnResponseAssistanceForOwner } from './learnV2Responses'
 import { LEARN_V2_PUBLIC_API_VERSION, parsePublicLearnRequest } from './learnV2PublicContract'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION } from '../../shared/learn-v2-responses'
+import { isLearnAssessmentTestOnly } from '../../shared/learn-v2-delayed-check'
 import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, LEARN_HELP_OPEN_PHASES, admitHelpSchema,
   type LearnHelpAdmission, type LearnHelpRequest, type LearnHelpReference } from './learnV2HelpContract'
 
@@ -89,14 +90,16 @@ function scopeResolver(ctx: MutationCtx, userId: string) {
     if (!row || row.userId !== userId || ['failed', 'cancelled'].includes(row.status)) throw new ScopeUnavailable()
     await folder(scope, row.folderId)
     const entries = await ctx.db.query('audioOverviewSourceManifestEntries').withIndex('by_jobId', q => q.eq('jobId', id)).take(LEARN_HELP_LIMITS.sources + 1)
-    const ids = new Set([...(row.sourceDocumentIds ?? []), ...entries.map(entry => {
+    const task = await ctx.db.get(row.taskId)
+    if (!task || task.userId !== userId) throw new ScopeUnavailable()
+    const ids = new Set([...(row.sourceDocumentIds ?? []), ...(task.audioOverviewRequest?.documents.map(document => document.documentId) ?? []), ...entries.map(entry => {
       if (entry.userId !== userId) throw new ScopeUnavailable()
       return entry.documentId
     })])
     if (entries.length > LEARN_HELP_LIMITS.sources || ids.size > LEARN_HELP_LIMITS.sources) throw new ScopeUnknown()
     for (const id of ids) await document(scope, id)
   }
-  async function reference(scope: Scope, reference: LearnHelpReference) {
+  async function resolveReference(scope: Scope, reference: LearnHelpReference) {
     switch (reference.kind) {
       case 'folder': return await folder(scope, reference.id)
       case 'document': return await document(scope, reference.id)
@@ -111,7 +114,32 @@ function scopeResolver(ctx: MutationCtx, userId: string) {
       case 'conversation': {
         const row = await ctx.db.get(reference.id)
         if (!row || row.userId !== userId) throw new ScopeUnavailable()
-        return await folder(scope, row.folderId)
+        const messages = await ctx.db.query('messages').withIndex('by_conversationId', q => q.eq('conversationId', row._id)).take(501)
+        if (messages.length > 500) throw new ScopeUnknown()
+        const references = new Map<string, LearnHelpReference>()
+        for (const message of messages) {
+          if (message.role === 'user' && !message.sources?.length && !message.interjectionContext) continue
+          if (!message.helpScope) throw new ScopeUnknown()
+          for (const item of message.helpScope.references) references.set(`${item.kind}:${item.id}`, item)
+        }
+        if (!references.size || references.size > LEARN_HELP_LIMITS.references) throw new ScopeUnknown()
+        for (const item of references.values()) await resolveReference(scope, item)
+        return
+      }
+      case 'course': {
+        const row = await ctx.db.get(reference.id)
+        if (!row || row.userId !== userId) throw new ScopeUnavailable()
+        if (row.folderId) await folder(scope, row.folderId)
+        const links = await ctx.db.query('courseSourceDocs').withIndex('by_courseId', q => q.eq('courseId', row._id)).take(LEARN_HELP_LIMITS.sources + 1)
+        if (links.length > LEARN_HELP_LIMITS.sources) throw new ScopeUnknown()
+        if (!row.folderId && !links.length) throw new ScopeUnknown()
+        for (const link of links) {
+          if (link.userId !== userId) throw new ScopeUnavailable()
+          if (link.documentId) await document(scope, link.documentId)
+          else if (link.folderId) await folder(scope, link.folderId)
+          else throw new ScopeUnknown()
+        }
+        return
       }
       case 'audio_job': return await audioJob(scope, reference.id)
       case 'audio_overview': {
@@ -129,7 +157,7 @@ function scopeResolver(ctx: MutationCtx, userId: string) {
       }
     }
   }
-  return { reference, learningVoid, thread }
+  return { reference: resolveReference, learningVoid, thread }
 }
 
 async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
@@ -149,6 +177,15 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
 
 export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
+  return await admitLearnHelp(ctx, userId, input)
+}
+
+export async function admitLearnHelpForAudioJob(ctx: MutationCtx, job: Doc<'audioOverviewJobs'>): Promise<LearnHelpAdmission> {
+  return await admitLearnHelp(ctx, job.userId, { version: LEARN_HELP_ADMISSION_VERSION, kind: 'audio',
+    idempotencyKey: `audio_help_${job._id}`, scope: { references: [{ kind: 'audio_job', id: job._id }] }, ordinaryOnly: true })
+}
+
+async function admitLearnHelp(ctx: MutationCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
   const request = parsePublicLearnRequest(admitHelpSchema, input)
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   const deny = (reasonCode: 'test_open' | 'disclosure_unknown' | 'unavailable'): LearnHelpAdmission => ({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode })
@@ -188,6 +225,11 @@ export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, i
   }
   if (!matches.length) return ordinary
   const scopeDigest = await privacyDigest({ kind: request.kind, scope: request.scope })
+  if (request.ordinaryOnly) {
+    const reason = matches.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose)) ? 'test_open' : 'unavailable'
+    for (const row of matches) await recordDenial(ctx, userId, row, request, reason, scopeDigest)
+    return deny(reason)
+  }
   const key = `help_${(await privacyDigest([request.idempotencyKey, request.kind, scopeDigest])).slice(7)}`
   const preparations = []
   for (const row of matches) {

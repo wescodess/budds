@@ -1,4 +1,7 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { getFunctionName, type FunctionReference } from 'convex/server'
+vi.mock('../../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 const mockQuery = vi.fn()
 const mockMutation = vi.fn()
@@ -38,7 +41,10 @@ vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({ public: { convex: { url: 'https
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     query = mockQuery
-    mutation = mockMutation
+    mutation(reference: FunctionReference<'mutation'>, args: unknown) {
+      if (getFunctionName(reference) === 'audioOverviewJobs:admitTeachingHelp') return Promise.resolve({ version: 'learn-v2.help-admission.v1', status: 'ordinary' })
+      return mockMutation(reference, args)
+    }
   },
 }))
 

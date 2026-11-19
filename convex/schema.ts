@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import * as measurementStorage from './lib/learnV2MeasurementStorage'
 import * as artifactLineage from './lib/learnV2ArtifactLineageContract'
+import { messageHelpScope } from './lib/learnV2HelpContract'
 import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
@@ -98,6 +99,7 @@ export default defineSchema({
     .index('by_userId_and_conversationId', ['userId', 'conversationId']),
 
   messages: defineTable({
+    helpScope: v.optional(v.object(messageHelpScope)),
     conversationId: v.id('conversations'),
     userId: v.string(),
     role: v.union(v.literal('user'), v.literal('assistant')),

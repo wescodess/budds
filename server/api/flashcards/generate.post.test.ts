@@ -1,6 +1,8 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { getFunctionName, type FunctionReference } from 'convex/server'
 import { api } from '../../../convex/_generated/api'
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 vi.stubGlobal('createError', (opts: { statusCode: number; message: string }) =>
   Object.assign(new Error(opts.message), { statusCode: opts.statusCode }),

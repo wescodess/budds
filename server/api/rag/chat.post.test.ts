@@ -2,6 +2,11 @@
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
 vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {} }))
+vi.mock('../../utils/teaching-source-scope', async importOriginal => ({
+  ...await importOriginal<typeof import('../../utils/teaching-source-scope')>(),
+  loadTeachingScope: async () => [],
+  assertTeachingSourcePins: () => {},
+}))
 
 const mockConvexQuery = vi.fn()
 
@@ -31,7 +36,7 @@ vi.stubGlobal('isAllowedModel', (await import('../../utils/models')).isAllowedMo
 vi.stubGlobal('SERVER_DEFAULT_MODEL', (await import('../../utils/models')).SERVER_DEFAULT_MODEL)
 
 const handler = (await import('./chat.post')).default
-const mockEvent = {} as any
+const mockEvent = { context: { convexToken: 'fixture-token' } } as any
 
 describe('POST /api/rag/chat — folderId enforcement (AC #1)', () => {
   beforeEach(() => {

@@ -644,7 +644,11 @@ export const getTeachingScope = query({
         if (documents.length > 64) teachingUnavailable()
         ids = documents.map(document => document._id)
       }
-    } else if (!ids) teachingUnavailable()
+    } else if (!ids) {
+      const documents = await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).take(65)
+      if (documents.length > 64) teachingUnavailable()
+      ids = documents.map(document => document._id)
+    }
     const documents: Doc<'documents'>[] = []
     for (const id of new Set(ids)) {
       const document = await ctx.db.get(id)

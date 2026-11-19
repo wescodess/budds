@@ -1,4 +1,4 @@
-import { assertTeachingCommand, loadTeachingScope, TeachingSourceError } from '../../utils/teaching-source-scope'
+import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -48,7 +48,8 @@ export default defineEventHandler(async (event) => {
   const convexClient = makeConvexClient(event)
   if (!convexClient) throw createError({ statusCode: 503, message: 'Flashcard storage unavailable' })
 
-  const teachingScope = await loadTeachingScope(convexClient, { folderId: body.folderId as Id<'folders'> })
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'> })
+  const teachingScope = await authorizeTeaching()
   const target = await convexClient.query(api.flashcardRooms.getRoom, { roomId })
   if (!target || target.room.folderId !== body.folderId) throw new TeachingSourceError()
 
@@ -75,6 +76,7 @@ export default defineEventHandler(async (event) => {
 
     let searchUnavailable = false
     const searchOrEmpty = async (params: Parameters<typeof searchDocuments>[0]) => {
+      await authorizeTeaching()
       try {
         const result = await searchDocuments({ ...params, teachingScope })
         searchUnavailable = false
@@ -99,6 +101,7 @@ export default defineEventHandler(async (event) => {
     let chunks: AISearchChunk[] = searchResults.data ?? []
 
     if (chunks.length < 2) {
+      await authorizeTeaching()
       try {
         const folderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 80_000 })
         if (folderDocs.length > 0) {
@@ -150,7 +153,9 @@ export default defineEventHandler(async (event) => {
 
     const messages = buildFlashcardPrompt(chunks, { cardCount })
 
+    await authorizeTeaching()
     const completion = await generateCompletion({
+      redactUpstreamErrorBody: true,
       model,
       messages,
       temperature: 0.3,
@@ -194,6 +199,7 @@ export default defineEventHandler(async (event) => {
       },
     }))
 
+    await authorizeTeaching()
     const generateResult = await convexClient.mutation(api.flashcardRooms.generateRoomCards, {
       roomId,
       origin: 'ai' as const,
@@ -213,6 +219,7 @@ export default defineEventHandler(async (event) => {
       },
     })
 
+    await authorizeTeaching()
     return {
       title: parsed.title,
       model,

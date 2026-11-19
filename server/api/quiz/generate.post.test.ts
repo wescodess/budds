@@ -1,4 +1,6 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { vi, describe, test, expect, beforeEach } from 'vitest'
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
@@ -261,7 +263,7 @@ describe('POST /api/quiz/generate', () => {
     expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
       { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP', language: 'en', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' } },
       { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.', language: 'en', evidence: { sourceIndex: 0, excerpt: 'Photosynthesis content' } },
-    ])
+    ], expect.any(Function))
   })
 
   test('[P0] preserves a generated question with an invalid source index without substituting or evaluating false provenance', async () => {
@@ -323,7 +325,7 @@ describe('POST /api/quiz/generate', () => {
     expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
     expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [expect.objectContaining({
       id: 'q0', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' },
-    })])
+    })], expect.any(Function))
     expect(console.info).toHaveBeenCalledWith('[quiz-quality-evidence]', {
       status: 'unavailable', reason: 'missing_evidence', itemCount: 1,
     })

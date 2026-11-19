@@ -1,6 +1,6 @@
 import { makeConvexClient } from '../../utils/convex-client'
 import type { Id } from '../../../convex/_generated/dataModel'
-import { assertTeachingCommand, loadTeachingScope, TeachingSourceError } from '../../utils/teaching-source-scope'
+import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 const TOPIC_EXTRACTION_QUERY = 'main topics, themes, and key concepts'
 
 export default defineEventHandler(async (event) => {
@@ -19,10 +19,12 @@ export default defineEventHandler(async (event) => {
 
   const convexClient = makeConvexClient(event)
   if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
-  const teachingScope = await loadTeachingScope(convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+  const teachingScope = await authorizeTeaching()
 
+  await authorizeTeaching()
   const searchResults = await searchDocuments({
-          teachingScope,
+    teachingScope,
     query: TOPIC_EXTRACTION_QUERY,
     userId,
     folderId: body.folderId,
@@ -33,6 +35,7 @@ export default defineEventHandler(async (event) => {
   let chunks = searchResults.data ?? []
 
   if (chunks.length < 2) {
+    await authorizeTeaching()
     try {
       const folderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 40_000 })
       if (folderDocs.length > 0) {
@@ -85,7 +88,9 @@ Rules:
     },
   ]
 
+  await authorizeTeaching()
   const completion = await generateCompletion({
+    redactUpstreamErrorBody: true,
     model: SERVER_DEFAULT_MODEL,
     messages,
     temperature: 0.2,
@@ -94,6 +99,7 @@ Rules:
 
   const raw = completion.choices[0]?.message?.content ?? ''
 
+  await authorizeTeaching()
   try {
     const stripped = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
     const cleaned = stripped.replace(/,(\s*[}\]])/g, '$1')
