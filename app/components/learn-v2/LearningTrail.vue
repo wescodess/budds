@@ -160,6 +160,13 @@ const statusText = computed(() => ({
   failed: 'Not saved. Your changes are still here.',
 })[mode.value])
 
+const barText = computed(() => {
+  if (saving.value) return `Saving objective ${selectedNumber.value}…`
+  if (failure.value?.reason === 'changed') return `Objective ${selectedNumber.value} wasn’t saved. The map changed.`
+  if (failure.value) return `Couldn’t save objective ${selectedNumber.value}.`
+  return `Objective ${selectedNumber.value} isn’t saved yet.`
+})
+
 function step(direction: -1 | 1): { index: number; swap: number } | { milestoneKey: string } | null {
   const index = placed.value.findIndex(row => row.key === selectedKey.value)
   const current = placed.value[index]
@@ -556,8 +563,9 @@ function closeOrder() {
             </button>
             <p v-if="selectedKey && waitingAway" role="status" class="flex min-w-0 flex-1 basis-48 items-center gap-2 text-sm text-foreground" data-testid="learn-v2-map-pending">
               <LoaderCircle v-if="saving" class="size-4 shrink-0 animate-spin text-[var(--warning)] motion-reduce:animate-none" />
+              <CircleAlert v-else-if="failure" class="size-4 shrink-0 text-destructive" />
               <CircleDot v-else class="size-4 shrink-0 text-[var(--learn-attention)]" />
-              <span>{{ saving ? `Saving objective ${selectedNumber}…` : `Objective ${selectedNumber} isn’t saved yet.` }} <a :href="`#${rowId(selectedKey)}`" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" @click.prevent="reveal(rowId(selectedKey))">Go to it</a></span>
+              <span>{{ barText }} <a :href="`#${rowId(selectedKey)}`" class="inline-flex min-h-6 items-center font-medium underline underline-offset-4 hover:text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none" @click.prevent="reveal(rowId(selectedKey))">Go to it</a></span>
             </p>
             <span v-else class="flex-1" />
             <UiButton v-if="canAccept" :variant="pending ? 'secondary' : 'default'" class="ml-auto" :disabled="busy || saving || pending" data-testid="learn-v2-accept-map" @click="emit('accept')">Accept learning map</UiButton>

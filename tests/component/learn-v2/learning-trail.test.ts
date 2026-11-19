@@ -115,6 +115,7 @@ describe('Learner map editor', () => {
     const pending = wrapper.get('[data-testid="learn-v2-map-pending"]')
     expect(pending.text()).toContain('Objective 2 isn’t saved yet.')
     expect(pending.get('a').text()).toBe('Go to it')
+    expect(pending.get('svg').classes()).toContain('text-[var(--learn-attention)]')
     await scrollEditor(true)
     expect(wrapper.find('[data-testid="learn-v2-map-pending"]').exists()).toBe(false)
 
@@ -260,6 +261,12 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Not saved. Your changes are still here.')
     expect((wrapper.get('[data-testid="learn-v2-objective-title"]').element as HTMLTextAreaElement).value).toBe('Explain cancellation')
     expect(wrapper.find('[data-testid="learn-v2-map-reload"]').exists()).toBe(false)
+
+    await scrollEditor(false)
+    const bar = wrapper.get('[data-testid="learn-v2-map-pending"]')
+    expect(bar.text()).toBe('Couldn’t save objective 2. Go to it')
+    expect(bar.classes()).toContain('text-foreground')
+    expect(bar.get('svg').classes()).toContain('text-destructive')
     wrapper.unmount()
   })
 
@@ -275,6 +282,14 @@ describe('Learner map editor', () => {
     expect(alert.text()).toContain('The map changed somewhere else, so objective 2 wasn’t saved. Your changes are still here.')
     expect(alert.classes()).not.toContain('text-destructive')
     expect(alert.get('svg').classes()).toContain('text-destructive')
+
+    await scrollEditor(false)
+    const bar = wrapper.get('[data-testid="learn-v2-map-pending"]')
+    expect(bar.text()).toBe('Objective 2 wasn’t saved. The map changed. Go to it')
+    expect(bar.classes()).toContain('text-foreground')
+    expect(bar.get('svg').classes()).toContain('text-destructive')
+    await scrollEditor(true)
+
     await wrapper.get('[data-testid="learn-v2-map-reload"]').trigger('click')
     expect(wrapper.find('[role="alert"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="learn-v2-objective-status"]').text()).toBe('Not saved yet: wording.')
