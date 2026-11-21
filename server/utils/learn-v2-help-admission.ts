@@ -3,6 +3,7 @@ import type { ConvexHttpClient } from 'convex/browser'
 import { api } from '../../convex/_generated/api'
 import { LEARN_HELP_ADMISSION_VERSION, helpAdmissionKey, type LearnHelpAdmission, type LearnHelpRequest } from '../../convex/lib/learnV2HelpContract'
 import { makeConvexClient } from './convex-client'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export function assertHelpAdmission(result: LearnHelpAdmission, ordinaryOnly = false) {
   if (result?.version !== LEARN_HELP_ADMISSION_VERSION) throw createError({ statusCode: 503, message: 'Service unavailable' })
@@ -11,6 +12,7 @@ export function assertHelpAdmission(result: LearnHelpAdmission, ordinaryOnly = f
 }
 
 export function createHelpAdmissionGuard(event: H3Event, input: Pick<LearnHelpRequest, 'kind' | 'scope' | 'ordinaryOnly'>, existingClient?: ConvexHttpClient) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return async (_delivery = false) => {}
   const client = existingClient ?? makeConvexClient(event)
   if (!client) throw createError({ statusCode: 500, message: 'Convex client unavailable' })
   const suppliedKey = getRequestHeader(event, 'idempotency-key')

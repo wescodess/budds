@@ -1,4 +1,4 @@
-import { teachingDeliveryValue } from '../../utils/teaching-delivery'
+import { teachingDeliveryValue, needsTeachingDelivery } from '../../utils/teaching-delivery'
 import { assertTeachingCommand, loadTeachingScope, assertTeachingSourcePins } from '../../utils/teaching-source-scope'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -103,7 +103,9 @@ async function runV2Interjection(
   }
   if (reservation.status === 'ready') {
     await authorizeHelp()
-    const existing = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+    const existing = needsTeachingDelivery()
+      ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+      : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
     const response = v2Response(existing)
     return response
@@ -124,7 +126,9 @@ async function runV2Interjection(
         interjectionId: reservation.interjectionId,
       })
       if (current?.status === 'ready') {
-        const delivered = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+        const delivered = needsTeachingDelivery()
+          ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+          : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
         if (!delivered) throw createError({ statusCode: 404, message: 'Interjection not found' })
         const response = v2Response(delivered)
         return response
@@ -267,9 +271,9 @@ async function runV2Interjection(
       orchestrationToken,
       artifact: renderedArtifact,
     })
-    const published = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, {
+    const published = needsTeachingDelivery() ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, {
       interjectionId: reservation.interjectionId, idempotencyKey,
-    }))
+    })) : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
     const response = v2Response(published)
     return response

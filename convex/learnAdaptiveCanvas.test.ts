@@ -224,8 +224,8 @@ describe('ready V2 adaptive Canvas', () => {
       const page = await owner.query(api.dataExport.getUserDataPage, { authorizationId, collection: 'learningThreadActivities', paginationOpts: { cursor: null, numItems: 16 } })
       expect(page.page.find(row => row._id === prepared.activityId)).not.toHaveProperty('submittedResponse')
       const review = await owner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: prepared.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
-      // The copied assessment pins in this fixture do not authorize source replay.
-      expect(review.page.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBeNull()
+      // Ordinary source review remains available while responses are off.
+      expect(review.page.find(row => row._id === ids.sourceSnapshotId)?.excerpt).toBe('Gravity attracts masses.')
       expect((await t.run(ctx => ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q
         .eq('userId', OWNER.tokenIdentifier).eq('sourceSnapshotId', ids.sourceSnapshotId)).unique()))?.excerpt).toBe('Gravity attracts masses.')
       expect(JSON.stringify(review)).not.toContain(STORAGE_CANARIES.answer)

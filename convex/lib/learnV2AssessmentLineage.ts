@@ -1,5 +1,6 @@
 import { ConvexError, v } from 'convex/values'
 import { inspectLearnHelpForAudioJob } from './learnV2HelpAdmission'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import type { LearnArtifactOwnerRecord, LearnArtifactPreparationArgs, LearnArtifactReference } from '../../shared/learn-v2-artifact-lineage'
@@ -26,6 +27,7 @@ function isMutationContext(ctx: ReadCtx): ctx is MutationCtx { return 'insert' i
 export function teachingUnavailable(): never { throw new Error('Teaching input is unavailable') }
 
 export async function assertTeachingInputs(ctx: ReadCtx, userId: string, artifacts: Artifact[], record?: LearnArtifactOwnerRecord) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const unique = [...new Map(artifacts.map(artifact => [`${artifact.kind}:${artifact.id}`, artifact])).values()]
   const publication = teachingPublication(ctx)
   for (let i = 0; i < unique.length; i += 64) {
@@ -71,6 +73,7 @@ export async function teachingDocuments(ctx: ReadCtx, userId: string, ids: reado
 }
 
 export async function publishTeaching(ctx: MutationCtx, userId: string, artifacts: Array<Pick<Output, 'artifact' | 'key'> & Partial<Pick<Output, 'sources' | 'origins'>>>, record?: LearnArtifactOwnerRecord) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const publication = teachingPublication(ctx)
   const required = record
     ? await isArtifactRegistrationRequiredForRecord(publication.preparation.ctx, record)
@@ -100,6 +103,7 @@ export async function assertSectionTeaching(ctx: ReadCtx, section: Doc<'courseSe
   if (section.contentBlocks.length) await assertTeachingInputs(ctx, section.userId, [{ kind: 'section_block', id: section._id }])
 }
 export async function assertRoomTeaching(ctx: ReadCtx, userId: string, roomId: Id<'flashcardRooms'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const room = await ctx.db.get(roomId)
   if (!room || room.userId !== userId) teachingUnavailable()
   if (room.activeVersionId) await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: room.activeVersionId }])
@@ -123,12 +127,14 @@ async function sectionMembers(ctx: ReadCtx, section: Doc<'courseSections'>, sour
   return [...keys].map(key => ({ artifact: { kind: 'section_block', id: section._id }, key, sources, origins: [] }))
 }
 export async function publishSections(ctx: MutationCtx, userId: string, sections: Doc<'courseSections'>[], components: Array<Pick<Output, 'artifact' | 'key'> & Partial<Pick<Output, 'sources' | 'origins'>>> = [], sources: Output['sources'] = []) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return
   const members = [...components]
   for (const section of sections) if (['ready', 'completed'].includes(section.status)) members.push(...await sectionMembers(ctx, section, sources))
   await publishTeaching(ctx, userId, members)
 }
 export async function publishContainingSections(ctx: MutationCtx, userId: string, entityId: string, components: Array<Pick<Output, 'artifact' | 'key'> & Partial<Pick<Output, 'sources' | 'origins'>>> = []) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return
   const sections = await ctx.db.query('courseSections').withIndex('by_userId', q => q.eq('userId', userId)).take(101)
   if (sections.length > 100) teachingUnavailable()
@@ -136,6 +142,7 @@ export async function publishContainingSections(ctx: MutationCtx, userId: string
 }
 
 export async function assertAudioTeaching(ctx: ReadCtx, overview: Doc<'audioOverviews'>, session = true) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   let record: LearnArtifactOwnerRecord | undefined
   if (!session) {
     const episode = overview.episodeId && await ctx.db.get(overview.episodeId)
@@ -152,6 +159,7 @@ export async function assertAudioTeaching(ctx: ReadCtx, overview: Doc<'audioOver
 }
 
 export async function assertAudioJobSources(ctx: ReadCtx, job: Doc<'audioOverviewJobs'>, session = false) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const admission = await inspectLearnHelpForAudioJob(ctx, job)
   if (admission.status !== 'ordinary') throw new ConvexError({ admission })
   const task = await ctx.db.get(job.taskId)
@@ -170,6 +178,7 @@ export async function assertAudioJobSources(ctx: ReadCtx, job: Doc<'audioOvervie
 }
 
 export async function assertBlockInputs(ctx: ReadCtx, userId: string, blocks: Doc<'courseSections'>['contentBlocks']) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   for (const block of blocks) {
     if (!block.entityId || block.type === 'text') continue
     if (block.type === 'quiz') {
@@ -191,6 +200,7 @@ export async function assertBlockInputs(ctx: ReadCtx, userId: string, blocks: Do
 }
 
 export async function cardCopyOrigins(ctx: ReadCtx, userId: string, versionId?: Id<'flashcardRoomVersions'>): Promise<Output['origins']> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
   if (!versionId) return []
   const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', 'flashcard_version').eq('artifact.id', versionId).eq('nextId', undefined)).take(9)
   if (rows.length > 8 || rows.some(row => row.userId !== userId)) teachingUnavailable()
@@ -198,6 +208,7 @@ export async function cardCopyOrigins(ctx: ReadCtx, userId: string, versionId?: 
 }
 
 export async function publishCardRoom(ctx: MutationCtx, userId: string, roomId: Id<'flashcardRooms'>, previousVersionId?: Id<'flashcardRoomVersions'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return
   const room = await ctx.db.get(roomId)
   if (!room || room.userId !== userId) teachingUnavailable()
@@ -216,6 +227,7 @@ export async function publishCardRoom(ctx: MutationCtx, userId: string, roomId: 
 
 export const teachingSourcePinsValidator = v.array(v.object({ documentId: v.id('documents'), sourceRevision: v.optional(v.string()), contentHash: v.optional(v.string()) }))
 export async function admitTeachingSourcePins(ctx: ReadCtx, userId: string, pins: Array<{ documentId: Id<'documents'>, sourceRevision?: string, contentHash?: string, r2Key?: string }>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
   if (pins.length > 64) teachingUnavailable()
   const documents = await teachingDocuments(ctx, userId, pins.map(pin => pin.documentId))
   for (const pin of pins) {
@@ -228,6 +240,7 @@ export async function admitTeachingSourcePins(ctx: ReadCtx, userId: string, pins
 
 
 export async function assertInterjectionTeaching(ctx: ReadCtx, userId: string, interjection: Doc<'audioOverviewInterjections'> | Doc<'audioOverviewInterjectionsV2'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const overview = await ctx.db.get(interjection.audioOverviewId)
   if (!overview || overview.userId !== userId) teachingUnavailable()
   await assertAudioTeaching(ctx, overview)
@@ -240,6 +253,7 @@ export async function interjectionAnswerAvailable(ctx: ReadCtx, userId: string, 
 
 
 export async function publishCorrectedCardRoom(ctx: MutationCtx, userId: string, roomId: Id<'flashcardRooms'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return
   const room = await ctx.db.get(roomId)
   if (!room || room.userId !== userId) teachingUnavailable()

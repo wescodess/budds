@@ -1,5 +1,6 @@
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { cardCopyOrigins, teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertRoomTeaching, teachingDocuments, publishTeaching, publishCardRoom, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -343,8 +344,8 @@ const getRoomRead = defineTeachingRead({
     const cards = await ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-      .take(201)
-    if (cards.length > 200) throw new Error('Teaching content exceeds its read limit')
+      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 201 : 32_000)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { room, cards }
@@ -660,8 +661,8 @@ const getRoomVersionRead = defineTeachingRead({
     const cards = await ctx.db
       .query('flashcardVersionCards')
       .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
-      .take(201)
-    if (cards.length > 200) throw new Error('Teaching content exceeds its read limit')
+      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 201 : 32_000)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { version, cards }

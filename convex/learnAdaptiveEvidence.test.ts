@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 
@@ -286,4 +286,9 @@ describe('Adaptive activity evidence projection', () => {
     expect(await t.run(ctx => ctx.db.get(before.attemptId))).toEqual(before.attempt)
     expect(await t.run(ctx => ctx.db.get(ids.activityId))).toEqual(before.activity)
   })
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

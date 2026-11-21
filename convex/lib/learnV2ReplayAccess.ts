@@ -7,8 +7,10 @@ import { admitArtifactInputsByIdentityForOwner, admitArtifactInputsByIdentityFor
 import { responsePrivacyReadContext } from './learnV2PrivacyReadContext'
 import { sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { projectStoredMessage, inspectStoredMessageProof } from './learnV2MessageProvenance'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export async function messageReplayAccess(ctx: QueryCtx | MutationCtx, userId: string, row: Doc<'messages'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { proof: { state: 'unknown' as const }, available: true, unavailable: false, ownText: row.role === 'user' }
   const proof = await inspectStoredMessageProof(userId, row)
   const available = proof.state === 'independent' || proof.state === 'known' && await currentMessageSourceAccess(ctx, userId, proof.references)
   const teaching = row.role === 'assistant' || Boolean(row.sources?.length || row.model || row.interjectionContext)
@@ -16,6 +18,7 @@ export async function messageReplayAccess(ctx: QueryCtx | MutationCtx, userId: s
 }
 
 export async function exportRetainedMessage(ctx: QueryCtx, userId: string, row: Doc<'messages'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return row
   const access = await messageReplayAccess(ctx, userId, row)
   return { ...projectStoredMessage(row, access.available, access.ownText), ...(access.unavailable ? { evidenceStatus: 'evidence_unavailable' as const } : {}) }
 }

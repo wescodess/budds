@@ -428,7 +428,7 @@ describe('dataExport includes Learn tables', () => {
     const result = await collectLearnDataForTest(asUser)
 
     expect(result.courses).toHaveLength(1)
-    expect(result.courses[0]!.evidenceStatus).toBe('evidence_unavailable')
+    expect(result.courses[0]).not.toHaveProperty('evidenceStatus')
     expect(result.courseSections).toHaveLength(1)
     expect(result.courseSourceDocs).toHaveLength(1)
     expect(result.learnProfile).toHaveLength(1)

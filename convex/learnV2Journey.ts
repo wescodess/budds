@@ -1,5 +1,6 @@
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v, type Infer } from 'convex/values'
 import { query, mutation } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -115,11 +116,11 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
       status: source.status,
       effectiveStatus: status,
       recordRevision: source.recordRevision ?? 1,
-      publicLocator: available ? sanitizePublicSourceLocator(source.publicLocator) ?? null : null,
+      publicLocator: !LEARN_MEASUREMENT_CAPABILITIES.responses ? source.publicLocator ?? null : available ? sanitizePublicSourceLocator(source.publicLocator) ?? null : null,
       origin: identity?.origin ?? null,
       title,
       retrievedAt: source.fetchedAt ?? null,
-      excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: sanitizePublicSourceLocator(excerpt.locator) ?? null, text: excerpt.excerpt } : null,
+      excerpt: excerpt?.rightsStatus === 'permitted' && excerpt.evidencePurgedAt === undefined && excerpt.excerpt?.trim() ? { locator: LEARN_MEASUREMENT_CAPABILITIES.responses ? sanitizePublicSourceLocator(excerpt.locator) ?? null : excerpt.locator, text: excerpt.excerpt } : null,
       mappedObjectives: mappedBySource.get(String(source._id)) ?? [],
       rightsStatus: source.rightsStatus ?? null,
       conflictStatus: source.conflictStatus ?? null,

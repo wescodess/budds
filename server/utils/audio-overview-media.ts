@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import { fetchPrivateR2Object } from './r2-folder'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export type PrivateAudioMedia = {
   objectKey: string
@@ -42,7 +43,7 @@ export async function privateAudioResponse(event: H3Event, media: PrivateAudioMe
     const value = upstream.headers.get(name)
     if (value) headers.set(name, value)
   }
-  if (!upstream.body) return new Response(upstream.body, { status: upstream.status, headers })
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !upstream.body) return new Response(upstream.body, { status: upstream.status, headers })
   const reader = upstream.body.getReader()
   let bytes = 0
   const body = new ReadableStream<Uint8Array>({

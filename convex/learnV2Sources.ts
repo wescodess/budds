@@ -1,5 +1,6 @@
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
@@ -197,6 +198,7 @@ const sourceSummary = v.object({
 })
 
 function sourceView(source: Doc<'learnSourceSnapshots'>, teachingAllowed = true) {
+  teachingAllowed ||= !LEARN_MEASUREMENT_CAPABILITIES.responses
   return {
     _id: source._id,
     sourceIdentityId: source.sourceIdentityId,
@@ -208,14 +210,14 @@ function sourceView(source: Doc<'learnSourceSnapshots'>, teachingAllowed = true)
     effectiveStatus: effectiveStatus(source),
     contentHash: teachingAllowed ? source.contentHash : undefined,
     contentType: source.contentType,
-    publicLocator: teachingAllowed && source.evidencePurgedAt === undefined && effectiveStatus(source) !== 'unavailable' ? sanitizePublicSourceLocator(source.publicLocator) : undefined,
+    publicLocator: !LEARN_MEASUREMENT_CAPABILITIES.responses || teachingAllowed && source.evidencePurgedAt === undefined && effectiveStatus(source) !== 'unavailable' ? sanitizePublicSourceLocator(source.publicLocator) : undefined,
     rightsStatus: source.rightsStatus,
     rightsProvenance: source.rightsProvenance,
     rightsPolicyVersion: source.rightsPolicyVersion,
     fetchPolicyVersion: source.fetchPolicyVersion,
     conflictStatus: source.conflictStatus,
     trustClassification: source.trustClassification,
-    unavailableReason: source.unavailableReason === undefined ? undefined : 'evidence_unavailable',
+    unavailableReason: !LEARN_MEASUREMENT_CAPABILITIES.responses ? source.unavailableReason : source.unavailableReason === undefined ? undefined : 'evidence_unavailable',
     fetchedAt: source.fetchedAt,
     evaluatedAt: source.evaluatedAt,
     acceptedAt: source.acceptedAt,
@@ -549,15 +551,15 @@ const listSourceReviewRead = defineTeachingRead({
       const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
       const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
         && excerpt.evidencePurgedAt === undefined && Boolean(excerpt.excerpt?.trim())
-      const hasLocator = available && Boolean(sanitizePublicSourceLocator(source.publicLocator)
+      const hasLocator = (!LEARN_MEASUREMENT_CAPABILITIES.responses || available) && Boolean(sanitizePublicSourceLocator(source.publicLocator)
         ?? sanitizePublicSourceLocator(identity.publicLocator)
         ?? sanitizePublicSourceLocator(excerpt?.locator))
       page.push({
         ...sourceView(source, available),
         identity: {
           origin: identity.origin,
-          title,
-          publisherDomain: available ? reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl) : null,
+          title: reviewTitle(title ?? undefined),
+          publisherDomain: !LEARN_MEASUREMENT_CAPABILITIES.responses || available ? reviewDomain(identity.publicLocator, source.publicLocator, identity.canonicalUrl) : null,
         },
         retrieval: {
           status: effectiveStatus(source),
@@ -568,9 +570,11 @@ const listSourceReviewRead = defineTeachingRead({
           status: source.rightsStatus ?? 'unknown',
           provenance: source.rightsProvenance ?? 'none',
           policyVersion: source.rightsPolicyVersion ?? null,
-          access: !available
+          access: LEARN_MEASUREMENT_CAPABILITIES.responses ? !available
             ? 'evidence_unavailable' as const
-            : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const,
+            : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const
+            : source.evidencePurgedAt !== undefined || effectiveStatus(source) === 'unavailable' ? 'evidence_unavailable' as const
+              : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const,
         },
         // Owner-scoped, text-only evidence. This is only present when the
         // rights policy allowed retention; private locators stay private.

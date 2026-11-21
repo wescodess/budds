@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     max_num_results: body.max_num_results,
     score_threshold: body.score_threshold,
   })
-  const current = await loadTeachingScope(client, { documentIds: teachingScope.map(source => source.documentId) })
+  const current = await loadTeachingScope(client, { documentIds: teachingScope?.map(source => source.documentId) })
   for (const chunk of result.data) assertTeachingSourcePins(current, chunk.attributes)
   await authorizeHelp(result.data.length > 0)
   return result

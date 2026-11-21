@@ -546,3 +546,8 @@ describe('section-text-prompt', () => {
     expect(messages[0].content).toContain('step-by-step')
   })
 })
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})

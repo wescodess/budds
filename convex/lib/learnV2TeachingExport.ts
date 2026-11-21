@@ -3,11 +3,13 @@ import { publicTask } from './publicTask'
 import type { TableNames } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { isCurrentTeachingReadScope, teachingReadScope, type TeachingReadTarget } from './learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 const copies = new Set(['courses', 'courseSections', 'quizzes', 'quizQuestions', 'quizAttempts', 'quizAnswerAssessments', 'flashcards', 'flashcardSets', 'flashcardRoomCards', 'flashcardRoomVersions', 'flashcardVersionCards', 'reviewItems',
   'audioOverviewJobs', 'audioOverviewOutlines', 'audioOverviewLearningObjectives', 'audioOverviewClaims', 'audioOverviewEpisodes', 'audioOverviewScenes', 'audioOverviewUtterances', 'audioOverviewSceneQualityGates', 'audioOverviewAlignments', 'audioOverviewAlignmentSegments', 'audioOverviewJobTurns', 'audioOverviews', 'audioOverviewInterjections', 'audioOverviewInterjectionsV2', 'audioOverviewInterjectionUtterances'])
 
 export async function exportTeachingCopy<T extends { _id: string, _creationTime: number }>(ctx: QueryCtx, userId: string, collection: string, value: T) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return value
   if (collection === 'tasks') {
     const id = ctx.db.normalizeId('tasks', value._id)
     const task = id && await ctx.db.get(id)

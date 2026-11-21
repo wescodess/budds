@@ -74,6 +74,7 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
     args: definition.args,
     ...(definition.returns ? { returns: definition.returns } : {}),
     handler: async (ctx: QueryCtx, args: ObjectType<Args>) => {
+      if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await definition.handler(ctx, args)
       const owner = await getOptionalAuthUserId(ctx)
       ctx = createResponsePrivacyReadContext(ctx, owner ?? 'anonymous_teaching_share').ctx
       try {
@@ -97,6 +98,7 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
     },
   }
   const deliver = async (ctx: MutationCtx, args: ObjectType<Args>, key: string, delivery: boolean) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, value: await definition.handler(readOnlyTeachingContext(ctx), args) }
     const owner = await getOptionalAuthUserId(ctx)
     const contextual = Boolean(owner && await hasOpenLearnHelp(ctx, owner))
     let authorization = await request(ctx, args, key, contextual)
@@ -143,6 +145,7 @@ export function defineTeachingMutation<Args extends PropertyValidators, Result>(
     args: definition.args,
     ...(definition.returns ? { returns: definition.returns } : {}),
     handler: async (ctx: MutationCtx, args: ObjectType<Args>) => {
+      if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await definition.handler(ctx, args)
       const userId = await requireAuth(ctx)
       const scope = await definition.scope(ctx, userId, args).catch(() => null)
       const input = { version: LEARN_HELP_ADMISSION_VERSION, kind: 'replay' as const, scope: scope?.references.length ? scope : null,
@@ -163,9 +166,9 @@ export function defineTeachingMutation<Args extends PropertyValidators, Result>(
 }
 
 export async function assertOrdinaryTeachingRead(ctx: QueryCtx, userId: string, scope: () => Promise<ReadScope>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const resolved = await scope()
   if (!isCurrentTeachingReadScope(resolved)) reject({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' })
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const admission = await inspectLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
     kind: 'replay', scope: resolved, ordinaryOnly: true, idempotencyKey: 'server_teaching_input_read' })
   if (admission.status !== 'ordinary') reject(admission)

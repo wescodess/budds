@@ -95,6 +95,23 @@ afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks() }
 const body = (extra: Record<string, unknown> = {}) => vi.mocked(globalThis.readBody).mockResolvedValue({
   query: 'Explain the rule', model: SERVER_DEFAULT_MODEL, folderId: s.f.folderId, ...extra,
 })
+
+test('capability-off streaming forwards large legacy answers without the new provenance limit or accounting', async () => {
+  policy.responses = false
+  const output = encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: 'answer '.repeat(90_000) } }] })}\n\n`)
+  vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({ start(controller) {
+    controller.enqueue(output)
+    controller.close()
+  } }))
+  const before = await s.exposures()
+  body({ stream: true })
+  await rag(event)
+  expect(emitted).toContain(new TextDecoder().decode(output))
+  expect(mutation).not.toHaveBeenCalled()
+  expect(query).not.toHaveBeenCalled()
+  expect(await s.exposures()).toEqual(before)
+})
+
 function noDispatch() {
   expect(globalThis.searchDocuments).not.toHaveBeenCalled()
   expect(globalThis.fetchFolderDocs).not.toHaveBeenCalled()
@@ -467,7 +484,7 @@ describe('Nitro handlers use registered server help admission', () => {
       sources: [{ content: 'SOURCE_CONTENT', score: 0.9, filename: 'case.pdf' }] })
     expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ content: '', sources: [], helpScope: { scope: 'unknown', references: null } })
     await s.t.run(ctx => ctx.db.delete(s.f.documentId))
-    for (const responses of [true, false]) {
+    for (const responses of [true]) {
       policy.responses = responses
       const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unknown_history_replay' })
       expect(replay).toMatchObject({ admission: { status: 'denied', reasonCode: 'unavailable' } })

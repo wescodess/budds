@@ -306,7 +306,7 @@ export default defineEventHandler(async (event) => {
     await authorizeTeaching()
     const result = await convexClient.mutation(api.courseSections.finalizeSectionGeneration, {
       sectionId,
-      sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
+      sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
       textContent: textResult || undefined,
       quizData: quizResult || undefined,
       flashcardData: flashcardResult || undefined,

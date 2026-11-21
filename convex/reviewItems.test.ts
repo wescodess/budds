@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
@@ -1201,4 +1201,9 @@ describe('flag sync between flashcards and review items', () => {
     expect(item.flagged).toBe(false)
     expect(item.correctedAnswer).toBeUndefined()
   })
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

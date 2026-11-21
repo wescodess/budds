@@ -204,7 +204,7 @@ export default defineEventHandler(async (event) => {
       roomId,
       origin: 'ai' as const,
       requestedCardCount: cardCount,
-      sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
+      sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
       model,
       title: parsed.title,
       cards: payloadCards,

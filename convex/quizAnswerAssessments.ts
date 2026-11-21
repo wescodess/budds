@@ -7,6 +7,7 @@ import { mutation, query, type QueryCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
 import type { Doc } from './_generated/dataModel'
 import manifest from '../workers/laya-evaluator/learningDecisionManifest.json'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 
 const labelValidator = v.union(
   v.literal('fully_correct'),
@@ -61,6 +62,7 @@ function requireProbabilityDistribution(
 }
 
 async function guardPending(ctx: QueryCtx, userId: string, rows: Doc<'quizAnswerAssessments'>[]) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   rows = rows.filter(row => !isRubricAssessment(row))
   await assertTeachingInputs(ctx, userId, rows.map(row => ({ kind: 'quiz_question', id: row.questionId })))
   for (const row of rows) {

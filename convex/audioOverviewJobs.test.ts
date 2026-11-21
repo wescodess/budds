@@ -789,3 +789,8 @@ describe('Audio job lineage isolation', () => {
     expect(await f.t.run(ctx => ctx.storage.getUrl(upload.storageId))).toBeTruthy()
   })
 })
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})

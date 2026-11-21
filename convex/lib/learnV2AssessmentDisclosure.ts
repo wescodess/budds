@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { legacyResponseAvailable, retainedResponsePayload } from './learnV2ResponsePrivacy'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAssessmentDisclosureContextSchema,
@@ -151,6 +152,7 @@ export const attemptSummary = v.object({
 
 export async function canReadSourceEvidence(ctx: ReadCtx, source: Doc<'learnSourceSnapshots'>) {
   const userId = await requireAuth(ctx)
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return source.userId === userId
   if (source.userId !== userId || source.evidencePurgedAt !== undefined || (source.effectiveStatus ?? source.status) === 'unavailable') return false
   const voidRow = await ctx.db.get(source.learningVoidId)
   if (!voidRow || voidRow.userId !== userId || (await ctx.db.get(voidRow.folderId))?.userId !== userId) return false
@@ -165,6 +167,7 @@ export async function canReadSourceEvidence(ctx: ReadCtx, source: Doc<'learnSour
 }
 
 export async function readSourceReviewTitle(ctx: ReadCtx, userId: string, source: Doc<'learnSourceSnapshots'>, identity: Doc<'learnSourceIdentities'> | null, teachingAllowed: boolean): Promise<string | null> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return source.userId === userId && identity?.userId === userId ? identity.title ?? null : null
   if (!teachingAllowed || source.userId !== userId || !identity || identity._id !== source.sourceIdentityId
     || identity.userId !== userId || identity.learningVoidId !== source.learningVoidId || identity.tombstonedAt !== undefined) return null
   return await privacyRead(ctx, userId, ['source-review-title', source._id], null, async scoped => {
@@ -320,6 +323,7 @@ export async function canReadAssessmentTeaching(ctx: ReadCtx, learningVoidId: Id
   const userId = await requireAuth(ctx)
   const voidRow = await ctx.db.get(learningVoidId)
   if (!voidRow || voidRow.userId !== userId || (await ctx.db.get(voidRow.folderId))?.userId !== userId) return false
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return true
   const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(9)
   if (rows.length > 8) return false
   for (const row of rows) {
@@ -380,7 +384,7 @@ export async function projectAttempt(ctx: ReadCtx, row: Doc<'masteryAttempts'>, 
           body: submission.bodyAvailability === 'purged'
             ? { bodyAvailability: 'purged', reasonCode: 'evidence_unavailable', purgedAt: submission.bodyPurgedAt }
             : payload ? { bodyAvailability: 'available', payload } : { bodyAvailability: 'unavailable', reasonCode: 'evidence_unavailable' }, result: null },
-        { owned: true, bodyDisclosureAllowed: Boolean(context?.accessAvailable && context.evidenceAvailable && context.pinsMatch
+        { owned: true, bodyDisclosureAllowed: !LEARN_MEASUREMENT_CAPABILITIES.responses || Boolean(context?.accessAvailable && context.evidenceAvailable && context.pinsMatch
           && context.lifecycle.submissionId === submission._id && submission.evidenceStatus === 'available' && submission.invalidatedAt === undefined), resultDisclosureAllowed: false })
       }
       catch { /* Invalid legacy snapshots do not authorize body disclosure. */ }
@@ -465,6 +469,12 @@ export function projectNonFactualPayload(activity: Doc<'learningThreadActivities
 export async function canReadActivityTeaching(ctx: ReadCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
   const userId = await requireAuth(ctx)
   if (thread.userId !== userId || activity.userId !== userId || activity.threadId !== thread._id || thread.deletionStartedAt !== undefined) return false
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) {
+    const content = activity.sessionContentId ? await ctx.db.get(activity.sessionContentId) : null
+    if (content?.userId === userId && content.assessmentPurpose && content.assessmentPurpose !== 'independent_application') return false
+    const opportunity = content?.assessmentOpportunityId ? await ctx.db.get(content.assessmentOpportunityId) : null
+    return !opportunity || opportunity.userId === userId && opportunity.purpose.kind === 'independent_application'
+  }
   if (activity.learningVoidId && activity.learningVoidId !== thread.learningVoidId) return false
   if (activity.sessionContentId) {
     const content = await ctx.db.get(activity.sessionContentId)

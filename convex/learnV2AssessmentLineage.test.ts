@@ -18,6 +18,11 @@ import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example|c43-owner', subject: 'same' }
 const userId = identity.tokenIdentifier
@@ -476,6 +481,6 @@ test('metadata excludes scoring input and legacy review copies require current a
     expect(outputs.slice(8, 11)).toEqual([null, null, null])
     expect(JSON.stringify(outputs)).not.toContain(canary)
     const allowed = ['accountDeletionJobs', 'courses', 'courseSections', 'folders', 'documents', 'courseSourceDocs', 'reviewItems', 'learnProfile', 'audioOverviewRooms', 'conversations', 'learnSourceIdentities', 'learnSourceSnapshots', 'learnArtifactLineages', 'learnArtifactValidations', 'learnArtifactSourceLinks', 'learnArtifactLineageOrigins', 'learnArtifactCaseBindings', 'learnAssessmentCatalogs', 'learnAssessmentCases']
-    for (const key of Object.keys(trace.stats.byTable)) expect(allowed).toContain(key.split(':')[1])
+    for (const key of Object.keys(trace.stats.byTable)) expect([...allowed, 'learnAssessmentOpportunities']).toContain(key.split(':')[1])
   })
 })

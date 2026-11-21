@@ -1,4 +1,5 @@
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { assertAudioTeaching } from './lib/learnV2AssessmentLineage'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { v } from 'convex/values'
@@ -130,9 +131,9 @@ export const listByFolder = query({
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
-      .take(101)
+      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 101 : 32_000)
 
-    if (allRows.length > 100) throw new Error('Teaching input is unavailable')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && allRows.length > 100) throw new Error('Teaching input is unavailable')
     const rows = allRows.filter((r) => r.courseScoped !== true)
 
     const admitted = []

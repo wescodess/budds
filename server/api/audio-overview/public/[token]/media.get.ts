@@ -14,7 +14,9 @@ export default defineEventHandler(async (event) => {
   if (!convexUrl) throw createError({ statusCode: 503, message: 'Audio media is unavailable' })
   const client = makeConvexClient(event) ?? new ConvexHttpClient(convexUrl)
   const input = { ...{ token }, idempotencyKey: `audio_media_${crypto.randomUUID()}` }
-  const media = teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaByShareTokenPreparation, input))
+  const media = needsTeachingDelivery()
+    ? teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaByShareTokenPreparation, input))
+    : await client.query(api.audioOverviewV2.resolveMediaByShareToken, { token })
   if (!media) throw createError({ statusCode: 404, message: 'Audio media not found' })
   return await privateAudioResponse(event, media, async () => {
     if (!needsTeachingDelivery()) return

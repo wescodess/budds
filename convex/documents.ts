@@ -1,5 +1,6 @@
 import { assertTeachingInputs, publishTeaching, teachingPublication, teachingUnavailable } from './lib/learnV2AssessmentLineage'
 import { classifyPersonalWorkDocumentForRecord } from './lib/learnV2ArtifactLineage'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v } from "convex/values";
 import {
   mutation,
@@ -419,7 +420,7 @@ export const finalizeDocumentIndexing = internalMutation({
     )
       return false;
 
-    if (args.status === 'success') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: doc._id })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && args.status === 'success') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: doc._id })
     await ctx.db.patch(args.id, {
       status: args.status,
       failureReason: args.status === "failed" ? args.failureReason : undefined,
@@ -436,7 +437,7 @@ export const getDocument = internalQuery({
   args: { id: v.id("documents") },
   handler: async (ctx, args) => {
     const document = await ctx.db.get(args.id)
-    if (document?.status === 'indexing') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: document._id })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && document?.status === 'indexing') await classifyPersonalWorkDocumentForRecord(teachingPublication(ctx).admission.ctx, { kind: 'document', id: document._id })
     return document;
   },
 });

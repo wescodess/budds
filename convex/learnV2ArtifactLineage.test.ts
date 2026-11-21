@@ -3303,3 +3303,8 @@ describe('Stage B declared legacy document pins', () => {
     expect(await t.withIdentity(owner).run(ctx => admitArtifactInputByIdentity(ctx, { kind: 'audio_overview', id: f.overviewId }))).toMatchObject({ status: 'admitted_unregistered' })
   })
 })
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})

@@ -240,7 +240,7 @@ export default defineEventHandler(async (event) => {
       model,
       creationMethod: 'auto_generated' as const,
       requestedQuestionCount: questionCount,
-      sourcePins: teachingScope.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
+      sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
       difficulty: body.difficulty,
       language: body.language,
       questions: persistQuestions,

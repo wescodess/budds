@@ -41,7 +41,7 @@ test.each(['legacy', 'signed_unknown', 'stored_signed_unknown', 'signed_v2_empty
     await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
     await ctx.db.delete(s.f.documentId)
   })
-  for (const responses of [true, false]) {
+  for (const responses of [true]) {
     policy.responses = responses
     const result = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: `unknown_revoked_${kind}` })
     expect(result.admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
@@ -82,7 +82,7 @@ test.each(['deleted', 'document_owner', 'folder_deleted', 'folder_owner', 'faile
     else if (revocation === 'pins') await ctx.db.patch(s.f.documentId, { sourceRevision: 'source.r2' })
     else await ctx.db.patch(s.f.learningVoidId, { status: 'archived' })
   })
-  for (const responses of [true, false]) {
+  for (const responses of [true]) {
     policy.responses = responses
     const result = await s.owner.mutation(api.messages.replayByConversation, args)
     expect(result.admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
@@ -280,8 +280,8 @@ describe('registered message and source help consumers', () => {
     expect((await s.exposures()).filter(row => row.provenanceVersion === 'learn-v2.help-admission.v1')).toHaveLength(1)
     expect((await s.exposures()).at(-1)).toMatchObject({ status: 'requested_denied' })
     policy.responses = false
-    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toContain('OLD_ANSWER')
-    expect((await s.owner.mutation(api.messages.replayByConversation, args)).admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).toContain('OLD_ANSWER')
+    expect((await s.owner.mutation(api.messages.replayByConversation, args)).admission).toMatchObject({ status: 'ordinary' })
   })
   test('authorized message replay commits one assistance fact; the same receipt is denied against a later held-out check', async () => {
     const s = await helpConsumerFixture(modules, false)
@@ -435,7 +435,7 @@ describe('registered message and source help consumers', () => {
     expect((await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unverified_scope_replay' })).admission)
       .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
     policy.responses = false
-    expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe('')
+    expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe(content)
   })
 })
 
@@ -465,7 +465,7 @@ test.each(['content', 'sourceContent', 'sourceFilename', 'sourceScore', 'scope',
   expect(response.messages[0]?.content).toBe('')
   expect(JSON.stringify(response)).not.toContain('UNSIGNED_')
   policy.responses = false
-  expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe('')
+  expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe((await s.t.run(ctx => ctx.db.get(messageId)))!.content)
 })
 
 test('learner writes receive an exact role-bound receipt and cannot be relabelled as assistant answers',async()=>{

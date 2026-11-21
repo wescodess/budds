@@ -64,6 +64,7 @@ export const listByConversation = query({
       .withIndex('by_conversationId', (q) => q.eq('conversationId', args.conversationId))
       .order('asc')
       .take(500)
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return rows.map(row => projectStoredMessage(row, true))
     // Queries cannot commit assistance. With the capability active this is a
     // metadata/learner-text read; substantive replay uses the mutation below.
     const replay = await replayScope(ctx, userId, rows)
@@ -88,6 +89,7 @@ export const replayByConversation = mutation({
     const conversation = await ctx.db.get(args.conversationId)
     if (!conversation || conversation.userId !== userId) throw new Error('Conversation not found')
     const rows = await ctx.db.query('messages').withIndex('by_conversationId', q => q.eq('conversationId', conversation._id)).order('asc').take(500)
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, messages: rows.map(row => projectStoredMessage(row, true)) }
     const replay = await replayScope(ctx, userId, rows)
     let admission = replay.delivery || replay.unavailableIds.size ? await admitLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
       kind: 'replay', idempotencyKey: args.idempotencyKey,
@@ -124,6 +126,16 @@ export const appendMessage = mutation({
     }
 
     let helpScope: Doc<'messages'>['helpScope']
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      if (args.model === undefined && !args.interjectionContext) {
+        helpScope = args.role === 'assistant' && args.provenance
+          && await verifyMessageProvenance(messageSigningSecret(), userId, args.content, args.sources ?? [], args.provenance).catch(() => false)
+          ? args.provenance
+          : await signMessageProvenance(messageSigningSecret(), userId, args.content, args.sources ?? [], null, args.role).catch(() => undefined)
+      }
+      return await ctx.db.insert('messages', { conversationId: args.conversationId, userId, role: args.role, content: args.content,
+        sources: args.sources, model: args.model, interjectionContext: args.interjectionContext, helpScope })
+    }
     if (args.role === 'assistant') {
       if (!args.provenance || !await verifyMessageProvenance(messageSigningSecret(), userId, args.content, args.sources ?? [], args.provenance).catch(() => false)) {
         throw new Error('Assistant message verification failed')

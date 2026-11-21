@@ -1,7 +1,9 @@
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export function publicTask(ctx: Pick<QueryCtx, 'db'>, row: Doc<'tasks'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return row
   const references = (input: unknown) => {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined
     const value = input as Record<string, unknown>

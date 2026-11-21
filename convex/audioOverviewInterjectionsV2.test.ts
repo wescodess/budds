@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { interjectionUtteranceVerificationId } from '../shared/audio-overview-grounding'
 import schema from './schema'
@@ -893,4 +893,9 @@ describe('V2 Interjection publication and read admission', () => {
     const artifacts = await f.t.run(ctx => ctx.db.query('audioOverviewAudioArtifacts').withIndex('by_episodeId_and_kind', q => q.eq('episodeId', f.episodeId)).take(10))
     expect(artifacts.filter(row => row.interjectionId === f.interjectionId)).toEqual([])
   })
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

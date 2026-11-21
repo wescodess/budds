@@ -1478,3 +1478,8 @@ test('a normal 200-answer model attempt fits exactly 25 daily dispatch reservati
   expect(counters.find(row => row.route === 'quiz-grading/dispatch-user')!.count).toBe(25)
   expect(counters.find(row => row.route === 'quiz-grading/dispatch-shared')!.count).toBe(25)
 })
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})

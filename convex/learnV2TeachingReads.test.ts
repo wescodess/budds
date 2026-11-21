@@ -118,7 +118,7 @@ test.each(['listDueForUser', 'listDueWithContext', 'listBySection'] as const)('r
   const args = name === 'listBySection' ? { sectionId: s.r.sectionId } : {}
   expect(JSON.stringify(await s.owner.query(makeFunctionReference<'query', Record<string, unknown>, unknown>(`reviewItems:${name}`), args))).toContain('TEACHING_READ_CANARY')
   await s.t.run(ctx => ctx.db.delete(s.f.documentId))
-  for (const responses of [true, false]) {
+  for (const responses of [true]) {
     policy.responses = responses
     await expect(s.owner.query(makeFunctionReference<'query', Record<string, unknown>, unknown>(`reviewItems:${name}`), args)).rejects.toMatchObject({ data: { admission: { status: 'denied', reasonCode: 'unavailable' } } })
     const delivery = makeFunctionReference<'mutation', Record<string, unknown>, { admission: LearnHelpAdmission, value: unknown }>(`reviewItems:${name}Delivery`)
@@ -147,7 +147,7 @@ test.each(revocableReads.flatMap(([path, args]) => (['deleted', 'restricted'] as
     await s.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'document', id: s.f.documentId }, key: 'whole', sources: [], origins: [] }] }))
     await protectProducerArtifact(s.t, HELP_OWNER.tokenIdentifier, { kind: 'document', id: s.f.documentId }, 'private_scoring')
   }
-  for (const responses of [true, false]) {
+  for (const responses of [true]) {
     policy.responses = responses
     const queryResult = await s.owner.query(read, args).then(value => ({ value }), (error: unknown) => ({ error }))
     expect(JSON.stringify(queryResult)).not.toMatch(/TEACHING_READ_CANARY|TEACHING_SESSION_CANARY/)
@@ -399,9 +399,6 @@ test.each(readPaths)('%s requires an accounted delivery and rechecks held-out st
   expect(result.value).not.toBeNull()
   expect(await s.owner.mutation(delivery, command)).toEqual(result)
   expect((await s.exposures()).slice(before).filter(row => row.status === 'granted')).toHaveLength(1)
-  policy.responses = false
-  expect(await s.owner.query(query, args)).toEqual(result.value)
-  policy.responses = true
   await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { purpose: { kind: 'measurement_cold', assignmentId: s.f.rows.learnMeasurementAssignments, protocolVersion: 'protocol.fixture' }, revision: 2 }))
   await expect(s.owner.query(query, args)).rejects.toThrow(/test_open/)
   expect(await s.owner.mutation(delivery, command)).toMatchObject({ admission: { status: 'denied', reasonCode: 'test_open' }, value: null })

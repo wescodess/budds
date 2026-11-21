@@ -7,6 +7,7 @@ import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 import { makeConvexClient } from '../../utils/convex-client'
 import { loadTeachingScope, assertTeachingSourcePins, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { messageProvenance, StreamMessageContent } from '../../utils/message-provenance'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import type { LearnHelpReference } from '../../../convex/lib/learnV2HelpContract'
 import { normalizeAssistantCitations } from '../../../shared/assistant-citations'
 
@@ -144,8 +145,8 @@ export default defineEventHandler(async (event) => {
     : { folderId: body.folderId as Id<'folders'> })
   let usedChunks: AISearchChunk[] = []
   const authorizeContent = async (delivery = false) => {
-    const current = await loadTeachingScope(client, { documentIds: teachingScope.map(source => source.documentId) })
-    for (const source of teachingScope) assertTeachingSourcePins(current, source)
+    const current = await loadTeachingScope(client, { documentIds: teachingScope?.map(source => source.documentId) })
+    for (const source of teachingScope ?? []) assertTeachingSourcePins(current, source)
     for (const chunk of usedChunks) assertTeachingSourcePins(current, chunk.attributes)
     await authorizeHelp(delivery)
   }
@@ -197,7 +198,7 @@ export default defineEventHandler(async (event) => {
           const explicitFolderDocs = await fetchFolderDocs({
             userId,
             documents: missingExplicitDocuments,
-            teachingScope: teachingScope.filter(source => missingExplicitDocuments.some(doc => doc.documentId === source.documentId)),
+            teachingScope: teachingScope?.filter(source => missingExplicitDocuments.some(doc => doc.documentId === source.documentId)),
             maxChars: 80_000,
           })
           if (explicitFolderDocs.length > 0) {
@@ -369,7 +370,7 @@ export default defineEventHandler(async (event) => {
           while (true) {
             const { done, value } = await reader.read()
             if (done) {
-              const text = answer.value()
+              const text = LEARN_MEASUREMENT_CAPABILITIES.responses ? answer.value() : null
               const provenance = text === null ? undefined : await messageProvenance(event, userId, text, citationChunks, Boolean(body.history?.length))
               await authorizeContent()
               if (provenance) controller.enqueue(encoder.encode(`event: provenance\ndata: ${JSON.stringify(provenance)}\n\n`))
@@ -377,8 +378,8 @@ export default defineEventHandler(async (event) => {
               reader.releaseLock()
               return
             }
-            answer.append(value)
-            if (!delivered && !answer.hasContent()) {
+            if (LEARN_MEASUREMENT_CAPABILITIES.responses) answer.append(value)
+            if (LEARN_MEASUREMENT_CAPABILITIES.responses && !delivered && !answer.hasContent()) {
               await authorizeContent()
               pending.push(value)
               continue

@@ -11,7 +11,9 @@ export default defineEventHandler(async (event) => {
   const client = makeConvexClient(event)
   if (!client) throw createError({ statusCode: 401, message: 'Authentication required' })
   const input = { ...{ artifactId: artifactId as Id<'audioOverviewAudioArtifacts'> }, idempotencyKey: `audio_media_${crypto.randomUUID()}` }
-  const media = teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaForOwnerPreparation, input))
+  const media = needsTeachingDelivery()
+    ? teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaForOwnerPreparation, input))
+    : await client.query(api.audioOverviewV2.resolveMediaForOwner, { artifactId: input.artifactId })
   if (!media) throw createError({ statusCode: 404, message: 'Audio media not found' })
   return await privateAudioResponse(event, media, async () => {
     if (!needsTeachingDelivery()) return

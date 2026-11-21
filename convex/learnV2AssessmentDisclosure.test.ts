@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { defineSchema, defineTable } from 'convex/server'
-import { v } from 'convex/values'
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { ConvexError, v } from 'convex/values'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
@@ -10,6 +10,13 @@ import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION } from '../shared/learn-v2-asses
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { ASSESSMENT_DISCLOSURE_READS, disclosureDigest, resolveAssessmentDisclosureContext } from './lib/learnV2AssessmentDisclosure'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+
+const policy = vi.hoisted(() => ({ responses: true }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, get responses() { return policy.responses } } }
+})
+beforeEach(() => { policy.responses = true })
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { subject: 'same-subject', issuer: 'https://auth.example.com', tokenIdentifier: 'https://auth.example.com|disclosure-owner' }
@@ -154,6 +161,17 @@ function assertNoPrivateFields(value: unknown) {
   }
 }
 
+async function readDisclosure<T>(read: () => Promise<T>): Promise<T | null> {
+  try { return await read() }
+  catch (error) {
+    if (!(error instanceof ConvexError)) throw error
+    expect(error.data).toMatchObject({ admission: { status: 'denied' } })
+    for (const canary of Object.values(canaries)) expect(JSON.stringify(error.data)).not.toContain(canary)
+    assertNoPrivateFields(error.data)
+    return null
+  }
+}
+
 describe('registered assessment disclosure inventory', () => {
   test.each(states.flatMap(state => (['folder_document', 'user_url'] as const).map(origin => ({ state, origin }))))('$state: $origin source names follow check state independently of evidence text', async ({ state, origin }) => {
     const s = await fixture(state)
@@ -163,15 +181,14 @@ describe('registered assessment disclosure inventory', () => {
       await ctx.db.patch(s.f.sourceIdentityId, { origin, title: origin === 'folder_document' ? undefined : title, folderDocumentId: origin === 'folder_document' ? s.f.documentId : undefined })
     })
     const expected = ['sealed_pending', 'scored', 'replaced'].includes(state) ? title : null
-    const review = await s.asOwner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } })
-    const journey = await s.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
-    expect(review.page[0]?.identity.title).toBe(expected)
-    expect(journey?.sources.items[0]?.title).toBe(expected)
-    expect(review.page[0]).not.toHaveProperty('filename')
-    expect(review.page[0]).not.toHaveProperty('objectKey')
+    const review = await readDisclosure(() => s.asOwner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { cursor: null, numItems: 8 } }))
+    const journey = await readDisclosure(() => s.asOwner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId }))
+    expect(review?.page[0]?.identity.title ?? null).toBe(expected)
+    expect(journey?.sources.items[0]?.title ?? null).toBe(expected)
+    if (review) { expect(review.page[0]).not.toHaveProperty('filename'); expect(review.page[0]).not.toHaveProperty('objectKey') }
     if (expected === null) {
-      expect(review.page[0]).toMatchObject({ excerpt: null, identity: { publisherDomain: null } })
-      expect(journey?.sources.items[0]).toMatchObject({ excerpt: null, publicLocator: null })
+      if (review) expect(review.page[0]).toMatchObject({ excerpt: null, identity: { publisherDomain: null } })
+      if (journey) expect(journey.sources.items[0]).toMatchObject({ excerpt: null, publicLocator: null })
     }
   })
 
@@ -209,7 +226,7 @@ describe('registered assessment disclosure inventory', () => {
   test.each(states)('%s: serialized reads retain only their declared DTOs', async state => {
     const s = await fixture(state)
     for (const [name, read] of reads) {
-      const value = await read(s)
+      const value = await readDisclosure<unknown>(() => read(s))
       const serialized = JSON.stringify(value)
       for (const canary of Object.values(canaries)) if (canary !== canaries.answer) expect(serialized, `${state}: ${name}`).not.toContain(canary)
       assertNoPrivateFields(value)
@@ -318,6 +335,7 @@ describe('registered assessment disclosure inventory', () => {
 
   test('calibration rediscloses only an exact historical grant and never its private rubric', async () => {
     const s = await fixture('no_grant')
+    policy.responses = false
     const contractDigest = await disclosureDigest(s.f.contract)
     const promptDigest = await disclosureDigest(s.f.contract.instructions)
     const identity = { kind: 'calibration' as const, objectiveId: s.f.scope.objectiveId, blueprintRevisionId: s.f.scope.blueprintRevisionId, promptDigest }
@@ -342,6 +360,7 @@ describe('registered assessment disclosure inventory', () => {
 
   test.each(['diagnostic_prompt', 'artifact_workspace', 'reflection_next_move'] as const)('malformed %s never falls back to stored protected text', async kind => {
     const s = await fixture()
+    policy.responses = false
     await s.t.run(async ctx => {
       const activity = await ctx.db.get(s.f.activityId)
       if (!activity) throw new Error('Missing diagnostic')
