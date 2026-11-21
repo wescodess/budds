@@ -19,7 +19,7 @@ const courseId = computed(() => route.params.courseId as Id<'courses'>)
 const sectionId = computed(() => route.params.sectionId as Id<'courseSections'>)
 
 const { isOnline } = useOnlineStatus()
-const { cacheSectionContent, getCachedSection } = useOfflineCache()
+const { cacheSectionContent, getCachedSection, forgetCachedCourse } = useOfflineCache()
 const { isSyncing, pendingCount } = useOfflineSync()
 
 const offlineData = ref<CachedSection | null>(null)
@@ -33,13 +33,24 @@ const sectionQuery = import.meta.client
   ? useTeachingQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
   : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
+const sectionsQuery = import.meta.client
+  ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
+
+const pausedFailure = computed(() => [courseQuery, sectionQuery, sectionsQuery].map(query => query.failure.value).find(failure => failure && !failure.retryable) ?? null)
+watch(pausedFailure, (paused) => {
+  if (!paused) return
+  offlineData.value = null
+  usingOfflineData.value = false
+  void forgetCachedCourse(courseId.value).catch(() => {})
+}, { immediate: true })
 const course = computed(() => courseQuery.data?.value ?? null)
 const section = computed(() => sectionQuery.data?.value ?? null)
 
 watch([() => isOnline.value, () => section.value], async ([online, sec]) => {
-  if (!online && !sec && import.meta.client) {
+  if (!online && !sec && import.meta.client && !pausedFailure.value) {
     const cached = await getCachedSection(sectionId.value)
-    if (cached) {
+    if (cached && !pausedFailure.value) {
       offlineData.value = cached
       usingOfflineData.value = true
     }
@@ -74,10 +85,6 @@ function handleBlockViewed(index: number) {
 const sectionOrder = computed(() => section.value?.order ?? null)
 
 usePreFetchSection(courseId, sectionOrder)
-
-const sectionsQuery = import.meta.client
-  ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
-  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
@@ -212,7 +219,7 @@ const isReady = computed(() => {
   return section.value && (section.value.status === 'ready' || section.value.status === 'completed')
 })
 
-const readFailure = computed(() => usingOfflineData.value ? null : courseQuery.failure.value ?? sectionQuery.failure.value ?? sectionsQuery.failure.value)
+const readFailure = computed(() => pausedFailure.value ?? (usingOfflineData.value ? null : courseQuery.failure.value ?? sectionQuery.failure.value ?? sectionsQuery.failure.value))
 
 function retryRead() {
   for (const query of [courseQuery, sectionQuery, sectionsQuery]) {

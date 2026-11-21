@@ -88,4 +88,27 @@ describe('Review reads', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="empty-state"]').exists()).toBe(true))
     expect(wrapper.find('[data-testid="review-read-error"]').exists()).toBe(false)
   })
+
+  it('clears an active session when a check opens mid-review', async () => {
+    dueItems.value = [{ _id: 'item_1', prompt: 'What is inertia?', answer: 'Resistance to change in motion', courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false }]
+    const Page = await import(page('review.vue'))
+    const wrapper = await mountSuspended(Page.default)
+    await wrapper.get('[data-testid="reveal-button"]').trigger('click')
+    expect(wrapper.get('[data-testid="review-answer"]').text()).toContain('Resistance to change in motion')
+
+    dueItems.value = null
+    dueError.value = denied('test_open')
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="review-read-paused"]').exists()).toBe(true))
+    expect(wrapper.text()).not.toContain('What is inertia?')
+    expect(wrapper.text()).not.toContain('Resistance to change in motion')
+    expect(wrapper.find('[data-testid="review-card"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="reveal-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="flag-button"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="mode-toggle"]').exists()).toBe(false)
+
+    dueError.value = null
+    dueItems.value = [{ _id: 'item_2', prompt: 'What is mass?', answer: 'Amount of matter', courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false }]
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-prompt"]').text()).toContain('What is mass?'))
+    expect(wrapper.find('[data-testid="review-answer"]').exists()).toBe(false)
+  })
 })

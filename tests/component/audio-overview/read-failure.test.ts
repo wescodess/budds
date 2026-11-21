@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ref, type Ref } from 'vue'
+import { nextTick, ref, type Ref } from 'vue'
 import { createAudioOverviewPlayback } from '~/composables/useAudioOverviewStore'
 
 const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
@@ -27,13 +27,26 @@ function stubQueries(names: string[]) {
   vi.stubGlobal('useConvexQuery', (reference: unknown) => queries[getFunctionName(reference as never)] ?? { data: ref(null), error: ref(null), refresh: vi.fn() })
 }
 
+const ownerOverview = { _id: 'overview-1', title: 'Owner overview', turns: [], hostNames: { hostA: 'Host A', hostB: 'Host B' }, sourceDocumentIds: [] }
+const publicOverview = { title: 'Shared overview', turns: [], voiceProfile: v2.voiceProfile, hostNames: v2.hostNames, totalDurationMs: 4_000, sourceDocumentIds: [], sourceFilenames: [], publishedAt: 1 }
+
+function fakeAudio() {
+  const el = document.createElement('audio')
+  vi.spyOn(el, 'pause').mockImplementation(() => {})
+  vi.spyOn(el, 'load').mockImplementation(() => {})
+  vi.spyOn(el, 'play').mockResolvedValue(undefined)
+  return el
+}
+
 describe('audio teaching read failures', () => {
+  let store: ReturnType<typeof createAudioOverviewPlayback>
   beforeEach(() => {
+    store = createAudioOverviewPlayback()
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
     vi.stubGlobal('useDocuments', () => ({ documents: ref([]) }))
     vi.stubGlobal('useAudioOverviewDownload', () => ({ downloadOverview: vi.fn() }))
-    vi.stubGlobal('useAudioOverviewStore', () => createAudioOverviewPlayback())
+    vi.stubGlobal('useAudioOverviewStore', () => store)
   })
 
   afterEach(() => vi.unstubAllGlobals())
@@ -85,6 +98,40 @@ describe('audio teaching read failures', () => {
       expect(wrapper.get('[data-testid="public-audio-title"]').text()).toBe(v2.title)
     })
 
+    it('stops and clears its player when a check opens after playback started, then reloads', async () => {
+      stubQueries(names)
+      queries['audioOverviews:getByShareToken']!.data.value = publicOverview
+      queries['audioOverviewV2:getPlaybackByShareToken']!.data.value = v2
+      const wrapper = await mountShell()
+      const audio = wrapper.findAll('audio')[0]!.element as HTMLAudioElement
+      const pause = vi.spyOn(audio, 'pause').mockImplementation(() => {})
+      vi.spyOn(audio, 'load').mockImplementation(() => {})
+      vi.spyOn(audio, 'play').mockResolvedValue(undefined)
+      await wrapper.get('[data-testid="public-audio-play-btn"]').trigger('click')
+      await flushPromises()
+      expect(audio.getAttribute('src')).toBe('/api/audio-overview/public/share-token/media')
+      expect(wrapper.text()).toContain('Host A opens.')
+
+      queries['audioOverviewV2:getPlaybackByShareToken']!.error.value = denied('test_open')
+      await nextTick()
+      expect(pause).toHaveBeenCalled()
+      expect(audio.getAttribute('src')).toBeNull()
+      expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(true)
+      expect(wrapper.findAll('audio')).toHaveLength(0)
+      expect(wrapper.find('[data-testid="public-audio-shell"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Host A opens.')
+
+      queries['audioOverviewV2:getPlaybackByShareToken']!.error.value = null
+      await flushPromises()
+      expect(wrapper.get('[data-testid="public-audio-title"]').text()).toBe(v2.title)
+      const reloaded = wrapper.findAll('audio')[0]!.element as HTMLAudioElement
+      expect(reloaded).not.toBe(audio)
+      vi.spyOn(reloaded, 'play').mockResolvedValue(undefined)
+      await wrapper.get('[data-testid="public-audio-play-btn"]').trigger('click')
+      await flushPromises()
+      expect(reloaded.getAttribute('src')).toBe('/api/audio-overview/public/share-token/media')
+    })
+
     it('treats an unavailable denial as retryable', async () => {
       stubQueries(names)
       queries['audioOverviews:getByShareToken']!.error.value = denied('unavailable')
@@ -108,6 +155,50 @@ describe('audio teaching read failures', () => {
       const wrapper = await mountPlayer()
       expect(wrapper.get('[data-testid="audio-read-paused"]').text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
       expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
+    })
+
+    it('pauses and clears the shared player and disables its controls when a check opens mid-play', async () => {
+      stubQueries(names)
+      const audio = fakeAudio()
+      store.attachAudio(audio, null)
+      queries['audioOverviews:getWithTurns']!.data.value = ownerOverview
+      queries['audioOverviewV2:getPlaybackForOwner']!.data.value = v2
+      const wrapper = await mountPlayer()
+      expect(store.overviewId.value).toBe('overview-1')
+      expect(store.continuousMediaUrl.value).toBe('/api/audio-overview/media/artifact-1')
+      expect(store.turns.value).toHaveLength(1)
+      store.isPlaying.value = true
+
+      queries['audioOverviewV2:getPlaybackForOwner']!.error.value = denied('test_open')
+      await nextTick()
+      expect(audio.pause).toHaveBeenCalled()
+      expect(audio.getAttribute('src')).toBeNull()
+      expect(store.isPlaying.value).toBe(false)
+      expect(store.overviewId.value).toBeNull()
+      expect(store.continuousMediaUrl.value).toBeNull()
+      expect(store.turns.value).toEqual([])
+      expect(store.turnUrls.value).toEqual([])
+      expect(wrapper.get('[data-testid="audio-read-paused"]').text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
+      expect(wrapper.text()).not.toContain('Host A opens.')
+      for (const id of ['audio-overview-play-btn', 'audio-overview-skip-back', 'audio-overview-skip-forward', 'audio-overview-scrubber', 'audio-overview-speed-btn', 'audio-overview-download-btn', 'audio-overview-share-btn', 'audio-overview-ask-btn']) {
+        expect(wrapper.get(`[data-testid="${id}"]`).attributes('disabled'), id).toBeDefined()
+      }
+
+      queries['audioOverviewV2:getPlaybackForOwner']!.error.value = null
+      await flushPromises()
+      expect(store.overviewId.value).toBe('overview-1')
+      expect(store.continuousMediaUrl.value).toBe('/api/audio-overview/media/artifact-1')
+      expect(wrapper.get('[data-testid="audio-overview-play-btn"]').attributes('disabled')).toBeUndefined()
+    })
+
+    it('leaves another overview in the shared player alone', async () => {
+      stubQueries(names)
+      store.attachAudio(fakeAudio(), null)
+      store.loadOverview({ overviewId: 'overview-2' as never, folderId: null, title: 'Other', turns: [{ speaker: 'host_a', text: 'Other turn', durationMs: 1_000 } as never], turnUrls: ['https://audio.test/other.mp3'] })
+      queries['audioOverviews:getWithTurns']!.error.value = denied('test_open')
+      await mountPlayer()
+      expect(store.overviewId.value).toBe('overview-2')
+      expect(store.turns.value).toHaveLength(1)
     })
 
     it('retries every failed read and clears the error', async () => {

@@ -152,6 +152,15 @@ watch(results, (value) => {
   requestPendingAssessment()
 }, { immediate: true })
 
+watch(() => resultsFailure.value?.retryable === false, (paused) => {
+  if (!paused) return
+  cancelScoreAnimation()
+  clearAssessmentRetry()
+  animatedPct.value = 0
+  assessmentRequestedFor.value = null
+  assessmentRequestFailed.value = false
+})
+
 watch(() => props.attemptId, () => {
   clearAssessmentRetry()
   assessmentRequestedFor.value = null

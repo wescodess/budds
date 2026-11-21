@@ -177,6 +177,7 @@ async function rateItem(quality: number) {
 
     ratingIdempotencyKeys.delete(itemId)
     ratings.value.push({ itemId, quality })
+    if (duePaused.value) return
 
     if (currentIndex.value >= totalItems.value - 1) {
       sessionComplete.value = await finishSession()
@@ -206,6 +207,18 @@ const flaggingOpen = ref(false)
 const flagCorrectedDef = ref('')
 const flagSaving = ref(false)
 const flagError = ref('')
+
+const duePaused = computed(() => dueFailure.value && !dueFailure.value.retryable ? dueFailure.value : null)
+watch(duePaused, (paused) => {
+  if (!paused) return
+  sessionStarted.value = false
+  sessionItems.value = []
+  currentIndex.value = 0
+  revealed.value = false
+  flaggingOpen.value = false
+  flagCorrectedDef.value = ''
+  flagError.value = ''
+}, { immediate: true })
 
 const flagMutation = import.meta.client
   ? useConvexMutation(api.contentFlags.flagFlashcard)

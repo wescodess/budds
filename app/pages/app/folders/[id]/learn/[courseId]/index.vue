@@ -25,6 +25,10 @@ const course = computed(() => courseQuery.data?.value ?? null)
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
 const readFailure = computed(() => courseQuery.failure.value ?? sectionsQuery.failure.value)
+const { forgetCachedCourse } = useOfflineCache()
+watch(() => readFailure.value && !readFailure.value.retryable, (paused) => {
+  if (paused) void forgetCachedCourse(courseId.value).catch(() => {})
+}, { immediate: true })
 
 function retryRead() {
   for (const query of [courseQuery, sectionsQuery]) {

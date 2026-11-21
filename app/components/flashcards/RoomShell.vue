@@ -59,6 +59,14 @@ const runningTaskForRoom = computed(() =>
 const mode = ref<Mode>('editor')
 const historyOpen = ref(false)
 const generateOpen = ref(false)
+const roomPaused = computed(() => roomFailure.value?.retryable === false)
+
+watch(roomPaused, (paused) => {
+  if (!paused) return
+  mode.value = 'editor'
+  historyOpen.value = false
+  generateOpen.value = false
+})
 const confirmDeleteOpen = ref(false)
 
 const lastUpdated = computed<number | null>(() => {
@@ -110,10 +118,11 @@ async function handleConfirmDelete() {
         <button
           type="button"
           :class="[
-            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition',
+            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
             mode === 'editor' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-editor"
+          :disabled="roomPaused"
           @click="mode = 'editor'"
         >
           <Pencil class="h-3.5 w-3.5" />
@@ -122,10 +131,11 @@ async function handleConfirmDelete() {
         <button
           type="button"
           :class="[
-            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition',
+            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
             mode === 'practice' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-practice"
+          :disabled="roomPaused"
           @click="mode = 'practice'"
         >
           <Play class="h-3.5 w-3.5" />
@@ -138,6 +148,7 @@ async function handleConfirmDelete() {
           variant="outline"
           size="sm"
           data-testid="flashcard-room-history-toggle"
+          :disabled="roomPaused"
           @click="historyOpen = true"
         >
           <History class="mr-1.5 h-4 w-4" />
@@ -146,6 +157,7 @@ async function handleConfirmDelete() {
         <UiButton
           size="sm"
           data-testid="flashcard-room-generate-trigger"
+          :disabled="roomPaused"
           @click="generateOpen = true"
         >
           <Sparkles class="mr-1.5 h-4 w-4" />

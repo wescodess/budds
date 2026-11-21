@@ -57,6 +57,7 @@ const { data: turnUrlData } = turnUrlQuery
 const { data: v2PlaybackData } = v2PlaybackQuery
 const readQueries = [overviewQuery, turnUrlQuery, v2PlaybackQuery]
 const readFailure = computed(() => readQueries.map(query => query.failure.value).find(Boolean) ?? null)
+const readBlocked = computed(() => Boolean(readFailure.value))
 function retryRead() {
   for (const query of readQueries) if (query.failure.value) void query.refresh?.()
 }
@@ -82,8 +83,8 @@ type V2Playback = {
   finalArtifact: { artifactId: string }
 }
 
-const overview = computed<Doc<'audioOverviews'> | null>(() => (overviewData.value as Doc<'audioOverviews'> | null | undefined) ?? null)
-const v2Playback = computed<V2Playback | null>(() => (v2PlaybackData.value as V2Playback | null | undefined) ?? null)
+const overview = computed<Doc<'audioOverviews'> | null>(() => readBlocked.value ? null : (overviewData.value as Doc<'audioOverviews'> | null | undefined) ?? null)
+const v2Playback = computed<V2Playback | null>(() => readBlocked.value ? null : (v2PlaybackData.value as V2Playback | null | undefined) ?? null)
 const isContinuousPlayback = computed(() => v2Playback.value?.schemaVersion === 2)
 const continuousMediaUrl = computed(() => v2Playback.value
   ? `/api/audio-overview/media/${encodeURIComponent(v2Playback.value.finalArtifact.artifactId)}`
@@ -102,7 +103,7 @@ const turns = computed<AudioOverviewTurn[]>(() => {
   }
   return (overview.value?.turns ?? []) as AudioOverviewTurn[]
 })
-const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value
+const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value || readBlocked.value
   ? []
   : (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
 
@@ -124,10 +125,18 @@ const displayedTimeSec = computed(() => isInterjectionActive.value ? interjectio
 const displayedActiveTurn = computed(() => displayedTurns.value[displayedTurnIndex.value] ?? null)
 
 watch(
-  [() => turns.value, () => turnUrls.value, () => continuousMediaUrl.value],
-  ([nextTurns, nextUrls, nextContinuousUrl]) => {
+  readBlocked,
+  (blocked) => {
+    if (blocked && import.meta.client) store.release(props.overviewId)
+  },
+  { immediate: true, flush: 'sync' },
+)
+
+watch(
+  [() => turns.value, () => turnUrls.value, () => continuousMediaUrl.value, () => readBlocked.value],
+  ([nextTurns, nextUrls, nextContinuousUrl, blocked]) => {
     if (!import.meta.client) return
-    if (!overview.value) return
+    if (blocked || !overview.value) return
     if (nextTurns.length === 0) return
     if (isContinuousPlayback.value && !nextContinuousUrl) return
     if (!isContinuousPlayback.value && nextTurns.length !== nextUrls.length) return
@@ -240,7 +249,7 @@ function cancelDelete() {
 }
 
 async function handleDownload() {
-  if (downloading.value) return
+  if (downloading.value || readBlocked.value) return
   downloading.value = true
   try {
     const { downloadOverview } = useAudioOverviewDownload()
@@ -378,7 +387,7 @@ const ringMiddleStyle = computed(() => ({
           data-testid="audio-overview-ask-btn"
           aria-label="Ask the hosts a follow-up"
           class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-card px-3 py-1.5 font-inter text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="props.interjectionInFlight || isInterjectionActive || props.regenerating"
+          :disabled="readBlocked || props.interjectionInFlight || isInterjectionActive || props.regenerating"
           @click="emit('request-ask')"
         >
           <Mic class="h-3.5 w-3.5" />
@@ -570,8 +579,8 @@ const ringMiddleStyle = computed(() => ({
           max="1000"
           :value="Math.round(progressPercent * 10)"
           data-testid="audio-overview-scrubber"
-          :disabled="isInterjectionActive"
-          class="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary"
+          :disabled="readBlocked || isInterjectionActive"
+          class="h-1.5 flex-1 cursor-pointer appearance-none rounded-full bg-border/40 accent-primary disabled:cursor-not-allowed disabled:opacity-50"
           @input="handleScrubInput"
         >
         <span class="w-12 text-right font-inter text-xs tabular-nums text-muted-foreground">{{ totalLabel }}</span>
@@ -584,8 +593,8 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-skip-back"
             aria-label="Skip back 10 seconds"
-            :disabled="isInterjectionActive"
-            class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
+            :disabled="readBlocked || isInterjectionActive"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             @click="skip(-10000)"
           >
             <Rewind class="h-4 w-4" />
@@ -594,7 +603,8 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-play-btn"
             :aria-label="isPlaying ? 'Pause' : 'Play'"
-            class="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-[1.03] sm:h-14 sm:w-14"
+            :disabled="readBlocked"
+            class="inline-flex h-12 w-12 items-center justify-center rounded-full bg-primary text-primary-foreground transition-transform hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-50 sm:h-14 sm:w-14"
             @click="togglePlay"
           >
             <Pause v-if="isPlaying" class="h-5 w-5" />
@@ -604,8 +614,8 @@ const ringMiddleStyle = computed(() => ({
             type="button"
             data-testid="audio-overview-skip-forward"
             aria-label="Skip forward 10 seconds"
-            :disabled="isInterjectionActive"
-            class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20"
+            :disabled="readBlocked || isInterjectionActive"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-full text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             @click="skip(10000)"
           >
             <FastForward class="h-4 w-4" />
@@ -619,7 +629,8 @@ const ringMiddleStyle = computed(() => ({
           <button
             type="button"
             data-testid="audio-overview-speed-btn"
-            class="inline-flex h-8 items-center gap-1 rounded-full border border-border/60 bg-background px-3 font-inter text-xs font-medium text-foreground transition-colors hover:bg-accent/20"
+            :disabled="readBlocked"
+            class="inline-flex h-8 items-center gap-1 rounded-full border border-border/60 bg-background px-3 font-inter text-xs font-medium text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
             @click="toggleSpeedMenu"
           >
             {{ playbackRate }}x
@@ -647,7 +658,7 @@ const ringMiddleStyle = computed(() => ({
           type="button"
           data-testid="audio-overview-download-btn"
           aria-label="Download audio overview"
-          :disabled="downloading || (!continuousMediaUrl && turnUrls.length === 0)"
+          :disabled="readBlocked || downloading || (!continuousMediaUrl && turnUrls.length === 0)"
           class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
           @click="handleDownload"
         >
@@ -657,7 +668,8 @@ const ringMiddleStyle = computed(() => ({
           type="button"
           data-testid="audio-overview-share-btn"
           :aria-label="overview?.shareToken ? 'Share link' : 'Share audio overview'"
-          class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20"
+          :disabled="readBlocked"
+          class="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border/60 bg-background text-foreground transition-colors hover:bg-accent/20 disabled:cursor-not-allowed disabled:opacity-50"
           @click="emit('request-share')"
         >
           <Share2 class="h-3.5 w-3.5" />

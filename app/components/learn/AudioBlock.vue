@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
 
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -23,7 +23,7 @@ const overviewQuery = useTeachingQuery(
 const { data: overviewData } = overviewQuery
 const readFailure = computed(() => props.entityId ? overviewQuery.failure.value : null)
 
-const overview = computed(() => overviewData.value ?? null)
+const overview = computed(() => readFailure.value ? null : overviewData.value ?? null)
 const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
 const turnUrls = computed<(string | null)[]>(() => overview.value?.turnUrls ?? [])
 const sourceFilenames = computed<string[]>(() => overview.value?.sourceFilenames ?? [])
@@ -83,7 +83,7 @@ function playTurn(index: number) {
 
 function togglePlay() {
   const el = audioEl.value
-  if (!el) return
+  if (!el || readFailure.value) return
 
   if (isPlaying.value) {
     el.pause()
@@ -95,6 +95,23 @@ function togglePlay() {
     el.play().then(() => { isPlaying.value = true }).catch(() => { isPlaying.value = false })
   }
 }
+
+function releaseAudio() {
+  const el = audioEl.value
+  if (el) {
+    el.pause()
+    el.removeAttribute('src')
+    el.load()
+  }
+  isPlaying.value = false
+  currentTurnIndex.value = 0
+  currentTime.value = 0
+  transcriptExpanded.value = false
+}
+
+watch(readFailure, (failure) => {
+  if (failure) releaseAudio()
+}, { flush: 'sync' })
 
 onUnmounted(() => {
   if (audioEl.value) {

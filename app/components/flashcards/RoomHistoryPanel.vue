@@ -37,6 +37,16 @@ const versionDetailQuery = useTeachingQuery(
 const versionDetail = versionDetailQuery.data
 const versionDetailFailure = computed(() => versionDetailQuery.failure.value)
 
+watch(() => versionsFailure.value?.retryable === false, (paused) => {
+  if (!paused) return
+  expandedVersionId.value = null
+  restoreTargetId.value = null
+})
+
+watch(() => versionDetailFailure.value?.retryable === false, (paused) => {
+  if (paused) restoreTargetId.value = null
+})
+
 const restoreMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.restoreRoomVersion)
   : createSsrMutationStub<typeof api.flashcardRooms.restoreRoomVersion>()

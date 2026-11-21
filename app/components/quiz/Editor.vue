@@ -44,6 +44,7 @@ const quizQuery = useTeachingQuery(
 )
 const quizData = quizQuery.data
 const quizFailure = computed(() => quizQuery.failure.value)
+const quizPaused = computed(() => quizFailure.value?.retryable === false)
 
 const updateQuestionMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
@@ -54,6 +55,12 @@ const state = ref<EditorState>('loading')
 const editingQuestionId = ref<string | null>(null)
 const drafts = ref<Record<string, Draft>>({})
 const saving = ref(false)
+
+watch(quizPaused, (paused) => {
+  if (!paused) return
+  drafts.value = {}
+  editingQuestionId.value = null
+})
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
 const questions = computed<Question[]>(() => (quizData.value?.questions ?? []) as Question[])

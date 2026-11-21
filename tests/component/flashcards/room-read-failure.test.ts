@@ -100,4 +100,29 @@ describe('RoomHistoryPanel teaching read failures', () => {
     expect(document.querySelector('[data-testid="flashcard-history-read-error"]')).toBeNull()
     expect(document.querySelector('[data-testid="flashcard-room-history-empty"]')).not.toBeNull()
   })
+
+describe('RoomShell denial after cards were shown', () => {
+  beforeEach(() => {
+    roomData.value = roomContent
+    roomError.value = null
+    document.body.innerHTML = ''
+  })
+
+  it('removes the cards, closes history and disables the room actions', async () => {
+    const wrapper = await mountShell()
+    expect(wrapper.text()).toContain('Mitosis')
+    await wrapper.get('[data-testid="flashcard-room-mode-practice"]').trigger('click')
+    await flushPromises()
+
+    roomError.value = denied('test_open')
+    roomData.value = null
+    await flushPromises()
+    expect(wrapper.get('[data-testid="flashcards-read-paused"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Mitosis')
+    expect(wrapper.text()).not.toContain('Cell division')
+    for (const id of ['flashcard-room-mode-editor', 'flashcard-room-mode-practice', 'flashcard-room-history-toggle', 'flashcard-room-generate-trigger']) {
+      expect(wrapper.get(`[data-testid="${id}"]`).attributes('disabled')).toBeDefined()
+    }
+  })
+})
 })

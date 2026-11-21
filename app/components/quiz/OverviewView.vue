@@ -22,6 +22,7 @@ const quizQuery = useTeachingQuery(
 )
 const quizData = quizQuery.data
 const quizFailure = computed(() => quizQuery.failure.value)
+const quizPaused = computed(() => quizFailure.value?.retryable === false)
 
 const { data: historyData } = useConvexQuery(
   api.quizzes.getQuizHistory,
@@ -37,6 +38,15 @@ const titleDraft = ref('')
 const questionModalOpen = ref(false)
 const editingQuestion = ref<Doc<'quizQuestions'> | null>(null)
 const confirmDeleteId = ref<string | null>(null)
+
+watch(quizPaused, (paused) => {
+  if (!paused) return
+  editingTitle.value = false
+  titleDraft.value = ''
+  questionModalOpen.value = false
+  editingQuestion.value = null
+  confirmDeleteId.value = null
+})
 
 const updateQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuiz)

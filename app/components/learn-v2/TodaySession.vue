@@ -83,6 +83,13 @@ const contentQuery = import.meta.client
   ? useTeachingQuery(api.learnV2SessionContent.getSessionContent, { studySessionId: candidate.studySessionId as never }, { enabled: started })
   : { data: ref<SessionContent>(null), failure: computed(() => null), refresh: async () => {} }
 const contentFailure = computed(() => contentQuery.failure.value)
+const contentPaused = computed(() => contentFailure.value && !contentFailure.value.retryable ? contentFailure.value : null)
+watch(contentPaused, (paused) => {
+  if (!paused) return
+  hint.value = null
+  reveal.value = null
+  if (feedback.value?.feedback) feedback.value = { ...feedback.value, feedback: undefined }
+})
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
 const adaptivePresentation = computed(() => (contentQuery.data?.value as SessionContent)?.adaptivePresentation ?? null)
@@ -183,11 +190,12 @@ async function start() {
   finally { busy.value = false }
 }
 async function assistance(kind: 'substantive_hint' | 'answer_reveal') {
-  if (!isOnline.value || busy.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
+  if (!isOnline.value || busy.value || contentPaused.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
   busy.value = true; error.value = null
   try {
     const result = await assistanceMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, kind }) as { revision: number, assistance: { content: string } }
     sessionRevision.value = result.revision
+    if (contentPaused.value) return
     if (kind === 'substantive_hint') hint.value = result.assistance.content
     else reveal.value = result.assistance.content
     notice.value = kind === 'substantive_hint' ? 'Hint added to this session.' : 'Worked example revealed for this session.'
@@ -243,6 +251,7 @@ async function retryScore() { await submit() }
 
     <div class="mt-5 space-y-4">
       <p v-if="!isOnline" id="learn-v2-offline-notice" data-testid="learn-v2-offline-notice" role="status" class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100 forced-colors:border-current">Server-scored sessions require a connection. No offline attempt is queued.</p>
+      <p v-if="contentPaused" role="status" data-testid="learn-v2-content-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ contentPaused.message }}</span></p>
       <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current">{{ error }}</p>
 
       <details data-testid="learn-v2-evidence-context" class="rounded-lg border border-border bg-card/50 px-4 py-3 text-sm text-muted-foreground forced-colors:border-current">
@@ -279,23 +288,22 @@ async function retryScore() { await submit() }
         <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-xl border border-border bg-card p-5 sm:p-6 forced-colors:border-current" :data-testid="`learn-v2-phase-${phase}`">
           <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-primary">{{ phaseLabel }}</p>
           <h2 class="mt-2 font-dm-sans text-xl font-semibold text-foreground">{{ phase === 'transfer' ? 'Apply it to a new case' : phase === 'confidence' ? 'Reflect on your answer' : phaseLabel }}</h2>
-          <p v-if="contentFailure && !contentFailure.retryable" role="status" data-testid="learn-v2-content-paused" class="mt-5 flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ contentFailure.message }}</span></p>
-          <div v-else-if="contentFailure" role="alert" data-testid="learn-v2-content-error" class="mt-5 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this part of your session.</p><button type="button" data-testid="learn-v2-content-retry" :disabled="!isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" @click="contentQuery.refresh()">Try again</button></div>
-          <p v-else-if="currentContent" class="mt-5 whitespace-pre-wrap text-[15px] leading-7 text-foreground">{{ currentContent }}</p>
-          <p v-else role="status" class="mt-5 text-sm leading-6 text-muted-foreground">Preparing the supported material for this part of your session…</p>
+          <div v-if="contentFailure?.retryable" role="alert" data-testid="learn-v2-content-error" class="mt-5 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this part of your session.</p><button type="button" data-testid="learn-v2-content-retry" :disabled="!isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" @click="contentQuery.refresh()">Try again</button></div>
+          <p v-else-if="currentContent && !contentPaused" class="mt-5 whitespace-pre-wrap text-[15px] leading-7 text-foreground">{{ currentContent }}</p>
+          <p v-else-if="!contentPaused" role="status" class="mt-5 text-sm leading-6 text-muted-foreground">Preparing the supported material for this part of your session…</p>
 
           <label v-if="phase === 'prediction'" class="mt-6 block text-sm font-medium text-foreground">Your prediction<textarea v-model="prediction" aria-label="Your prediction" placeholder="Write what you think before seeing the explanation." class="mt-2 min-h-32 w-full rounded-lg border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring forced-colors:border-current" /></label>
 
           <template v-if="phase === 'teaching'">
             <div data-testid="learn-v2-assistance-consequence" class="mt-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100 forced-colors:border-current"><Eye class="mr-2 inline h-4 w-4 text-primary" aria-hidden="true" />A worked example supports learning. Using it records this attempt as guided, not independent.</div>
-            <button type="button" data-testid="learn-v2-reveal" :disabled="busy || !isOnline || !!reveal" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('answer_reveal')"><Eye class="h-4 w-4" aria-hidden="true" />{{ reveal ? 'Worked example shown' : 'Show worked example' }}</button>
+            <button type="button" data-testid="learn-v2-reveal" :disabled="busy || !isOnline || !!reveal || !!contentPaused" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('answer_reveal')"><Eye class="h-4 w-4" aria-hidden="true" />{{ reveal ? 'Worked example shown' : 'Show worked example' }}</button>
             <p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-4 whitespace-pre-wrap rounded-lg border border-border bg-background/60 p-4 text-sm leading-7 text-foreground forced-colors:border-current">{{ reveal }}</p>
           </template>
 
           <template v-if="phase === 'fading'">
             <label class="mt-6 block text-sm font-medium text-foreground">Your faded-practice response<textarea v-model="fadedResponse" aria-label="Your faded-practice response" placeholder="Try it independently first. You can ask for a hint if needed." class="mt-2 min-h-32 w-full rounded-lg border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring forced-colors:border-current" /></label>
             <div data-testid="learn-v2-assistance-consequence" class="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100 forced-colors:border-current"><Lightbulb class="mr-2 inline h-4 w-4 text-primary" aria-hidden="true" />A hint keeps this attempt in the guided lane. It is useful support, not a penalty.</div>
-            <button type="button" data-testid="learn-v2-hint" :disabled="busy || !isOnline || !!hint" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('substantive_hint')"><Lightbulb class="h-4 w-4" aria-hidden="true" />{{ hint ? 'Hint shown' : 'Get a hint' }}</button>
+            <button type="button" data-testid="learn-v2-hint" :disabled="busy || !isOnline || !!hint || !!contentPaused" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('substantive_hint')"><Lightbulb class="h-4 w-4" aria-hidden="true" />{{ hint ? 'Hint shown' : 'Get a hint' }}</button>
             <p v-if="hint" data-testid="learn-v2-hint-content" class="mt-4 whitespace-pre-wrap rounded-lg border border-border bg-background/60 p-4 text-sm leading-7 text-foreground forced-colors:border-current">{{ hint }}</p>
           </template>
 

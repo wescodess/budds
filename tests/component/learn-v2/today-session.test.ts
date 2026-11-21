@@ -216,6 +216,25 @@ describe('LearnV2TodaySession', () => {
       expect(wrapper.get('[data-testid="learn-v2-continue"]').attributes('disabled')).toBeDefined()
     })
 
+    it('drops server-delivered hints and worked examples when a check opens mid-session', async () => {
+      const wrapper = await mount(); await startSession(wrapper)
+      await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+      await wrapper.find('textarea[aria-label="Your prediction"]').setValue('prediction')
+      await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+      await wrapper.get('[data-testid="learn-v2-reveal"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-v2-reveal-content"]').text()).toContain('Server assistance'))
+      expect(wrapper.text()).toContain('explanation content')
+
+      content.value = null
+      contentError.value = denied('test_open')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-content-paused"]').exists()).toBe(true))
+      expect(wrapper.find('[data-testid="learn-v2-reveal-content"]').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('Server assistance')
+      expect(wrapper.text()).not.toContain('explanation content')
+      expect(wrapper.get('[data-testid="learn-v2-reveal"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('[data-testid="learn-v2-continue"]').attributes('disabled')).toBeDefined()
+    })
+
     it('says plainly when disclosure is unknown', async () => {
       content.value = null
       contentError.value = denied('disclosure_unknown')

@@ -25,10 +25,12 @@ const emit = defineEmits<{
   openWizard: []
 }>()
 
-const { data: quizData } = useTeachingQuery(
+const quizQuery = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )
+const quizData = quizQuery.data
+const quizPaused = computed(() => quizQuery.failure.value?.retryable === false)
 
 const { data: historyData } = useConvexQuery(
   api.quizzes.getQuizHistory,
@@ -63,7 +65,24 @@ const takingInitialIndex = ref(0)
 const takingAnsweredIds = ref<Set<string>>(new Set())
 const resultsAttemptId = ref<Id<'quizAttempts'> | null>(null)
 
+function clearAttemptContent() {
+  takingQuestions.value = []
+  takingSettings.value = null
+  takingAttemptId.value = null
+  takingInitialIndex.value = 0
+  takingAnsweredIds.value = new Set()
+  resultsAttemptId.value = null
+  settingsOpen.value = false
+  resumeDialogOpen.value = false
+  viewState.value = 'overview'
+}
+
+watch(quizPaused, (paused) => {
+  if (paused) clearAttemptContent()
+})
+
 function handleTakeQuiz() {
+  if (quizPaused.value) return
   if (hasInProgressAttempt.value) {
     resumeDialogOpen.value = true
   }
@@ -73,6 +92,7 @@ function handleTakeQuiz() {
 }
 
 function applyAttemptResult(result: AttemptResult) {
+  if (quizPaused.value) return
   takingQuestions.value = result.questions
   takingSettings.value = result.settings
   takingAttemptId.value = result.attemptId

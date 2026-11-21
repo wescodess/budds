@@ -23,6 +23,7 @@ const quizQuery = useTeachingQuery(
 )
 const quizData = quizQuery.data
 const quizFailure = computed(() => quizQuery.failure.value)
+const quizPaused = computed(() => quizFailure.value?.retryable === false)
 
 const { data: attemptsData } = useConvexQuery(
   api.quizzes.listAttempts,
@@ -92,6 +93,15 @@ watch(
   { immediate: true },
 )
 
+watch(quizPaused, (paused) => {
+  if (!paused) return
+  resultsByQuestion.value = {}
+  scoreSummary.value = null
+  reviewMode.value = false
+  hydratedFromAttempt.value = false
+  if (state.value !== 'submitting') state.value = 'loading'
+})
+
 const allAnswered = computed(() => {
   if (questions.value.length === 0) return false
   return questions.value.every((q) => {
@@ -128,6 +138,10 @@ async function handleSubmit() {
       }>
     }
 
+    if (quizPaused.value) {
+      state.value = 'loading'
+      return
+    }
     const byId: Record<string, QuestionResult> = {}
     for (const r of result.results) {
       byId[r.questionId] = {

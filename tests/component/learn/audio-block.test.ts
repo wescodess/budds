@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 
 const mockOverviewData = ref<any>(null)
 const mockOverviewError = ref<any>(null)
@@ -69,6 +70,39 @@ describe('AudioBlock', () => {
     expect(mockRefresh).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(true))
     expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
+  })
+
+  it('stops playback and clears the transcript when a check opens mid-play, then reloads on recovery', async () => {
+    mockOverviewData.value = sampleOverview
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    const audio = wrapper.get('audio').element as HTMLAudioElement
+    const pause = vi.spyOn(audio, 'pause').mockImplementation(() => {})
+    vi.spyOn(audio, 'play').mockResolvedValue(undefined)
+    vi.spyOn(audio, 'load').mockImplementation(() => {})
+    await wrapper.get('[data-testid="audio-block-play"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Pause audio primer')
+    expect(audio.getAttribute('src')).toBe('https://audio.test/1.mp3')
+    await wrapper.find('[data-testid="audio-block-transcript-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('SN1 reactions')
+
+    mockOverviewError.value = denied('test_open')
+    await nextTick()
+    expect(pause).toHaveBeenCalled()
+    expect(audio.getAttribute('src')).toBeNull()
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(true)
+    expect(wrapper.find('audio').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('SN1 reactions')
+    expect(wrapper.text()).not.toContain('Reaction Mechanisms Primer')
+
+    mockOverviewError.value = null
+    await nextTick()
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Play audio primer')
+    expect(wrapper.text()).not.toContain('SN1 reactions')
   })
 
   it('ignores read failures when there is no audio to load', async () => {

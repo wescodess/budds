@@ -28,9 +28,11 @@ const roomQuery = import.meta.client && !props.isOffline && props.roomId
     )
   : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
-const roomFailure = computed(() => props.isOffline && props.offlineData ? null : roomQuery.failure.value)
+const roomPaused = computed(() => roomQuery.failure.value?.retryable === false)
+const roomFailure = computed(() => roomPaused.value ? roomQuery.failure.value : props.isOffline && props.offlineData ? null : roomQuery.failure.value)
 
 const roomData = computed(() => {
+  if (roomPaused.value) return null
   if (props.isOffline && props.offlineData) {
     return {
       room: { title: 'Flashcards' },
@@ -78,6 +80,16 @@ const progressLabel = computed(() =>
 )
 
 const practiceComplete = ref(false)
+
+watch(roomPaused, (paused) => {
+  if (!paused) return
+  currentIndex.value = 0
+  isFlipped.value = false
+  cardKey.value++
+  flaggingOpen.value = false
+  flagCorrectedDef.value = ''
+  flagError.value = ''
+})
 const offlineAttempts = props.isOffline ? useOfflineAttempts() : null
 
 function effectiveDefinition(card: { definition: string; flagged?: boolean; correctedDefinition?: string } | null) {
