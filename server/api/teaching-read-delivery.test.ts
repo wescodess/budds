@@ -48,6 +48,21 @@ test.each(paths)('%s denies before fetching bytes during a held-out check', asyn
   expect(await granted()).toHaveLength(0)
 })
 
+test('ordinary anonymous shared audio stays playable without accounting against the publisher check', async () => {
+  vi.mocked(globalThis.getRouterParam).mockReturnValue(r.token)
+  mutation.mockImplementation((reference, args) => s.t.mutation(reference, args))
+  await openCheck()
+  const before = await s.exposures()
+  fetchMedia.mockResolvedValue(new Response(new ReadableStream({ start(controller) {
+    controller.enqueue(new Uint8Array([1, 2, 3, 4])); controller.close()
+  } })))
+  const anonymousEvent = { context: {} } as never
+  const response = await sharedMedia(anonymousEvent) as Response
+  expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]))
+  expect(fetchMedia).toHaveBeenCalledTimes(1)
+  expect(await s.exposures()).toEqual(before)
+})
+
 test.each(paths)('%s fetch failure is not delivered assistance', async (_path, handler, id) => {
   vi.mocked(globalThis.getRouterParam).mockReturnValue(id())
   fetchMedia.mockRejectedValueOnce(new Error('Fixture storage unavailable'))

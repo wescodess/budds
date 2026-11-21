@@ -264,7 +264,7 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
     return { version: LEARN_HELP_ADMISSION_VERSION, status: 'authorized', authorizations: [] }
   }
   if (!isMutationContext(ctx)) throw new Error('Help admission unavailable')
-  const key = `help_${(await privacyDigest([request.idempotencyKey, request.kind, scopeDigest])).slice(7)}`
+  const key = `help_${(await privacyDigest([request.idempotencyKey, request.kind])).slice(7)}`
   const preparations = []
   for (const row of matches) {
     const prepared = await prepareLearnResponseAssistanceForOwner(ctx, userId, { version: LEARN_V2_PUBLIC_API_VERSION,

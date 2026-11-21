@@ -14,6 +14,7 @@ import * as audioOverviewRooms from './audioOverviewRooms'
 import { invokePrivacyQuery, tracePrivacyReads } from '../tests/fixtures/learn-v2-privacy-reads'
 import { ASSESSMENT_DISCLOSURE_OTHER_OWNERS } from './lib/learnV2AssessmentDisclosure'
 import producerGuide from '../docs/plans/learn-v2-c1-public-api-contract.md?raw'
+import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
@@ -86,6 +87,23 @@ async function restrict(f: Fixture, kind: 'quiz_question' | 'section_block' | 'd
     }
   })
 }
+
+test.each(['measurement', 'private_scoring', 'unknown'] as const)('ordinary message replay withholds a source whose lineage became %s', async classification => {
+  vi.stubEnv('NUXT_BETTER_AUTH_SECRET', 'lineage-replay-fixture-secret')
+  const f = await fixture()
+  const conversationId = await f.owner.mutation(api.conversations.createConversation, { folderId: f.folderId, title: 'Teaching history' })
+  const content = 'REVOKED_LINEAGE_ANSWER'
+  const sources = [{ content: 'REVOKED_LINEAGE_QUOTE', filename: 'owned.txt', score: 1 }]
+  await f.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources,
+    provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, userId, content, sources, [{ kind: 'document', id: f.documentId }]) })
+  const args = { conversationId, idempotencyKey: 'lineage_replay_receipt' }
+  expect((await f.owner.mutation(api.messages.replayByConversation, args)).messages[0]?.content).toBe(content)
+  await restrict(f, 'document', classification)
+  const replay = await f.owner.mutation(api.messages.replayByConversation, args)
+  expect(replay.admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(JSON.stringify(replay)).not.toMatch(/REVOKED_LINEAGE/)
+  expect(JSON.stringify(await f.owner.query(api.messages.listByConversation, { conversationId }))).not.toMatch(/REVOKED_LINEAGE/)
+})
 async function inventory(f: Fixture) {
   return f.t.run(async ctx => ({
     catalog: await ctx.db.get(f.catalogId),

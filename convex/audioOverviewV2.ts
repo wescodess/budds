@@ -891,6 +891,7 @@ const SHARE_TOKEN_PATTERN = /^[0-9a-f]{32}$/
 
 const getPlaybackByShareTokenRead = defineTeachingRead({
   name: 'audioOverviewV2.getPlaybackByShareToken',
+  anonymousShare: true,
   scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
 
   args: { token: v.string() },
@@ -987,6 +988,7 @@ export const resolveMediaForOwnerPreparation = mutation(resolveMediaForOwnerRead
 
 const resolveMediaByShareTokenRead = defineTeachingRead({
   name: 'audioOverviewV2.resolveMediaByShareToken',
+  anonymousShare: true,
   scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
   metadataPreparation: true,
 

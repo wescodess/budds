@@ -9,6 +9,7 @@ import { requireAuth } from './lib/auth'
 import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
 import { personalResponsePage } from './lib/learnV2PersonalExportPage'
+import { exportRetainedMessage } from './lib/learnV2ReplayAccess'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
 // the 16 MiB transaction and return-value ceilings even at the per-row limit.
@@ -103,8 +104,10 @@ export const getUserDataPage = query({
         return await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'conversations':
         return await ctx.db.query('conversations').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
-      case 'messages':
-        return await ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+      case 'messages': {
+        const result = await ctx.db.query('messages').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
+        return { ...result, page: await Promise.all(result.page.map(row => exportRetainedMessage(ctx, userId, row))) }
+      }
       case 'quizzes':
         return await ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
       case 'quizQuestions':

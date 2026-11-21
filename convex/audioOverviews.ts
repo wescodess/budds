@@ -429,6 +429,7 @@ export const unpublishOverview = mutation({
 
 const getByShareTokenRead = defineTeachingRead({
   name: 'audioOverviews.getByShareToken',
+  anonymousShare: true,
   scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
 
   args: { token: v.string() },
@@ -474,6 +475,7 @@ export const getByShareTokenDelivery = mutation(getByShareTokenRead.delivery)
 
 const getTurnUrlsByShareTokenRead = defineTeachingRead({
   name: 'audioOverviews.getTurnUrlsByShareToken',
+  anonymousShare: true,
   scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
 
   args: { token: v.string() },

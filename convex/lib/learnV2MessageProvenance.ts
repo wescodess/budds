@@ -1,6 +1,16 @@
 import type { Doc } from '../_generated/dataModel'
 import { MESSAGE_PROVENANCE_VERSION, verifyMessageProvenance } from '../../shared/learn-v2-message-provenance'
 
+export function projectStoredMessage(row: Doc<'messages'>, allowContent: boolean, allowOwnText = true) {
+  return {
+    _id: row._id, _creationTime: row._creationTime, conversationId: row.conversationId,
+    userId: row.userId, role: row.role, content: allowContent || row.role === 'user' && allowOwnText ? row.content : '',
+    ...(allowContent && row.model ? { model: row.model } : {}),
+    ...(allowContent && row.sources ? { sources: row.sources } : {}),
+    ...(allowContent && row.interjectionContext ? { interjectionContext: row.interjectionContext } : {}),
+  }
+}
+
 export function messageSigningSecret() {
   return process.env.NUXT_BETTER_AUTH_SECRET || process.env.BETTER_AUTH_SECRET || ''
 }

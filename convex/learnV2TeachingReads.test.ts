@@ -2,6 +2,7 @@ import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION } from '../shared/learn-v2-asses
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { makeFunctionReference } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import type { LearnHelpAdmission } from './lib/learnV2HelpContract'
 import { seedTeachingReads } from '../tests/fixtures/learn-v2-teaching-reads'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
@@ -17,7 +18,7 @@ vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal 
     get responses() { return policy.responses } } }
 })
 const modules = import.meta.glob('./**/*.ts')
-beforeEach(() => { policy.responses = true; vi.stubEnv('AUDIO_OVERVIEW_WORKER_TOKEN','fixture-worker-token-000000000000000000000'); vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
+beforeEach(() => { policy.responses = true; vi.stubEnv('NUXT_BETTER_AUTH_SECRET', 'teaching-read-signal-fixture'); vi.stubEnv('AUDIO_OVERVIEW_WORKER_TOKEN','fixture-worker-token-000000000000000000000'); vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.restoreAllMocks() })
 
 async function fixture() {
@@ -35,7 +36,7 @@ async function fixture() {
 test.each(['getWithTurns', 'getTurnUrls'] as const)('audioOverviews.%s cannot return formative content without delivery accounting', async name => {
   const s = await fixture()
   const before = await s.exposures()
-  await expect(s.owner.query(api.audioOverviews[name], { id: s.overviewId })).rejects.toThrow(/help_delivery_required/)
+  await deliveryRevision(() => s.owner.query(api.audioOverviews[name], { id: s.overviewId }))
   expect(await s.exposures()).toEqual(before)
 })
 
@@ -105,13 +106,156 @@ async function readFixture() {
   return { ...s, r }
 }
 
+async function deliveryRevision(read: () => Promise<unknown>) {
+  const error: unknown = await read().then(() => null, (cause: unknown) => cause)
+  expect(error).toMatchObject({ data: { code: 'help_delivery_required', revision: expect.stringMatching(/^hmac-sha256:[a-f0-9]{64}$/) } })
+  expect(JSON.stringify(error)).not.toContain('TEACHING_')
+  if (!(error instanceof ConvexError)) throw new Error('Expected teaching delivery signal')
+  return (error.data as { revision: string }).revision
+}
+
+test('accounted Quiz results signal answer and semantic-grading changes without repeating exposure', async () => {
+  const s = await readFixture()
+  const { answerId, assessmentId } = await s.t.run(async ctx => {
+    const answer = (await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', s.r.attemptId)).first())!
+    const assessmentId = await ctx.db.insert('quizAnswerAssessments', { userId: HELP_OWNER.tokenIdentifier, attemptId: s.r.attemptId,
+      attemptAnswerId: answer._id, questionId: s.r.questionId, kind: 'quiz.free_response_assessment.v1', status: 'pending',
+      questionSnapshot: { question: 'TEACHING_READ_CANARY', questionType: 'free-response', expectedAnswer: 'TEACHING_READ_CANARY', evidenceExcerpt: 'TEACHING_READ_CANARY' },
+      learnerAnswerSnapshot: answer.userAnswer, deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() })
+    return { answerId: answer._id, assessmentId }
+  })
+  const query = () => s.owner.query(api.quizzes.getAttemptResults, { attemptId: s.r.attemptId })
+  const command = { attemptId: s.r.attemptId, idempotencyKey: 'reactive_quiz_delivery' }
+  const before = (await s.exposures()).length
+  const initial = await deliveryRevision(query)
+  const first = await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)
+  expect(first.value?.results[0]?.semanticAssessment?.status).toBe('pending')
+  await s.t.run(ctx => ctx.db.patch(answerId, { feedback: 'Updated answer feedback' }))
+  const answerChanged = await deliveryRevision(query)
+  expect(answerChanged).not.toBe(initial)
+  expect((await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)).value?.results[0]?.feedback).toBe('Updated answer feedback')
+  await s.t.run(ctx => ctx.db.patch(assessmentId, { status: 'available', label: 'fully_correct', confidence: 1 }))
+  expect(await deliveryRevision(query)).not.toBe(answerChanged)
+  const graded = await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)
+  expect(graded.value?.results[0]?.semanticAssessment).toMatchObject({ status: 'available', label: 'fully_correct' })
+  expect((await s.exposures()).slice(before).filter(row => row.status === 'granted')).toHaveLength(1)
+})
+
+test.each(['course', 'audio'] as const)('accounted %s content changes its delivery signal without another exposure', async kind => {
+  const s = await readFixture()
+  const query = () => kind === 'course' ? s.owner.query(api.courses.get, { id: s.r.courseId }) : s.owner.query(api.audioOverviews.getWithTurns, { id: s.r.overviewId })
+  const deliver = () => kind === 'course' ? s.owner.mutation(api.courses.getDelivery, { id: s.r.courseId, idempotencyKey: 'reactive_course_delivery' })
+    : s.owner.mutation(api.audioOverviews.getWithTurnsDelivery, { id: s.r.overviewId, idempotencyKey: 'reactive_audio_delivery' })
+  const before = (await s.exposures()).length
+  const original = await deliveryRevision(query)
+  expect((await deliver()).admission.status).toBe('authorized')
+  await s.t.run(async ctx => {
+    if (kind === 'course') {
+      const row = (await ctx.db.get(s.r.courseId))!
+      await ctx.db.patch(row._id, { outlineSections: row.outlineSections.map(section => ({ ...section, description: 'TEACHING_UPDATED_CANARY' })) })
+    } else {
+      const row = (await ctx.db.get(s.r.overviewId))!
+      await ctx.db.patch(row._id, { turns: row.turns.map(turn => ({ ...turn, text: 'TEACHING_UPDATED_CANARY' })) })
+    }
+  })
+  expect(await deliveryRevision(query)).not.toBe(original)
+  expect(JSON.stringify((await deliver()).value)).toContain('TEACHING_UPDATED_CANARY')
+  expect((await s.exposures()).slice(before).filter(row => row.status === 'granted')).toHaveLength(1)
+})
+
+test('a replacement formative opportunity changes the signal and accounts once for the same delivery key', async () => {
+  const s = await readFixture()
+  const query = () => s.owner.query(api.quizzes.getAttemptResults, { attemptId: s.r.attemptId })
+  const command = { attemptId: s.r.attemptId, idempotencyKey: 'reactive_replacement_delivery' }
+  const before = (await s.exposures()).length
+  const original = await deliveryRevision(query)
+  const first = await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)
+  const replacementId = await s.t.run(async ctx => {
+    const { _id, _creationTime: _time, ...row } = (await ctx.db.get(s.f.rows.learnAssessmentOpportunities))!
+    await ctx.db.patch(_id, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
+    return await ctx.db.insert('learnAssessmentOpportunities', { ...row, revision: 1 })
+  })
+  expect(await deliveryRevision(query)).not.toBe(original)
+  expect((await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)).value).toEqual(first.value)
+  await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)
+  const exposures = (await s.exposures()).slice(before).filter(row => row.status === 'granted')
+  expect(exposures.map(row => row.assessmentOpportunityId).sort()).toEqual([s.f.rows.learnAssessmentOpportunities, replacementId].sort())
+})
+
+test('a reactive read rechecks newly added source scope without counting its delivery key twice', async () => {
+  const s = await readFixture()
+  const command = { id: s.r.quizId, idempotencyKey: 'reactive_source_scope_delivery' }
+  const before = (await s.exposures()).length
+  expect((await s.owner.mutation(api.quizzes.getWithQuestionsDelivery, command)).admission.status).toBe('authorized')
+  await s.t.run(async ctx => {
+    const documentId = await ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, filename: 'another.txt', status: 'success', fileSize: 1 })
+    await ctx.db.insert('quizQuestions', { userId: HELP_OWNER.tokenIdentifier, quizId: s.r.quizId, order: 1,
+      question: 'Another teaching question', type: 'free-response', correctAnswer: 'Another teaching answer', sourceDocumentId: documentId })
+  })
+  const result = await s.owner.mutation(api.quizzes.getWithQuestionsDelivery, command)
+  expect(result.value?.questions).toHaveLength(2)
+  expect((await s.exposures()).slice(before).filter(row => row.status === 'granted')).toHaveLength(1)
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { purpose: {
+    kind: 'measurement_cold', assignmentId: s.f.rows.learnMeasurementAssignments, protocolVersion: 'protocol.fixture' }, revision: 2 }))
+  expect(await s.owner.mutation(api.quizzes.getWithQuestionsDelivery, command)).toMatchObject({ admission: { status: 'denied', reasonCode: 'test_open' }, value: null })
+})
+
+test('a changed source provenance changes the signal even when the public Quiz results stay identical', async () => {
+  const s = await readFixture()
+  const query = () => s.owner.query(api.quizzes.getAttemptResults, { attemptId: s.r.attemptId })
+  const command = { attemptId: s.r.attemptId, idempotencyKey: 'reactive_provenance_delivery' }
+  const before = (await s.exposures()).length
+  const original = await deliveryRevision(query)
+  const first = await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)
+  await s.t.run(async ctx => {
+    const documentId = await ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, filename: 'replacement.txt', status: 'success', fileSize: 1 })
+    await ctx.db.patch(s.r.questionId, { sourceDocumentId: documentId })
+  })
+  expect(await deliveryRevision(query)).not.toBe(original)
+  expect((await s.owner.mutation(api.quizzes.getAttemptResultsDelivery, command)).value).toEqual(first.value)
+  expect((await s.exposures()).slice(before).filter(row => row.status === 'granted')).toHaveLength(1)
+})
+
+test.each(readPaths.filter(([path]) => /ByShareToken$/.test(path)))('%s remains anonymous while the authenticated owner keeps contextual admission', async (path, input) => {
+  const s = await readFixture()
+  const args = input(s)
+  const query = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
+  const delivery = makeFunctionReference<'mutation', Record<string, unknown>, { admission: LearnHelpAdmission, value: unknown }>(`${path.replace('.', ':')}Delivery`)
+  const before = await s.exposures()
+  policy.responses = false
+  const ordinary = await s.t.query(query, args)
+  expect(ordinary).not.toBeNull()
+  for (const responses of [false, true]) {
+    policy.responses = responses
+    expect(await s.t.query(query, args)).toEqual(ordinary)
+    expect(await s.t.mutation(delivery, { ...args, idempotencyKey: 'anonymous_shared_delivery' })).toEqual({
+      admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, value: ordinary,
+    })
+    const other = s.t.withIdentity({ tokenIdentifier: 'https://foreign.example|help-owner', subject: HELP_OWNER.subject })
+    expect(await other.query(query, args)).toEqual(ordinary)
+  }
+  expect(await s.exposures()).toEqual(before)
+  policy.responses = true
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { purpose: {
+    kind: 'measurement_cold', assignmentId: s.f.rows.learnMeasurementAssignments, protocolVersion: 'protocol.fixture' }, revision: 2 }))
+  await expect(s.owner.query(query, args)).rejects.toThrow(/test_open/)
+  const denied = await s.owner.mutation(delivery, { ...args, idempotencyKey: 'owner_shared_delivery',
+    ...(path.includes('resolveMedia') ? { orchestrationToken: process.env.AUDIO_OVERVIEW_WORKER_TOKEN } : {}) })
+  expect(denied).toMatchObject({ admission: { status: 'denied', reasonCode: 'test_open' }, value: null })
+  expect(JSON.stringify(denied)).not.toContain('TEACHING_')
+  expect(await s.t.query(query, args)).toEqual(ordinary)
+  await s.t.run(ctx => ctx.db.patch(s.r.overviewId, { shareToken: undefined }))
+  expect(await s.t.query(query, args)).toBeNull()
+  expect(await s.t.mutation(delivery, { ...args, idempotencyKey: 'revoked_anonymous_share' })).toMatchObject({ admission: { status: 'ordinary' }, value: null })
+})
+
 test.each(readPaths)('%s requires an accounted delivery and rechecks held-out status', async (path, input) => {
   const s = await readFixture()
   const args = input(s)
   const query = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
   const delivery = makeFunctionReference<'mutation', Record<string, unknown>, { admission: LearnHelpAdmission, value: unknown }>(`${path.replace('.', ':')}Delivery`)
   const before = (await s.exposures()).length
-  await expect(s.owner.query(query, args)).rejects.toThrow(/help_delivery_required/)
+  await deliveryRevision(() => s.owner.query(query, args))
   expect((await s.exposures()).length).toBe(before)
   const command = { ...args, idempotencyKey: 'registered_teaching_read', ...(path.includes('resolveMedia')?{orchestrationToken:process.env.AUDIO_OVERVIEW_WORKER_TOKEN}: {}) }
   const result = await s.owner.mutation(delivery, command)
@@ -245,7 +389,7 @@ test.each([
   const args={threadId:s.f.threadId,...(path.includes('Evidence')?{activityId:(await s.t.run(ctx=>ctx.db.get(s.f.activityId)))!.activityId}:{})}
   const query=makeFunctionReference<'query',Record<string,unknown>,unknown>(path.replace('.',':'))
   const delivery=makeFunctionReference<'mutation',Record<string,unknown>,{admission:LearnHelpAdmission,value:unknown}>(`${path.replace('.',':')}Delivery`)
-  await expect(s.owner.query(query,args)).rejects.toThrow(/help_delivery_required/)
+  await deliveryRevision(() => s.owner.query(query,args))
   const before=(await s.exposures()).length
   const result=await s.owner.mutation(delivery,{...args,idempotencyKey:'adaptive_teaching_read'})
   expect(result.admission.status).toBe('authorized')

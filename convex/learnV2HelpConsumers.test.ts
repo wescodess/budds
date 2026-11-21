@@ -7,6 +7,7 @@ import { orchestratePublicSearch } from './learnV2SearchActions'
 import { LEARN_HELP_LIMITS } from './lib/learnV2HelpContract'
 import { HELP_OWNER, helpConsumerFixture } from '../tests/fixtures/learn-v2-help-consumers'
 import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -17,6 +18,64 @@ vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal 
 const modules = import.meta.glob('./**/*.ts')
 beforeEach(() => { policy.responses = true; vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.stubEnv('NUXT_BETTER_AUTH_SECRET', 'message-provenance-fixture-secret'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
+
+test.each(['deleted', 'document_owner', 'folder_deleted', 'folder_owner', 'failed', 'identity', 'snapshot', 'excerpt', 'rights', 'pins', 'archived'] as const)('sealed replay revalidates a signed source after %s revocation and preserves learner prose', async revocation => {
+  const s = await helpConsumerFixture(modules, false)
+  const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Retained conversation' })
+  const content = 'SOURCE_DERIVED_ANSWER'
+  const sources = [{ content: 'REVOKED_SOURCE_QUOTE', filename: 'retained.txt', score: 1 }]
+  await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'user', content: 'My own question' })
+  await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources,
+    provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, content, sources,
+      [{ kind: 'document', id: s.f.documentId }]) })
+  const args = { conversationId, idempotencyKey: 'sealed_source_replay' }
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+  expect((await s.owner.mutation(api.messages.replayByConversation, args)).messages[1]?.content).toBe(content)
+  const before = await s.exposures()
+  await s.t.run(async ctx => {
+    if (revocation === 'deleted') await ctx.db.delete(s.f.documentId)
+    else if (revocation === 'document_owner') await ctx.db.patch(s.f.documentId, { userId: 'other-owner' })
+    else if (revocation === 'folder_deleted') await ctx.db.delete(s.f.folderId)
+    else if (revocation === 'folder_owner') await ctx.db.patch(s.f.folderId, { userId: 'other-owner' })
+    else if (revocation === 'failed') await ctx.db.patch(s.f.documentId, { status: 'failed' })
+    else if (revocation === 'identity') await ctx.db.patch(s.f.sourceIdentityId, { tombstonedAt: Date.now() })
+    else if (revocation === 'snapshot') await ctx.db.patch(s.f.sourceSnapshotId, { evidencePurgedAt: Date.now() })
+    else if (revocation === 'excerpt') await ctx.db.patch(s.f.sourceExcerptId, { evidencePurgedAt: Date.now() })
+    else if (revocation === 'rights') await ctx.db.patch(s.f.sourceSnapshotId, { rightsStatus: 'prohibited' })
+    else if (revocation === 'pins') await ctx.db.patch(s.f.documentId, { sourceRevision: 'source.r2' })
+    else await ctx.db.patch(s.f.learningVoidId, { status: 'archived' })
+  })
+  for (const responses of [true, false]) {
+    policy.responses = responses
+    const result = await s.owner.mutation(api.messages.replayByConversation, args)
+    expect(result.admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+    expect(result.messages.map(row => row.content)).toEqual(['My own question', ''])
+    expect(result.messages[1]?.sources).toBeUndefined()
+    expect(JSON.stringify(result)).not.toMatch(/SOURCE_DERIVED_ANSWER|REVOKED_SOURCE_QUOTE/)
+    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toMatch(/SOURCE_DERIVED_ANSWER|REVOKED_SOURCE_QUOTE/)
+  }
+  expect(await s.exposures()).toEqual(before)
+})
+
+test('personal message export cannot replay a revoked signed source through an export authorization', async () => {
+  const s = await helpConsumerFixture(modules, false)
+  const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Retained conversation' })
+  const content = 'REVOKED_EXPORTED_ANSWER'
+  const sources = [{ content: 'REVOKED_EXPORTED_QUOTE', filename: 'retained.txt', score: 1 }]
+  await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'user', content: 'My retained question' })
+  await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources,
+    provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, content, sources,
+      [{ kind: 'document', id: s.f.documentId }]) })
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+  const authorizationId = await authorizeExport(s.owner)
+  const args = { collection: 'messages' as const, authorizationId, paginationOpts: { numItems: 8, cursor: null } }
+  expect(JSON.stringify(await s.owner.query(api.dataExport.getUserDataPage, args))).toContain(content)
+  await s.t.run(ctx => ctx.db.delete(s.f.documentId))
+  const result = await s.owner.query(api.dataExport.getUserDataPage, { ...args, authorizationId: await authorizeExport(s.owner) })
+  expect(JSON.stringify(result)).not.toMatch(/REVOKED_EXPORTED/)
+  expect(JSON.stringify(result)).toContain('My retained question')
+  expect(result.page).toContainEqual(expect.objectContaining({ role: 'assistant', content: '', evidenceStatus: 'evidence_unavailable' }))
+})
 
 describe('registered message and source help consumers', () => {
   test.each(['depth', 'cycle'] as const)('folder %s cannot prove irrelevance', async kind => {
