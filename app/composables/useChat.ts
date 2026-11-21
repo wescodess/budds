@@ -440,9 +440,11 @@ export function useChat(
 
   async function loadConversation(conversationIdToLoad: Id<'conversations'>) {
     if (!import.meta.client || !convexClient) return
-    const rows = await convexClient.query(api.messages.listByConversation, {
+    const replay = await convexClient.mutation(api.messages.replayByConversation, {
       conversationId: conversationIdToLoad,
-    }) as Array<{
+      idempotencyKey: `message_replay_${crypto.randomUUID().replace(/-/g, '')}`,
+    })
+    const rows = replay.messages as Array<{
       role: 'user' | 'assistant'
       content: string
       sources?: Source[]
@@ -451,7 +453,7 @@ export function useChat(
 
     messages.value = rows.map(r => ({
       role: r.role,
-      content: r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
+      content: r.content,
       sources: r.sources,
       ...(r.interjectionContext ? { interjectionContext: r.interjectionContext } : {}),
     }))

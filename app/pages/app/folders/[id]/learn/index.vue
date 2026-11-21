@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { api } from '#convex/api'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
 
@@ -6,7 +8,7 @@ const ctx = injectFolderContext()
 const { folderId } = ctx
 
 const coursesQuery = import.meta.client
-  ? useConvexQuery(api.courses.listByFolder, computed(() => ({ folderId: folderId.value })))
+  ? useTeachingQuery(api.courses.listByFolder, computed(() => ({ folderId: folderId.value })))
   : { data: ref([]) }
 
 const backlogQuery = import.meta.client

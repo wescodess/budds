@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { History, Pencil, Play, Sparkles, Loader2 } from '@lucide/vue'
@@ -19,7 +21,7 @@ const emit = defineEmits<{
   generationStarted: []
 }>()
 
-const { data: roomData } = useConvexQuery(
+const { data: roomData } = useTeachingQuery(
   api.flashcardRooms.getRoom,
   computed(() => ({ roomId: props.roomId })),
 )

@@ -3,18 +3,19 @@ import type { AISearchChunk } from './ai-search'
 import type { Id } from '../../convex/_generated/dataModel'
 import type { H3Event } from 'h3'
 import { readConfiguredRuntimeValue } from './runtime-config'
+import { normalizeAssistantCitations } from '../../shared/assistant-citations'
 
 export async function messageProvenance(event: H3Event, userId: string, content: string, chunks: AISearchChunk[], hasHistory: boolean) {
-  if (hasHistory || chunks.some(chunk => !chunk.attributes.documentId || !chunk.attributes.folderId)) return
+  const known = !hasHistory && !chunks.some(chunk => !chunk.attributes.documentId || !chunk.attributes.folderId)
   const references = new Map<string, MessageScopeReference>()
-  for (const chunk of chunks) {
+  for (const chunk of known ? chunks : []) {
     const document: MessageScopeReference = { kind: 'document', id: chunk.attributes.documentId as Id<'documents'> }
     const folder: MessageScopeReference = { kind: 'folder', id: chunk.attributes.folderId as Id<'folders'> }
     references.set(`document:${document.id}`, document)
     references.set(`folder:${folder.id}`, folder)
   }
   const secret = readConfiguredRuntimeValue(useRuntimeConfig(event).betterAuthSecret, 'NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET')
-  return await signMessageProvenance(secret, userId, content,
+  return await signMessageProvenance(secret, userId, normalizeAssistantCitations(content),
     chunks.map(chunk => ({ content: chunk.content, score: chunk.score, filename: chunk.attributes.filename ?? 'Unknown' })), [...references.values()])
 }
 

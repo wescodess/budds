@@ -1,3 +1,4 @@
+import { teachingDeliveryValue } from '../../utils/teaching-delivery'
 import { assertTeachingCommand, loadTeachingScope, assertTeachingSourcePins } from '../../utils/teaching-source-scope'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -102,10 +103,9 @@ async function runV2Interjection(
   }
   if (reservation.status === 'ready') {
     await authorizeHelp()
-    const existing = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
+    const existing = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
     if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
     const response = v2Response(existing)
-    await authorizeHelp(true)
     return response
   }
 
@@ -120,12 +120,13 @@ async function runV2Interjection(
     ownsScripting = claim.claimed
     if (!claim.claimed) {
       await authorizeHelp()
-      const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+      const current = await convexClient.query(api.audioOverviewInterjectionsV2.getStatusForOwner, {
         interjectionId: reservation.interjectionId,
       })
       if (current?.status === 'ready') {
-        const response = v2Response(current)
-        await authorizeHelp(true)
+        const delivered = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+        if (!delivered) throw createError({ statusCode: 404, message: 'Interjection not found' })
+        const response = v2Response(delivered)
         return response
       }
       throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
@@ -245,7 +246,7 @@ async function runV2Interjection(
       utterances: script.utterances,
     })
     const renderedArtifact = render.artifact
-    const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+    const current = await convexClient.query(api.audioOverviewInterjectionsV2.getStatusForOwner, {
       interjectionId: reservation.interjectionId,
     })
     if (!current || current.status !== 'rendering') {
@@ -266,12 +267,11 @@ async function runV2Interjection(
       orchestrationToken,
       artifact: renderedArtifact,
     })
-    const published = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
-      interjectionId: reservation.interjectionId,
-    })
+    const published = teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, {
+      interjectionId: reservation.interjectionId, idempotencyKey,
+    }))
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
     const response = v2Response(published)
-    await authorizeHelp(true)
     return response
   }
   catch (error) {
@@ -335,7 +335,7 @@ export default defineEventHandler(async (event) => {
     scope: { references: [{ kind: 'audio_overview', id: body.overviewId as Id<'audioOverviews'> }] } }, convexClient)
   await authorizeHelp()
 
-  const overview = await convexClient.query(api.audioOverviews.getWithTurns, {
+  const overview = await convexClient.query(api.audioOverviews.getInterjectionMetadata, {
     id: body.overviewId as Id<'audioOverviews'>,
   })
   if (!overview) {

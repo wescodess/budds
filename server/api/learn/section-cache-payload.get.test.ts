@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from '../../../convex/_generated/api'
 
 const query = vi.hoisted(() => vi.fn())
-vi.mock('../../utils/convex-client', () => ({ makeConvexClient: () => ({ query }) }))
+vi.mock('../../utils/convex-client', () => ({ makeConvexClient: () => ({ mutation:query }) }))
 vi.stubGlobal('defineEventHandler', <T>(handler: T) => handler)
 vi.stubGlobal('getQuery', () => ({ sectionId: 'section_1' }))
 vi.stubGlobal('createError', (options: { statusCode: number, statusMessage: string }) => Object.assign(new Error(options.statusMessage), options))
@@ -13,9 +13,9 @@ describe('section offline transport lineage', () => {
 
   test('returns only the authoritative offline projection', async () => {
     const payload = { sectionId: 'section_1', contentBlocks: [{ type: 'text', content: 'Ordinary teaching' }] }
-    query.mockResolvedValue(payload)
+    query.mockResolvedValue({admission:{status:'ordinary'},value:payload})
     await expect(handler({ context: { convexToken: 'owner-token' } } as never)).resolves.toEqual(payload)
-    expect(query).toHaveBeenCalledWith(api.courseSections.getOfflineCachePayload, { sectionId: 'section_1' })
+    expect(query).toHaveBeenCalledWith(api.courseSections.getOfflineCachePayloadDelivery, expect.objectContaining({ sectionId: 'section_1',idempotencyKey:expect.any(String) }))
   })
 
   test('rejects a protected nested payload without returning an offline envelope', async () => {

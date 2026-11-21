@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
+beforeEach(()=>vi.stubEnv('NUXT_BETTER_AUTH_SECRET','message-fixture-secret'))
+afterEach(()=>vi.unstubAllEnvs())
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -63,6 +66,7 @@ describe('messages.appendMessage', () => {
       conversationId,
       role: 'assistant',
       content: 'Photosynthesis converts light to energy.',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, TEST_IDENTITY.tokenIdentifier, 'Photosynthesis converts light to energy.',sources,[]),
       sources,
       model: 'claude-opus-4-6',
     })
@@ -71,7 +75,7 @@ describe('messages.appendMessage', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('assistant')
     expect(messages[0].sources).toEqual(sources)
-    expect(messages[0].model).toBe('claude-opus-4-6')
+    expect(messages[0]).not.toHaveProperty('model')
   })
 
   it('[P0] should reject appending to another user\'s conversation', async () => {
@@ -120,6 +124,7 @@ describe('messages.listByConversation', () => {
       conversationId,
       role: 'assistant',
       content: 'A1',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, TEST_IDENTITY.tokenIdentifier, 'A1',[],[]),
     })
     await asUser.mutation(api.messages.appendMessage, {
       conversationId,

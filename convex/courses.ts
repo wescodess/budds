@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from 'convex/values'
 import { action, internalQuery, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
@@ -92,7 +94,10 @@ export const create = mutation({
   },
 })
 
-export const listByUser = query({
+const listByUserRead = defineTeachingRead({
+  name: 'courses.listByUser',
+  scope: async (ctx, userId) => { const rows = await ctx.db.query('courses').withIndex('by_userId', q => q.eq('userId', userId)).order('desc').take(100); return await teachingReadScope(ctx, userId, rows.map(row => ({ kind: 'course' as const, id: row._id }))) },
+
   args: {},
   handler: async (ctx) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -104,7 +109,10 @@ export const listByUser = query({
       .order('desc')
       .take(100)
   },
-})
+
+}, { hasContent: value => value.some(row => row.outlineSections.length > 0) })
+export const listByUser = query(listByUserRead.query)
+export const listByUserDelivery = mutation(listByUserRead.delivery)
 
 /** Owner-scoped bounded reader for durable calendar sync continuations. */
 export const getCalendarSyncPage = internalQuery({
@@ -119,7 +127,10 @@ export const getCalendarSyncPage = internalQuery({
     .paginate({ cursor: args.cursor, numItems: 25 }),
 })
 
-export const listByFolder = query({
+const listByFolderRead = defineTeachingRead({
+  name: 'courses.listByFolder',
+  scope: async (ctx, userId , args) => { const rows = await ctx.db.query('courses').withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', args.folderId)).order('desc').take(50); return await teachingReadScope(ctx, userId, rows.map(row => ({ kind: 'course' as const, id: row._id }))) },
+
   args: { folderId: v.id('folders') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -133,9 +144,15 @@ export const listByFolder = query({
       .order('desc')
       .take(50)
   },
-})
 
-export const get = query({
+}, { hasContent: value => value.some(row => row.outlineSections.length > 0) })
+export const listByFolder = query(listByFolderRead.query)
+export const listByFolderDelivery = mutation(listByFolderRead.delivery)
+
+const getRead = defineTeachingRead({
+  name: 'courses.get',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'course', id: args.id }]),
+
   args: { id: v.id('courses') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -145,7 +162,10 @@ export const get = query({
     if (!course || course.userId !== userId) return null
     return course
   },
-})
+
+}, { hasContent: value => Boolean(value?.outlineSections.length) })
+export const get = query(getRead.query)
+export const getDelivery = mutation(getRead.delivery)
 
 export const finalizeOutline = mutation({
   args: {

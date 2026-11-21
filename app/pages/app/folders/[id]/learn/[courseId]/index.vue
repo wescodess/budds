@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
@@ -11,11 +13,11 @@ const { folderId } = ctx
 const courseId = computed(() => route.params.courseId as Id<'courses'>)
 
 const courseQuery = import.meta.client
-  ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
+  ? useTeachingQuery(api.courses.get, computed(() => ({ id: courseId.value })))
   : { data: ref(null) }
 
 const sectionsQuery = import.meta.client
-  ? useConvexQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
+  ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
   : { data: ref(null) }
 
 const course = computed(() => courseQuery.data?.value ?? null)

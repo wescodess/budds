@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { teachingSourcePinsValidator, admitTeachingSourcePins, assertSectionTeaching, assertBlockInputs, teachingDocuments, publishSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
@@ -10,7 +12,10 @@ import { transitionMastery } from './lib/masteryStateMachine'
 import type { MasteryLevel } from './lib/masteryStateMachine'
 import { updateStreakForActivity } from './learnProfile'
 
-export const get = query({
+const getRead = defineTeachingRead({
+  name: 'courseSections.get',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'section', id: args.id }]),
+
   args: { id: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -19,9 +24,15 @@ export const get = query({
     await assertSectionTeaching(ctx, section)
     return section
   },
-})
 
-export const listByCourse = query({
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const get = query(getRead.query)
+export const getDelivery = mutation(getRead.delivery)
+
+const listByCourseRead = defineTeachingRead({
+  name: 'courseSections.listByCourse',
+  scope: async (ctx,userId,args)=>{const rows=await ctx.db.query('courseSections').withIndex('by_courseId_and_order',q=>q.eq('courseId',args.courseId)).take(100); return await teachingReadScope(ctx,userId,rows.map(row=>({kind:'section' as const,id:row._id})))},
+
   args: { courseId: v.id('courses') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -35,7 +46,10 @@ export const listByCourse = query({
     for (const section of sections) await assertSectionTeaching(ctx, section)
     return sections
   },
-})
+
+}, { hasContent: value => value.some(row => row.contentBlocks.length > 0) })
+export const listByCourse = query(listByCourseRead.query)
+export const listByCourseDelivery = mutation(listByCourseRead.delivery)
 
 export const updateTitle = mutation({
   args: {
@@ -526,7 +540,10 @@ export const finalizeSectionGeneration = mutation({
   },
 })
 
-export const getNextSection = query({
+const getNextSectionRead = defineTeachingRead({
+  name: 'courseSections.getNextSection',
+  scope: async(ctx,userId,args) => { const row = await ctx.db.query('courseSections').withIndex('by_courseId_and_order',q=>q.eq('courseId',args.courseId).eq('order',args.currentOrder+1)).unique(); return row ? await teachingReadScope(ctx,userId,[{kind:'section',id:row._id}]):null },
+
   args: {
     courseId: v.id('courses'),
     currentOrder: v.number(),
@@ -546,7 +563,10 @@ export const getNextSection = query({
     if (nextSection) await assertSectionTeaching(ctx, nextSection)
     return nextSection
   },
-})
+
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const getNextSection = query(getNextSectionRead.query)
+export const getNextSectionDelivery = mutation(getNextSectionRead.delivery)
 
 export const checkPreFetchStatus = query({
   args: {
@@ -755,7 +775,10 @@ export const completeSection = mutation({
   },
 })
 
-export const getOfflineCachePayload = query({
+const getOfflineCachePayloadRead = defineTeachingRead({
+  name: 'courseSections.getOfflineCachePayload',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'section', id: args.sectionId }]),
+
   args: { sectionId: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -858,7 +881,10 @@ export const getOfflineCachePayload = query({
       contentBlocks: blocks,
     }
   },
-})
+
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const getOfflineCachePayload = query(getOfflineCachePayloadRead.query)
+export const getOfflineCachePayloadDelivery = mutation(getOfflineCachePayloadRead.delivery)
 
 export const setOfflineAvailable = mutation({
   args: {

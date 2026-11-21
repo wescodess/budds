@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -571,7 +573,10 @@ async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterje
   }
 }
 
-export const getForOwner = query({
+const getForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewInterjectionsV2.getForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'interjection_v2', id: args.interjectionId }]),
+
   args: { interjectionId: v.id('audioOverviewInterjectionsV2') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -580,9 +585,25 @@ export const getForOwner = query({
     if (!interjection || interjection.userId !== userId) return null
     return await projection(ctx, interjection, await interjectionAnswerAvailable(ctx, userId, interjection))
   },
+
+}, { hasContent: value => Boolean(value?.utterances.length) })
+export const getForOwner = query(getForOwnerRead.query)
+export const getForOwnerDelivery = mutation(getForOwnerRead.delivery)
+
+export const getStatusForOwner = query({
+  args: { interjectionId: v.id('audioOverviewInterjectionsV2') },
+  handler: async (ctx, args) => {
+    const userId = await getOptionalAuthUserId(ctx)
+    const row = await ctx.db.get(args.interjectionId)
+    return userId && row?.userId === userId ? { _id: row._id, status: row.status, jobId: row.jobId, idempotencyKey: row.idempotencyKey } : null
+  },
 })
 
-export const resolveMediaForOwner = query({
+const resolveMediaForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewInterjectionsV2.resolveMediaForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'interjection_v2', id: args.interjectionId }]),
+  metadataPreparation: true,
+
   args: { interjectionId: v.id('audioOverviewInterjectionsV2') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -609,7 +630,11 @@ export const resolveMediaForOwner = query({
       durationMs: artifact.durationMs,
     }
   },
+
 })
+export const resolveMediaForOwner = query(resolveMediaForOwnerRead.query)
+export const resolveMediaForOwnerDelivery = mutation(resolveMediaForOwnerRead.delivery)
+export const resolveMediaForOwnerPreparation = mutation(resolveMediaForOwnerRead.preparation)
 
 export const cancelOrDelete = mutation({
   args: { interjectionId: v.id('audioOverviewInterjectionsV2') },

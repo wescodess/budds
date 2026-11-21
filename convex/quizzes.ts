@@ -1,3 +1,5 @@
+import { defineTeachingRead, defineTeachingMutation } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertQuizTeaching, teachingDocuments, publishTeaching, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query, internalMutation } from './_generated/server'
@@ -351,7 +353,10 @@ export const listByFolder = query({
   },
 })
 
-export const getWithQuestions = query({
+const getWithQuestionsRead = defineTeachingRead({
+  name: 'quizzes.getWithQuestions',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'quiz', id: args.id }]),
+
   args: { id: v.id('quizzes') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -370,9 +375,12 @@ export const getWithQuestions = query({
 
     return { quiz, questions: questions.map(projectLearnerQuizQuestion) }
   },
-})
 
-export const updateQuiz = mutation({
+}, { hasContent: value => Boolean(value?.questions.length) })
+export const getWithQuestions = query(getWithQuestionsRead.query)
+export const getWithQuestionsDelivery = mutation(getWithQuestionsRead.delivery)
+
+const updateQuizTeaching = defineTeachingMutation({name:'quizzes.updateQuiz',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'quiz',id:args.quizId}]),
   args: {
     quizId: v.id('quizzes'),
     title: v.optional(v.string()),
@@ -399,7 +407,8 @@ export const updateQuiz = mutation({
 
     return await ctx.db.get(args.quizId)
   },
-})
+}, {hasContent:value=>Boolean(value?.description)})
+export const updateQuiz = mutation(updateQuizTeaching)
 
 export const addQuestion = mutation({
   args: {
@@ -456,7 +465,7 @@ export const addQuestion = mutation({
   },
 })
 
-export const updateQuestion = mutation({
+const updateQuestionTeaching = defineTeachingMutation({name:'quizzes.updateQuestion',scope:async(ctx,userId,args)=>{const row=await ctx.db.get(args.questionId);return row?.userId===userId?await teachingReadScope(ctx,userId,[{kind:'quiz',id:row.quizId}]):null},
   args: {
     questionId: v.id('quizQuestions'),
     question: v.optional(v.string()),
@@ -520,6 +529,7 @@ export const updateQuestion = mutation({
     return projectLearnerQuizQuestion((await ctx.db.get(args.questionId))!)
   },
 })
+export const updateQuestion = mutation(updateQuestionTeaching)
 
 export const deleteQuestion = mutation({
   args: { questionId: v.id('quizQuestions') },
@@ -550,7 +560,7 @@ export const deleteQuestion = mutation({
   },
 })
 
-export const startAttempt = mutation({
+const startAttemptTeaching = defineTeachingMutation({name:'quizzes.startAttempt',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'quiz',id:args.quizId}]),
   args: {
     quizId: v.id('quizzes'),
     settings: settingsValidator,
@@ -638,8 +648,9 @@ export const startAttempt = mutation({
     }
   },
 })
+export const startAttempt = mutation(startAttemptTeaching)
 
-export const submitAnswer = mutation({
+const submitAnswerTeaching = defineTeachingMutation({name:'quizzes.submitAnswer',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:args.attemptId}]),
   args: {
     attemptId: v.id('quizAttempts'),
     questionId: v.id('quizQuestions'),
@@ -709,8 +720,9 @@ export const submitAnswer = mutation({
     }
   },
 })
+export const submitAnswer = mutation(submitAnswerTeaching)
 
-export const submitAllAnswers = mutation({
+const submitAllAnswersTeaching = defineTeachingMutation({name:'quizzes.submitAllAnswers',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:args.attemptId}]),
   args: {
     attemptId: v.id('quizAttempts'),
     answers: v.array(v.object({
@@ -796,7 +808,8 @@ export const submitAllAnswers = mutation({
     if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, args.attemptId)
     return { score: correctCount, total, percentage, results, ...(gradingState ? { gradingPending: gradingState.gradingStatus === 'grading' } : {}) }
   },
-})
+}, {hasContent:value=>value.results.length>0})
+export const submitAllAnswers = mutation(submitAllAnswersTeaching)
 
 export const completeAttempt = mutation({
   args: { attemptId: v.id('quizAttempts') },
@@ -855,7 +868,10 @@ export const abandonAttempt = mutation({
   },
 })
 
-export const getAttemptResults = query({
+const getAttemptResultsRead = defineTeachingRead({
+  name: 'quizzes.getAttemptResults',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'attempt', id: args.attemptId }]),
+
   args: { attemptId: v.id('quizAttempts') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -980,7 +996,10 @@ export const getAttemptResults = query({
       results: [],
     }
   },
-})
+
+}, {hasContent:value=>Boolean(value?.results.length)})
+export const getAttemptResults = query(getAttemptResultsRead.query)
+export const getAttemptResultsDelivery = mutation(getAttemptResultsRead.delivery)
 
 export const getQuizHistory = query({
   args: {
@@ -1019,7 +1038,7 @@ export const getQuizHistory = query({
   },
 })
 
-export const submitAttempt = mutation({
+const submitAttemptTeaching = defineTeachingMutation({name:'quizzes.submitAttempt',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'quiz',id:args.quizId}]),
   args: {
     quizId: v.id('quizzes'),
     answers: v.array(
@@ -1114,7 +1133,8 @@ export const submitAttempt = mutation({
     if (gradingState?.gradingStatus === 'grading') await scheduleQuizGrading(ctx, attemptId)
     return { attemptId, score: correctCount, total, correctCount, results }
   },
-})
+}, {hasContent:value=>value.results.length>0})
+export const submitAttempt = mutation(submitAttemptTeaching)
 
 export const listAttempts = query({
   args: { quizId: v.id('quizzes') },

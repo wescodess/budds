@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ArrowLeft, Pencil, Plus, X } from '@lucide/vue'
@@ -36,7 +38,7 @@ const emit = defineEmits<{
   back: []
 }>()
 
-const { data: quizData } = useConvexQuery(
+const { data: quizData } = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )

@@ -1,3 +1,5 @@
+import { assertOrdinaryTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertQuizTeaching, assertTeachingInputs, teachingUnavailable } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query, type QueryCtx } from './_generated/server'
@@ -95,6 +97,7 @@ export const listPendingForAttempt = query({
         .eq('userId', userId).eq('attemptId', args.attemptId).eq('status', 'pending').eq('nextAttemptAt', undefined))
       .take(PENDING_SCAN_LIMIT)
     await guardPending(ctx, userId, [...indexedRows, ...legacyRows])
+    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:attempt._id}]))
     const rows = [...indexedRows, ...legacyRows]
       .filter(row => !isRubricAssessment(row))
       .filter((row, index, all) => all.findIndex(candidate => candidate._id === row._id) === index)
@@ -134,6 +137,7 @@ export const listPendingForShadowAttempt = query({
         .eq('deterministicIsCorrect', false))
       .take(PENDING_SCAN_LIMIT)
     await guardPending(ctx, userId, rows)
+    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:attempt._id}]))
     return rows.filter(row => !isRubricAssessment(row)
       && (row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now))
       .slice(0, MAX_BATCH).map(row => ({

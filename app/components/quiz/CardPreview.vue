@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -6,7 +8,7 @@ const props = defineProps<{
   quizId: Id<'quizzes'>
 }>()
 
-const { data } = useConvexQuery(
+const { data } = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )

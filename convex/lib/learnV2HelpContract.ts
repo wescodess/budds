@@ -7,7 +7,9 @@ export const messageScopeReference = v.union(
   v.object({ kind: v.literal('document'), id: v.id('documents') }),
   v.object({ kind: v.literal('folder'), id: v.id('folders') }),
 )
-export const messageHelpScope = { version: v.literal(MESSAGE_PROVENANCE_VERSION), references: v.array(messageScopeReference) }
+export const messageProvenanceFields = { version: v.literal(MESSAGE_PROVENANCE_VERSION), references: v.array(messageScopeReference), signature: v.string() }
+export const messageHelpScope = { version: v.union(v.literal('learn-v2.message-provenance.v1'), v.literal(MESSAGE_PROVENANCE_VERSION)),
+  references: v.array(messageScopeReference), signature: v.optional(v.string()) }
 
 export const LEARN_HELP_ADMISSION_VERSION = 'learn-v2.help-admission.v1' as const
 export const LEARN_HELP_LIMITS = { openOpportunities: 8, references: 64, sources: 64, folderDepth: 8 } as const

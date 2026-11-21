@@ -258,11 +258,7 @@ describe('conversations.deleteConversation', () => {
       role: 'user',
       content: 'Q1',
     })
-    await asUser.mutation(api.messages.appendMessage, {
-      conversationId: convoId,
-      role: 'assistant',
-      content: 'A1',
-    })
+    await t.run(ctx=>ctx.db.insert('messages',{userId:TEST_IDENTITY.tokenIdentifier,conversationId:convoId,role:'assistant',content:'A1'}))
 
     await asUser.mutation(api.conversations.deleteConversation, { id: convoId })
 

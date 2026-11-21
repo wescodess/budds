@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioJobSources, assertAudioTeaching, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
@@ -867,7 +869,10 @@ async function loadPlaybackProjection(ctx: QueryCtx, overview: Doc<'audioOvervie
   }
 }
 
-export const getPlaybackForOwner = query({
+const getPlaybackForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewV2.getPlaybackForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'audio_overview', id: args.overviewId }]),
+
   args: { overviewId: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -877,11 +882,17 @@ export const getPlaybackForOwner = query({
     await assertAudioTeaching(ctx, overview, true)
     return await loadPlaybackProjection(ctx, overview)
   },
-})
+
+}, {hasContent:value=>Boolean(value?.utterances.length || value?.outline.narrativeArc.trim() || value?.claims.length)})
+export const getPlaybackForOwner = query(getPlaybackForOwnerRead.query)
+export const getPlaybackForOwnerDelivery = mutation(getPlaybackForOwnerRead.delivery)
 
 const SHARE_TOKEN_PATTERN = /^[0-9a-f]{32}$/
 
-export const getPlaybackByShareToken = query({
+const getPlaybackByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviewV2.getPlaybackByShareToken',
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -915,7 +926,10 @@ export const getPlaybackByShareToken = query({
       alignment: projection.alignment,
     }
   },
-})
+
+}, {hasContent:value=>Boolean(value?.utterances.length)})
+export const getPlaybackByShareToken = query(getPlaybackByShareTokenRead.query)
+export const getPlaybackByShareTokenDelivery = mutation(getPlaybackByShareTokenRead.delivery)
 
 function mediaMetadata(artifact: Doc<'audioOverviewAudioArtifacts'>) {
   return {
@@ -941,7 +955,11 @@ function isPublishedFinalArtifact(artifact: Doc<'audioOverviewAudioArtifacts'> |
     && artifact.container === 'wav'
 }
 
-export const resolveMediaForOwner = query({
+const resolveMediaForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewV2.resolveMediaForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'media', id: args.artifactId }]),
+  metadataPreparation: true,
+
   args: { artifactId: v.id('audioOverviewAudioArtifacts') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -961,9 +979,17 @@ export const resolveMediaForOwner = query({
     await assertAudioTeaching(ctx, overview, true)
     return mediaMetadata(artifact)
   },
-})
 
-export const resolveMediaByShareToken = query({
+})
+export const resolveMediaForOwner = query(resolveMediaForOwnerRead.query)
+export const resolveMediaForOwnerDelivery = mutation(resolveMediaForOwnerRead.delivery)
+export const resolveMediaForOwnerPreparation = mutation(resolveMediaForOwnerRead.preparation)
+
+const resolveMediaByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviewV2.resolveMediaByShareToken',
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+  metadataPreparation: true,
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -989,7 +1015,11 @@ export const resolveMediaByShareToken = query({
       || episode.finalArtifactId !== artifact._id) return null
     return mediaMetadata(artifact)
   },
+
 })
+export const resolveMediaByShareToken = query(resolveMediaByShareTokenRead.query)
+export const resolveMediaByShareTokenDelivery = mutation(resolveMediaByShareTokenRead.delivery)
+export const resolveMediaByShareTokenPreparation = mutation(resolveMediaByShareTokenRead.preparation)
 
 export const recordSceneEvaluation = mutation({
   args: {

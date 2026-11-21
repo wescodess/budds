@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ChevronDown, RotateCcw, Sparkles, History } from '@lucide/vue'
@@ -15,7 +17,7 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
 }>()
 
-const { data: versionsData } = useConvexQuery(
+const { data: versionsData } = useTeachingQuery(
   api.flashcardRooms.listRoomVersions,
   computed(() => ({ roomId: props.roomId })),
 )
@@ -26,7 +28,7 @@ const expandedVersionId = ref<Id<'flashcardRoomVersions'> | null>(null)
 const restoreTargetId = ref<Id<'flashcardRoomVersions'> | null>(null)
 const restoring = ref(false)
 
-const { data: versionDetail } = useConvexQuery(
+const { data: versionDetail } = useTeachingQuery(
   api.flashcardRooms.getRoomVersion,
   computed(() => ({ versionId: expandedVersionId.value ?? undefined })),
 )

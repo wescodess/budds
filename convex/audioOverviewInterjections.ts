@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, admitTeachingSourcePins, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { artifactPayloadDigest } from './lib/learnV2ArtifactLineage'
 import { v } from 'convex/values'
@@ -131,7 +133,10 @@ export const create = mutation({
   },
 })
 
-export const listByOverview = query({
+const listByOverviewRead = defineTeachingRead({
+  name: 'audioOverviewInterjections.listByOverview',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'audio_overview', id: args.audioOverviewId }]),
+
   args: { audioOverviewId: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -152,9 +157,15 @@ export const listByOverview = query({
     }
     return result
   },
-})
 
-export const getTurnUrls = query({
+}, { hasContent: value => value.some(row=>row.answerTurns.length>0) })
+export const listByOverview = query(listByOverviewRead.query)
+export const listByOverviewDelivery = mutation(listByOverviewRead.delivery)
+
+const getTurnUrlsRead = defineTeachingRead({
+  name: 'audioOverviewInterjections.getTurnUrls',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'interjection', id: args.id }]),
+
   args: { id: v.id('audioOverviewInterjections') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -168,7 +179,10 @@ export const getTurnUrls = query({
     }
     return urls
   },
-})
+
+}, { hasContent: value => Boolean(value?.some(Boolean)) })
+export const getTurnUrls = query(getTurnUrlsRead.query)
+export const getTurnUrlsDelivery = mutation(getTurnUrlsRead.delivery)
 
 export const deleteInterjection = mutation({
   args: { id: v.id('audioOverviewInterjections') },

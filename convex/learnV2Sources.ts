@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
@@ -487,7 +489,10 @@ export const listSources = query({
 // Owner-only projection for source-review cards. It deliberately omits
 // canonical/private URLs, object keys, and identity keys. A
 // rights-permitted text excerpt is returned only for learner review.
-export const listSourceReview = query({
+const listSourceReviewRead = defineTeachingRead({
+  name: 'learnV2Sources.listSourceReview',
+  scope: async(ctx,userId,args)=>args.blueprintRevisionId?await teachingReadScope(ctx,userId,[{kind:'blueprint',id:args.blueprintRevisionId}]):null,
+
   args: {
     blueprintRevisionId: v.union(v.id('learnBlueprintRevisions'), v.null()),
     paginationOpts: paginationOptsValidator,
@@ -580,7 +585,10 @@ export const listSourceReview = query({
     }
     return { page, isDone: result.isDone, continueCursor: result.continueCursor }
   },
-})
+
+}, { hasContent: value => value.page.some(row=>Boolean(row.excerpt)) })
+export const listSourceReview = query(listSourceReviewRead.query)
+export const listSourceReviewDelivery = mutation(listSourceReviewRead.delivery)
 
 async function cleanAdmissionRows(ctx: MutationCtx, now: number) {
   const leases = await ctx.db.query('learnSourceFetchLeases')

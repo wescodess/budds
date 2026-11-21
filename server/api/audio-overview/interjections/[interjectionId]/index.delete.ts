@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
   const client = makeConvexClient(event)
   if (!client) throw createError({ statusCode: 401, message: 'Authentication required' })
   const id = interjectionId as Id<'audioOverviewInterjectionsV2'>
-  const current = await client.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: id })
+  const current = await client.query(api.audioOverviewInterjectionsV2.getStatusForOwner, { interjectionId: id })
   if (!current) throw createError({ statusCode: 404, message: 'Interjection not found' })
   const result = await client.mutation(api.audioOverviewInterjectionsV2.cancelOrDelete, { interjectionId: id })
   if (current.status === 'reserved' || current.status === 'rendering') {

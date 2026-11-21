@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowLeft, BookOpenCheck, ChevronRight, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -78,7 +80,7 @@ function makeKey(prefix: string) {
 }
 
 const contentQuery = import.meta.client
-  ? useConvexQuery(api.learnV2SessionContent.getSessionContent, { studySessionId: candidate.studySessionId as never }, { enabled: started })
+  ? useTeachingQuery(api.learnV2SessionContent.getSessionContent, { studySessionId: candidate.studySessionId as never }, { enabled: started })
   : { data: ref<SessionContent>(null) }
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))

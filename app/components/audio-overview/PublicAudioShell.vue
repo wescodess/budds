@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch } from 'vue'
@@ -12,15 +14,15 @@ const props = defineProps<{
 
 const tokenRef = computed(() => props.token)
 
-const { data: overviewData } = useConvexQuery(
+const { data: overviewData } = useTeachingQuery(
   api.audioOverviews.getByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: turnUrlData } = useConvexQuery(
+const { data: turnUrlData } = useTeachingQuery(
   api.audioOverviews.getTurnUrlsByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: v2PlaybackData } = useConvexQuery(
+const { data: v2PlaybackData } = useTeachingQuery(
   api.audioOverviewV2.getPlaybackByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )

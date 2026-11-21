@@ -1,3 +1,6 @@
+import { mutation } from './_generated/server'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from 'convex/values'
 import { internalQuery, query, type QueryCtx } from './_generated/server'
 import type { Id } from './_generated/dataModel'
@@ -110,7 +113,10 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
 
 // The drawer reads this same owner-scoped projection with an explicit thread
 // boundary. No raw evidence records or private locators cross the client seam.
-export const getThreadActivityEvidence = query({
+const getThreadActivityEvidenceRead = defineTeachingRead({
+  name: 'learnAdaptiveEvidence.getThreadActivityEvidence',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'thread', id: args.threadId }]),
+
   args: { threadId: v.id('learningThreads'), activityId: v.string() },
   returns: v.union(v.object({ ...evidenceFields, ownerId: v.id('users'), threadId: v.id('learningThreads') }), v.null()),
   handler: async (ctx, args) => {
@@ -121,7 +127,10 @@ export const getThreadActivityEvidence = query({
     const projection = await readActivityEvidence(ctx, userId, args.activityId, args.threadId)
     return projection ? { ...projection, ownerId: owner._id, threadId: args.threadId } : null
   },
-})
+
+}, { hasContent: value => Boolean(value?.claims.some(row=>row.claimText)) })
+export const getThreadActivityEvidence = query(getThreadActivityEvidenceRead.query)
+export const getThreadActivityEvidenceDelivery = mutation(getThreadActivityEvidenceRead.delivery)
 
 export const getActivityEvidence = internalQuery({
   args: { activityId: v.string() },

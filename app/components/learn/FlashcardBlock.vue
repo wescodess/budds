@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { ChevronLeft, ChevronRight, Layers, Flag } from '@lucide/vue'
 import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
@@ -20,7 +22,7 @@ const props = defineProps<{
 }>()
 
 const roomQuery = import.meta.client && !props.isOffline && props.roomId
-  ? useConvexQuery(
+  ? useTeachingQuery(
       api.flashcardRooms.getRoom,
       computed(() => ({ roomId: props.roomId as Id<'flashcardRooms'> })),
     )

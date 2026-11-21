@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
@@ -38,15 +40,15 @@ const emit = defineEmits<{
   'delete-overview': [id: Id<'audioOverviews'>]
 }>()
 
-const { data: overviewData } = useConvexQuery(
+const { data: overviewData } = useTeachingQuery(
   api.audioOverviews.getWithTurns,
   computed(() => ({ id: props.overviewId })),
 )
-const { data: turnUrlData } = useConvexQuery(
+const { data: turnUrlData } = useTeachingQuery(
   api.audioOverviews.getTurnUrls,
   computed(() => ({ id: props.overviewId })),
 )
-const { data: v2PlaybackData } = useConvexQuery(
+const { data: v2PlaybackData } = useTeachingQuery(
   api.audioOverviewV2.getPlaybackForOwner,
   computed(() => ({ overviewId: props.overviewId })),
 )

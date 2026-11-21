@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { cardCopyOrigins, teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertRoomTeaching, teachingDocuments, publishTeaching, publishCardRoom, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -326,7 +328,10 @@ export const listRoomsByFolder = query({
   },
 })
 
-export const getRoom = query({
+const getRoomRead = defineTeachingRead({
+  name: 'flashcardRooms.getRoom',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'room', id: args.roomId }]),
+
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -338,12 +343,16 @@ export const getRoom = query({
     const cards = await ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-      .collect()
+      .take(201)
+    if (cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { room, cards }
   },
-})
+
+}, { hasContent: value => Boolean(value?.cards.length) })
+export const getRoom = query(getRoomRead.query)
+export const getRoomDelivery = mutation(getRoomRead.delivery)
 
 export const createCard = mutation({
   args: {
@@ -600,7 +609,10 @@ export const generateRoomCards = mutation({
   },
 })
 
-export const listRoomVersions = query({
+const listRoomVersionsRead = defineTeachingRead({
+  name: 'flashcardRooms.listRoomVersions',
+  scope: async(ctx,userId,args)=>{const rows=await ctx.db.query('flashcardRoomVersions').withIndex('by_roomId',q=>q.eq('roomId',args.roomId)).order('desc').take(100);return await teachingReadScope(ctx,userId,rows.map(row=>({kind:'version' as const,id:row._id})))},
+
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -626,9 +638,15 @@ export const listRoomVersions = query({
       model: v.model,
     }))
   },
-})
 
-export const getRoomVersion = query({
+}, { hasContent: value => value.some(row => Boolean(row.prompt)) })
+export const listRoomVersions = query(listRoomVersionsRead.query)
+export const listRoomVersionsDelivery = mutation(listRoomVersionsRead.delivery)
+
+const getRoomVersionRead = defineTeachingRead({
+  name: 'flashcardRooms.getRoomVersion',
+  scope: async(ctx,userId,args)=>args.versionId?await teachingReadScope(ctx,userId,[{kind:'version',id:args.versionId}]):null,
+
   args: { versionId: v.optional(v.id('flashcardRoomVersions')) },
   handler: async (ctx, args) => {
     if (!args.versionId) return null
@@ -642,12 +660,16 @@ export const getRoomVersion = query({
     const cards = await ctx.db
       .query('flashcardVersionCards')
       .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
-      .collect()
+      .take(201)
+    if (cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { version, cards }
   },
-})
+
+}, { hasContent: value => Boolean(value?.cards.length) })
+export const getRoomVersion = query(getRoomVersionRead.query)
+export const getRoomVersionDelivery = mutation(getRoomVersionRead.delivery)
 
 export const restoreRoomVersion = mutation({
   args: {

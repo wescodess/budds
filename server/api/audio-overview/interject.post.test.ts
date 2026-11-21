@@ -40,7 +40,10 @@ vi.mock('../../utils/r2-folder', () => ({
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth = mockSetAuth
-    mutation = mockMutation
+    mutation(reference: FunctionReference<'mutation'>,args:unknown) {
+      if(getFunctionName(reference)==='audioOverviewInterjectionsV2:getForOwnerDelivery') return mockQuery(reference,args).then(value=>({admission:{status:'ordinary'},value}))
+      return mockMutation(reference,args)
+    }
     query(reference: FunctionReference<'query'>, args: unknown) { return getFunctionName(reference) === 'documents:getTeachingScope' ? mockTeachingScope() : mockQuery(reference, args) }
   },
 }))

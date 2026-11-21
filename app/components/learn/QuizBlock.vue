@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { Check, X, HelpCircle, Flag } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -23,7 +25,7 @@ const props = defineProps<{
 }>()
 
 const quizQuery = import.meta.client && !props.isOffline && props.quizId
-  ? useConvexQuery(
+  ? useTeachingQuery(
       api.quizzes.getWithQuestions,
       computed(() => ({ id: props.quizId as Id<'quizzes'> })),
     )

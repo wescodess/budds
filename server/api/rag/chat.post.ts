@@ -8,6 +8,7 @@ import { makeConvexClient } from '../../utils/convex-client'
 import { loadTeachingScope, assertTeachingSourcePins, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { messageProvenance, StreamMessageContent } from '../../utils/message-provenance'
 import type { LearnHelpReference } from '../../../convex/lib/learnV2HelpContract'
+import { normalizeAssistantCitations } from '../../../shared/assistant-citations'
 
 const SYSTEM_PROMPT = `You are a helpful assistant that answers questions based on the provided context.
 Use the context below to answer the user's question accurately.
@@ -428,7 +429,7 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const answer = completion.choices[0]?.message?.content ?? ''
+  const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
   const provenance = await messageProvenance(event, userId, answer, citationChunks, Boolean(body.history?.length))
   await authorizeContent(Boolean(answer || responseSources.length))
   return {

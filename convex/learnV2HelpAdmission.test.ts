@@ -6,7 +6,7 @@ import schema from './schema'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, type LearnHelpReference } from './lib/learnV2HelpContract'
-import { MESSAGE_PROVENANCE_VERSION } from '../shared/learn-v2-message-provenance'
+import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -84,7 +84,7 @@ describe('registered server-derived help admission', () => {
     const s = await fixture()
     if (kind === 'thread') await s.t.run(ctx => ctx.db.patch(s.f.threadId, { authorityKind: 'v2_mission', learningVoidId: s.f.learningVoidId }))
     const audioId = kind === 'audio' ? await s.t.run(ctx => ctx.db.insert('audioOverviews', { userId: OWNER.tokenIdentifier,
-      folderId: s.f.folderId, title: 'Existing teaching', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 })) : null
+      folderId: s.f.folderId, sourceDocumentIds:[s.f.documentId], title: 'Existing teaching', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 })) : null
     const reference: LearnHelpReference = kind === 'void' ? { kind: 'learning_void', id: s.f.learningVoidId }
       : kind === 'folder' ? { kind: 'folder', id: s.f.folderId }
         : kind === 'document' ? { kind: 'document', id: s.f.documentId }
@@ -92,9 +92,11 @@ describe('registered server-derived help admission', () => {
             : kind === 'thread' ? { kind: 'thread', id: s.f.threadId }
               : kind === 'audio' ? { kind: 'audio_overview', id: audioId! }
                 : { kind: 'conversation', id: await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Old conversation' }) }
-    if (reference.kind === 'conversation') await s.t.run(ctx => ctx.db.insert('messages', { userId: OWNER.tokenIdentifier,
-      conversationId: reference.id, role: 'assistant', content: 'Teaching answer', helpScope: { version: MESSAGE_PROVENANCE_VERSION,
-        references: [{ kind: 'document', id: s.f.documentId }] } }))
+    if (reference.kind === 'conversation') {
+      const proof=await signMessageProvenance('message-fixture-secret',OWNER.tokenIdentifier,'Teaching answer',[],[{kind:'document',id:s.f.documentId}]);
+      vi.stubEnv('NUXT_BETTER_AUTH_SECRET','message-fixture-secret');
+      await s.owner.mutation(api.messages.appendMessage,{conversationId:reference.id,role:'assistant',content:'Teaching answer',provenance:proof})
+    }
     const before = (await s.exposures()).length
     expect(await s.admit([reference])).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
     expect(await s.admit([reference])).toMatchObject({ status: 'denied', reasonCode: 'test_open' })

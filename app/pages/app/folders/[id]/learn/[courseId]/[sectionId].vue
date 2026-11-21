@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { getErrorMessage } from '~~/shared/errors'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
 import { api } from '#convex/api'
@@ -23,11 +25,11 @@ const offlineData = ref<CachedSection | null>(null)
 const usingOfflineData = ref(false)
 
 const courseQuery = import.meta.client
-  ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
+  ? useTeachingQuery(api.courses.get, computed(() => ({ id: courseId.value })))
   : { data: ref(null) }
 
 const sectionQuery = import.meta.client
-  ? useConvexQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
+  ? useTeachingQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
   : { data: ref(null) }
 
 const course = computed(() => courseQuery.data?.value ?? null)
@@ -73,7 +75,7 @@ const sectionOrder = computed(() => section.value?.order ?? null)
 usePreFetchSection(courseId, sectionOrder)
 
 const sectionsQuery = import.meta.client
-  ? useConvexQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
+  ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
   : { data: ref(null) }
 
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])

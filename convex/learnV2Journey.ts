@@ -1,5 +1,7 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
-import { query } from './_generated/server'
+import { query, mutation } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
@@ -246,7 +248,7 @@ export const listHub = query({
   },
 })
 
-export const getMission = query({
+const getMissionTeaching = defineTeachingRead({name:'learnV2Journey.getMission',scope:async(ctx,userId,args)=>args.learningVoidId?await teachingReadScope(ctx,userId,[{kind:'learning_void',id:args.learningVoidId}]):null,
   args: { learningVoidId: v.union(v.id('learningVoids'), v.null()) },
   returns: v.union(journeyValidator, v.null()),
   handler: async (ctx, args) => {
@@ -256,9 +258,11 @@ export const getMission = query({
     const owned = await ownedVoid(ctx, userId, args.learningVoidId)
     return owned ? await journey(ctx, userId, owned.row, owned.folder) : null
   },
-})
+},{hasContent:value=>Boolean(value?.sources.items.some(row=>row.excerpt))})
+export const getMission = query(getMissionTeaching.query)
+export const getMissionDelivery = mutation(getMissionTeaching.delivery)
 
-export const getCurrentMission = query({
+const getCurrentMissionTeaching = defineTeachingRead({name:'learnV2Journey.getCurrentMission',scope:async(ctx,userId)=>{const rows=await ctx.db.query('learningVoids').withIndex('by_userId',q=>q.eq('userId',userId)).order('desc').take(33);if(rows.length>32)return null;const row=rows.find(row=>!['completed','archived'].includes(row.status));return row?await teachingReadScope(ctx,userId,[{kind:'learning_void',id:row._id}]):null},
   args: {},
   returns: v.union(journeyValidator, v.null()),
   handler: async (ctx) => {
@@ -271,7 +275,9 @@ export const getCurrentMission = query({
     const owned = await ownedVoid(ctx, userId, current._id)
     return owned ? await journey(ctx, userId, owned.row, owned.folder) : null
   },
-})
+},{hasContent:value=>Boolean(value?.sources.items.some(row=>row.excerpt))})
+export const getCurrentMission = query(getCurrentMissionTeaching.query)
+export const getCurrentMissionDelivery = mutation(getCurrentMissionTeaching.delivery)
 
 /** A bounded, owner-scoped session handoff. Routes use this instead of
  * reconstructing authoritative revisions from content fragments. */

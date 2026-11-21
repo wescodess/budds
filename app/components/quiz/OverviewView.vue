@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { Pencil, Trash2, Plus, Sparkles, Check, X } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../../convex/_generated/dataModel'
@@ -14,7 +16,7 @@ const emit = defineEmits<{
   viewAttempt: [attemptId: Id<'quizAttempts'>]
 }>()
 
-const { data: quizData } = useConvexQuery(
+const { data: quizData } = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import {
   Users,
   BookOpen,
@@ -72,7 +74,7 @@ const { data: quizzesData } = useConvexQuery(
   computed(() => ({ folderId: props.folderId })),
 )
 
-const { data: coursesData } = useConvexQuery(
+const { data: coursesData } = useTeachingQuery(
   api.courses.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )

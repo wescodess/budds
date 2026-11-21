@@ -1,5 +1,7 @@
 import type { ChatMessage } from '../../utils/ai-gateway'
 import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
+import { messageProvenance } from '../../utils/message-provenance'
+import { normalizeAssistantCitations } from '../../../shared/assistant-citations'
 
 const SYSTEM_PROMPT = `You are Budds, a warm, encouraging study companion.
 You help students think through problems, learn new concepts, and draft ideas.
@@ -7,7 +9,7 @@ Be concise, friendly, and honest about uncertainty.
 When asked something that would benefit from course materials, mention the student can open one of their course folders to get sourced answers.`
 
 export default defineEventHandler(async (event) => {
-  getConvexTokenIdentifier(event)
+  const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     query: string
@@ -71,10 +73,12 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const answer = completion.choices[0]?.message?.content ?? ''
+  const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
+  const provenance = await messageProvenance(event, userId, answer, [], Boolean(body.history?.length))
   await authorizeHelp(Boolean(answer))
   return {
     answer,
+    ...(provenance ? { provenance } : {}),
     model: completion.model,
     usage: completion.usage,
     ...(modelFallback && { modelFallback }),

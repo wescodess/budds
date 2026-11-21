@@ -1,3 +1,4 @@
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
 /* eslint-disable @typescript-eslint/no-explicit-any -- Convex generated journey projection is intentionally adapted at this single boundary. */
 import { computed, ref, toValue, watch, type MaybeRef } from 'vue'
 import { api } from '#convex/api'
@@ -52,7 +53,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const missionArgs = ref<{ learningVoidId: string | null }>({ learningVoidId: id.value })
   watch(id, learningVoidId => { missionArgs.value = { learningVoidId } }, { flush: 'sync' })
   const hubQuery = import.meta.client ? useConvexQuery(api.learnV2Journey.listHub, {}, { enabled: allowed }) : { data: ref<any>(null), pending: ref(false) }
-  const missionQuery = import.meta.client ? useConvexQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false) }
+  const missionQuery = import.meta.client ? useTeachingQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false) }
   const sourceReviewArgs = ref<{ blueprintRevisionId: string | null; paginationOpts: { cursor: null; numItems: number } }>({ blueprintRevisionId: null, paginationOpts: { cursor: null, numItems: 64 } })
   const createVoid = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.createLearningVoid) : { mutate: async () => null }
   const updateVoidDraft = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.updateLearningVoidDraft) : { mutate: async () => null }
@@ -84,7 +85,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const researchResults = ref<Array<{ title: string; url: string; snippet?: string }>>([])
   const mission = computed(() => missionQuery.data.value as Mission | null | undefined)
   watch(mission, value => { sourceReviewArgs.value = { blueprintRevisionId: value?.currentBlueprint?._id ?? null, paginationOpts: { cursor: null, numItems: 64 } } }, { flush: 'sync' })
-  const sourceReviewQuery = import.meta.client ? useConvexQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false) }
+  const sourceReviewQuery = import.meta.client ? useTeachingQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false) }
   const hub = computed<LearnHubSnapshot>(() => {
     const rows = (hubQuery.data.value as any)?.items ?? []
     const missions = rows.map((row: any) => missionSnapshot(row))

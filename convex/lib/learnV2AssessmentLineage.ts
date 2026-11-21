@@ -1,4 +1,5 @@
 import { ConvexError, v } from 'convex/values'
+import { inspectLearnHelpForAudioJob } from './learnV2HelpAdmission'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import type { LearnArtifactOwnerRecord, LearnArtifactPreparationArgs, LearnArtifactReference } from '../../shared/learn-v2-artifact-lineage'
@@ -151,6 +152,8 @@ export async function assertAudioTeaching(ctx: ReadCtx, overview: Doc<'audioOver
 }
 
 export async function assertAudioJobSources(ctx: ReadCtx, job: Doc<'audioOverviewJobs'>, session = false) {
+  const admission = await inspectLearnHelpForAudioJob(ctx, job)
+  if (admission.status !== 'ordinary') throw new ConvexError({ admission })
   const task = await ctx.db.get(job.taskId)
   if (!task || task.userId !== job.userId || !task.audioOverviewRequest) teachingUnavailable()
   const documents = await teachingDocuments(ctx, job.userId, task.audioOverviewRequest.documents.map(document => String(document.documentId)), session ? undefined : { kind: 'audio_job', id: job._id })

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
@@ -51,7 +53,7 @@ const dailyReviewCap = computed(() => {
 })
 
 const dueQuery = import.meta.client
-  ? useConvexQuery(api.reviewItems.listDueWithContext, queryArgs)
+  ? useTeachingQuery(api.reviewItems.listDueWithContext, queryArgs)
   : { data: ref([]) }
 
 const sessionItems = ref<ReviewItem[]>([])

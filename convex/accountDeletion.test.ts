@@ -96,12 +96,7 @@ async function seedUserData(
     role: 'user',
     content: 'Hi',
   })
-  await asUser.mutation(api.messages.appendMessage, {
-    conversationId: convoId,
-    role: 'assistant',
-    content: 'Hello',
-    model: 'claude-3',
-  })
+  await t.run(ctx=>ctx.db.insert('messages',{userId:identity.tokenIdentifier,conversationId:convoId,role:'assistant',content:'Hello',model:'legacy-model'}))
 
   return { folderId, docSuccessId, docProcessingId, convoId }
 }

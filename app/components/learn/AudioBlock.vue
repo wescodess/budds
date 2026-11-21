@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { ref, computed, onUnmounted } from 'vue'
 import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -13,7 +15,7 @@ interface AudioOverviewTurn {
 }
 
 const overviewId = computed(() => (props.entityId ?? '') as Id<'audioOverviews'>)
-const { data: overviewData } = useConvexQuery(
+const { data: overviewData } = useTeachingQuery(
   api.audioOverviews.getCourseScopedOverview,
   computed(() => ({ id: overviewId.value })),
   { enabled: computed(() => Boolean(props.entityId)) },

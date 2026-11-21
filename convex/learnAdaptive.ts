@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
 import { paginationOptsValidator } from 'convex/server'
 import { api } from './_generated/api'
@@ -729,7 +731,10 @@ export const listThreadArtifacts = query({
   },
 })
 
-export const getArtifactCanvas = query({
+const getArtifactCanvasRead = defineTeachingRead({
+  name: 'learnAdaptive.getArtifactCanvas',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'thread', id: args.threadId }]),
+
   args: { threadId: v.id('learningThreads') },
   returns: v.union(v.object({ ownerId: v.id('users'), thread: v.object({ id: v.id('learningThreads'), revision: v.number(), outcome: v.string() }),
     activity: v.object({ id: v.string(), planRevision: v.number(), status: adaptiveActivityStatus, primitive: v.union(nonFactualPrimitive, v.null()), fallback: adaptiveFallback }), status: adaptiveActivityStatus }), v.null()),
@@ -758,7 +763,10 @@ export const getArtifactCanvas = query({
       status: operable ? activity.status : 'blocked' as const,
     }
   },
-})
+
+}, { hasContent: value => Boolean(value?.activity.primitive) })
+export const getArtifactCanvas = query(getArtifactCanvasRead.query)
+export const getArtifactCanvasDelivery = mutation(getArtifactCanvasRead.delivery)
 
 const reflectionDecisionValidator = v.union(v.literal('accept'), v.literal('override'), v.literal('end'))
 const REFLECTION_DECISION_VERSION = 'learn-adaptive.reflection-decision.v1' as const
@@ -817,7 +825,10 @@ async function validPersistedReflectionDecision(ctx: QueryCtx | MutationCtx, thr
     && await reflectionReceiptMatches(thread, activity, receipt, decision.outcome))
 }
 
-export const getReflectionCanvas = query({
+const getReflectionCanvasRead = defineTeachingRead({
+  name: 'learnAdaptive.getReflectionCanvas',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'thread', id: args.threadId }]),
+
   args: { threadId: v.id('learningThreads') },
   returns: v.union(v.object({ ownerId: v.id('users'), thread: v.object({ id: v.id('learningThreads'), revision: v.number(), outcome: v.string(), lifecycle: adaptiveLifecycle }),
     activity: v.object({ id: v.string(), planRevision: v.number(), status: adaptiveActivityStatus, purpose: v.string(), reason: v.string(), primitive: v.union(nonFactualPrimitive, v.null()), fallback: adaptiveFallback }),
@@ -850,7 +861,10 @@ export const getReflectionCanvas = query({
       decision: completed ? { outcome: decision.outcome, nextMove: decision.nextMove, decidedAt: decision.decidedAt } : null,
     }
   },
-})
+
+}, { hasContent: value => Boolean(value?.activity.primitive) })
+export const getReflectionCanvas = query(getReflectionCanvasRead.query)
+export const getReflectionCanvasDelivery = mutation(getReflectionCanvasRead.delivery)
 
 export const decideReflectionNextMove = mutation({
   args: { threadId: v.id('learningThreads'), activityId: v.string(), decision: reflectionDecisionValidator,

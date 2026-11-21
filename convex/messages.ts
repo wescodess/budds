@@ -4,8 +4,9 @@ import { requireAuth } from './lib/auth'
 import type { Doc } from './_generated/dataModel'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { admitLearnHelpForOwner } from './lib/learnV2HelpAdmission'
-import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, helpAdmissionValidator, messageHelpScope, type LearnHelpReference } from './lib/learnV2HelpContract'
-import { verifyMessageProvenance } from '../shared/learn-v2-message-provenance'
+import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, helpAdmissionValidator, messageProvenanceFields, type LearnHelpReference } from './lib/learnV2HelpContract'
+import { MESSAGE_PROVENANCE_VERSION, signMessageProvenance, verifyMessageProvenance } from '../shared/learn-v2-message-provenance'
+import { messageSigningSecret, verifiedStoredMessageScope } from './lib/learnV2MessageProvenance'
 
 const sourcesValidator = v.array(
   v.object({
@@ -15,26 +16,32 @@ const sourcesValidator = v.array(
   }),
 )
 
-function projectMessage(row: Doc<'messages'>, allowContent: boolean) {
+function projectMessage(row: Doc<'messages'>, allowContent: boolean, allowOwnText = true) {
   return {
     _id: row._id, _creationTime: row._creationTime, conversationId: row.conversationId,
-    userId: row.userId, role: row.role, content: allowContent || row.role === 'user' ? row.content : '',
+    userId: row.userId, role: row.role, content: allowContent || row.role === 'user' && allowOwnText ? row.content : '',
     ...(allowContent && row.model ? { model: row.model } : {}),
     ...(allowContent && row.sources ? { sources: row.sources } : {}),
     ...(allowContent && row.interjectionContext ? { interjectionContext: row.interjectionContext } : {}),
   }
 }
 
-function replayScope(rows: Doc<'messages'>[]) {
+async function replayScope(userId: string, rows: Doc<'messages'>[]) {
   const references = new Map<string, LearnHelpReference>()
+  let unknown = false
+  let invalid = false
+  const invalidIds = new Set<string>()
   for (const row of rows) {
-    if (row.interjectionContext || row.model !== undefined) return null
-    if (row.role === 'user' && !row.sources?.length && !row.interjectionContext) continue
-    if (!row.helpScope?.references.length) return null
-    for (const reference of row.helpScope.references) references.set(`${reference.kind}:${reference.id}`, reference)
-    if (references.size > LEARN_HELP_LIMITS.references) return null
+    const verified = await verifiedStoredMessageScope(userId, row)
+    const malformed = row.helpScope?.version === MESSAGE_PROVENANCE_VERSION && verified === null
+    invalid ||= malformed
+    if (malformed) invalidIds.add(row._id)
+    if (!malformed && row.role === 'user' && !row.sources?.length && !row.interjectionContext && row.model === undefined) continue
+    if (!verified?.length) unknown = true
+    for (const reference of verified ?? []) references.set(`${reference.kind}:${reference.id}`, reference)
+    if (references.size > LEARN_HELP_LIMITS.references) unknown = true
   }
-  return references.size ? { references: [...references.values()] } : null
+  return { invalid, invalidIds, scope: !unknown && references.size ? { references: [...references.values()] } : null }
 }
 
 export const listByConversation = query({
@@ -54,7 +61,10 @@ export const listByConversation = query({
       .take(500)
     // Queries cannot commit assistance. With the capability active this is a
     // metadata/learner-text read; substantive replay uses the mutation below.
-    return rows.map(row => projectMessage(row, !LEARN_MEASUREMENT_CAPABILITIES.responses))
+    return await Promise.all(rows.map(async row => {
+      const valid = row.helpScope?.version !== MESSAGE_PROVENANCE_VERSION || await verifiedStoredMessageScope(userId, row) !== null
+      return projectMessage(row, !LEARN_MEASUREMENT_CAPABILITIES.responses && valid, valid)
+    }))
   },
 })
 
@@ -73,10 +83,12 @@ export const replayByConversation = mutation({
     const conversation = await ctx.db.get(args.conversationId)
     if (!conversation || conversation.userId !== userId) throw new Error('Conversation not found')
     const rows = await ctx.db.query('messages').withIndex('by_conversationId', q => q.eq('conversationId', conversation._id)).order('asc').take(500)
-    const admission = await admitLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
+    const replay = await replayScope(userId, rows)
+    let admission = await admitLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
       kind: 'replay', idempotencyKey: args.idempotencyKey,
-      scope: replayScope(rows) }, rows.some(row => row.role === 'assistant' && row.content.length > 0 || row.sources?.length || row.interjectionContext))
-    return { admission, messages: rows.map(row => projectMessage(row, admission.status !== 'denied')) }
+      scope: replay.scope }, !replay.invalid && rows.some(row => row.role === 'assistant' && row.content.length > 0 || row.sources?.length || row.interjectionContext))
+    if (replay.invalid && admission.status === 'ordinary') admission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' }
+    return { admission, messages: rows.map(row => projectMessage(row, admission.status !== 'denied', !replay.invalidIds.has(row._id))) }
   },
 })
 
@@ -85,7 +97,7 @@ export const appendMessage = mutation({
     conversationId: v.id('conversations'),
     role: v.union(v.literal('user'), v.literal('assistant')),
     content: v.string(),
-    provenance: v.optional(v.object({ ...messageHelpScope, signature: v.string() })),
+    provenance: v.optional(v.object(messageProvenanceFields)),
     sources: v.optional(sourcesValidator),
     model: v.optional(v.string()),
     interjectionContext: v.optional(v.object({
@@ -106,16 +118,18 @@ export const appendMessage = mutation({
     }
 
     let helpScope: Doc<'messages'>['helpScope']
-    if (args.role === 'assistant' && args.provenance) {
-      const secret = process.env.NUXT_BETTER_AUTH_SECRET || process.env.BETTER_AUTH_SECRET || ''
-      if (await verifyMessageProvenance(secret, userId, args.content, args.sources ?? [], args.provenance).catch(() => false)) {
-        let owned = true
-        for (const reference of args.provenance.references) {
-          const row = await ctx.db.get(reference.id)
-          if (!row || row.userId !== userId) { owned = false; break }
-        }
-        if (owned) helpScope = { version: args.provenance.version, references: args.provenance.references }
+    if (args.role === 'assistant') {
+      if (!args.provenance || !await verifyMessageProvenance(messageSigningSecret(), userId, args.content, args.sources ?? [], args.provenance).catch(() => false)) {
+        throw new Error('Assistant message verification failed')
       }
+      for (const reference of args.provenance.references) {
+        const row = await ctx.db.get(reference.id)
+        if (!row || row.userId !== userId) throw new Error('Assistant message verification failed')
+      }
+      helpScope = args.provenance
+    } else {
+      helpScope = await signMessageProvenance(messageSigningSecret(), userId, args.content, args.sources ?? [], [], 'user')
+      if (!helpScope) throw new Error('Message verification unavailable')
     }
 
     return await ctx.db.insert('messages', {
@@ -124,9 +138,7 @@ export const appendMessage = mutation({
       role: args.role,
       content: args.content,
       helpScope,
-      sources: args.sources,
-      model: helpScope ? undefined : args.model,
-      interjectionContext: helpScope ? undefined : args.interjectionContext,
+      sources: args.sources ?? [],
     })
   },
 })

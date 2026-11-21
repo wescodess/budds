@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptSettings, AttemptQuestion } from '~/composables/useQuizAttempt'
@@ -23,7 +25,7 @@ const emit = defineEmits<{
   openWizard: []
 }>()
 
-const { data: quizData } = useConvexQuery(
+const { data: quizData } = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )

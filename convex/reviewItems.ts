@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from 'convex/values'
 import { query, mutation, internalMutation } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
@@ -69,7 +71,10 @@ export const extractFromSection = internalMutation({
   },
 })
 
-export const listDueForUser = query({
+const listDueForUserRead = defineTeachingRead({
+  name: 'reviewItems.listDueForUser',
+  scope: async (ctx, userId) => { const rows = await ctx.db.query('reviewItems').withIndex('by_userId_and_nextReviewDate', q => q.eq('userId', userId).lte('nextReviewDate', new Date().toISOString().slice(0,10))).take(200); return await teachingReadScope(ctx, userId, rows.filter(row=>!row.flagged).map(row=>({kind:'section' as const,id:row.sectionId}))) },
+
   args: {},
   handler: async (ctx) => {
     const userId = await requireAuth(ctx)
@@ -84,7 +89,10 @@ export const listDueForUser = query({
 
     return items.filter((item) => !item.flagged)
   },
+
 })
+export const listDueForUser = query(listDueForUserRead.query)
+export const listDueForUserDelivery = mutation(listDueForUserRead.delivery)
 
 export const getReviewBacklogCount = query({
   args: {},
@@ -112,7 +120,10 @@ export const getReviewBacklogCount = query({
   },
 })
 
-export const listDueWithContext = query({
+const listDueWithContextRead = defineTeachingRead({
+  name: 'reviewItems.listDueWithContext',
+  scope: async (ctx, userId) => { const rows = await ctx.db.query('reviewItems').withIndex('by_userId_and_nextReviewDate', q => q.eq('userId', userId).lte('nextReviewDate', new Date().toISOString().slice(0,10))).take(200); return await teachingReadScope(ctx, userId, rows.filter(row=>!row.flagged).map(row=>({kind:'section' as const,id:row.sectionId}))) },
+
   args: {
     mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
   },
@@ -168,9 +179,15 @@ export const listDueWithContext = query({
 
     return enriched
   },
-})
 
-export const listBySection = query({
+})
+export const listDueWithContext = query(listDueWithContextRead.query)
+export const listDueWithContextDelivery = mutation(listDueWithContextRead.delivery)
+
+const listBySectionRead = defineTeachingRead({
+  name: 'reviewItems.listBySection',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'section', id: args.sectionId }]),
+
   args: { sectionId: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -183,7 +200,10 @@ export const listBySection = query({
       .withIndex('by_sectionId', (q) => q.eq('sectionId', args.sectionId))
       .take(200)
   },
+
 })
+export const listBySection = query(listBySectionRead.query)
+export const listBySectionDelivery = mutation(listBySectionRead.delivery)
 
 export const completeReviewSession = mutation({
   args: {

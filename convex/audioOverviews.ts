@@ -1,4 +1,6 @@
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioTeaching } from './lib/learnV2AssessmentLineage'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -72,7 +74,10 @@ export const createCourseScopedOverview = mutation({
   },
 })
 
-export const getCourseScopedOverview = query({
+const getCourseScopedOverviewRead = defineTeachingRead({
+  name: 'audioOverviews.getCourseScopedOverview',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'audio_overview', id: args.id }]),
+
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -105,7 +110,10 @@ export const getCourseScopedOverview = query({
       sourceFilenames,
     }
   },
-})
+
+}, {hasContent:value=>Boolean(value?.turns.length || value?.turnUrls.some(Boolean))})
+export const getCourseScopedOverview = query(getCourseScopedOverviewRead.query)
+export const getCourseScopedOverviewDelivery = mutation(getCourseScopedOverviewRead.delivery)
 
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
@@ -181,7 +189,9 @@ export const listByRoom = query({
   },
 })
 
-export const getWithTurns = query({
+const getWithTurnsRead = defineTeachingRead({
+  name: 'audioOverviews.getWithTurns',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx,userId,[{kind:'audio_overview',id:args.id}]),
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -192,9 +202,24 @@ export const getWithTurns = query({
     await assertAudioTeaching(ctx, overview, true)
     return overview
   },
+}, { hasContent: value => Boolean(value?.turns.length) })
+export const getWithTurns = query(getWithTurnsRead.query)
+export const getWithTurnsDelivery = mutation(getWithTurnsRead.delivery)
+
+export const getInterjectionMetadata = query({
+  args: { id: v.id('audioOverviews') },
+  handler: async (ctx, args) => {
+    const userId = await getOptionalAuthUserId(ctx)
+    const row = await ctx.db.get(args.id)
+    if (!userId || !row || row.userId !== userId) return null
+    return { _id: row._id, title: row.title, status: row.status, folderId: row.folderId,
+      episodeId: row.episodeId, scopeDocIds: row.scopeDocIds, hostNames: row.hostNames, voiceProfile: row.voiceProfile }
+  },
 })
 
-export const getTurnUrls = query({
+const getTurnUrlsRead = defineTeachingRead({
+  name: 'audioOverviews.getTurnUrls',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx,userId,[{kind:'audio_overview',id:args.id}]),
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -209,7 +234,9 @@ export const getTurnUrls = query({
     }
     return urls
   },
-})
+}, { hasContent: value => Boolean(value?.some(Boolean)) })
+export const getTurnUrls = query(getTurnUrlsRead.query)
+export const getTurnUrlsDelivery = mutation(getTurnUrlsRead.delivery)
 
 export const deleteOverview = mutation({
   args: { id: v.id('audioOverviews') },
@@ -400,7 +427,10 @@ export const unpublishOverview = mutation({
   },
 })
 
-export const getByShareToken = query({
+const getByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviews.getByShareToken',
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -437,9 +467,15 @@ export const getByShareToken = query({
       hostNames: overview.hostNames,
     }
   },
-})
 
-export const getTurnUrlsByShareToken = query({
+}, {hasContent:value=>Boolean(value?.turns.length)})
+export const getByShareToken = query(getByShareTokenRead.query)
+export const getByShareTokenDelivery = mutation(getByShareTokenRead.delivery)
+
+const getTurnUrlsByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviews.getTurnUrlsByShareToken',
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -459,4 +495,7 @@ export const getTurnUrlsByShareToken = query({
     }
     return urls
   },
-})
+
+}, { hasContent: value => Boolean(value?.some(Boolean)) })
+export const getTurnUrlsByShareToken = query(getTurnUrlsByShareTokenRead.query)
+export const getTurnUrlsByShareTokenDelivery = mutation(getTurnUrlsByShareTokenRead.delivery)
