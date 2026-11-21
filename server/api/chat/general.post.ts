@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import type { ChatMessage } from '../../utils/ai-gateway'
 import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 import { messageProvenance } from '../../utils/message-provenance'
@@ -53,7 +54,7 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
-    redactUpstreamErrorBody: true,
+    redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }
@@ -73,7 +74,8 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
+  const rawAnswer = completion.choices[0]?.message?.content ?? ''
+  const answer = LEARN_MEASUREMENT_CAPABILITIES.responses ? normalizeAssistantCitations(rawAnswer) : rawAnswer
   const provenance = await messageProvenance(event, userId, answer, [], Boolean(body.history?.length), false)
   await authorizeHelp(Boolean(answer))
   return {

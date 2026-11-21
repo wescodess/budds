@@ -68,7 +68,7 @@ async function mapProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0
     const prerequisites = await ctx.db.query('learnObjectivePrerequisites')
       .withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id))
       .take(MAX_OBJECTIVES + 1)
-    if (prerequisites.length > MAX_OBJECTIVES) throw new Error('Learn V2 prerequisites exceed their bounded contract')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && prerequisites.length > MAX_OBJECTIVES) throw new Error('Learn V2 prerequisites exceed their bounded contract')
     objectiveViews.push({ ...projectObjective(objective, blueprint.recordRevision), sourceLinks: links.map(row => projectFields(sourceLinkSummary.fields, row)), prerequisiteObjectiveIds: prerequisites.map(row => row.prerequisiteObjectiveId) })
   }
   return { blueprint: projectFields(blueprintSummary.fields, blueprint), milestones: milestones.map(row => projectFields(milestoneSummary.fields, row)), objectives: objectiveViews }
@@ -108,7 +108,7 @@ async function sourceProjection(ctx: Parameters<typeof requireLearnV2QueryAccess
     const status = source.effectiveStatus ?? source.status
     const identity = await ctx.db.get(source.sourceIdentityId)
     const title = await readSourceReviewTitle(ctx, userId, source, identity, teachingAllowed)
-    const available = teachingAllowed && await sourceBodyAvailable(ctx, userId, source._id)
+    const available = !LEARN_MEASUREMENT_CAPABILITIES.responses || teachingAllowed && await sourceBodyAvailable(ctx, userId, source._id)
     const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id) : null
     items.push({
       _id: source._id,
@@ -140,7 +140,7 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const accepted = root.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : revisions.find(row => row.status === 'accepted') ?? null
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
-  if (accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
   return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview) : null,
     accepted: accepted ? projectPlan(accepted) : null, sessions: sessions.map(row => projectFields(sessionSummary.fields, row)) }
 }

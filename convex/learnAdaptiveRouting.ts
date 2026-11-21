@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 import type { Doc } from './_generated/dataModel'
@@ -276,6 +277,7 @@ export const decideNextActivity = mutation({
         ...(applicationMetadata ? { overrideApplication: applicationMetadata } : {}) }, revision }
     },
     })
+    if (result.kind === 'ok' && !LEARN_MEASUREMENT_CAPABILITIES.responses) return result
     if (result.kind === 'ok') {
       const userId = await requireAuth(ctx)
       const id = ctx.db.normalizeId('learnActivityDecisions', result.value.decisionId)
@@ -298,7 +300,7 @@ export const replayDecision = query({
     const row = await ctx.db.get(args.decisionId)
     if (!row || row.userId !== userId) return null
     const thread = await ctx.db.get(row.threadId)
-    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined)) return null
     if (!(await decisionReplays(row))) return { status: 'integrity_failed' as const }
     return { status: 'replayed' as const, value: decisionValue(row) }
   },

@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { assertTeachingCommand, createTeachingHelpGuard } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
@@ -175,7 +176,7 @@ export default defineEventHandler(async (event) => {
         })
 
         const completion = await generateCompletion({
-          redactUpstreamErrorBody: true,
+          redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
           model: requestedModel,
           messages,
           temperature: 0.4,
@@ -200,7 +201,7 @@ export default defineEventHandler(async (event) => {
         })
 
         const completion = await generateCompletion({
-          redactUpstreamErrorBody: true,
+          redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
           model: requestedModel,
           messages: quizMessages,
           temperature: 0.3,
@@ -249,7 +250,7 @@ export default defineEventHandler(async (event) => {
         })
 
         const completion = await generateCompletion({
-          redactUpstreamErrorBody: true,
+          redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
           model: requestedModel,
           messages: fcMessages,
           temperature: 0.3,

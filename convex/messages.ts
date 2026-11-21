@@ -4,7 +4,7 @@ import { requireAuth } from './lib/auth'
 import type { Doc } from './_generated/dataModel'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { admitLearnHelpForOwner } from './lib/learnV2HelpAdmission'
-import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, helpAdmissionValidator, messageProvenanceFields } from './lib/learnV2HelpContract'
+import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, helpAdmissionValidator, messageProvenanceFields, messageHelpScope } from './lib/learnV2HelpContract'
 import { signMessageProvenance, verifyMessageProvenance, type MessageScopeReference } from '../shared/learn-v2-message-provenance'
 import { messageSigningSecret, projectStoredMessage, inspectStoredMessageProof } from './lib/learnV2MessageProvenance'
 import { currentMessageSourceAccess } from './lib/learnV2ReplayAccess'
@@ -64,7 +64,7 @@ export const listByConversation = query({
       .withIndex('by_conversationId', (q) => q.eq('conversationId', args.conversationId))
       .order('asc')
       .take(500)
-    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return rows.map(row => projectStoredMessage(row, true))
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return rows
     // Queries cannot commit assistance. With the capability active this is a
     // metadata/learner-text read; substantive replay uses the mutation below.
     const replay = await replayScope(ctx, userId, rows)
@@ -78,7 +78,7 @@ export const replayByConversation = mutation({
   returns: v.object({ admission: helpAdmissionValidator, messages: v.array(v.object({
     _id: v.id('messages'), _creationTime: v.number(), conversationId: v.id('conversations'), userId: v.string(),
     role: v.union(v.literal('user'), v.literal('assistant')), content: v.string(), model: v.optional(v.string()),
-    evidenceStatus: v.optional(v.literal('evidence_unavailable')),
+    evidenceStatus: v.optional(v.literal('evidence_unavailable')), helpScope: v.optional(v.object(messageHelpScope)),
     sources: v.optional(sourcesValidator), interjectionContext: v.optional(v.object({
       overviewId: v.id('audioOverviews'), turnIndex: v.number(), timeMs: v.number(), quotedText: v.string(),
       sourceFilename: v.optional(v.string()), interjectionId: v.optional(v.id('audioOverviewInterjections')),
@@ -89,7 +89,7 @@ export const replayByConversation = mutation({
     const conversation = await ctx.db.get(args.conversationId)
     if (!conversation || conversation.userId !== userId) throw new Error('Conversation not found')
     const rows = await ctx.db.query('messages').withIndex('by_conversationId', q => q.eq('conversationId', conversation._id)).order('asc').take(500)
-    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, messages: rows.map(row => projectStoredMessage(row, true)) }
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, messages: rows }
     const replay = await replayScope(ctx, userId, rows)
     let admission = replay.delivery || replay.unavailableIds.size ? await admitLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
       kind: 'replay', idempotencyKey: args.idempotencyKey,

@@ -115,8 +115,8 @@ export default defineEventHandler(async (event) => {
     : [{ kind: 'folder', id: body.folderId as Id<'folders'> }]
   // Unbound client history may originate outside the selected scope.
   const client = makeConvexClient(event)
-  if (!client) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
-  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: body.history?.length ? null : { references } }, client)
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && !client) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: body.history?.length ? null : { references } }, client ?? undefined)
   await authorizeHelp()
   let scopedDocumentIds: Set<string> | null = hasScope ? new Set() : null
   let scopedDocuments: Array<{
@@ -126,6 +126,7 @@ export default defineEventHandler(async (event) => {
     r2Key?: string
   }> = []
   if (hasScope) {
+    if (!client) throw createError({ statusCode: 500, message: 'Convex client not configured' })
     const resolved = await client.query(api.folders.resolveScope, {
       folderIds: body.scope?.folderIds as Id<'folders'>[] | undefined,
       fileIds: body.scope?.fileIds as Id<'documents'>[] | undefined,
@@ -323,7 +324,7 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
-    redactUpstreamErrorBody: true,
+    redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }
@@ -333,14 +334,16 @@ export default defineEventHandler(async (event) => {
     let stream: ReadableStream
     try {
       stream = await generateCompletionStream({ model: body.model, ...completionParams, stream: true })
-    } catch {
+    } catch (error) {
       if (body.model !== SERVER_DEFAULT_MODEL) {
         await authorizeContent()
         modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
-        stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true }).catch(() => {
+        stream = await generateCompletionStream({ model: SERVER_DEFAULT_MODEL, ...completionParams, stream: true }).catch((fallbackError: unknown) => {
+          if (!LEARN_MEASUREMENT_CAPABILITIES.responses) throw fallbackError
           throw createError({ statusCode: 502, message: 'Help generation unavailable' })
         })
       } else {
+        if (!LEARN_MEASUREMENT_CAPABILITIES.responses) throw error
         throw createError({ statusCode: 502, message: 'Help generation unavailable' })
       }
     }
@@ -399,7 +402,7 @@ export default defineEventHandler(async (event) => {
         } catch (error) {
           await reader.cancel().catch(() => {})
           reader.releaseLock()
-          controller.error((error as { data?: { status?: string } }).data?.status === 'denied'
+          controller.error(!LEARN_MEASUREMENT_CAPABILITIES.responses ? error : (error as { data?: { status?: string } }).data?.status === 'denied'
             ? error : createError({ statusCode: 502, message: 'Help stream unavailable' }))
         }
       },
@@ -430,7 +433,8 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
+  const rawAnswer = completion.choices[0]?.message?.content ?? ''
+  const answer = LEARN_MEASUREMENT_CAPABILITIES.responses ? normalizeAssistantCitations(rawAnswer) : rawAnswer
   const provenance = await messageProvenance(event, userId, answer, citationChunks, Boolean(body.history?.length))
   await authorizeContent(Boolean(answer || responseSources.length))
   return {

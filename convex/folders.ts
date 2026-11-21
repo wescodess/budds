@@ -554,9 +554,9 @@ export const resolveScope = query({
         const folder = await ctx.db.get(folderId)
         if (!folder || folder.userId !== userId) continue
         ownedFolderIds.push(folderId)
-        const descendants = await collectDescendants(ctx, userId, folderId, 32_000)
+        const descendants = await collectDescendants(ctx, userId, folderId)
         for (const id of [folderId, ...descendants.map(row => row._id)]) {
-          const rows = await ctx.db.query('documents').withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', id)).take(32_000)
+          const rows = await ctx.db.query('documents').withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', id)).collect()
           for (const row of rows) add(row)
         }
       }

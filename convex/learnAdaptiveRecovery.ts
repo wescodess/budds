@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
@@ -189,8 +190,9 @@ export const getDiagnosticCanvas = query({
     const recovery = adaptiveRecoveryCopy(evidenceState)
     if (!activity) return { ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision }, status: 'draft' as const, evidenceState, recovery, decisionPending: !thread.initialDecision || thread.initialDecision.status === 'pending', activity: null }
     if (activity.userId !== userId || activity.threadId !== thread._id || activity.activityClass !== 'non_factual') return null
-    const allowed = await canReadActivityTeaching(ctx, thread, activity) && await isOperableDiagnosticActivity(activity)
-    const payload = projectNonFactualPayload(activity, allowed)
+    const teachingAllowed = await canReadActivityTeaching(ctx, thread, activity)
+    const allowed = teachingAllowed && await isOperableDiagnosticActivity(activity)
+    const payload = projectNonFactualPayload(activity, allowed, teachingAllowed)
     const primitive = payload.primitive
     const selectedOverride = await ctx.db.query('learnActivityOverrides')
       .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
@@ -200,8 +202,8 @@ export const getDiagnosticCanvas = query({
       activity: { id: activity.activityId, status: activity.status, planRevision: activity.planRevision, primitive,
         controls: projectAdaptiveControls({ activityClass: 'non_factual', activityStatus: primitive ? activity.status : 'blocked', lifecycle: thread.lifecycle,
           evidenceReady: evidenceState === 'ready', sourceCount: 0, currentTime: thread.availableTime,
-          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan,
-          purpose: allowed ? activity.purpose : '', reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
+          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: !LEARN_MEASUREMENT_CAPABILITIES.responses && teachingAllowed ? activity.reasonText : undefined,
+          purpose: teachingAllowed && (!LEARN_MEASUREMENT_CAPABILITIES.responses || allowed) ? activity.purpose : '', reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         response: await activityResponseAvailable(ctx, userId, activity) ? activity.submittedResponse ?? null : null,
         fallback: payload.fallback, requiredAction: { kind: 'submit_response' as const, label: 'Save response' as const } } }
   },

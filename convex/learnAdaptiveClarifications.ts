@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -151,7 +152,7 @@ export const getInitialDecision = query({
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !thread.initialDecision) return null
+    if (!thread || thread.userId !== userId || LEARN_MEASUREMENT_CAPABILITIES.responses && thread.deletionStartedAt !== undefined || !thread.initialDecision) return null
     return {
       ...projectDecision(thread.initialDecision),
       originalNeed: thread.originalNeed,

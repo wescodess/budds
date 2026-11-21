@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../../shared/learn-v2-measurement-storage-manifest'
 import { assertTeachingCommand } from '../../../utils/teaching-source-scope'
 import { assertHelpAdmission } from '../../../utils/learn-v2-help-admission'
 import { getErrorMessage } from '../../../../shared/errors'
@@ -143,6 +144,7 @@ async function activeContext(client: ConvexHttpClient, jobId: Id<'audioOverviewJ
 }
 
 async function authorizeJobHelp(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, capability: string) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   assertHelpAdmission(await client.mutation(api.audioOverviewJobs.admitTeachingHelp, { jobId, capability }), true)
 }
 
@@ -157,7 +159,7 @@ function minimumGroundedCharacters(request: AudioOverviewRequest): number {
 }
 
 async function retrieveGroundedChunks(request: AudioOverviewRequest, userId: string, authorizeHelp: () => Promise<void>): Promise<AISearchChunk[]> {
-  const teachingScope = request.documents.map(({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }) => ({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }))
+  const teachingScope = LEARN_MEASUREMENT_CAPABILITIES.responses ? request.documents.map(({ documentId, folderId, filename, contentHash, sourceRevision, r2Key }) => ({ documentId, folderId, filename, contentHash, sourceRevision, r2Key })) : undefined
   const minimumCharacters = minimumGroundedCharacters(request)
   const scopeDocIds = request.documents.map(document => String(document.documentId))
   const frozenIdentityByDocument = new Map<string, { contentHash: string, sourceRevision: string }>(request.documents.map(document => [
@@ -456,7 +458,7 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
       await authorizeHelp()
       try {
         completion = await generateCompletion({
-          redactUpstreamErrorBody: true,
+          redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
           model: SCRIPT_MODEL,
           messages: dialogueMessages,
           temperature: dialogueTemperature,
@@ -566,7 +568,7 @@ async function prepare(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>,
       for (const batch of batchClaimEntailmentInputs(entailmentInput)) {
         await authorizeHelp()
         const completion = await generateCompletion({
-          redactUpstreamErrorBody: true,
+          redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
           model: SCRIPT_MODEL,
           messages: buildClaimEntailmentPrompt(batch),
           temperature: 0,
@@ -919,7 +921,7 @@ async function align(client: ConvexHttpClient, jobId: Id<'audioOverviewJobs'>, c
     return { skipped: false }
   }
   catch (error) {
-    if ((error as { data?: { status?: string } }).data?.status === 'denied') throw error
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (error as { data?: { status?: string } }).data?.status === 'denied') throw error
     await client.mutation(api.audioOverviewV2.failAlignment, {
       jobId,
       capability,
@@ -973,7 +975,7 @@ export default defineEventHandler(async (event) => {
   }
   catch (error: unknown) {
     const denial = (error as { data?: { status?: string, reasonCode?: string } }).data
-    if (denial?.status === 'denied') return { ok: false, retryable: false, ...denial }
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && denial?.status === 'denied') return { ok: false, retryable: false, ...denial }
     console.error('[audio-overview/jobs/step] failed', body.stage, error)
     return { ok: false, ...classifyRetry(error) }
   }

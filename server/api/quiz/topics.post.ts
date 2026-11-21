@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { makeConvexClient } from '../../utils/convex-client'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
@@ -18,8 +19,8 @@ export default defineEventHandler(async (event) => {
   }
 
   const convexClient = makeConvexClient(event)
-  if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
-  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && !convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
+  const authorizeTeaching = convexClient ? createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined }) : async () => undefined
   const teachingScope = await authorizeTeaching()
 
   await authorizeTeaching()
@@ -90,7 +91,7 @@ Rules:
 
   await authorizeTeaching()
   const completion = await generateCompletion({
-    redactUpstreamErrorBody: true,
+    redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
     model: SERVER_DEFAULT_MODEL,
     messages,
     temperature: 0.2,

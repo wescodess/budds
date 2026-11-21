@@ -11,8 +11,9 @@ export class TeachingSourceError extends Error {
   readonly statusCode = 403
   constructor() { super('Teaching input is unavailable') }
 }
-export async function loadTeachingScope(client: ConvexHttpClient, scope: FunctionArgs<typeof api.documents.getTeachingScope>) {
+export async function loadTeachingScope(client: ConvexHttpClient | null, scope: FunctionArgs<typeof api.documents.getTeachingScope>) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return undefined
+  if (!client) throw new TeachingSourceError()
   const documents = await client.query(api.documents.getTeachingScope, scope)
   if (!Array.isArray(documents)) throw new TeachingSourceError()
   return documents

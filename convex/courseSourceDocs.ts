@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v } from 'convex/values'
 import { query } from './_generated/server'
 import { requireAuth } from './lib/auth'
@@ -10,11 +11,11 @@ export const listByCourse = query({
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return []
 
-    const rows = await ctx.db
+    const sources = ctx.db
       .query('courseSourceDocs')
       .withIndex('by_courseId', (q) => q.eq('courseId', args.courseId))
-      .take(65)
-    if (rows.length > 64) throw new Error('Teaching input is unavailable')
+    const rows = LEARN_MEASUREMENT_CAPABILITIES.responses ? await sources.take(65) : await sources.collect()
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && rows.length > 64) throw new Error('Teaching input is unavailable')
     return rows
   },
 })

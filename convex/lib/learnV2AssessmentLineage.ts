@@ -60,6 +60,7 @@ export async function assertTeachingInputs(ctx: ReadCtx, userId: string, artifac
 }
 
 export async function teachingDocuments(ctx: ReadCtx, userId: string, ids: readonly string[], record?: LearnArtifactOwnerRecord) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
   const documents: Doc<'documents'>[] = []
   const scope = teachingPublication(ctx).admission.ctx
   for (const raw of new Set(ids)) {
@@ -94,6 +95,7 @@ export async function publishTeaching(ctx: MutationCtx, userId: string, artifact
 }
 
 export async function assertQuizTeaching(ctx: ReadCtx, userId: string, quizId: Id<'quizzes'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(200)
   const questions = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
   if (questions.length > 200 || questions.some(question => question.userId !== userId)) teachingUnavailable()
   await assertTeachingInputs(ctx, userId, questions.map(question => ({ kind: 'quiz_question', id: question._id })))
@@ -133,6 +135,13 @@ export async function publishSections(ctx: MutationCtx, userId: string, sections
   for (const section of sections) if (['ready', 'completed'].includes(section.status)) members.push(...await sectionMembers(ctx, section, sources))
   await publishTeaching(ctx, userId, members)
 }
+export async function publishCourseSections(ctx: MutationCtx, userId: string, courseId: Id<'courses'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
+  const sections = await ctx.db.query('courseSections').withIndex('by_courseId_and_order', q => q.eq('courseId', courseId)).take(101)
+  if (sections.length > 100) teachingUnavailable()
+  await publishSections(ctx, userId, sections)
+}
+
 export async function publishContainingSections(ctx: MutationCtx, userId: string, entityId: string, components: Array<Pick<Output, 'artifact' | 'key'> & Partial<Pick<Output, 'sources' | 'origins'>>> = []) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   if (!await isArtifactRegistrationRequiredForOwner(teachingPublication(ctx).preparation.ctx, userId)) return

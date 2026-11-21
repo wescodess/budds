@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
@@ -41,17 +42,19 @@ export default defineEventHandler(async (event) => {
   if (!body?.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
-  if (!body.roomId?.trim()) throw createError({ statusCode: 400, message: 'roomId is required for publication' })
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && !body.roomId?.trim()) throw createError({ statusCode: 400, message: 'roomId is required for publication' })
 
   const taskId = body.taskId as Id<'tasks'> | undefined
-  const roomId = body.roomId as Id<'flashcardRooms'>
-  const convexClient = makeConvexClient(event)
-  if (!convexClient) throw createError({ statusCode: 503, message: 'Flashcard storage unavailable' })
+  const roomId = body.roomId as Id<'flashcardRooms'> | undefined
+  const convexClient = LEARN_MEASUREMENT_CAPABILITIES.responses || taskId ? makeConvexClient(event) : null
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && !convexClient) throw createError({ statusCode: 503, message: 'Flashcard storage unavailable' })
 
-  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'> })
+  const authorizeTeaching = convexClient ? createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'> }) : async () => undefined
   const teachingScope = await authorizeTeaching()
-  const target = await convexClient.query(api.flashcardRooms.getRoom, { roomId })
-  if (!target || target.room.folderId !== body.folderId) throw new TeachingSourceError()
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && convexClient && roomId) {
+    const target = await convexClient.query(api.flashcardRooms.getRoom, { roomId })
+    if (!target || target.room.folderId !== body.folderId) throw new TeachingSourceError()
+  }
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -155,7 +158,7 @@ export default defineEventHandler(async (event) => {
 
     await authorizeTeaching()
     const completion = await generateCompletion({
-      redactUpstreamErrorBody: true,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       model,
       messages,
       temperature: 0.3,
@@ -165,7 +168,7 @@ export default defineEventHandler(async (event) => {
     const raw = completion.choices[0]?.message?.content ?? ''
     const parsed = parseFlashcardResponse(raw)
 
-    if (parsed.cards.length > cardCount) throw createError({ statusCode: 502, message: 'Flashcards exceed the requested publication size' })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && parsed.cards.length > cardCount) throw createError({ statusCode: 502, message: 'Flashcards exceed the requested publication size' })
     if (parsed.cards.length === 0) {
       const msg = 'Flash card generation produced no valid cards'
       await failTask(msg)
@@ -185,50 +188,53 @@ export default defineEventHandler(async (event) => {
       }
     })
 
-    await setTaskProgress('Archiving previous deck…')
+    if (roomId && convexClient && (LEARN_MEASUREMENT_CAPABILITIES.responses || taskId)) {
+      await setTaskProgress('Archiving previous deck…')
 
-    const payloadCards = persistCards.map((c) => ({
-      term: c.front,
-      definition: c.back,
-      metadata: {
-        source: {
-          documentId: c.sourceDocumentId,
-          filename: c.sourceFilename,
-          chunkContent: c.sourceChunkContent,
+      const payloadCards = persistCards.map((c) => ({
+        term: c.front,
+        definition: c.back,
+        metadata: {
+          source: {
+            documentId: c.sourceDocumentId,
+            filename: c.sourceFilename,
+            chunkContent: c.sourceChunkContent,
+          },
         },
-      },
-    }))
+      }))
 
-    await authorizeTeaching()
-    const generateResult = await convexClient.mutation(api.flashcardRooms.generateRoomCards, {
-      roomId,
-      origin: 'ai' as const,
-      requestedCardCount: cardCount,
-      sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
-      model,
-      title: parsed.title,
-      cards: payloadCards,
-    })
+      await authorizeTeaching()
+      const generateResult = await convexClient.mutation(api.flashcardRooms.generateRoomCards, {
+        roomId,
+        origin: 'ai' as const,
+        requestedCardCount: cardCount,
+        sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
+        model,
+        title: parsed.title,
+        cards: payloadCards,
+      })
 
-    if (taskId) await convexClient.mutation(api.tasks.markComplete, {
-      taskId,
-      result: {
+      if (taskId) await convexClient.mutation(api.tasks.markComplete, {
+        taskId,
+        result: {
+          roomId,
+          versionId: generateResult.versionId,
+          cardCount: generateResult.cardCount,
+        },
+      })
+
+      await authorizeTeaching()
+      return {
+        title: parsed.title,
+        model,
+        cards: persistCards,
+        cardCount: persistCards.length,
+        ...(taskId ? { taskId } : {}),
         roomId,
         versionId: generateResult.versionId,
-        cardCount: generateResult.cardCount,
-      },
-    })
-
-    await authorizeTeaching()
-    return {
-      title: parsed.title,
-      model,
-      cards: persistCards,
-      cardCount: persistCards.length,
-      ...(taskId ? { taskId } : {}),
-      roomId,
-      versionId: generateResult.versionId,
+      }
     }
+    return { title: parsed.title, model, cards: persistCards, cardCount: persistCards.length }
   }
   catch (err) {
     const statusCode = getErrorStatusCode(err)

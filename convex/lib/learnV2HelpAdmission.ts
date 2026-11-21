@@ -210,15 +210,13 @@ export async function inspectLearnHelpForAudioJob(ctx: ReadCtx, job: Doc<'audioO
 }
 
 async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false): Promise<LearnHelpAdmission> {
-  const request = parsePublicLearnRequest(admitHelpSchema, input)
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
+  const request = parsePublicLearnRequest(admitHelpSchema, input)
   const deny = (reasonCode: 'test_open' | 'disclosure_unknown' | 'unavailable'): LearnHelpAdmission => ({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode })
   const record = async (row: Doc<'learnAssessmentOpportunities'>, reason: string, scopeDigest: string) => {
     if (!readOnly && isMutationContext(ctx)) await recordDenial(ctx, userId, row, request, reason, scopeDigest)
   }
-  // No opportunity creator can run with this capability off. This grants no
-  // opportunity-bound permission and creates no exposure for ordinary work.
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
   const open: Doc<'learnAssessmentOpportunities'>[] = []
   for (const phase of LEARN_HELP_OPEN_PHASES) {
     const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase))

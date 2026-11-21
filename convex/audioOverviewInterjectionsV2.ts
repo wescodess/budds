@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, publishTeaching } from './lib/learnV2AssessmentLineage'
@@ -256,9 +257,9 @@ export const claimScripting = mutation({
     requireAudioOverviewOrchestrationCredential(args.orchestrationToken)
     const userId = await requireAuth(ctx)
     const interjection = await requireOwnedInterjection(ctx, args.interjectionId, userId)
-    const parent = await ctx.db.get(interjection.audioOverviewId)
-    if (!parent || parent.userId !== userId) throw new Error('Audio overview not found')
-    await assertAudioTeaching(ctx, parent)
+    const parent = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(interjection.audioOverviewId) : null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!parent || parent.userId !== userId)) throw new Error('Audio overview not found')
+    if (parent) await assertAudioTeaching(ctx, parent)
     if (interjection.status !== 'reserved') {
       return { claimed: false, status: interjection.status }
     }
@@ -283,9 +284,9 @@ export const startRendering = mutation({
     requireAudioOverviewOrchestrationCredential(args.orchestrationToken)
     const userId = await requireAuth(ctx)
     const interjection = await requireOwnedInterjection(ctx, args.interjectionId, userId)
-    const parent = await ctx.db.get(interjection.audioOverviewId)
-    if (!parent || parent.userId !== userId) throw new Error('Audio overview not found')
-    await assertAudioTeaching(ctx, parent)
+    const parent = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(interjection.audioOverviewId) : null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!parent || parent.userId !== userId)) throw new Error('Audio overview not found')
+    if (parent) await assertAudioTeaching(ctx, parent)
     if (interjection.status === 'cancelled' || interjection.status === 'deleting') throw new Error('Interjection was cancelled')
     if (interjection.status === 'failed') throw new Error('Interjection has failed')
     if (interjection.status === 'ready') throw new Error('Interjection is already ready')
@@ -545,6 +546,7 @@ async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterje
   }
   const artifact = answerAvailable && interjection.artifactId ? await ctx.db.get(interjection.artifactId) : null
   return {
+    ...(!LEARN_MEASUREMENT_CAPABILITIES.responses ? interjection : {
     _id: interjection._id, _creationTime: interjection._creationTime, userId: interjection.userId,
     audioOverviewId: interjection.audioOverviewId, episodeId: interjection.episodeId, jobId: interjection.jobId,
     sourceManifestId: interjection.sourceManifestId, insertedAfterTurnIndex: interjection.insertedAfterTurnIndex,
@@ -555,6 +557,7 @@ async function projection(ctx: QueryCtx, interjection: Doc<'audioOverviewInterje
     hostAVoice: interjection.hostAVoice, hostBVoice: interjection.hostBVoice,
     createdAt: interjection.createdAt, updatedAt: interjection.updatedAt, completedAt: interjection.completedAt,
     answerAvailability: answerAvailable ? 'available' as const : 'unavailable' as const,
+    }),
     utterances: utterances.map(row => ({
       utteranceId: row._id,
       order: row.order,

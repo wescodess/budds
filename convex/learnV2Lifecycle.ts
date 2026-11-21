@@ -306,7 +306,7 @@ export const listLearningVoids = query({
     const page = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(MAX_LIST_PAGE_SIZE, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
     const live = []
     for (const row of page.page) if (await isLiveOwnedVoid(ctx, userId, row._id)) live.push(projectFields(voidSummary.fields, row))
-    return { page: live, isDone: page.isDone, continueCursor: page.continueCursor }
+    return { page: live, isDone: page.isDone, continueCursor: page.continueCursor, splitCursor: page.splitCursor, pageStatus: page.pageStatus }
   },
 })
 

@@ -1,3 +1,5 @@
+import { getErrorMessage } from '../../../shared/errors'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { teachingDeliveryValue, needsTeachingDelivery } from '../../utils/teaching-delivery'
 import { assertTeachingCommand, loadTeachingScope, assertTeachingSourcePins } from '../../utils/teaching-source-scope'
 import { ConvexHttpClient } from 'convex/browser'
@@ -56,7 +58,7 @@ type V2Projection = Pick<Doc<'audioOverviewInterjectionsV2'>, '_id' | 'insertedA
 }
 
 function v2Response(interjection: V2Projection) {
-  if (interjection.answerAvailability === 'unavailable' || !interjection.artifact || !interjection.utterances.length) throw createError({ statusCode: 403, message: 'Teaching input is unavailable' })
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && (interjection.answerAvailability === 'unavailable' || !interjection.artifact || !interjection.utterances.length)) throw createError({ statusCode: 403, message: 'Teaching input is unavailable' })
   const artifactUrl = `/api/audio-overview/interjections/${interjection._id}/media`
   const durationMs = interjection.artifact?.durationMs ?? 0
   return {
@@ -122,7 +124,7 @@ async function runV2Interjection(
     ownsScripting = claim.claimed
     if (!claim.claimed) {
       await authorizeHelp()
-      const current = await convexClient.query(api.audioOverviewInterjectionsV2.getStatusForOwner, {
+      const current = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviewInterjectionsV2.getStatusForOwner : api.audioOverviewInterjectionsV2.getForOwner, {
         interjectionId: reservation.interjectionId,
       })
       if (current?.status === 'ready') {
@@ -175,7 +177,7 @@ async function runV2Interjection(
     await authorizeHelp()
     const completion = await generateCompletion({
       model: SCRIPT_MODEL,
-      redactUpstreamErrorBody: true,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       messages: buildV2InterjectionPrompt({ question: body.question, overviewTitle: overview.title, sources: evidence }),
       temperature: 0.4,
       max_tokens: 1_500,
@@ -199,7 +201,7 @@ async function runV2Interjection(
     await authorizeHelp()
     const verificationCompletion = await generateCompletion({
       model: SCRIPT_MODEL,
-      redactUpstreamErrorBody: true,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       messages: buildClaimEntailmentPrompt(entailmentInput),
       temperature: 0,
       max_tokens: Math.min(1_000, Math.max(500, entailmentInput.length * 100)),
@@ -250,7 +252,7 @@ async function runV2Interjection(
       utterances: script.utterances,
     })
     const renderedArtifact = render.artifact
-    const current = await convexClient.query(api.audioOverviewInterjectionsV2.getStatusForOwner, {
+    const current = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviewInterjectionsV2.getStatusForOwner : api.audioOverviewInterjectionsV2.getForOwner, {
       interjectionId: reservation.interjectionId,
     })
     if (!current || current.status !== 'rendering') {
@@ -290,7 +292,7 @@ async function runV2Interjection(
       await convexClient.mutation(api.audioOverviewInterjectionsV2.fail, {
         interjectionId: reservation.interjectionId,
         orchestrationToken,
-        error: 'Audio interjection generation failed',
+        error: LEARN_MEASUREMENT_CAPABILITIES.responses ? 'Audio interjection generation failed' : getErrorMessage(error, 'Audio interjection generation failed'),
       }).catch(() => {})
     }
     throw error
@@ -339,7 +341,7 @@ export default defineEventHandler(async (event) => {
     scope: { references: [{ kind: 'audio_overview', id: body.overviewId as Id<'audioOverviews'> }] } }, convexClient)
   await authorizeHelp()
 
-  const overview = await convexClient.query(api.audioOverviews.getInterjectionMetadata, {
+  const overview = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviews.getInterjectionMetadata : api.audioOverviews.getWithTurns, {
     id: body.overviewId as Id<'audioOverviews'>,
   })
   if (!overview) {

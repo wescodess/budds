@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
@@ -165,7 +166,7 @@ export default defineEventHandler(async (event) => {
 
     await authorizeTeaching()
     const completion = await generateCompletion({
-      redactUpstreamErrorBody: true,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       model,
       messages,
       temperature: 0.3,
@@ -174,7 +175,7 @@ export default defineEventHandler(async (event) => {
 
     const raw = completion.choices[0]?.message?.content ?? ''
     const parsed = parseQuizResponse(raw)
-    if (parsed.questions.length > questionCount) throw createError({ statusCode: 502, message: 'Quiz exceeds the requested publication size' })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && parsed.questions.length > questionCount) throw createError({ statusCode: 502, message: 'Quiz exceeds the requested publication size' })
     parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
     if (parsed.questions.length === 0) {

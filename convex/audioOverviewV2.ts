@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioJobSources, assertAudioTeaching, publishTeaching } from './lib/learnV2AssessmentLineage'
@@ -1481,10 +1482,10 @@ export const completeAlignment = mutation({
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')
     }
-    const episode = await ctx.db.get(alignment.episodeId)
+    const episode = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(alignment.episodeId) : null
     const overview = episode?.compatibilityOverviewId && await ctx.db.get(episode.compatibilityOverviewId)
-    if (!overview || overview.userId !== job.userId) throw new Error('Audio overview is unavailable')
-    await assertAudioTeaching(ctx, overview, false)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!overview || overview.userId !== job.userId)) throw new Error('Audio overview is unavailable')
+    if (overview) await assertAudioTeaching(ctx, overview, false)
     if (alignment.status === 'ready') return { duplicate: true }
     if (alignment.status === 'failed') throw new Error('Failed alignment cannot become ready')
     if (alignment.segmentCount < 1) throw new Error('Cannot complete an empty alignment')
@@ -1512,7 +1513,7 @@ export const completeAlignment = mutation({
     }
     const now = Date.now()
     await ctx.db.patch(alignment._id, { status: 'ready', error: undefined, updatedAt: now, completedAt: now })
-    await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overview._id }, key: 'whole' }], { kind: 'audio_job', id: job._id })
+    if (overview) await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overview._id }, key: 'whole' }], { kind: 'audio_job', id: job._id })
     return { duplicate: false }
   },
 })

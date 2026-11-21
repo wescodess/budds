@@ -299,6 +299,7 @@ async function findReceipt(ctx: MutationCtx, userId: string, rawIdempotencyKey: 
 
 function replayReceipt(receipt: Doc<'learnSourceCommandReceipts'>, command: string, fingerprint: string) {
   if (receipt.command !== command || receipt.requestFingerprint !== fingerprint) throw new Error('Idempotency key reuse')
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return projectSourceReceipt(JSON.parse(receipt.response))
   if (receipt.response.length > 8192) throw new Error('Source receipt is unavailable')
   try { return projectSourceReceipt(JSON.parse(receipt.response)) }
   catch { throw new Error('Source receipt is unavailable') }
@@ -311,6 +312,10 @@ const sourceReceiptSchema = z.object({ sourceSnapshotId: learnIdSchema<'learnSou
   effectiveStatus: z.enum(['candidate', 'fetched', 'evaluated', 'user_accepted', 'rejected', 'unavailable']), recordRevision: z.number().int().positive(),
   conflictStatus: z.enum(['clear', 'unresolved']).optional(), unavailableReason: z.string().max(96).optional() })
 function projectSourceReceipt(value: unknown) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) {
+    const row = value as z.infer<typeof sourceReceiptSchema>
+    return { sourceSnapshotId: row.sourceSnapshotId, status: row.status, effectiveStatus: row.effectiveStatus, recordRevision: row.recordRevision, ...(row.conflictStatus ? { conflictStatus: row.conflictStatus } : {}), ...(row.unavailableReason ? { unavailableReason: row.unavailableReason } : {}) }
+  }
   const parsed = sourceReceiptSchema.safeParse(value)
   if (!parsed.success) throw new Error('Source receipt is unavailable')
   const row = parsed.data
@@ -546,7 +551,7 @@ const listSourceReviewRead = defineTeachingRead({
     const page = []
     for (const { source, identity, reviewedObjectives } of metadata) {
       const title = await readSourceReviewTitle(ctx, userId, source, identity, teachingAllowed)
-      const available = await privacyRead(ctx, userId, ['source-review-available', source._id], false,
+      const available = !LEARN_MEASUREMENT_CAPABILITIES.responses ? await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted: true }) : await privacyRead(ctx, userId, ['source-review-available', source._id], false,
         async scoped => teachingAllowed && await sourceBodyAvailable(scoped, userId, source._id, { allowUnaccepted: true }))
       const excerpt = available ? await retainedSourceExcerpt(ctx, userId, source._id, { allowUnaccepted: true }) : null
       const hasContent = source.rightsStatus === 'permitted' && excerpt?.rightsStatus === 'permitted'
@@ -587,7 +592,7 @@ const listSourceReviewRead = defineTeachingRead({
         reviewedObjectives,
       })
     }
-    return { page, isDone: result.isDone, continueCursor: result.continueCursor }
+    return { page, isDone: result.isDone, continueCursor: result.continueCursor, splitCursor: result.splitCursor, pageStatus: result.pageStatus }
   },
 
 }, { hasContent: value => value.page.some(row=>Boolean(row.excerpt)) })

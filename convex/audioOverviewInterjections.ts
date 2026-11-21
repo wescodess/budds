@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertAudioTeaching, assertInterjectionTeaching, interjectionAnswerAvailable, admitTeachingSourcePins, publishTeaching } from './lib/learnV2AssessmentLineage'
@@ -72,7 +73,7 @@ export const create = mutation({
       || task.userId !== userId
       || task.folderId !== overview.folderId
       || task.type !== 'audio-overview-generation'
-      || !['running', 'completed'].includes(task.status)
+      || (LEARN_MEASUREMENT_CAPABILITIES.responses ? !['running', 'completed'].includes(task.status) : task.status !== 'running')
       || !task.audioOverviewRequest
     ) {
       throw new Error('Reserved audio overview task not found')
@@ -110,7 +111,7 @@ export const create = mutation({
 
     const interjectionId = await ctx.db.insert('audioOverviewInterjections', {
       audioOverviewId: args.audioOverviewId,
-      taskId: task._id,
+      ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { taskId: task._id } : {}),
       userId,
       insertedAfterTurnIndex: clampedAfterIndex,
       question: trimmedQuestion,
@@ -144,11 +145,12 @@ const listByOverviewRead = defineTeachingRead({
     const overview = await ctx.db.get(args.audioOverviewId)
     if (!overview || overview.userId !== userId) return []
 
-    const rows = await ctx.db
+    const history = ctx.db
       .query('audioOverviewInterjections')
       .withIndex('by_audioOverview', (q) => q.eq('audioOverviewId', args.audioOverviewId))
       .order('asc')
-      .take(101)
+    const rows = LEARN_MEASUREMENT_CAPABILITIES.responses ? await history.take(101) : await history.collect()
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return rows
     if (rows.length > 100) throw new Error('Teaching input is unavailable')
     const result = []
     for (const row of rows) {

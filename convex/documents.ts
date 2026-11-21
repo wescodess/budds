@@ -628,6 +628,7 @@ export const getTeachingScope = query({
   args: { folderId: v.optional(v.id('folders')), courseId: v.optional(v.id('courses')), documentIds: v.optional(v.array(v.id('documents'))) },
   returns: v.array(v.object({ documentId: v.id('documents'), folderId: v.id('folders'), filename: v.string(), contentHash: v.optional(v.string()), sourceRevision: v.optional(v.string()), r2Key: v.optional(v.string()) })),
   handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
     const userId = await requireAuth(ctx)
     let ids = args.documentIds
     if (ids && ids.length > 64) teachingUnavailable()

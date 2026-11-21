@@ -125,13 +125,13 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const allRows = await ctx.db
+    const collection = ctx.db
       .query('audioOverviews')
       .withIndex('by_userId_and_folderId', (q) =>
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
-      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 101 : 32_000)
+    const allRows = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(101) : await collection.collect()
 
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && allRows.length > 100) throw new Error('Teaching input is unavailable')
     const rows = allRows.filter((r) => r.courseScoped !== true)

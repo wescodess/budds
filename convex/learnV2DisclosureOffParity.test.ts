@@ -1,10 +1,12 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { makeFunctionReference } from 'convex/server'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import { HELP_OWNER, helpConsumerFixture } from '../tests/fixtures/learn-v2-help-consumers'
 import { seedTeachingReads } from '../tests/fixtures/learn-v2-teaching-reads'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
+import { expectDev, recordingDev } from '../tests/fixtures/c4-off-parity/expect-dev'
+import { adaptiveEvidenceFixture } from '../tests/fixtures/c4-off-parity/adaptive-evidence'
 import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -43,20 +45,17 @@ test.each(['unsigned', 'v1', 'signed_deleted', 'signed_unknown', 'signed_invalid
     ? await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, content, sources, kind === 'signed_deleted' ? [{ kind: 'document', id: s.f.documentId }] : null)
     : kind === 'v1' ? { version: 'learn-v2.message-provenance.v1' as const, references: [{ kind: 'document' as const, id: s.f.documentId }] } : undefined
   if (kind === 'signed_invalid' && proof?.version === 'learn-v2.message-provenance.v3') proof = { ...proof, signature: '0'.repeat(64) }
-  const rows = await s.t.run(async ctx => {
+  await s.t.run(async ctx => {
     const learner = await ctx.db.insert('messages', { userId: HELP_OWNER.tokenIdentifier, conversationId, role: 'user', content: 'My question' })
     const assistant = await ctx.db.insert('messages', { userId: HELP_OWNER.tokenIdentifier, conversationId, role: 'assistant', content, sources, helpScope: proof })
     await ctx.db.delete(s.f.documentId)
     return [(await ctx.db.get(learner))!, (await ctx.db.get(assistant))!]
   })
-  const visible = rows.map(({ helpScope: _scope, ...row }) => row)
   const before = await s.exposures()
-  expect(await s.owner.query(api.messages.listByConversation, { conversationId })).toEqual(visible)
-  expect(await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'off_replay' })).toEqual({
-    admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, messages: visible,
-  })
+  expectDev(`chat.${kind}.list`, await s.owner.query(api.messages.listByConversation, { conversationId }))
+  if (!recordingDev) expectDev(`chat.${kind}.list`, (await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'off_replay' })).messages)
   const exported = await s.owner.query(api.dataExport.getUserDataPage, { collection: 'messages', paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
-  expect(exported.page).toEqual(rows)
+  expectDev(`chat.${kind}.export`, exported)
   expect((await s.exposures()).filter(row => row.purpose === 'teaching')).toEqual(before.filter(row => row.purpose === 'teaching'))
 })
 
@@ -70,7 +69,7 @@ test.each([false, true])('off-state appends preserve dev message fields with sig
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role, ...fields })
   }
   const rows = await s.owner.query(api.messages.listByConversation, { conversationId })
-  expect(rows.map(({ _id: _id, _creationTime: _time, ...row }) => row)).toEqual(['user', 'assistant'].map(role => ({ conversationId, userId: HELP_OWNER.tokenIdentifier, role, ...fields })))
+  expectDev(`chat.append.${signing}`, rows.map(({ _id: _id, _creationTime: _time, ...row }) => row))
 })
 
 const reads = [
@@ -89,13 +88,10 @@ test.each(reads)('%s retains legacy teaching and its delivery alias while off af
   const s = await fixture(), args = argsFor(s)
   const query = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
   const delivery = makeFunctionReference<'mutation', Record<string, unknown>, unknown>(`${path.replace('.', ':')}Delivery`)
-  const original = await s.owner.query(query, args)
-  expect(JSON.stringify(original)).toContain(text)
   const before = await s.exposures()
   await s.t.run(ctx => ctx.db.delete(s.f.documentId))
-  const expected = path === 'audioOverviews.getCourseScopedOverview' ? { ...original as object, sourceFilenames: ['Source'] } : original
-  expect(await s.owner.query(query, args)).toEqual(expected)
-  expect(await s.owner.mutation(delivery, { ...args, idempotencyKey: 'off_delivery' })).toEqual({ admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, value: expected })
+  expectDev(`read.${path}.deleted`, await s.owner.query(query, args))
+  if (!recordingDev) expectDev(`read.${path}.deleted`, (await s.owner.mutation(delivery, { ...args, idempotencyKey: 'off_delivery' }) as { value: unknown }).value)
   expect(await s.exposures()).toEqual(before)
 })
 
@@ -103,20 +99,17 @@ test.each(['courses', 'courseSections', 'quizQuestions', 'quizAnswerAssessments'
   const s = await fixture()
   await s.t.run(ctx => ctx.db.delete(s.f.documentId))
   const exported = await s.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
-  expect(exported.page).not.toHaveLength(0)
-  expect(JSON.stringify(exported)).not.toContain('evidence_unavailable')
-  if (collection !== 'tasks') expect(JSON.stringify(exported)).toContain(text)
+  expectDev(`export.${collection}`, exported)
 })
 
 test.each(['audioOverviews.getByShareToken', 'audioOverviewV2.getPlaybackByShareToken'] as const)('%s retains ordinary anonymous and owner shares while off', async path => {
   const s = await fixture(), query = makeFunctionReference<'query', { token: string }, unknown>(path.replace('.', ':'))
-  const original = await s.t.query(query, { token: s.r.token })
-  expect(JSON.stringify(original)).toContain(text)
-  expect(await s.owner.query(query, { token: s.r.token })).toEqual(original)
+  expectDev(`share.${path}.anonymous`, await s.t.query(query, { token: s.r.token }))
+  expectDev(`share.${path}.owner`, await s.owner.query(query, { token: s.r.token }))
   await s.t.run(ctx => ctx.db.delete(s.f.documentId))
   const result = await s.t.query(query, { token: s.r.token })
-  expect(JSON.stringify(result)).toContain(text)
-  expect(await s.owner.query(query, { token: s.r.token })).toEqual(result)
+  expectDev(`share.${path}.deleted.anonymous`, result)
+  expectDev(`share.${path}.deleted.owner`, await s.owner.query(query, { token: s.r.token }))
 })
 
 test.each([
@@ -130,11 +123,10 @@ test.each([
   const s = await fixture(), args = argsFor(s)
   const query = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
   const delivery = makeFunctionReference<'mutation', Record<string, unknown>, unknown>(`${path.replace('.', ':')}Delivery`)
-  const before = await s.exposures(), original = await s.owner.query(query, args)
-  expect(original).not.toBeNull()
+  const before = await s.exposures()
   await s.t.run(ctx => ctx.db.delete(s.f.documentId))
-  expect(await s.owner.query(query, args)).toEqual(original)
-  expect(await s.owner.mutation(delivery, { ...args, idempotencyKey: 'off_media' })).toEqual({ admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, value: original })
+  expectDev(`media.${path}`, await s.owner.query(query, args))
+  if (!recordingDev) expectDev(`media.${path}`, (await s.owner.mutation(delivery, { ...args, idempotencyKey: 'off_media' }) as { value: unknown }).value)
   expect(await s.exposures()).toEqual(before)
 })
 
@@ -146,10 +138,10 @@ test('off-state task reads and export retain cached teaching and progress exactl
     await ctx.db.delete(s.f.documentId)
     return (await ctx.db.get(job.taskId))!
   })
-  expect(await s.owner.query(api.tasks.get, { taskId: row._id })).toEqual(row)
-  expect(await s.owner.query(api.tasks.listByFolder, { folderId: s.f.folderId })).toContainEqual(row)
+  expectDev('tasks.get', await s.owner.query(api.tasks.get, { taskId: row._id }))
+  expectDev('tasks.list', await s.owner.query(api.tasks.listByFolder, { folderId: s.f.folderId }))
   const exported = await s.owner.query(api.dataExport.getUserDataPage, { collection: 'tasks', paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
-  expect(exported.page).toEqual([row])
+  expectDev('tasks.export', exported)
 })
 
 test('off-state legacy decks and Audio lists retain collections above the new teaching limits', async () => {
@@ -164,9 +156,9 @@ test('off-state legacy decks and Audio lists retain collections above the new te
     const { _id: _overviewId, _creationTime: _overviewTime, ...overview } = (await ctx.db.get(s.r.overviewId))!
     for (let index = 1; index <= 100; index++) await ctx.db.insert('audioOverviews', { ...overview, shareToken: undefined })
   })
-  expect((await s.owner.query(api.flashcardRooms.getRoom, { roomId: s.r.roomId }))?.cards).toHaveLength(202)
-  expect((await s.owner.query(api.flashcardRooms.getRoomVersion, { versionId: s.r.versionId }))?.cards).toHaveLength(202)
-  expect(await s.owner.query(api.audioOverviews.listByFolder, { folderId: s.f.folderId })).toHaveLength(101)
+  expectDev('limits.cards', await s.owner.query(api.flashcardRooms.getRoom, { roomId: s.r.roomId }))
+  expectDev('limits.versionCards', await s.owner.query(api.flashcardRooms.getRoomVersion, { versionId: s.r.versionId }))
+  expectDev('limits.audioList', await s.owner.query(api.audioOverviews.listByFolder, { folderId: s.f.folderId }))
 })
 
 test('off-state folder discovery retains dev scopes larger than the new admission limit', async () => {
@@ -176,8 +168,8 @@ test('off-state folder discovery retains dev scopes larger than the new admissio
     for (let index = 0; index < 65; index++) rows.push(await ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, filename: `source-${index}.txt`, status: 'success', fileSize: 1 }))
     return rows
   })
-  expect((await s.owner.query(api.folders.resolveScope, { fileIds: ids })).documentIds).toEqual(ids)
-  expect((await s.owner.query(api.folders.resolveScope, { folderIds: [s.f.folderId] })).documentIds).toEqual([s.f.documentId, ...ids])
+  expectDev('limits.folderFiles', await s.owner.query(api.folders.resolveScope, { fileIds: ids }))
+  expectDev('limits.folderScope', await s.owner.query(api.folders.resolveScope, { folderIds: [s.f.folderId] }))
 })
 
 test('off-state source review and mission retain dev titles, locators and excerpts during an open check', async () => {
@@ -188,14 +180,117 @@ test('off-state source review and mission retain dev titles, locators and excerp
     await ctx.db.patch(s.f.sourceExcerptId, { locator })
   })
   const review = await s.owner.query(api.learnV2Sources.listSourceReview, { blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { numItems: 8, cursor: null } })
-  expect(review.page[0]).toMatchObject({ identity: { title: 'Study reference' }, excerpt: 'Source rule' })
+  expectDev('sources.review', review)
   const mission = await s.owner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
-  expect(mission?.sources.items[0]).toMatchObject({ title: 'Study\nreference', publicLocator: locator, excerpt: { locator, text: 'Source rule' } })
+  expectDev('sources.mission', mission?.sources)
 })
 
 test('assessment criteria, rubrics and keys stay omitted from the registered map while off', async () => {
+  if (recordingDev) return
   const s = await fixture()
   const result = await s.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: s.f.scope.blueprintRevisionId })
   expect(result?.objectives).not.toHaveLength(0)
   expect(JSON.stringify(result)).not.toMatch(/assessmentContract|weightPercent|criteria|rubric|scoringPayload/)
+})
+
+
+test('101 legacy interjections retain their full history and raw fields', async () => {
+  const s = await fixture()
+  await s.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...row } = (await ctx.db.get(s.r.interjectionId))!
+    for (let index = 1; index <= 100; index++) await ctx.db.insert('audioOverviewInterjections', { ...row, question: `Question ${index}` })
+  })
+  expectDev('limits.interjections101', await s.owner.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: s.r.overviewId }))
+})
+
+test('65 course source links retain dev source discovery', async () => {
+  const s = await fixture()
+  await s.t.run(async ctx => {
+    for (let index = 1; index <= 64; index++) await ctx.db.insert('courseSourceDocs', { userId: HELP_OWNER.tokenIdentifier, courseId: s.r.courseId, folderId: s.f.folderId, documentId: s.f.documentId })
+  })
+  expectDev('limits.courseSources65', await s.owner.query(api.courseSourceDocs.listByCourse, { courseId: s.r.courseId }))
+})
+
+test.each(['accepted', 'revision_changed', 'deleted', 'unavailable'] as const)('Adaptive evidence %s preserves dev claim text and integrity', async state => {
+  const { t, ids, ownerId } = await adaptiveEvidenceFixture(modules)
+  await t.run(async ctx => {
+    if (state === 'revision_changed') await ctx.db.patch(ids.sourceSnapshotId, { recordRevision: 8 })
+    if (state === 'deleted') await ctx.db.delete(ids.sourceSnapshotId)
+    if (state === 'unavailable') await ctx.db.patch(ids.threadId, { evidenceState: 'invalidated' })
+  })
+  const owner = t.withIdentity({ tokenIdentifier: ownerId })
+  expectDev(`evidence.${state}.internal`, await owner.query(internal.learnAdaptiveEvidence.getActivityEvidence, { activityId: 'activity-evidence-1' }))
+  expectDev(`evidence.${state}.public`, await owner.query(api.learnAdaptiveEvidence.getThreadActivityEvidence, { threadId: ids.threadId, activityId: 'activity-evidence-1' }))
+})
+
+test('legacy internal workers preserve dev auth and publication contracts', async () => {
+  const s = await fixture()
+  expectDev('workers.sectionInputs', await s.t.query(internal.courseSections.getForGeneration, { sectionId: s.r.sectionId }))
+  expectDev('workers.markReady', await s.t.mutation(internal.courseSections.markReady, { sectionId: s.r.sectionId, contentBlocks: [{ type: 'text', content: text, order: 0 }] }))
+  expectDev('workers.createCards', await s.t.mutation(internal.flashcardRooms.createCourseScopedRoom, { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, title: 'Worker cards', cards: [{ term: 'Term', definition: 'Definition' }] }))
+})
+
+test('legacy flashcard source resolution and oversize publication retain dev behavior', async () => {
+  const s = await fixture()
+  expectDev('mutation.invalidCardSource', await s.owner.mutation(api.flashcardRooms.createCard, { roomId: s.r.roomId, term: 'Term', definition: 'Definition', metadata: { source: { documentId: 'legacy-missing-source', filename: 'Legacy', chunkContent: 'Retained quote' } } }))
+  expectDev('mutation.oversizeCards', await s.owner.mutation(api.flashcardRooms.generateRoomCards, { roomId: s.r.roomId, origin: 'ai', requestedCardCount: 1, cards: [{ term: 'Term 1', definition: 'Definition' }, { term: 'Term 2', definition: 'Definition' }] }))
+})
+
+test('internal generation preserves the dev trusted-worker course relation while off', async () => {
+  const s = await fixture()
+  await s.t.run(ctx => ctx.db.patch(s.r.courseId, { userId: 'https://foreign.example|legacy-course' }))
+  expectDev('workers.legacyCourseOwner', await s.t.query(internal.courseSections.getForGeneration, { sectionId: s.r.sectionId }))
+})
+
+test.each(['remove', 'updateOrder'] as const)('section %s keeps the dev mutation result beyond the new publication range', async method => {
+  const s = await fixture()
+  const ids = await s.t.run(async ctx => {
+    const ids = [s.r.sectionId]
+    for (let order = 1; order <= 101; order++) ids.push(await ctx.db.insert('courseSections', {
+      userId: HELP_OWNER.tokenIdentifier, courseId: s.r.courseId, title: `Section ${order}`, order,
+      knowledgeType: 'factual', status: 'ready', masteryLevel: 'new', contentBlocks: [{ type: 'text', content: `Teaching ${order}`, order: 0 }],
+    }))
+    return ids
+  })
+  const result = method === 'remove'
+    ? await s.owner.mutation(api.courseSections.remove, { sectionId: ids[1]! })
+    : await s.owner.mutation(api.courseSections.updateOrder, { courseId: s.r.courseId, sectionIds: [...ids].reverse() })
+  expectDev(`mutation.sections.${method}`, result)
+  expectDev(`mutation.sections.${method}.read`, await s.owner.query(api.courseSections.listByCourse, { courseId: s.r.courseId }))
+})
+
+test.each(['diagnostic_prompt', 'artifact_workspace', 'reflection_next_move'] as const)('legacy %s fallback and continuation retain the exact dev projection', async primitive => {
+  const { t, ids, ownerId } = await adaptiveEvidenceFixture(modules)
+  await t.run(async ctx => {
+    const row = (await ctx.db.get(ids.activityId))!
+    const base = { contractVersion: row.primitivePlan[0]!.contractVersion, rendererVersion: row.primitivePlan[0]!.rendererVersion }
+    const props = primitive === 'diagnostic_prompt'
+      ? { ...base, type: primitive, action: 'submit_response' as const, testId: 'learn-primitive-diagnostic-prompt' as const, props: { prompt: 'Prompt', responseFormat: 'short_text' as const, assistance: 'none' as const } }
+      : primitive === 'artifact_workspace'
+        ? { ...base, type: primitive, action: 'save_artifact' as const, testId: 'learn-primitive-artifact-workspace' as const, props: { prompt: 'Prompt', artifactKind: 'note' as const, starterText: 'Draft' } }
+        : { ...base, type: primitive, action: 'accept_next_move' as const, testId: 'learn-primitive-reflection-next-move' as const, props: { feedback: 'Feedback', nextMove: 'Continue', allowedDecisions: ['accept' as const] } }
+    await ctx.db.patch(ids.activityId, { activityClass: 'non_factual', primitivePlan: [props], purpose: 'Retained purpose',
+      reasonText: { version: 'learn-adaptive.reason-text.v1', purpose: 'Retained purpose', text: 'Retained reason' },
+      fallback: { ...row.fallback, title: 'Retained fallback', body: 'Retained fallback teaching' } })
+  })
+  const owner = t.withIdentity({ tokenIdentifier: ownerId })
+  const path = primitive === 'diagnostic_prompt' ? 'learnAdaptiveRecovery:getDiagnosticCanvas' : primitive === 'artifact_workspace' ? 'learnAdaptive:getArtifactCanvas' : 'learnAdaptive:getReflectionCanvas'
+  expectDev(`adaptive.${primitive}.canvas`, await owner.query(makeFunctionReference<'query', { threadId: typeof ids.threadId }, unknown>(path), { threadId: ids.threadId }))
+  expectDev(`adaptive.${primitive}.thread`, await owner.query(api.learnAdaptive.getThread, { threadId: ids.threadId }))
+  expectDev(`adaptive.${primitive}.memory`, await owner.query(api.learnAdaptive.getMemory, { threadId: ids.threadId }))
+})
+
+test('legacy Quiz creation retains dev foreign source metadata handling while off', async () => {
+  const s = await fixture()
+  const sourceDocumentId = await s.t.run(async ctx => {
+    const userId = 'https://foreign.example|legacy-source'
+    const folderId = await ctx.db.insert('folders', { userId, name: 'Foreign', documentCount: 1 })
+    return await ctx.db.insert('documents', { userId, folderId, filename: 'foreign.txt', status: 'success', fileSize: 1 })
+  })
+  const created = await s.owner.mutation(api.quizzes.createWithQuestions, { folderId: s.f.folderId, title: 'Legacy quiz', questions: [{
+    order: 0, type: 'free-response', question: 'My prompt', correctAnswer: 'My answer', sourceDocumentId,
+    sourceChunkContent: 'My retained quote', sourceFilename: 'Retained label',
+  }] })
+  expectDev('mutation.foreignQuizSource.create', created)
+  expectDev('mutation.foreignQuizSource.read', await s.owner.query(api.quizzes.getWithQuestions, { id: created.quizId }))
 })

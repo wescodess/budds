@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { useMediaQuery } from '@vueuse/core'
@@ -440,11 +441,10 @@ export function useChat(
 
   async function loadConversation(conversationIdToLoad: Id<'conversations'>) {
     if (!import.meta.client || !convexClient) return
-    const replay = await convexClient.mutation(api.messages.replayByConversation, {
+    const rows = (LEARN_MEASUREMENT_CAPABILITIES.responses ? (await convexClient.mutation(api.messages.replayByConversation, {
       conversationId: conversationIdToLoad,
       idempotencyKey: `message_replay_${crypto.randomUUID().replace(/-/g, '')}`,
-    })
-    const rows = replay.messages as Array<{
+    })).messages : await convexClient.query(api.messages.listByConversation, { conversationId: conversationIdToLoad })) as Array<{
       role: 'user' | 'assistant'
       content: string
       sources?: Source[]
@@ -453,7 +453,7 @@ export function useChat(
 
     messages.value = rows.map(r => ({
       role: r.role,
-      content: r.content,
+      content: !LEARN_MEASUREMENT_CAPABILITIES.responses && r.role === 'assistant' ? normalizeAssistantMessageContent(r.content) : r.content,
       sources: r.sources,
       ...(r.interjectionContext ? { interjectionContext: r.interjectionContext } : {}),
     }))

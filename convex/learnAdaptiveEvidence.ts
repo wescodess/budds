@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { mutation } from './_generated/server'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -85,7 +86,7 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
     return {
       kind: 'factual' as const, activityId: activity.activityId, eligibility: historical ? 'historical' as const : 'blocked' as const,
       readOnly: historical, integrityState: sourceIntegrity,
-      claims: claims.map(claim => ({ claimId: claim.claimId, claimText: null,
+      claims: !LEARN_MEASUREMENT_CAPABILITIES.responses ? claims.map(claim => ({ ...claim, integrityState: sourceIntegrity, claimStatus: 'unknown' as const, source: { ...claim.source, locator: locatorUnavailable ? null : claim.source.locator } })) : claims.map(claim => ({ claimId: claim.claimId, claimText: null,
         integrityState: sourceIntegrity, claimStatus: 'unknown' as const,
         source: { origin: claim.source.origin, sourceSnapshotId: claim.source.sourceSnapshotId,
           sourceSnapshotRevision: claim.source.sourceSnapshotRevision, sourceRecordRevision: claim.source.sourceRecordRevision,
@@ -103,7 +104,7 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
         : 'blocked' as const,
     readOnly: historical,
     integrityState,
-    claims: claims.map(claim => ({ claimId: claim.claimId,
+    claims: !LEARN_MEASUREMENT_CAPABILITIES.responses ? claims : claims.map(claim => ({ claimId: claim.claimId,
       claimText: claim.integrityState === 'accepted' ? claim.claimText : null, claimStatus: claim.claimStatus, integrityState: claim.integrityState,
       source: { origin: claim.source.origin, sourceSnapshotId: claim.source.sourceSnapshotId,
         sourceSnapshotRevision: claim.source.sourceSnapshotRevision, sourceRecordRevision: claim.source.sourceRecordRevision,

@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -84,6 +85,7 @@ async function replay(ctx: MutationCtx, userId: string, key: string, requestFing
   if (!row) return null
   if (!await matchesLegacyFingerprint(row.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveVoid(ctx, userId, row.learningVoidId)
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return projectFields(schedulingReceipt.fields, JSON.parse(row.response))
   if (row.response.length > 128_000) throw new Error('Scheduling receipt is unavailable')
   try {
     const result = schedulingReceiptSchema.safeParse(JSON.parse(row.response))

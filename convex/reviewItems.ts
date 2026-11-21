@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { publicReviewItem } from './lib/publicReviewItem'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -34,8 +35,8 @@ export const extractFromSection = internalMutation({
     const roomId = ctx.db.normalizeId('flashcardRooms', flashcardBlock.entityId)
     if (!roomId) return 0
 
-    const room = await ctx.db.get(roomId)
-    if (!room || room.userId !== args.userId) return 0
+    const room = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(roomId) : null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!room || room.userId !== args.userId)) return 0
     const cards = await ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', roomId))
@@ -58,7 +59,7 @@ export const extractFromSection = internalMutation({
         courseId: args.courseId,
         sectionId: args.sectionId,
         flashcardRoomCardId: card._id,
-        sourceVersionId: room.activeVersionId,
+        ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { sourceVersionId: room?.activeVersionId } : {}),
         prompt: card.term,
         answer: card.definition,
         easeFactor: 2.5,

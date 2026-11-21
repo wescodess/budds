@@ -358,7 +358,7 @@ describe('registered assessment disclosure inventory', () => {
     expect((await read())?.calibration.items[0]?.prompt).toBeNull()
   })
 
-  test.each(['diagnostic_prompt', 'artifact_workspace', 'reflection_next_move'] as const)('malformed %s never falls back to stored protected text', async kind => {
+  test.each(['diagnostic_prompt', 'artifact_workspace', 'reflection_next_move'] as const)('malformed held-out %s never falls back to stored protected text', async kind => {
     const s = await fixture()
     policy.responses = false
     await s.t.run(async ctx => {
@@ -370,7 +370,8 @@ describe('registered assessment disclosure inventory', () => {
         : kind === 'reflection_next_move'
           ? { ...base, type: kind, action: 'accept_next_move' as const, testId: 'learn-primitive-reflection-next-move' as const, props: { feedback: canaries.rubric, nextMove: canaries.solution, allowedDecisions: ['accept' as const] } }
           : activity.primitivePlan[0]!
-      await ctx.db.patch(s.f.activityId, { primitivePlan: [primitive], canonicalInputSnapshot: '{invalid',
+      await ctx.db.patch(s.f.scope.contextPins.sessionContentId, { assessmentPurpose: 'measurement_cold' })
+      await ctx.db.patch(s.f.activityId, { sessionContentId: s.f.scope.contextPins.sessionContentId, primitivePlan: [primitive], canonicalInputSnapshot: '{invalid',
         fallback: { ...activity.fallback, body: canaries.fallback }, purpose: canaries.prompt })
     })
     const value = kind === 'diagnostic_prompt' ? await s.asOwner.query(api.learnAdaptiveRecovery.getDiagnosticCanvas, { threadId: s.f.threadId })

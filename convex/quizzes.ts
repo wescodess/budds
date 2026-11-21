@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead, defineTeachingMutation } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertQuizTeaching, teachingDocuments, publishTeaching, publishContainingSections } from './lib/learnV2AssessmentLineage'
@@ -207,7 +208,7 @@ export const createWithQuestions = mutation({
     if (!folder || folder.userId !== userId) throw new Error('Folder not found')
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
 
-    if (args.requestedQuestionCount !== undefined && (!Number.isInteger(args.requestedQuestionCount) || args.requestedQuestionCount < 1 || args.requestedQuestionCount > 50 || args.questions.length > args.requestedQuestionCount)) throw new Error('Quiz exceeds the requested publication size')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && args.requestedQuestionCount !== undefined && (!Number.isInteger(args.requestedQuestionCount) || args.requestedQuestionCount < 1 || args.requestedQuestionCount > 50 || args.questions.length > args.requestedQuestionCount)) throw new Error('Quiz exceeds the requested publication size')
     await teachingDocuments(ctx, userId, args.questions.flatMap(q => q.sourceDocumentId ? [q.sourceDocumentId] : []))
     const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const trimmedTitle = args.title.trim().slice(0, 120) || 'Quiz'
@@ -252,8 +253,10 @@ export const createWithQuestions = mutation({
       })
     }
 
-    const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
-    await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole', sources })))
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
+      await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole', sources })))
+    }
     return { quizId }
   },
 })
@@ -272,7 +275,7 @@ export const createCourseScopedQuiz = internalMutation({
     if (args.questions.length > MAX_QUIZ_QUESTIONS) throw new Error(`Quiz cannot exceed ${MAX_QUIZ_QUESTIONS} questions`)
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== args.userId || course.folderId !== args.folderId || course.status === 'deleting') throw new Error('Course not found')
-    if (await requireAuth(ctx) !== course.userId) throw new Error('Learn access denied')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && await requireAuth(ctx) !== course.userId) throw new Error('Learn access denied')
     const userId = course.userId
     await teachingDocuments(ctx, userId, args.questions.flatMap(q => q.sourceDocumentId ? [q.sourceDocumentId] : []))
     const quizId = await ctx.db.insert('quizzes', {
@@ -311,8 +314,10 @@ export const createCourseScopedQuiz = internalMutation({
       })
     }
 
-    const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
-    await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole' })))
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const published = await ctx.db.query('quizQuestions').withIndex('by_quizId', q => q.eq('quizId', quizId)).take(201)
+      await publishTeaching(ctx, userId, published.map(question => ({ artifact: { kind: 'quiz_question' as const, id: question._id }, key: 'whole' })))
+    }
     return { quizId }
   },
 })

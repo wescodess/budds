@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
@@ -61,7 +62,7 @@ const conversionSummary = v.object({ activityDocumentId: v.id('learningThreadAct
 
 async function canReadActivitySummary(ctx: QueryCtx | MutationCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
   if (!await canReadActivityTeaching(ctx, thread, activity)) return false
-  return (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+  return !LEARN_MEASUREMENT_CAPABILITIES.responses || (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
 }
 
 function normalizeContributionSource(ctx: QueryCtx | MutationCtx, feature: Doc<'learningThreadContributions'>['sourceFeature'], sourceId: string): ContributionSource | null {
@@ -133,7 +134,7 @@ export const listThreadContributions = query({
     const result = await ctx.db.query('learningThreadContributions')
       .withIndex('by_userId_and_threadId_and_createdAt', q => q.eq('userId', userId).eq('threadId', args.threadId))
       .order('desc').paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(50, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
-    return { isDone: result.isDone, continueCursor: result.continueCursor, page: await Promise.all(result.page.map(async contribution => {
+    return { isDone: result.isDone, continueCursor: result.continueCursor, splitCursor: result.splitCursor, pageStatus: result.pageStatus, page: await Promise.all(result.page.map(async contribution => {
       const evidenceIntegrity = await contributionEvidenceIntegrity(ctx, userId, thread, contribution)
       return { ...projectFields(contributionSummary.fields, { ...contribution, evidenceIntegrity }), metadata: { role: contribution.metadata.role }, evidenceIntegrity }
     })) }
@@ -485,7 +486,7 @@ type MemoryProjection = {
 export const getMemory = query({
   args: { threadId: v.id('learningThreads') },
   returns: v.union(v.object({ ownerId: v.id('users'), threadId: v.id('learningThreads'), threadRevision: v.number(), lifecycle: adaptiveLifecycle,
-    unresolvedPoint: v.union(v.string(), v.null()), nextAction: v.union(v.object({ label: v.string() }), v.null()), evidenceState: v.string(),
+    unresolvedPoint: v.union(v.string(), v.null()), nextAction: v.union(v.object({ label: v.string(), kind: v.optional(v.string()), reasonCode: v.optional(v.string()), activityId: v.optional(v.union(v.string(), v.null())) }), v.null()), evidenceState: v.string(),
     preferences: v.array(v.object({ key: memoryPreferenceKeyValidator, value: v.union(v.string(), v.null()), state: disclosureLiterals(['active', 'disabled']), revision: v.number() })),
     artifacts: v.array(v.object({ id: v.id('learningThreadArtifacts'), kind: adaptiveArtifactKindValidator, title: v.string(), summary: v.string(), status: adaptiveArtifactStatusValidator,
       revision: v.number(), updatedAt: v.number(), historical: v.boolean(), readOnly: v.boolean(), evidenceLabel: v.union(v.literal('evidence_unavailable'), v.null()) })),
@@ -551,7 +552,7 @@ export const getMemory = query({
       threadRevision: thread.revision,
       lifecycle: thread.lifecycle,
       unresolvedPoint: thread.unresolvedPoint?.slice(0, 240) ?? null,
-      nextAction: continuation?.nextAction ? { label: continuation.nextAction.label } : null,
+      nextAction: !LEARN_MEASUREMENT_CAPABILITIES.responses ? continuation?.nextAction ?? null : continuation?.nextAction ? { label: continuation.nextAction.label } : null,
       evidenceState: await liveEvidenceState(ctx, thread),
       preferences: preferences.map(row => ({ key: row.key, value: row.value, state: row.state, revision: row.revision })),
       artifacts: artifacts.map(row => ({ id: row.id, kind: row.artifactKind, title: row.title, summary: row.summary,
@@ -749,7 +750,8 @@ const getArtifactCanvasRead = defineTeachingRead({
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) return null
     const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
-    const operable = replay.ok && await canReadActivityTeaching(ctx, thread, activity) && activity.requiredAction.kind === 'save_artifact'
+    const teachingAllowed = await canReadActivityTeaching(ctx, thread, activity)
+    const operable = replay.ok && teachingAllowed && activity.requiredAction.kind === 'save_artifact'
       && activity.requiredAction.label === 'Save artifact'
       && activity.primitivePlan[0].action === 'save_artifact'
       && activity.evaluationContract.kind !== 'server_scored'
@@ -759,7 +761,7 @@ const getArtifactCanvasRead = defineTeachingRead({
       ownerId: owner._id,
       thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed },
       activity: { id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
-        ...projectNonFactualPayload(activity, operable) },
+        ...projectNonFactualPayload(activity, operable, teachingAllowed) },
       status: operable ? activity.status : 'blocked' as const,
     }
   },
@@ -842,7 +844,8 @@ const getReflectionCanvasRead = defineTeachingRead({
     if (activity.primitivePlan.length !== 1 || activity.primitivePlan[0]?.type !== 'reflection_next_move') return null
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) return null
-    const primitive = await canReadActivityTeaching(ctx, thread, activity) ? await validReflectionActivity(activity) : null
+    const teachingAllowed = await canReadActivityTeaching(ctx, thread, activity)
+    const primitive = teachingAllowed ? await validReflectionActivity(activity) : null
     const decision = activity.reflectionDecision
     const decisionValid = !decision || primitive && await validPersistedReflectionDecision(ctx, thread, activity, primitive)
     const ready = primitive && !decision && ['eligible', 'started'].includes(activity.status)
@@ -853,9 +856,9 @@ const getReflectionCanvasRead = defineTeachingRead({
       thread: { id: thread._id, revision: thread.revision, outcome: thread.outcome ?? thread.originalNeed, lifecycle: thread.lifecycle },
       activity: {
         id: activity.activityId, planRevision: activity.planRevision, status: activity.status,
-        purpose: primitive ? activity.purpose : '', reason: primitive ? reasonTextForActivity({ activityClass: activity.activityClass,
+        purpose: primitive || !LEARN_MEASUREMENT_CAPABILITIES.responses && teachingAllowed ? activity.purpose : '', reason: !LEARN_MEASUREMENT_CAPABILITIES.responses && teachingAllowed ? activity.reasonText?.text ?? activity.purpose : primitive ? reasonTextForActivity({ activityClass: activity.activityClass,
           purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }).text : '',
-        ...projectNonFactualPayload(activity, Boolean(ready || completed)),
+        ...projectNonFactualPayload(activity, Boolean(ready || completed), teachingAllowed),
       },
       status: completed ? 'completed' as const : ready ? activity.status : 'blocked' as const,
       decision: completed ? { outcome: decision.outcome, nextMove: decision.nextMove, decidedAt: decision.decidedAt } : null,
@@ -1223,7 +1226,7 @@ async function projectThread(ctx: QueryCtx, userId: string, thread: Doc<'learnin
   }
   const sourceEvidenceState = await liveEvidenceState(ctx, thread)
   const teachingAllowed = !activity || await canReadActivityTeaching(ctx, thread, activity)
-  const planValid = !activity || (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
+  const planValid = !LEARN_MEASUREMENT_CAPABILITIES.responses || !activity || (await replayAdaptiveActivityPlan(storedPlan(activity))).ok
   const factualCanvas = teachingAllowed && activity?.activityClass === 'factual' ? await loadReadyCanvas(ctx, userId, thread._id, { includeSavedResponse: false }) : null
   const completion = await representativeCompletion(ctx, userId, activity)
   const reflectionPrimitive = activity ? await validReflectionActivity(activity) : null

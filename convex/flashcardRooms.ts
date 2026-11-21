@@ -55,9 +55,9 @@ async function resolveDocumentId(
 ): Promise<Id<'documents'> | undefined> {
   if (!raw) return undefined
   const normalized = ctx.db.normalizeId('documents', raw)
-  if (!normalized) throw new Error('Teaching input is unavailable')
+  if (!normalized) { if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Teaching input is unavailable'); return undefined }
   const doc = await ctx.db.get(normalized)
-  if (!doc || doc.userId !== userId) throw new Error('Teaching input is unavailable')
+  if (!doc || doc.userId !== userId) { if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Teaching input is unavailable'); return undefined }
   await teachingDocuments(ctx, userId, [normalized])
   return normalized
 }
@@ -167,7 +167,7 @@ async function archiveCurrentCards(
       term: card.term,
       definition: card.definition,
       metadata: card.metadata,
-      sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename,
+      ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename } : {}),
     })
   }
 
@@ -188,10 +188,10 @@ export const createCourseScopedRoom = internalMutation({
     })),
   },
   handler: async (ctx, args) => {
-    const userId = await requireAuth(ctx)
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : args.userId
     if (userId !== args.userId) throw new Error('Learn access denied')
-    const folder = await ctx.db.get(args.folderId)
-    if (!folder || folder.userId !== userId) throw new Error('Folder not found')
+    const folder = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(args.folderId) : null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!folder || folder.userId !== userId)) throw new Error('Folder not found')
     const title = normalizeTitle(args.title, 'Section Flashcards')
     const now = Date.now()
 
@@ -341,10 +341,10 @@ const getRoomRead = defineTeachingRead({
     if (!room || room.userId !== userId) return null
 
     await assertRoomTeaching(ctx, userId, room._id)
-    const cards = await ctx.db
+    const collection = ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 201 : 32_000)
+    const cards = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(201) : await collection.collect()
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
@@ -543,8 +543,8 @@ export const generateRoomCards = mutation({
     const userId = await requireIdentity(ctx)
     const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
-    if (args.requestedCardCount !== undefined && (!Number.isInteger(args.requestedCardCount) || args.requestedCardCount < 1 || args.requestedCardCount > 200)
-      || args.cards.length > (args.requestedCardCount ?? 200)) throw new Error('Flashcards exceed the requested publication size')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (args.requestedCardCount !== undefined && (!Number.isInteger(args.requestedCardCount) || args.requestedCardCount < 1 || args.requestedCardCount > 200)
+      || args.cards.length > (args.requestedCardCount ?? 200))) throw new Error('Flashcards exceed the requested publication size')
     const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const archiveOpts = await resolveArchiveOpts(ctx, room)
     await archiveCurrentCards(ctx, room, archiveOpts)
@@ -658,10 +658,10 @@ const getRoomVersionRead = defineTeachingRead({
     if (!version || version.userId !== userId) return null
 
     await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: version._id }])
-    const cards = await ctx.db
+    const collection = ctx.db
       .query('flashcardVersionCards')
       .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
-      .take(LEARN_MEASUREMENT_CAPABILITIES.responses ? 201 : 32_000)
+    const cards = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(201) : await collection.collect()
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
@@ -714,7 +714,7 @@ export const restoreRoomVersion = mutation({
         term: card.term,
         definition: card.definition,
         metadata: card.metadata,
-        sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename,
+        ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename } : {}),
       })
     }
 

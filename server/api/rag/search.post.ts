@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 import { makeConvexClient } from '../../utils/convex-client'
@@ -18,9 +19,9 @@ export default defineEventHandler(async (event) => {
   }
 
   const client = makeConvexClient(event)
-  if (!client) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && !client) throw createError({ statusCode: 503, message: 'Convex client unavailable' })
   const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'search',
-    scope: body.folderId ? { references: [{ kind: 'folder', id: body.folderId as Id<'folders'> }] } : null }, client)
+    scope: body.folderId ? { references: [{ kind: 'folder', id: body.folderId as Id<'folders'> }] } : null }, client ?? undefined)
   await authorizeHelp()
   const teachingScope = await loadTeachingScope(client, { folderId: body.folderId as Id<'folders'> | undefined })
   await authorizeHelp()

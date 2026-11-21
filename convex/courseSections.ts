@@ -1,6 +1,7 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
-import { teachingSourcePinsValidator, admitTeachingSourcePins, assertSectionTeaching, assertBlockInputs, teachingDocuments, publishSections } from './lib/learnV2AssessmentLineage'
+import { teachingSourcePinsValidator, admitTeachingSourcePins, assertSectionTeaching, assertBlockInputs, teachingDocuments, publishSections, publishCourseSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
@@ -133,7 +134,7 @@ export const remove = mutation({
       }
     }
 
-    await publishSections(ctx, userId, await ctx.db.query('courseSections').withIndex('by_courseId_and_order', q => q.eq('courseId', section.courseId)).collect())
+    await publishCourseSections(ctx, userId, section.courseId)
     const course = await ctx.db.get(section.courseId)
     if (course) {
       const filtered = course.outlineSections
@@ -242,7 +243,7 @@ export const updateOrder = mutation({
       })
     }
 
-    await publishSections(ctx, userId, await ctx.db.query('courseSections').withIndex('by_courseId_and_order', q => q.eq('courseId', args.courseId)).collect())
+    await publishCourseSections(ctx, userId, args.courseId)
     await ctx.db.patch(args.courseId, {
       outlineSections: reorderedOutline,
       updatedAt: Date.now(),
@@ -281,8 +282,8 @@ export const getForGeneration = internalQuery({
       .withIndex('by_courseId', (q) => q.eq('courseId', section.courseId))
       .collect()
 
-    const userId = await requireAuth(ctx)
-    if (section.userId !== userId || course.userId !== userId) throw new Error('Section not found')
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : section.userId
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (section.userId !== userId || course.userId !== userId)) throw new Error('Section not found')
     await assertSectionTeaching(ctx, section)
     await teachingDocuments(ctx, userId, sourceDocs.flatMap(source => source.documentId ? [source.documentId] : []))
     return { section, course, sourceDocs }
@@ -299,7 +300,7 @@ export const markReady = internalMutation({
     const section = await ctx.db.get(args.sectionId)
     if (!section) return
 
-    const userId = await requireAuth(ctx)
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : section.userId
     if (section.userId !== userId) throw new Error('Section not found')
     await assertSectionTeaching(ctx, section)
     await assertBlockInputs(ctx, userId, args.contentBlocks)
@@ -381,7 +382,7 @@ export const finalizeSectionGeneration = mutation({
     await teachingDocuments(ctx, userId, (args.quizData?.questions ?? []).flatMap(question => question.sourceDocumentId ? [question.sourceDocumentId] : []))
     if (args.audioEntityId) await assertBlockInputs(ctx, userId, [{ type: 'audio', order: 0, entityId: args.audioEntityId }])
     const limits = section.knowledgeType === 'factual' ? [5, 16] : section.knowledgeType === 'procedural' ? [10, 8] : [8, 12]
-    if ((args.quizData?.questions.length ?? 0) > limits[0]! || (args.flashcardData?.cards.length ?? 0) > limits[1]!) throw new Error('Section exceeds the requested publication size')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && ((args.quizData?.questions.length ?? 0) > limits[0]! || (args.flashcardData?.cards.length ?? 0) > limits[1]!)) throw new Error('Section exceeds the requested publication size')
     const outputs: Array<{ artifact: { kind: 'quiz_question', id: Id<'quizQuestions'> } | { kind: 'flashcard_version', id: Id<'flashcardRoomVersions'> }, key: string, sources: typeof sources }> = []
 
     const contentBlocks: Array<{

@@ -22,7 +22,7 @@ import { privacyRead } from './learnV2PrivacyReadContext'
 type ReadCtx = QueryCtx | MutationCtx
 export const disclosureLiterals = <const T extends string>(values: readonly T[]) => v.union(...values.map(value => v.literal(value)))
 const nullableString = v.union(v.string(), v.null())
-export const pageFields = { isDone: v.boolean(), continueCursor: v.string() }
+export const pageFields = { isDone: v.boolean(), continueCursor: v.string(), splitCursor: v.optional(v.union(v.string(), v.null())), pageStatus: v.optional(v.union(disclosureLiterals(['SplitRecommended', 'SplitRequired']), v.null())) }
 
 // The validator is also the field allowlist; adding a storage field cannot
 // enlarge a public document projection.
@@ -450,7 +450,7 @@ export const nonFactualPrimitive = v.union(
   v.object({ ...primitiveBase, type: v.literal('reflection_next_move'), action: disclosureLiterals(['accept_next_move', 'override_next_move', 'end_thread']), testId: v.literal('learn-primitive-reflection-next-move'),
     props: v.object({ feedback: v.string(), nextMove: v.string(), allowedDecisions: v.array(disclosureLiterals(['accept', 'override', 'end'])) }) }),
 )
-export function projectNonFactualPayload(activity: Doc<'learningThreadActivities'>, allowed: boolean) {
+export function projectNonFactualPayload(activity: Doc<'learningThreadActivities'>, allowed: boolean, teachingAllowed = true) {
   const p = allowed && activity.primitivePlan.length === 1 ? activity.primitivePlan[0] : null
   const primitive = !p ? null : p.type === 'diagnostic_prompt'
     ? { contractVersion: p.contractVersion, rendererVersion: p.rendererVersion, type: p.type, action: p.action, testId: p.testId,
@@ -461,14 +461,14 @@ export function projectNonFactualPayload(activity: Doc<'learningThreadActivities
       : p.type === 'reflection_next_move'
         ? { contractVersion: p.contractVersion, rendererVersion: p.rendererVersion, type: p.type, action: p.action, testId: p.testId,
             props: { feedback: p.props.feedback, nextMove: p.props.nextMove, allowedDecisions: [...p.props.allowedDecisions] } } : null
-  const f = primitive ? activity.fallback : adaptiveActivityFallbackForReason('invalid_props')
+  const f = primitive || !LEARN_MEASUREMENT_CAPABILITIES.responses && teachingAllowed ? activity.fallback : adaptiveActivityFallbackForReason('invalid_props')
   return { primitive, fallback: { version: f.version, kind: f.kind, title: f.title, body: f.body,
     primaryAction: { type: f.primaryAction.type, label: f.primaryAction.label }, testId: f.testId } }
 }
 
 export async function canReadActivityTeaching(ctx: ReadCtx, thread: Doc<'learningThreads'>, activity: Doc<'learningThreadActivities'>) {
   const userId = await requireAuth(ctx)
-  if (thread.userId !== userId || activity.userId !== userId || activity.threadId !== thread._id || thread.deletionStartedAt !== undefined) return false
+  if (thread.userId !== userId || activity.userId !== userId || activity.threadId !== thread._id || LEARN_MEASUREMENT_CAPABILITIES.responses && thread.deletionStartedAt !== undefined) return false
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) {
     const content = activity.sessionContentId ? await ctx.db.get(activity.sessionContentId) : null
     if (content?.userId === userId && content.assessmentPurpose && content.assessmentPurpose !== 'independent_application') return false

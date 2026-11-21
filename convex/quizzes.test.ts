@@ -1,9 +1,16 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
+
+const policy = vi.hoisted(() => ({ responses: false }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, get responses() { return policy.responses } } }
+})
+beforeEach(() => { policy.responses = false })
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -99,7 +106,8 @@ describe('quizzes.createWithQuestions', () => {
     }
   })
 
-  test('[P1] rejects a foreign source before persisting its copied payload', async () => {
+  test('[P1] with responses enabled rejects a foreign source before persisting its copied payload', async () => {
+    policy.responses = true
     const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
