@@ -175,7 +175,7 @@ export function createAudioOverviewPlayback() {
   const preloadElRef = shallowRef<HTMLAudioElement | null>(null)
   const magnitude = ref(0)
   const visualizerSupported = ref(true)
-  let listenersAttached = false
+  let listenersElement: HTMLAudioElement | null = null
   let rafId: number | null = null
   let spliceApplied = false
   let interjectionSession: {
@@ -349,9 +349,9 @@ export function createAudioOverviewPlayback() {
     if (!import.meta.client) return
     audioElRef.value = el
     preloadElRef.value = preloadEl
-    if (el && !listenersAttached) {
+    if (el && listenersElement !== el) {
       setupListeners(el)
-      listenersAttached = true
+      listenersElement = el
     }
   }
 
@@ -589,8 +589,8 @@ export function createAudioOverviewPlayback() {
   function dismiss() {
     pause()
     stopVisualizer()
-    const el = audioElRef.value
-    if (el) {
+    for (const el of [audioElRef.value, preloadElRef.value]) {
+      if (!el) continue
       el.removeAttribute('src')
       el.load()
     }
@@ -616,6 +616,10 @@ export function createAudioOverviewPlayback() {
     spliceApplied = false
   }
 
+  function release(overviewId: string) {
+    if (state.overviewId === overviewId) dismiss()
+  }
+
   const shellVisible = ref(false)
 
   return {
@@ -639,6 +643,7 @@ export function createAudioOverviewPlayback() {
     spliceTurns,
     playInterjection,
     dismiss,
+    release,
   }
 }
 

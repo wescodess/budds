@@ -173,7 +173,7 @@ describe('Learn V2 foundational lifecycle', () => {
       const learningVoid = await owner.mutation(api.learnV2Lifecycle.createLearningVoid, { folderId, title: 'Ordinal', idempotencyKey: 'ordinal-void' })
       const original = await owner.mutation(api.learnV2Lifecycle.createBlueprintDraft, { learningVoidId: learningVoid!._id, expectedVoidRevision: 1, idempotencyKey: 'ordinal-blueprint' })
       const second = await owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: original!._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'ordinal-second' })
-      await expect(owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: original!._id, expectedRecordRevision: 1, expectedVoidRevision: 3, idempotencyKey: 'ordinal-stale' })).rejects.toThrow(/revision conflict/)
+      await expect(owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: original!._id, expectedRecordRevision: 1, expectedVoidRevision: 3, idempotencyKey: 'ordinal-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
       const third = await owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: second!._id, expectedRecordRevision: 1, expectedVoidRevision: 3, idempotencyKey: 'ordinal-third' })
       expect([original!.revision, second!.revision, third!.revision]).toEqual([1, 2, 3])
     }

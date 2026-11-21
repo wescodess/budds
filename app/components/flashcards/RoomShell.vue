@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
-import { History, Pencil, Play, Sparkles, Loader2 } from '@lucide/vue'
+import { CircleAlert, History, Pencil, Play, Sparkles, Loader2 } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
@@ -19,7 +21,7 @@ const emit = defineEmits<{
   generationStarted: []
 }>()
 
-const { data: roomData } = useConvexQuery(
+const roomQuery = useTeachingQuery(
   api.flashcardRooms.getRoom,
   computed(() => ({ roomId: props.roomId })),
 )
@@ -32,6 +34,8 @@ const deleteMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.deleteRoom)
   : createSsrMutationStub<typeof api.flashcardRooms.deleteRoom>()
 
+const roomData = roomQuery.data
+const roomFailure = computed(() => roomQuery.failure.value)
 const room = computed(() => roomData.value?.room ?? null)
 const cards = computed(() => roomData.value?.cards ?? [])
 const cardCount = computed(() => cards.value.length)
@@ -55,6 +59,14 @@ const runningTaskForRoom = computed(() =>
 const mode = ref<Mode>('editor')
 const historyOpen = ref(false)
 const generateOpen = ref(false)
+const roomPaused = computed(() => roomFailure.value?.retryable === false)
+
+watch(roomPaused, (paused) => {
+  if (!paused) return
+  mode.value = 'editor'
+  historyOpen.value = false
+  generateOpen.value = false
+})
 const confirmDeleteOpen = ref(false)
 
 const lastUpdated = computed<number | null>(() => {
@@ -96,7 +108,7 @@ async function handleConfirmDelete() {
       @delete="confirmDeleteOpen = true"
       @back="emit('back')"
     />
-    <div v-else class="flex items-center gap-3 border-b border-border/60 px-5 py-4">
+    <div v-else-if="!roomFailure" class="flex items-center gap-3 border-b border-border/60 px-5 py-4">
       <UiSkeleton class="h-9 w-9 rounded-lg" />
       <UiSkeleton class="h-6 w-40 rounded-md" />
     </div>
@@ -106,10 +118,11 @@ async function handleConfirmDelete() {
         <button
           type="button"
           :class="[
-            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition',
+            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
             mode === 'editor' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-editor"
+          :disabled="roomPaused"
           @click="mode = 'editor'"
         >
           <Pencil class="h-3.5 w-3.5" />
@@ -118,10 +131,11 @@ async function handleConfirmDelete() {
         <button
           type="button"
           :class="[
-            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition',
+            'flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50',
             mode === 'practice' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-practice"
+          :disabled="roomPaused"
           @click="mode = 'practice'"
         >
           <Play class="h-3.5 w-3.5" />
@@ -134,6 +148,7 @@ async function handleConfirmDelete() {
           variant="outline"
           size="sm"
           data-testid="flashcard-room-history-toggle"
+          :disabled="roomPaused"
           @click="historyOpen = true"
         >
           <History class="mr-1.5 h-4 w-4" />
@@ -142,6 +157,7 @@ async function handleConfirmDelete() {
         <UiButton
           size="sm"
           data-testid="flashcard-room-generate-trigger"
+          :disabled="roomPaused"
           @click="generateOpen = true"
         >
           <Sparkles class="mr-1.5 h-4 w-4" />
@@ -168,8 +184,12 @@ async function handleConfirmDelete() {
     </div>
 
     <div class="min-h-0 flex-1 overflow-y-auto">
+      <div v-if="roomFailure" class="p-5">
+        <p v-if="roomFailure && !roomFailure.retryable" role="status" data-testid="flashcards-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ roomFailure.message }}</span></p>
+        <div v-else-if="roomFailure" role="alert" data-testid="flashcards-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load these flashcards.</p><button type="button" data-testid="flashcards-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="roomQuery.refresh?.()">Try again</button></div>
+      </div>
       <FlashcardsRoomEditor
-        v-if="mode === 'editor'"
+        v-else-if="mode === 'editor'"
         :room-id="roomId"
         :cards="cards"
       />

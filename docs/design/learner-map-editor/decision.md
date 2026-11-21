@@ -16,6 +16,7 @@ Spec: [#515](https://github.com/wescodess/budds/issues/515). Blocks C4: [#514](h
 - Round 1: `recommended answers` (Outline, with the orchestrator's recommended side effects).
 - Round 2: `reccommended answers` (3b).
 - States 3b does not draw follow 3a, with Accept only in the bar: `Yes, follow 3a (Recommended)`.
+- 2026-11-18: `fit`. At 320 wide the bar stays on one row: Order becomes an icon-only button (its existing icon, named "Order", 36px) next to Accept, so the first objective's citations stay in view. It narrows only when the bar is under 21rem; wider bars keep the approved Order button.
 
 **Date:** 2026-11-17
 
@@ -38,6 +39,17 @@ Owner's words, 2026-11-17: `No Add on empty map, Time/depth pop-overs, One objec
 - While one objective has unsaved changes, another can't be selected; the bar's Go to it returns to it.
 - The saving spinner uses `--learn-attention`, as `DESIGN.md` requires for in-progress states.
 - Split is held with the objective's other changes and sent on Save.
+
+## Approved differences from `approved.html`
+
+Owner's words, 2026-11-18: `Keep disabled + note (Recommended)`.
+
+- At 15 objectives, Add objective stays disabled, with the note "A map holds up to 15 objectives. Remove one to add another."
+
+Owner's words, 2026-11-18: `Tint + border (Recommended)`.
+
+- In the sources pop-over, the selected answer to "Do your sources cover this?" uses the `DESIGN.md` active state: an amber `--primary` border and the same 8% amber tint as the order pop-over's current row and the sidebar's Learn item, with `text-foreground`. Keyboard focus is the ring only, and Accept learning map stays the only filled amber action in view.
+- This replaces 3a's filled amber segment.
 
 ## Product decisions carried into the build
 

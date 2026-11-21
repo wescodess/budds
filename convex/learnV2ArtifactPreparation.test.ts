@@ -575,7 +575,7 @@ describe('round-2 producer budgets', { timeout: 30_000 }, () => {
     const edit = !section ? undefined : await f.asOwner.run(async raw => {
       const reference = result.references.find(ref => ref.artifact.kind === 'section_block')!
       if (reference.artifact.kind !== 'section_block') throw new Error('Expected section')
-      await raw.runMutation(api.courseSections.updateTitle, { sectionId: reference.artifact.id, title: 'Edited section' })
+      await raw.db.patch(reference.artifact.id, { title: 'Edited section' })
       const total = createArtifactLineagePublicationContext(raw)
       await prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [0, 1, 2, 3].map(index => member(reference.artifact as LearnArtifactPreparationArgs['artifacts'][number]['artifact'], `block-${index}`)) })
       return { ...total.readUsage, ranges: total.indexRanges }
@@ -784,8 +784,8 @@ describe('Stage B revision succession', () => {
     for (const action of ['flag', 'unflag', 'flag'] as const) {
       const before = published.references[0]!
       published = await f.asOwner.run(async ctx => {
-        if (action === 'flag') await ctx.runMutation(api.contentFlags.flagQuizQuestion, { questionId: question.id, correctedAnswer: 'Corrected solution' })
-        else await ctx.runMutation(api.contentFlags.unflagQuizQuestion, { questionId: question.id })
+        if (action === 'flag') await ctx.db.patch(question.id, { flagged: true, correctedAnswer: 'Corrected solution' })
+        else await ctx.db.patch(question.id, { flagged: undefined, correctedAnswer: undefined })
         expect(await admitArtifactInputByIdentity(ctx, question)).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
         return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
       })
@@ -808,7 +808,7 @@ describe('Stage B revision succession', () => {
     if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
     for (let i = 0; i < 40; i++) {
       published = await f.asOwner.run(async ctx => {
-        await ctx.runMutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: `Edited scenario ${i}` })
+        await ctx.db.patch(artifact.id, { question: `Edited scenario ${i}` })
         return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
       })
       expect(await f.asOwner.run(ctx => admitArtifactInput(ctx, { reference: published.references[0]! }))).toMatchObject({ status: 'admitted_registered' })
@@ -828,10 +828,10 @@ describe('Stage B revision succession', () => {
     const artifact = published.references[0]!.artifact
     if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
     await f.t.run(ctx => ctx.db.patch(published.lineageIds[0]!, { classification }))
-    await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: 'Stranded protected scenario' })
+    await f.t.run(ctx => ctx.db.patch(artifact.id, { question: 'Stranded protected scenario' }))
     const before = await inventory(f.t)
     await expect(f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: 'A different scenario' })
+      await ctx.db.patch(artifact.id, { question: 'A different scenario' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
     })).rejects.toThrow('unavailable')
     expect(await inventory(f.t)).toEqual(before)
@@ -899,7 +899,7 @@ describe('Stage B corrected answers and linked section revisions', () => {
     const quiz = await f.t.run(ctx => writeQuiz(ctx, f))
     const artifact = quiz.artifacts[0]!.artifact
     if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
-    await f.asOwner.mutation(api.contentFlags.flagQuizQuestion, { questionId: artifact.id, correctedAnswer: 'Reserved solution' })
+    await f.t.run(ctx => ctx.db.patch(artifact.id, { flagged: true, correctedAnswer: 'Reserved solution' }))
     await f.t.run(ctx => reserve(ctx))
     await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: quiz.artifacts }))).rejects.toThrow('reservation check rejected')
   })
@@ -908,7 +908,7 @@ describe('Stage B corrected answers and linked section revisions', () => {
     const f = await setup()
     await registerSource(f)
     const section = await f.t.run(ctx => writeSectionCards(ctx, f))
-    await f.asOwner.mutation(api.contentFlags.flagFlashcard, { cardId: section.cardId, correctedDefinition: 'Reserved solution' })
+    await f.t.run(ctx => ctx.db.patch(section.cardId, { flagged: true, correctedDefinition: 'Reserved solution' }))
     await f.t.run(ctx => reserve(ctx))
     await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [section.artifacts[1]!] }))).rejects.toThrow('reservation check rejected')
   })
@@ -920,8 +920,8 @@ describe('Stage B corrected answers and linked section revisions', () => {
     await f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.artifacts }))
     for (const action of ['flag', 'unflag', 'flag'] as const) {
       const result = await f.asOwner.run(async ctx => {
-        if (action === 'flag') await ctx.runMutation(api.contentFlags.flagFlashcard, { cardId: section.cardId, correctedDefinition: 'Corrected card solution' })
-        else await ctx.runMutation(api.contentFlags.unflagFlashcard, { cardId: section.cardId })
+        if (action === 'flag') await ctx.db.patch(section.cardId, { flagged: true, correctedDefinition: 'Corrected card solution' })
+        else await ctx.db.patch(section.cardId, { flagged: undefined, correctedDefinition: undefined })
         expect(await admitArtifactInputByIdentity(ctx, { kind: 'section_block', id: section.sectionId })).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
         return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [section.artifacts[1]!] })
       })
@@ -1022,7 +1022,7 @@ describe('Stage B source availability and identity boundaries', () => {
     const artifact = first.references[0]!.artifact
     if (artifact.kind !== 'quiz_question') throw new Error('Expected question')
     const next = await f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: 'Stricter successor scenario' })
+      await ctx.db.patch(artifact.id, { question: 'Stricter successor scenario' })
       const extra = await ctx.db.insert('folders', { userId, name: 'Additional required access', documentCount: 0 })
       const output = member(artifact)
       output.sources.push({ kind: 'folder', folderId: extra })
@@ -1177,7 +1177,7 @@ describe('B2 revision succession binds current content', { timeout: 60_000 }, ()
     const artifact = { kind: 'section_block' as const, id: section.sectionId }
     for (let i = 0; i < 30; i++) {
       await f.asOwner.run(async ctx => {
-        await ctx.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: `Edited section ${i}` })
+        await ctx.db.patch(section.sectionId, { title: `Edited section ${i}` })
         expect(await admitArtifactInputByIdentity(ctx, artifact)).toMatchObject({ status: 'rejected', reasonCode: 'registration_required' })
         await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(artifact)] })
       })
@@ -1205,7 +1205,7 @@ describe('B2 revision succession binds current content', { timeout: 60_000 }, ()
     })
     const question = quizArtifact(published.references[0]!)
     const flagged = await f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.contentFlags.flagQuizQuestion, { questionId: question.id, correctedAnswer: 'Corrected rewritten solution' })
+      await ctx.db.patch(question.id, { flagged: true, correctedAnswer: 'Corrected rewritten solution' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })
     expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_registered' })
@@ -1255,7 +1255,7 @@ describe('B2 revision succession binds current content', { timeout: 60_000 }, ()
     await f.t.run(ctx => ctx.db.delete(other))
     const before = await inventory(f.t)
     await expect(f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Edited after source deletion' })
+      await ctx.db.patch(question.id, { question: 'Edited after source deletion' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })).rejects.toThrow('unavailable')
     expect(await inventory(f.t)).toEqual(before)
@@ -1270,7 +1270,7 @@ describe('B2 revision succession binds current content', { timeout: 60_000 }, ()
     await f.t.run(ctx => ctx.db.patch(taught!._id, { reservedAt: 0 }))
     vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'complete' })
     const edit = (fields: { question?: string, correctAnswer?: string, explanation?: string }) => f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, ...fields })
+      await ctx.db.patch(question.id, { ...fields })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })
     await expect(edit({ explanation: 'Only the explanation changed' })).rejects.toThrow('reservation check rejected')
@@ -1310,7 +1310,7 @@ describe('B2 exact pair identity', () => {
     const first = await publishQuiz(f, [{ question: 'What is the capital of Australia?', answer: 'Sydney' }])
     const question = quizArtifact(first.references[0]!)
     const corrected = await f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.contentFlags.flagQuizQuestion, { questionId: question.id, correctedAnswer: 'Canberra' })
+      await ctx.db.patch(question.id, { flagged: true, correctedAnswer: 'Canberra' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })
     expect(await bindingsFor(f.t, corrected.lineageIds[0]!)).toMatchObject([await normalizedInstructionalCaseFingerprints('What is the capital of Australia?', 'Canberra')])
@@ -1382,7 +1382,7 @@ describe('B2 descendant re-pinning', { timeout: 60_000 }, () => {
     }
     const [explicit, lazy, edited] = copies.map(copy => quizArtifact(copy.references[0]!))
     const successor = await f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: quizArtifact(origin.references[0]!).id, question: 'Origin task, revised' })
+      await ctx.db.patch(quizArtifact(origin.references[0]!).id, { question: 'Origin task, revised' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(quizArtifact(origin.references[0]!))] })
     })
     for (const copy of copies) {
@@ -1391,7 +1391,7 @@ describe('B2 descendant re-pinning', { timeout: 60_000 }, () => {
     }
     await expect(f.t.withIdentity(foreign).run(ctx => repinArtifactLineageDescendantsForOwner(ctx, userId, { artifacts: [explicit!] }))).rejects.toThrow('access denied')
     await expect(f.asOwner.run(ctx => repinArtifactLineageDescendants(ctx, { artifacts: [explicit!], origins: [] }))).rejects.toThrow()
-    await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: edited!.id, question: 'Copied edited task, changed' })
+    await f.t.run(ctx => ctx.db.patch(edited!.id, { question: 'Copied edited task, changed' }))
     const repinned = await f.t.run(ctx => repinArtifactLineageDescendantsForRecord(ctx, { kind: 'document', id: f.documentId }, { artifacts: [explicit!, edited!] }))
     expect(repinned).toMatchObject({ references: [copies[0]!.references[0]], catalogRevision: successor.catalogRevision + 1 })
     expect(await f.asOwner.run(ctx => repinArtifactLineageDescendants(ctx, { artifacts: [explicit!] }))).toMatchObject({ lineageIds: [], references: [], catalogRevision: repinned.catalogRevision })
@@ -1420,8 +1420,8 @@ describe('B2 enrollment, idempotency and linked components', { timeout: 60_000 }
     })
     const artifact = quizArtifact(copy.references[0]!)
     await f.t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: false } }))
-    if (condition === 'origin_edited') await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: quizArtifact(origin.references[0]!).id, question: 'Origin edited while unenrolled' })
-    else if (condition !== 'unchanged') await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: artifact.id, question: 'Edited while unenrolled' })
+    if (condition === 'origin_edited') await f.t.run(ctx => ctx.db.patch(quizArtifact(origin.references[0]!).id, { question: 'Origin edited while unenrolled' }))
+    else if (condition !== 'unchanged') await f.t.run(ctx => ctx.db.patch(artifact.id, { question: 'Edited while unenrolled' }))
     await f.t.run(async ctx => {
       const row = (await ctx.db.get(copy.lineageIds[0]!))!
       if (condition === 'invalidated') await ctx.db.patch(row._id, { invalidatedAt: 0 })
@@ -1452,12 +1452,12 @@ describe('B2 enrollment, idempotency and linked components', { timeout: 60_000 }
     })
     const question = quizArtifact(published.references[0]!)
     await f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Only the whole key is re-registered' })
+      await ctx.db.patch(question.id, { question: 'Only the whole key is re-registered' })
       await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })
     await f.t.run(ctx => ctx.db.patch(f.catalogId, { measurementCapability: { enabled: false } }))
     expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'rejected', reasonCode: 'lineage_unavailable' })
-    await f.asOwner.mutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Both keys are now stale' })
+    await f.t.run(ctx => ctx.db.patch(question.id, { question: 'Both keys are now stale' }))
     expect(await f.asOwner.run(ctx => admitArtifactInputByIdentity(ctx, question))).toMatchObject({ status: 'admitted_unregistered' })
   })
 
@@ -1467,7 +1467,7 @@ describe('B2 enrollment, idempotency and linked components', { timeout: 60_000 }
     const first = await publishQuiz(f, [{ question: 'Replayed task', answer: 'Replayed solution' }])
     const question = quizArtifact(first.references[0]!)
     const replay = () => f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.updateQuestion, { questionId: question.id, question: 'Replayed task, edited' })
+      await ctx.db.patch(question.id, { question: 'Replayed task, edited' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member(question)] })
     })
     const edited = await replay()
@@ -1513,7 +1513,7 @@ describe('B2 enrollment, idempotency and linked components', { timeout: 60_000 }
     if (condition !== 'teaching') await f.t.run(ctx => ctx.db.patch(section.result.lineageIds[target]!, condition === 'invalidated' ? { invalidatedAt: 0 } : { classification: condition }))
     const before = await inventory(f.t)
     const publish = f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: 'Edited over a linked component' })
+      await ctx.db.patch(section.sectionId, { title: 'Edited over a linked component' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
     })
     if (condition === 'teaching') expect(await publish).toMatchObject({ catalogRevision: section.result.catalogRevision + 1 })
@@ -1536,7 +1536,8 @@ describe('B2 linked component and case memo boundaries', { timeout: 60_000 }, ()
     const before = await inventory(f.t)
     await expect(f.asOwner.run(async ctx => {
       const room = (await ctx.db.query('flashcardRoomCards').withIndex('by_userId', q => q.eq('userId', userId)).take(1))[0]!.roomId
-      await ctx.runMutation(api.flashcardRooms.createCard, { roomId: room, term: 'An unversioned term', definition: 'An unversioned definition' })
+      await ctx.db.insert('flashcardRoomCards', { userId, roomId: room, displayOrder: 2, term: 'An unversioned term', definition: 'An unversioned definition' })
+      await ctx.db.patch(room, { activeVersionId: undefined })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
     })).rejects.toThrow('unavailable')
     expect(await inventory(f.t)).toEqual(before)
@@ -1552,7 +1553,7 @@ describe('B2 linked component and case memo boundaries', { timeout: 60_000 }, ()
     })
     const before = await inventory(f.t)
     await expect(f.asOwner.run(async ctx => {
-      await ctx.runMutation(api.quizzes.addQuestion, { quizId: section.quizId, questionText: 'An unregistered task', type: 'free-response', correctAnswer: 'An unregistered solution' })
+      await ctx.db.insert('quizQuestions', { userId, quizId: section.quizId, order: 1, question: 'An unregistered task', type: 'free-response', correctAnswer: 'An unregistered solution' })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
     })).rejects.toThrow('unavailable')
     expect(await inventory(f.t)).toEqual(before)
@@ -1600,7 +1601,7 @@ describe('B2 section budget envelope', { timeout: 120_000 }, () => {
     const before = await inventory(f.t)
     await expect(f.asOwner.run(async raw => {
       const total = createArtifactLineagePublicationContext(raw)
-      await raw.runMutation(api.courseSections.updateTitle, { sectionId: section.sectionId, title: 'Edited oversized section' })
+      await raw.db.patch(section.sectionId, { title: 'Edited oversized section' })
       return prepareAndRegisterInstructionalArtifacts(total.preparation.ctx, { artifacts: [member({ kind: 'section_block', id: section.sectionId })] })
     })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'projection_exceeds_budget' } })
     expect(await inventory(f.t)).toEqual(before)
@@ -2155,6 +2156,36 @@ describe('sibling inspection recovery and batch boundaries', { timeout: 60_000 }
       await ctx.db.insert('quizQuestions', { userId, quizId: section.quizId, order: 1, question: 'New unregistered component', correctAnswer: 'New solution', type: 'free-response', sourceDocumentId: f.documentId })
       return prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: section.keys })
     })).rejects.toThrow('unavailable')
+    expect(await inventory(f.t)).toEqual(before)
+  })
+})
+
+
+describe('retained-document partition', () => {
+  test.each([false, true])('a same-batch document cannot repair a retained sibling source (document first: %s)', async documentFirst => {
+    const f = await setup()
+    await registerSource(f, true)
+    const retainedDocumentId = await registerDocument(f, 'retained-only')
+    const quiz = await f.asOwner.run(async ctx => {
+      const written = await writeQuiz(ctx, f)
+      const root = written.artifacts[0]!
+      await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [root, {
+        ...root, key: 'sibling', sources: [{ kind: 'document', documentId: retainedDocumentId, sourceRevision: 'source.r1' }],
+      }] })
+      return written
+    })
+    await f.t.run(async ctx => {
+      for (const kind of ['document', 'document_chunk'] as const) {
+        const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_artifact_kind_and_artifact_id_and_nextId', q => q.eq('artifact.kind', kind).eq('artifact.id', retainedDocumentId).eq('nextId', undefined)).take(16)
+        for (const row of rows) await ctx.db.patch(row._id, { publication: undefined })
+      }
+    })
+    const root = quiz.artifacts[0]!
+    const repair = member({ kind: 'document', id: retainedDocumentId }, 'repair-key')
+    const before = await inventory(f.t)
+    await expect(f.asOwner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, {
+      artifacts: documentFirst ? [repair, root] : [root, repair],
+    }))).rejects.toThrow('Artifact lineage unavailable')
     expect(await inventory(f.t)).toEqual(before)
   })
 })

@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
-import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { ref, computed, onUnmounted, watch } from 'vue'
+import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -13,13 +15,15 @@ interface AudioOverviewTurn {
 }
 
 const overviewId = computed(() => (props.entityId ?? '') as Id<'audioOverviews'>)
-const { data: overviewData } = useConvexQuery(
+const overviewQuery = useTeachingQuery(
   api.audioOverviews.getCourseScopedOverview,
   computed(() => ({ id: overviewId.value })),
   { enabled: computed(() => Boolean(props.entityId)) },
 )
+const { data: overviewData } = overviewQuery
+const readFailure = computed(() => props.entityId ? overviewQuery.failure.value : null)
 
-const overview = computed(() => overviewData.value ?? null)
+const overview = computed(() => readFailure.value ? null : overviewData.value ?? null)
 const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
 const turnUrls = computed<(string | null)[]>(() => overview.value?.turnUrls ?? [])
 const sourceFilenames = computed<string[]>(() => overview.value?.sourceFilenames ?? [])
@@ -79,7 +83,7 @@ function playTurn(index: number) {
 
 function togglePlay() {
   const el = audioEl.value
-  if (!el) return
+  if (!el || readFailure.value) return
 
   if (isPlaying.value) {
     el.pause()
@@ -91,6 +95,23 @@ function togglePlay() {
     el.play().then(() => { isPlaying.value = true }).catch(() => { isPlaying.value = false })
   }
 }
+
+function releaseAudio() {
+  const el = audioEl.value
+  if (el) {
+    el.pause()
+    el.removeAttribute('src')
+    el.load()
+  }
+  isPlaying.value = false
+  currentTurnIndex.value = 0
+  currentTime.value = 0
+  transcriptExpanded.value = false
+}
+
+watch(readFailure, (failure) => {
+  if (failure) releaseAudio()
+}, { flush: 'sync' })
 
 onUnmounted(() => {
   if (audioEl.value) {
@@ -137,7 +158,10 @@ const hasData = computed(() => !!overview.value && turns.value.length > 0)
       <span class="text-xs font-medium uppercase tracking-wide text-stone-400">Audio Primer</span>
     </div>
 
-    <div v-if="!entityId || !hasData" class="flex items-center gap-4 rounded-lg border border-stone-800 bg-stone-950 p-4">
+    <p v-if="readFailure && !readFailure.retryable" role="status" data-testid="audio-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+    <div v-else-if="readFailure" role="alert" data-testid="audio-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this audio overview.</p><button type="button" data-testid="audio-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="overviewQuery.refresh?.()">Try again</button></div>
+
+    <div v-else-if="!entityId || !hasData" class="flex items-center gap-4 rounded-lg border border-stone-800 bg-stone-950 p-4">
       <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/10">
         <Headphones class="h-5 w-5 text-amber-500" />
       </div>

@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -67,7 +68,7 @@ function legacyCards() {
 
 describe('migrations.migrateLegacyFlashcards', () => {
   test('[P0] copies each legacy set → room + initial version + cards on both sides', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -105,7 +106,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
   })
 
   test('[P0] idempotent — second run does not duplicate', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Cell Biology', legacyCards())
@@ -122,7 +123,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
   })
 
   test('[P0] skips mismatched-owner legacy card rows', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -144,7 +145,7 @@ describe('migrations.migrateLegacyFlashcards', () => {
   })
 
   test('[P0] skips legacy set whose folder is owned by different user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { setId } = await seedLegacySet(t, USER_A.tokenIdentifier, folderId, 'Set', legacyCards())

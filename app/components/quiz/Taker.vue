@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
-import { ArrowLeft } from '@lucide/vue'
+import { ArrowLeft, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import type { QuestionResult } from './Question.vue'
@@ -15,10 +17,13 @@ const emit = defineEmits<{
   back: []
 }>()
 
-const { data: quizData } = useConvexQuery(
+const quizQuery = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )
+const quizData = quizQuery.data
+const quizFailure = computed(() => quizQuery.failure.value)
+const quizPaused = computed(() => quizFailure.value?.retryable === false)
 
 const { data: attemptsData } = useConvexQuery(
   api.quizzes.listAttempts,
@@ -88,6 +93,15 @@ watch(
   { immediate: true },
 )
 
+watch(quizPaused, (paused) => {
+  if (!paused) return
+  resultsByQuestion.value = {}
+  scoreSummary.value = null
+  reviewMode.value = false
+  hydratedFromAttempt.value = false
+  if (state.value !== 'submitting') state.value = 'loading'
+})
+
 const allAnswered = computed(() => {
   if (questions.value.length === 0) return false
   return questions.value.every((q) => {
@@ -124,6 +138,10 @@ async function handleSubmit() {
       }>
     }
 
+    if (quizPaused.value) {
+      state.value = 'loading'
+      return
+    }
     const byId: Record<string, QuestionResult> = {}
     for (const r of result.results) {
       byId[r.questionId] = {
@@ -163,7 +181,24 @@ function handleBack() {
 
 <template>
   <div data-testid="quiz-taker">
-    <div v-if="state === 'loading'" class="space-y-3" data-testid="quiz-taker-loading">
+    <div v-if="quizFailure && !quizFailure.retryable" role="status" data-testid="quiz-read-paused" class="rounded-md border p-6 text-center">
+      <p class="flex items-start justify-center gap-2 text-left text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ quizFailure.message }}</span></p>
+      <UiButton class="mt-4" variant="outline" data-testid="quiz-taker-back" @click="handleBack">
+        <ArrowLeft class="mr-1.5 h-4 w-4" />
+        Back
+      </UiButton>
+    </div>
+
+    <div v-else-if="quizFailure" role="alert" data-testid="quiz-read-error" class="rounded-md border p-6 text-center">
+      <p class="font-medium">Could not load this quiz.</p>
+      <button type="button" data-testid="quiz-read-retry" class="mx-auto mt-2 block text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="quizQuery.refresh?.()">Try again</button>
+      <UiButton class="mt-4" variant="outline" data-testid="quiz-taker-back" @click="handleBack">
+        <ArrowLeft class="mr-1.5 h-4 w-4" />
+        Back
+      </UiButton>
+    </div>
+
+    <div v-else-if="state === 'loading'" class="space-y-3" data-testid="quiz-taker-loading">
       <UiSkeleton v-for="i in 3" :key="i" class="h-32 w-full rounded-md animate-pulse" />
     </div>
 

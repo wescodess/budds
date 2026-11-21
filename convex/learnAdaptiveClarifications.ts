@@ -3,6 +3,7 @@ import { mutation, query, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
+import { adaptiveIntent, disclosureLiterals } from './lib/learnV2AssessmentDisclosure'
 import {
   CLARIFICATION_TEMPLATE_VERSION,
   INITIAL_DECISION_VERSION,
@@ -141,10 +142,16 @@ export const resolveClarification = mutation({
 
 export const getInitialDecision = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(v.object({ decisionVersion: v.literal('learn-adaptive.initial-decision.v1'),
+    status: disclosureLiterals(['not_required', 'pending', 'answered', 'skipped']),
+    reasonCode: disclosureLiterals(['outcome_needed_for_first_move', 'declared_inputs_sufficient', 'evidence_requires_recovery']),
+    continuationKind: disclosureLiterals(['ready_v2', 'standalone_non_factual', 'preparing_non_factual', 'evidence_recovery']),
+    question: v.optional(v.object({ key: v.literal('useful_outcome'), templateVersion: v.literal('learn-adaptive.clarification-templates.v1'), prompt: v.string(), help: v.string() })),
+    originalNeed: v.string(), outcome: v.string(), intent: adaptiveIntent, revision: v.number() }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const thread = await ctx.db.get(args.threadId)
-    if (!thread || thread.userId !== userId || !thread.initialDecision) return null
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || !thread.initialDecision) return null
     return {
       ...projectDecision(thread.initialDecision),
       originalNeed: thread.originalNeed,

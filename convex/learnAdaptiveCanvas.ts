@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { createResponsePrivacyReadContext, privacyRead, responsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
@@ -317,13 +319,15 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
     }
 }
 
-export const getCanvas = query({
+const getCanvasRead = defineTeachingRead({name:'learnAdaptiveCanvas.getCanvas',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'thread',id:args.threadId}]),
   args: { threadId: v.id('learningThreads') },
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     return await loadReadyCanvas(createResponsePrivacyReadContext(ctx, userId).ctx, userId, args.threadId)
   },
-})
+}, {hasContent:value=>Boolean(value?.activity.primitive)})
+export const getCanvas = query(getCanvasRead.query)
+export const getCanvasDelivery = mutation(getCanvasRead.delivery)
 
 const renderFailureReasonValidator = v.union(
   v.literal('unknown_primitive'), v.literal('unsupported_action'), v.literal('renderer_unavailable'), v.literal('oversized_prop'),

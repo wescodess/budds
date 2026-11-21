@@ -1,3 +1,4 @@
+import { teachingDeliveryValue } from '../../utils/teaching-delivery'
 import { api } from '../../../convex/_generated/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { makeConvexClient } from '../../utils/convex-client'
@@ -14,9 +15,9 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 401, statusMessage: 'Unauthorized' })
   }
 
-  const payload = await client.query(api.courseSections.getOfflineCachePayload, {
-    sectionId: sectionId as Id<'courseSections'>,
-  })
+  const payload = teachingDeliveryValue(await client.mutation(api.courseSections.getOfflineCachePayloadDelivery, {
+    sectionId: sectionId as Id<'courseSections'>, idempotencyKey: `section_cache_${crypto.randomUUID()}`,
+  }))
 
   return payload
 })

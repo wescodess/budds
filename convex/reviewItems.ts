@@ -1,3 +1,6 @@
+import { publicReviewItem } from './lib/publicReviewItem'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from 'convex/values'
 import { query, mutation, internalMutation } from './_generated/server'
 import { getOptionalAuthUserId, requireAuth } from './lib/auth'
@@ -31,6 +34,8 @@ export const extractFromSection = internalMutation({
     const roomId = ctx.db.normalizeId('flashcardRooms', flashcardBlock.entityId)
     if (!roomId) return 0
 
+    const room = await ctx.db.get(roomId)
+    if (!room || room.userId !== args.userId) return 0
     const cards = await ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', roomId))
@@ -53,6 +58,7 @@ export const extractFromSection = internalMutation({
         courseId: args.courseId,
         sectionId: args.sectionId,
         flashcardRoomCardId: card._id,
+        sourceVersionId: room.activeVersionId,
         prompt: card.term,
         answer: card.definition,
         easeFactor: 2.5,
@@ -69,7 +75,10 @@ export const extractFromSection = internalMutation({
   },
 })
 
-export const listDueForUser = query({
+const listDueForUserRead = defineTeachingRead({
+  name: 'reviewItems.listDueForUser',
+  scope: async (ctx, userId) => { const rows = await ctx.db.query('reviewItems').withIndex('by_userId_and_nextReviewDate', q => q.eq('userId', userId).lte('nextReviewDate', new Date().toISOString().slice(0,10))).take(200); return await teachingReadScope(ctx, userId, rows.filter(row=>!row.flagged).map(row=>({kind:'review_item' as const,id:row._id}))) },
+
   args: {},
   handler: async (ctx) => {
     const userId = await requireAuth(ctx)
@@ -82,9 +91,12 @@ export const listDueForUser = query({
       )
       .take(200)
 
-    return items.filter((item) => !item.flagged)
+    return items.filter((item) => !item.flagged).map(publicReviewItem)
   },
+
 })
+export const listDueForUser = query(listDueForUserRead.query)
+export const listDueForUserDelivery = mutation(listDueForUserRead.delivery)
 
 export const getReviewBacklogCount = query({
   args: {},
@@ -112,7 +124,10 @@ export const getReviewBacklogCount = query({
   },
 })
 
-export const listDueWithContext = query({
+const listDueWithContextRead = defineTeachingRead({
+  name: 'reviewItems.listDueWithContext',
+  scope: async (ctx, userId) => { const rows = await ctx.db.query('reviewItems').withIndex('by_userId_and_nextReviewDate', q => q.eq('userId', userId).lte('nextReviewDate', new Date().toISOString().slice(0,10))).take(200); return await teachingReadScope(ctx, userId, rows.filter(row=>!row.flagged).map(row=>({kind:'review_item' as const,id:row._id}))) },
+
   args: {
     mode: v.optional(v.union(v.literal('full'), v.literal('quick'))),
   },
@@ -159,7 +174,7 @@ export const listDueWithContext = query({
       }
 
       enriched.push({
-        ...item,
+        ...publicReviewItem(item),
         courseTitle,
         sectionTitle: sectionData.title,
         sectionOrder: sectionData.order,
@@ -168,9 +183,15 @@ export const listDueWithContext = query({
 
     return enriched
   },
-})
 
-export const listBySection = query({
+})
+export const listDueWithContext = query(listDueWithContextRead.query)
+export const listDueWithContextDelivery = mutation(listDueWithContextRead.delivery)
+
+const listBySectionRead = defineTeachingRead({
+  name: 'reviewItems.listBySection',
+  scope: async (ctx, userId, args) => { const rows = await ctx.db.query('reviewItems').withIndex('by_sectionId', q => q.eq('sectionId', args.sectionId)).take(200); return await teachingReadScope(ctx, userId, rows.map(row => ({ kind: 'review_item' as const, id: row._id }))) },
+
   args: { sectionId: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
@@ -178,12 +199,16 @@ export const listBySection = query({
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) return []
 
-    return await ctx.db
+    const rows = await ctx.db
       .query('reviewItems')
       .withIndex('by_sectionId', (q) => q.eq('sectionId', args.sectionId))
       .take(200)
+    return rows.map(publicReviewItem)
   },
+
 })
+export const listBySection = query(listBySectionRead.query)
+export const listBySectionDelivery = mutation(listBySectionRead.delivery)
 
 export const completeReviewSession = mutation({
   args: {

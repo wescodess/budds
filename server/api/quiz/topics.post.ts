@@ -1,3 +1,6 @@
+import { makeConvexClient } from '../../utils/convex-client'
+import type { Id } from '../../../convex/_generated/dataModel'
+import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 const TOPIC_EXTRACTION_QUERY = 'main topics, themes, and key concepts'
 
 export default defineEventHandler(async (event) => {
@@ -8,11 +11,20 @@ export default defineEventHandler(async (event) => {
     resourceIds?: string[]
   }>(event)
 
+  assertTeachingCommand(body, { folderId: 'string', resourceIds: 'strings' })
+
   if (!body?.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
 
+  const convexClient = makeConvexClient(event)
+  if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+  const teachingScope = await authorizeTeaching()
+
+  await authorizeTeaching()
   const searchResults = await searchDocuments({
+    teachingScope,
     query: TOPIC_EXTRACTION_QUERY,
     userId,
     folderId: body.folderId,
@@ -23,8 +35,9 @@ export default defineEventHandler(async (event) => {
   let chunks = searchResults.data ?? []
 
   if (chunks.length < 2) {
+    await authorizeTeaching()
     try {
-      const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 40_000 })
+      const folderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 40_000 })
       if (folderDocs.length > 0) {
         chunks = folderDocs.map((doc) => ({
           id: doc.key,
@@ -40,6 +53,7 @@ export default defineEventHandler(async (event) => {
       }
     }
     catch (error) {
+      if (error instanceof TeachingSourceError) throw error
       console.error('[quiz/topics] Failed to fetch folder docs fallback:', error)
     }
   }
@@ -74,7 +88,9 @@ Rules:
     },
   ]
 
+  await authorizeTeaching()
   const completion = await generateCompletion({
+    redactUpstreamErrorBody: true,
     model: SERVER_DEFAULT_MODEL,
     messages,
     temperature: 0.2,
@@ -83,6 +99,7 @@ Rules:
 
   const raw = completion.choices[0]?.message?.content ?? ''
 
+  await authorizeTeaching()
   try {
     const stripped = raw.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')
     const cleaned = stripped.replace(/,(\s*[}\]])/g, '$1')

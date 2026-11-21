@@ -6,6 +6,8 @@ import { requireLearnV2MutationAccess, requireLearnV2QueryAccess } from './lib/l
 import { isLearnV2TransitionAllowed } from '../shared/learn-v2-contract'
 import { cloneBlueprintChildren } from './lib/learnV2BlueprintClone'
 import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
+import { blueprintSummary, pageFields, projectFields, voidSummary } from './lib/learnV2AssessmentDisclosure'
+import { rejectStaleMapEdit } from './lib/learnV2MapEdit'
 
 const voidStatus = v.union(v.literal('draft'), v.literal('sourcing'), v.literal('source_review'), v.literal('map_review'), v.literal('calibration'), v.literal('plan_review'), v.literal('scheduled'), v.literal('active'), v.literal('completed'), v.literal('paused'), v.literal('needs_attention'), v.literal('failed'), v.literal('archived'))
 const blueprintStatus = v.union(v.literal('draft'), v.literal('source_review'), v.literal('map_review'), v.literal('accepted'), v.literal('active'), v.literal('superseded'))
@@ -199,12 +201,12 @@ export const forkBlueprintDraft = mutation({
     const source = await ctx.db.get(args.blueprintRevisionId)
     if (!source || source.userId !== userId) throw new Error('Blueprint revision not found')
     const learningVoid = await requireLiveOwnedVoid(ctx, userId, source.learningVoidId)
-    if (source.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) throw new Error('Blueprint revision conflict')
+    if (source.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) rejectStaleMapEdit()
     const latest = await ctx.db.query('learnBlueprintRevisions')
       .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', source.blueprintId))
       .order('desc').first()
     if (!latest) throw new Error('Blueprint revision not found')
-    if (latest._id !== source._id) throw new Error('Blueprint revision conflict')
+    if (latest._id !== source._id) rejectStaleMapEdit()
     if (!['draft', 'source_review', 'map_review', 'accepted', 'active'].includes(source.status)) throw new Error('Blueprint revision cannot be edited')
     if (!['draft', 'source_review', 'map_review', 'calibration'].includes(learningVoid.status)) throw new Error('Learning Void is not ready for a Blueprint edit')
     const now = Date.now()
@@ -288,29 +290,32 @@ export const transitionBlueprintRevision = mutation({
 
 export const getLearningVoid = query({
   args: { learningVoidId: v.id('learningVoids') },
+  returns: v.union(voidSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const row = await ctx.db.get(args.learningVoidId)
-    return row && await isLiveOwnedVoid(ctx, userId, row._id) ? row : null
+    return row && row.userId === userId && await isLiveOwnedVoid(ctx, userId, row._id) ? projectFields(voidSummary.fields, row) : null
   },
 })
 
 export const listLearningVoids = query({
   args: { paginationOpts: paginationOptsValidator },
+  returns: v.object({ page: v.array(voidSummary), ...pageFields }),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const page = await ctx.db.query('learningVoids').withIndex('by_userId', q => q.eq('userId', userId)).paginate({ cursor: args.paginationOpts.cursor, numItems: Math.min(MAX_LIST_PAGE_SIZE, Math.max(1, Math.floor(args.paginationOpts.numItems))) })
     const live = []
-    for (const row of page.page) if (await isLiveOwnedVoid(ctx, userId, row._id)) live.push(row)
-    return { ...page, page: live }
+    for (const row of page.page) if (await isLiveOwnedVoid(ctx, userId, row._id)) live.push(projectFields(voidSummary.fields, row))
+    return { page: live, isDone: page.isDone, continueCursor: page.continueCursor }
   },
 })
 
 export const getBlueprintRevision = query({
   args: { blueprintRevisionId: v.id('learnBlueprintRevisions') },
+  returns: v.union(blueprintSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     const row = await ctx.db.get(args.blueprintRevisionId)
-    return row && await isLiveOwnedVoid(ctx, userId, row.learningVoidId) ? row : null
+    return row && row.userId === userId && await isLiveOwnedVoid(ctx, userId, row.learningVoidId) ? projectFields(blueprintSummary.fields, row) : null
   },
 })

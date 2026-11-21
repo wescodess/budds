@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "kind": "routes",
+  "notes": "Build capture of the learner map editor (#515), compared in fidelity mode with the approved TARGET surface learner-map-editor. Twelve static fixture cases render the production LearningTrail inside the workspace shell: the full 15-objective map, the order pop-over and unsaved changes (drawn in approved.html), and the sources and what-comes-first pop-overs, saving, a failed save, a save refused because the map changed somewhere else, a long title being edited, loading, no objectives and one objective (drawn in 3a, per decision.md). The harness scripts each state through the real controls. Synthetic copy only, with no learner data, criteria, rubrics or weights. The app sidebar is not rendered.",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 832
+    },
+    {
+      "width": 390,
+      "height": 844
+    },
+    {
+      "width": 320,
+      "height": 640
+    }
+  ],
+  "contentSelector": "[data-testid=learn-v2-workspace]",
+  "readySelector": "[data-testid=map-editor-harness][data-ready=true] [data-testid=learn-v2-learning-trail]",
+  "requiredFonts": [
+    "DM Sans",
+    "Inter"
+  ],
+  "cases": [
+    {
+      "kind": "map",
+      "state": "full",
+      "path": "/__e2e/map-editor-harness?state=full"
+    },
+    {
+      "kind": "map",
+      "state": "order",
+      "path": "/__e2e/map-editor-harness?state=order"
+    },
+    {
+      "kind": "map",
+      "state": "unsaved",
+      "path": "/__e2e/map-editor-harness?state=unsaved"
+    },
+    {
+      "kind": "map",
+      "state": "sources",
+      "path": "/__e2e/map-editor-harness?state=sources"
+    },
+    {
+      "kind": "map",
+      "state": "first",
+      "path": "/__e2e/map-editor-harness?state=first"
+    },
+    {
+      "kind": "map",
+      "state": "saving",
+      "path": "/__e2e/map-editor-harness?state=saving"
+    },
+    {
+      "kind": "map",
+      "state": "failed",
+      "path": "/__e2e/map-editor-harness?state=failed"
+    },
+    {
+      "kind": "map",
+      "state": "changed",
+      "path": "/__e2e/map-editor-harness?state=changed"
+    },
+    {
+      "kind": "map",
+      "state": "long",
+      "path": "/__e2e/map-editor-harness?state=long"
+    },
+    {
+      "kind": "map",
+      "state": "empty",
+      "path": "/__e2e/map-editor-harness?state=empty"
+    },
+    {
+      "kind": "map",
+      "state": "loading",
+      "path": "/__e2e/map-editor-harness?state=loading"
+    },
+    {
+      "kind": "map",
+      "state": "one",
+      "path": "/__e2e/map-editor-harness?state=one"
+    }
+  ]
+}

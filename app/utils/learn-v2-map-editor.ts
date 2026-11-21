@@ -1,4 +1,13 @@
-import type { LearnAssessmentContract, LearnMapEdit } from '~/types/learn-v2-journey'
+import { ConvexError } from 'convex/values'
+import type { LearnMapEdit } from '../types/learn-v2-journey'
+
+export class LearnMapChangedError extends Error {}
+
+export function isLearnMapChangedError(cause: unknown) {
+  if (cause instanceof LearnMapChangedError) return true
+  const data: unknown = cause instanceof ConvexError ? cause.data : undefined
+  return typeof data === 'object' && data !== null && (data as { reasonCode?: unknown }).reasonCode === 'revision_conflict'
+}
 
 export interface LearnMapCandidate {
   version: 'learn-v2.blueprint-candidate.v1'
@@ -17,7 +26,7 @@ export interface LearnMapCandidate {
     sourceSnapshotIds: string[]
     gapSourceSnapshotIds: string[]
     prerequisiteObjectiveKeys: string[]
-    assessmentContract: LearnAssessmentContract
+    splitFromObjectiveKey?: string
   }>
 }
 
@@ -34,10 +43,6 @@ function clone(candidate: LearnMapCandidate): LearnMapCandidate {
       sourceSnapshotIds: [...objective.sourceSnapshotIds],
       gapSourceSnapshotIds: [...objective.gapSourceSnapshotIds],
       prerequisiteObjectiveKeys: [...objective.prerequisiteObjectiveKeys],
-      assessmentContract: {
-        ...objective.assessmentContract,
-        criteria: objective.assessmentContract.criteria.map(criterion => ({ ...criterion })),
-      },
     })),
   }
 }
@@ -60,7 +65,7 @@ function assertPublishableShape(candidate: LearnMapCandidate) {
     if (visited.has(key)) return
     visiting.add(key)
     for (const prerequisite of prerequisites.get(key) ?? []) {
-      if (!keys.has(prerequisite)) throw new Error('A prerequisite is no longer in this map')
+      if (!keys.has(prerequisite)) throw new LearnMapChangedError('A prerequisite is no longer in this map')
       visit(prerequisite)
     }
     visiting.delete(key)
@@ -72,7 +77,7 @@ function assertPublishableShape(candidate: LearnMapCandidate) {
 function sourceIds(keys: string[], sourceIdByKey: Readonly<Record<string, string>>) {
   return keys.map((key) => {
     const id = sourceIdByKey[key]
-    if (!id) throw new Error('A selected source is no longer available in this draft')
+    if (!id) throw new LearnMapChangedError('A selected source is no longer available in this draft')
     return id
   })
 }
@@ -83,6 +88,28 @@ function createObjectiveKey(existing: Set<string>, supplied?: () => string) {
     if (/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(candidate) && candidate.length <= 64 && !existing.has(candidate)) return candidate
   }
   throw new Error('Could not create a stable objective identity')
+}
+
+function splitObjective(candidate: LearnMapCandidate, objectiveKey: string, firstTitle: string, secondTitle: string, existingKeys: Set<string>, nextKey?: () => string) {
+  if (candidate.objectives.length >= 15) throw new Error('This map already has the maximum of 15 objectives')
+  const index = candidate.objectives.findIndex(objective => objective.key === objectiveKey)
+  if (index < 0) throw new LearnMapChangedError('Objective is no longer in this map')
+  const original = candidate.objectives[index]!
+  const secondKey = createObjectiveKey(existingKeys, nextKey)
+  const second = structuredClone(original)
+  original.title = firstTitle
+  original.estimatedMinutes = Math.max(5, Math.ceil(original.estimatedMinutes / 2))
+  second.key = secondKey
+  second.title = secondTitle
+  second.estimatedMinutes = Math.max(5, Math.floor(second.estimatedMinutes / 2))
+  second.prerequisiteObjectiveKeys = [original.key]
+  second.splitFromObjectiveKey = original.splitFromObjectiveKey ?? original.key
+  for (const dependant of candidate.objectives) {
+    if (dependant.key !== original.key && dependant.prerequisiteObjectiveKeys.includes(original.key)) {
+      dependant.prerequisiteObjectiveKeys = dependant.prerequisiteObjectiveKeys.map(key => key === original.key ? secondKey : key)
+    }
+  }
+  candidate.objectives.splice(index + 1, 0, second)
 }
 
 export function applyLearnMapEdit(
@@ -96,7 +123,7 @@ export function applyLearnMapEdit(
 
   if (edit.kind === 'move_objective') {
     const index = candidate.objectives.findIndex(objective => objective.key === edit.objectiveKey)
-    if (index < 0) throw new Error('Objective is no longer in this map')
+    if (index < 0) throw new LearnMapChangedError('Objective is no longer in this map')
     const destination = edit.direction === 'up' ? index - 1 : index + 1
     if (destination < 0 || destination >= candidate.objectives.length) return candidate
     const [objective] = candidate.objectives.splice(index, 1)
@@ -104,39 +131,21 @@ export function applyLearnMapEdit(
   }
   else if (edit.kind === 'remove_objective') {
     const target = candidate.objectives.find(objective => objective.key === edit.objectiveKey)
-    if (!target) throw new Error('Objective is no longer in this map')
+    if (!target) throw new LearnMapChangedError('Objective is no longer in this map')
     candidate.objectives = candidate.objectives.filter(objective => objective.key !== edit.objectiveKey)
     for (const objective of candidate.objectives) objective.prerequisiteObjectiveKeys = objective.prerequisiteObjectiveKeys.filter(key => key !== edit.objectiveKey)
   }
-  else if (edit.kind === 'split_objective') {
-    if (candidate.objectives.length >= 15) throw new Error('This map already has the maximum of 15 objectives')
-    const index = candidate.objectives.findIndex(objective => objective.key === edit.objectiveKey)
-    if (index < 0) throw new Error('Objective is no longer in this map')
-    const original = candidate.objectives[index]!
-    const secondKey = createObjectiveKey(existingKeys, nextKey)
-    const second = structuredClone(original)
-    original.title = edit.firstTitle
-    original.estimatedMinutes = Math.max(5, Math.ceil(original.estimatedMinutes / 2))
-    second.key = secondKey
-    second.title = edit.secondTitle
-    second.estimatedMinutes = Math.max(5, Math.floor(second.estimatedMinutes / 2))
-    second.prerequisiteObjectiveKeys = [original.key]
-    for (const dependant of candidate.objectives) {
-      if (dependant.key !== original.key && dependant.prerequisiteObjectiveKeys.includes(original.key)) {
-        dependant.prerequisiteObjectiveKeys = dependant.prerequisiteObjectiveKeys.map(key => key === original.key ? secondKey : key)
-      }
-    }
-    candidate.objectives.splice(index + 1, 0, second)
-  }
+  else if (edit.kind === 'split_objective') splitObjective(candidate, edit.objectiveKey, edit.firstTitle, edit.secondTitle, existingKeys, nextKey)
   else {
     const draft = edit.objective
     const existing = draft.objectiveKey ? candidate.objectives.find(objective => objective.key === draft.objectiveKey) : undefined
     const template = existing ?? candidate.objectives.at(-1)
     if (!template) throw new Error('A generated map is required before adding objectives')
-    const key = existing?.key ?? createObjectiveKey(existingKeys, nextKey)
+    const { splitFromObjectiveKey, ...base } = template
     const updated = {
-      ...template,
-      key,
+      ...base,
+      ...(existing && splitFromObjectiveKey ? { splitFromObjectiveKey } : {}),
+      key: existing?.key ?? createObjectiveKey(existingKeys, nextKey),
       milestoneKey: draft.milestoneKey,
       title: draft.title.trim(),
       capability: draft.capability.trim(),
@@ -147,13 +156,19 @@ export function applyLearnMapEdit(
       sourceSnapshotIds: draft.coverage === 'gap' ? [] : sourceIds(draft.supportingSourceKeys, sourceIdByKey),
       gapSourceSnapshotIds: draft.coverage === 'strong' ? [] : sourceIds(draft.gapSourceKeys, sourceIdByKey),
       prerequisiteObjectiveKeys: [...draft.prerequisiteKeys],
-      assessmentContract: structuredClone(draft.assessmentContract),
     }
-    if (existing) Object.assign(existing, updated)
+    if (existing) candidate.objectives.splice(candidate.objectives.indexOf(existing), 1, updated)
     else {
       if (candidate.objectives.length >= 15) throw new Error('This map already has the maximum of 15 objectives')
-      candidate.objectives.push(updated)
+      const lastInMilestone = candidate.objectives.findLastIndex(objective => objective.milestoneKey === updated.milestoneKey)
+      candidate.objectives.splice(lastInMilestone < 0 ? candidate.objectives.length : lastInMilestone + 1, 0, updated)
     }
+    if (edit.order) {
+      const position = new Map(edit.order.map((key, index) => [key, index]))
+      if (position.size !== candidate.objectives.length || candidate.objectives.some(objective => !position.has(objective.key))) throw new LearnMapChangedError('Objective is no longer in this map')
+      candidate.objectives.sort((a, b) => position.get(a.key)! - position.get(b.key)!)
+    }
+    if (edit.split) splitObjective(candidate, updated.key, updated.title, edit.split.secondTitle, existingKeys, nextKey)
   }
 
   normalizeOrders(candidate)

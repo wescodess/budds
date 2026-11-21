@@ -1,4 +1,6 @@
 import { v } from 'convex/values'
+import { z } from 'zod'
+import { learnIdSchema } from '../shared/learn-v2-responses'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, query, type MutationCtx } from './_generated/server'
@@ -8,6 +10,7 @@ import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 import { sourceSupportsGeneration } from './lib/learnV2BackingSource'
+import { disclosureLiterals, planSummary, projectFields, projectPlan } from './lib/learnV2AssessmentDisclosure'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MAX_OBJECTIVES = 15
@@ -15,6 +18,24 @@ const MAX_SESSIONS = 600
 const MAX_AVAILABILITY_WINDOWS = 28
 const MAX_BLACKOUT_DATES = 90
 const MAX_REVIEW_INTERVALS = 4
+const schedulingReceipt = v.object({
+  _id: v.optional(v.union(v.id('studyPlanRevisions'), v.id('studySessions'))), status: v.optional(disclosureLiterals(['draft', 'accepted', 'missed', 'unavailable'])),
+  reasonCode: v.optional(v.literal('evidence_unavailable')),
+  revision: v.optional(v.number()), recordRevision: v.optional(v.number()), feasibility: v.optional(disclosureLiterals(['feasible', 'infeasible'])),
+  schedulerVersion: v.optional(v.string()), reasonCodes: v.optional(v.array(v.string())), parentRevisionId: v.optional(v.id('studyPlanRevisions')),
+  voidStatus: v.optional(v.literal('scheduled')), sessionCount: v.optional(v.number()), missedSessionIds: v.optional(v.array(v.id('studySessions'))),
+  successorPlanRevisionId: v.optional(v.id('studyPlanRevisions')), changedSessionIds: v.optional(v.array(v.string())), preservedSessionIds: v.optional(v.array(v.string())),
+})
+const schedulingReceiptSchema = z.union([
+  z.object({ status: z.literal('unavailable'), reasonCode: z.literal('evidence_unavailable') }),
+  z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('draft'), revision: z.number().int().positive(), recordRevision: z.number().int().positive(),
+    feasibility: z.enum(['feasible', 'infeasible']), schedulerVersion: z.literal(LEARN_V2_SCHEDULER_VERSION).optional(),
+    reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8).optional(), parentRevisionId: learnIdSchema<'studyPlanRevisions'>().optional() }),
+  z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('accepted'), voidStatus: z.literal('scheduled'), sessionCount: z.number().int().min(0).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
+  z.object({ _id: learnIdSchema<'studySessions'>(), status: z.literal('missed'), revision: z.number().int().positive() }),
+  z.object({ missedSessionIds: z.array(learnIdSchema<'studySessions'>()).max(MAX_SESSIONS) }),
+  z.object({ successorPlanRevisionId: learnIdSchema<'studyPlanRevisions'>(), changedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), preservedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
+])
 
 async function digest(value: unknown) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
@@ -63,7 +84,13 @@ async function replay(ctx: MutationCtx, userId: string, key: string, requestFing
   if (!row) return null
   if (!await matchesLegacyFingerprint(row.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveVoid(ctx, userId, row.learningVoidId)
-  return JSON.parse(row.response) as Record<string, unknown>
+  if (row.response.length > 128_000) throw new Error('Scheduling receipt is unavailable')
+  try {
+    const result = schedulingReceiptSchema.safeParse(JSON.parse(row.response))
+    if (!result.success) throw new Error('Scheduling receipt is unavailable')
+    return projectFields(schedulingReceipt.fields, result.data)
+  }
+  catch { throw new Error('Scheduling receipt is unavailable') }
 }
 async function receipt(ctx: MutationCtx, data: { userId: string, learningVoidId: Id<'learningVoids'>, idempotencyKey: string, command: string, requestFingerprint: string, response: Record<string, unknown>, nowUtcMs: number }) {
   await ctx.db.insert('learnPlanCommandReceipts', { userId: data.userId, learningVoidId: data.learningVoidId, idempotencyKey: data.idempotencyKey, command: data.command, requestFingerprint: data.requestFingerprint, response: JSON.stringify(data.response), createdAt: data.nowUtcMs })
@@ -107,6 +134,7 @@ async function buildSchedulingInput(ctx: MutationCtx, userId: string, blueprint:
 
 export const createPlanPreview = mutation({
   args: { learningVoidId: v.id('learningVoids'), blueprintRevisionId: v.id('learnBlueprintRevisions'), expectedVoidRevision: v.number(), expectedBlueprintRecordRevision: v.number(), idempotencyKey: v.string(), schedulingInput: schedulingInputValidator },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedBlueprintRecordRevision, 'Expected Blueprint record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('createPlanPreview', args)
@@ -134,6 +162,7 @@ export const createPlanPreview = mutation({
 
 export const editPlanPreview = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedPlanRecordRevision: v.number(), expectedVoidRevision: v.number(), expectedBlueprintRecordRevision: v.number(), changeReason: v.union(v.literal('availability_changed'), v.literal('deadline_changed'), v.literal('session_length_changed')), idempotencyKey: v.string(), schedulingInput: schedulingInputValidator },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedBlueprintRecordRevision, 'Expected Blueprint record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('editPlanPreview', args)
@@ -159,6 +188,7 @@ export const editPlanPreview = mutation({
 
 export const acceptPlanPreview = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedVoidRevision: v.number(), expectedPlanRecordRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('acceptPlanPreview', args)
@@ -202,6 +232,7 @@ export const acceptPlanPreview = mutation({
 
 export const markExpiredSessionsMissed = mutation({
   args: { learningVoidId: v.id('learningVoids'), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertIdempotencyKey(args.idempotencyKey)
     const now = Date.now()
@@ -228,6 +259,7 @@ export const markExpiredSessionsMissed = mutation({
 
 export const markStudySessionMissed = mutation({
   args: { studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedSessionRevision, 'Expected Study Session revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('markStudySessionMissed', args)
@@ -249,6 +281,7 @@ export const markStudySessionMissed = mutation({
 
 export const reflowFutureIncomplete = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedPlanRecordRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertIdempotencyKey(args.idempotencyKey)
     const now = Date.now()
@@ -316,10 +349,11 @@ export const reflowFutureIncomplete = mutation({
 
 export const getPlanPreview = query({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions') },
+  returns: v.union(planSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx); const row = await ctx.db.get(args.studyPlanRevisionId)
     if (!row || row.userId !== userId) return null
     const voidRow = await ctx.db.get(row.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
-    return voidRow?.userId === userId && folder?.userId === userId ? row : null
+    return voidRow?.userId === userId && folder?.userId === userId ? projectPlan(row) : null
   },
 })

@@ -61,7 +61,7 @@ export async function evaluateTypedDecision(event: H3Event, request: TypedDecisi
  * Advisory quiz entry point. Its result is intentionally discarded by the
  * route: this pilot must never influence publication or score.
  */
-export async function shadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem[]): Promise<TypedDecisionResult> {
+export async function shadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem[], beforeDispatch?: () => Promise<unknown>): Promise<TypedDecisionResult> {
   if (items.length > LEARNING_DECISION_MAX_ITEMS) return unavailableDecision('over_budget')
   const serialized = JSON.stringify(items)
   const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized)))).map(byte => byte.toString(16).padStart(2, '0')).join('')
@@ -74,6 +74,7 @@ export async function shadowEvaluateQuiz(event: H3Event, items: QuizDecisionItem
     items,
   }
   const started = Date.now()
+  await beforeDispatch?.()
   const result = await evaluateTypedDecision(event, request)
   const confidences = result.status === 'completed' ? result.decisions.map(d => d.confidence) : []
   console.info('[learning-decision]', { requestId: request.requestId, inputDigest: digest, provider: result.status === 'completed' ? result.provider : undefined, modelRevision: result.status === 'completed' ? result.modelRevision : undefined, status: result.status, reason: result.status === 'unavailable' ? result.reason : undefined, timingMs: Date.now() - started, itemCount: items.length, omittedItemCount: 0, supportedCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'supported').length : undefined, needsReviewCount: result.status === 'completed' ? result.decisions.filter(d => d.label === 'needs_review' || d.reviewRequired).length : undefined, meanConfidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : undefined })

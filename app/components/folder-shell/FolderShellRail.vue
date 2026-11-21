@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import {
   Users,
   BookOpen,
@@ -13,6 +15,7 @@ import {
   LogOut,
   ChevronsLeft,
   ChevronsRight,
+  CircleAlert,
   Eye,
   Trash2,
 } from '@lucide/vue'
@@ -72,10 +75,13 @@ const { data: quizzesData } = useConvexQuery(
   computed(() => ({ folderId: props.folderId })),
 )
 
-const { data: coursesData } = useConvexQuery(
+const coursesQuery = useTeachingQuery(
   api.courses.listByFolder,
   computed(() => ({ folderId: props.folderId })),
 )
+
+const { data: coursesData } = coursesQuery
+const coursesFailure = computed(() => coursesQuery.failure.value)
 
 const voids = computed<VoidItem[]>(() => {
   const folderIdStr = props.folderId as unknown as string
@@ -303,6 +309,10 @@ useHorizontalSwipeGesture({
           data-testid="rail-item-learn"
           @click="emit('navigate-learn')"
         />
+        <template v-if="coursesFailure && !resolvedCompact">
+          <p v-if="!coursesFailure.retryable" role="status" data-testid="rail-courses-read-paused" class="flex items-start gap-2 px-2 py-1 text-xs leading-5 text-foreground"><CircleAlert class="mt-0.5 size-3.5 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ coursesFailure.message }}</span></p>
+          <p v-else role="alert" data-testid="rail-courses-read-error" class="px-2 py-1 text-xs leading-5 text-destructive">Could not load courses. <button type="button" data-testid="rail-courses-read-retry" class="font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="coursesQuery.refresh?.()">Try again</button></p>
+        </template>
 
         <div class="my-3 h-px bg-border/60" />
         <div

@@ -12,6 +12,9 @@ import { canonicalAdaptiveActivityJson } from '../shared/learn-adaptive-activity
 import { ADAPTIVE_ROUTER_VERSION, routeAdaptiveNextActivity, type AdaptiveRouterInput, type AdaptiveRouterResult } from '../shared/learn-adaptive-router'
 import { applyAdaptiveOverrideAtBoundary, ADAPTIVE_OVERRIDE_APPLICATION_VERSION, type AdaptiveOverrideApplication } from '../shared/learn-adaptive-override-application'
 import { ADAPTIVE_OVERRIDE_VERSION, fixedNextPlanForOverride } from '../shared/learn-adaptive-controls'
+import { adaptiveOverrideOptions, disclosureLiterals, projectFields } from './lib/learnV2AssessmentDisclosure'
+import { learnActivityDecisionFields } from '../shared/adaptive-learn-storage-manifest'
+import { requireAuth } from './lib/auth'
 
 const MAX_SNAPSHOT_BYTES = 8_192
 const ROUTING_DECISION_CONTRACT_VERSION = 'learn-adaptive.routing-decision.v1'
@@ -28,6 +31,22 @@ type DecisionValue = {
   overrideApplication?: Omit<NonNullable<Doc<'learnActivityDecisions'>['overrideApplication']>, 'inputDigest'>
 }
 
+const decisionValueValidator = v.object({ decisionId: v.string(), activityId: v.string(), routerVersion: v.literal('learn-adaptive.router.v1'),
+  status: disclosureLiterals(['recommended', 'blocked']), selectedActivity: learnActivityDecisionFields.selectedActivity, reasonCode: v.string(),
+  fallback: v.union(v.object({ kind: v.literal('non_factual_activity'), primitive: v.literal('diagnostic_prompt'), activityClass: v.literal('non_factual'), reasonCode: v.literal('safe_non_factual_recovery') }),
+    v.object({ kind: v.literal('safe_handoff'), destination: v.literal('learn_home'), reasonCode: v.literal('router_unavailable') }),
+    v.object({ kind: v.literal('stay_on_current'), reasonCode: v.literal('unresolved_prior_activity') })),
+  overrides: adaptiveOverrideOptions,
+  overrideApplication: v.optional(v.object({ version: v.literal('learn-adaptive.override-application.v1'), overrideId: v.id('learnActivityOverrides'),
+    sourceActivityId: v.id('learningThreadActivities'), sourceActivityKey: v.string(), sourceBoundaryOrdinal: v.number(),
+    option: learnActivityDecisionFields.overrideApplication.fields.option, planValid: v.optional(v.boolean()),
+    outcome: disclosureLiterals(['applied', 'fallback']), applicationReason: disclosureLiterals(['applied', 'router_blocked', 'evidence_unavailable', 'insufficient_sources', 'policy_unavailable', 'plan_invalid']),
+    effectiveAvailableTime: learnActivityDecisionFields.overrideApplication.fields.effectiveAvailableTime })),
+})
+const commandReturn = v.union(v.object({ kind: v.literal('ok'), value: decisionValueValidator, revision: v.number(), receiptId: v.string() }),
+  v.object({ kind: v.literal('conflict'), code: disclosureLiterals(['stale_revision', 'duplicate_key', 'activity_boundary_changed']), expectedRevision: v.number(), actualRevision: v.number(), authority: v.literal('convex') }),
+  v.object({ kind: disclosureLiterals(['denied', 'blocked', 'invalid']), code: v.string(), message: v.string(), retryable: v.boolean() }))
+
 async function digest(value: string) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
@@ -35,12 +54,17 @@ async function digest(value: string) {
 
 function decisionValue(row: Doc<'learnActivityDecisions'>): DecisionValue {
   const overrideApplication = row.overrideApplication
-    ? (({ inputDigest: _inputDigest, ...metadata }) => metadata)(row.overrideApplication)
+    ? projectFields(decisionValueValidator.fields.overrideApplication.fields, row.overrideApplication)
     : undefined
+  const storedFallback = JSON.parse(row.fallback) as AdaptiveRouterResult['fallback']
+  const fallback = storedFallback.kind === 'non_factual_activity'
+    ? { kind: storedFallback.kind, primitive: storedFallback.primitive, activityClass: storedFallback.activityClass, reasonCode: storedFallback.reasonCode }
+    : storedFallback.kind === 'safe_handoff' ? { kind: storedFallback.kind, destination: storedFallback.destination, reasonCode: storedFallback.reasonCode }
+      : { kind: storedFallback.kind, reasonCode: storedFallback.reasonCode }
+  const overrides = JSON.parse(row.overrideMetadata) as AdaptiveRouterResult['overrides']
   return { decisionId: String(row._id), activityId: row.activityId, routerVersion: row.routerVersion,
-    status: row.status, selectedActivity: row.selectedActivity, reasonCode: row.reasonCode as DecisionValue['reasonCode'],
-    fallback: JSON.parse(row.fallback) as AdaptiveRouterResult['fallback'],
-    overrides: JSON.parse(row.overrideMetadata) as AdaptiveRouterResult['overrides'],
+    status: row.status, selectedActivity: row.selectedActivity ? { primitive: row.selectedActivity.primitive, activityClass: row.selectedActivity.activityClass } : null, reasonCode: row.reasonCode as DecisionValue['reasonCode'],
+    fallback, overrides: overrides.map(option => ({ key: option.key, label: option.label, available: option.available, unavailableReason: option.unavailableReason })),
     ...(overrideApplication ? { overrideApplication } : {}) }
 }
 
@@ -77,7 +101,9 @@ async function decisionReplays(row: Doc<'learnActivityDecisions'>): Promise<bool
 
 export const decideNextActivity = mutation({
   args: { threadId: v.id('learningThreads'), expectedRevision: v.number(), idempotencyKey: v.string() },
-  handler: async (ctx, args) => await executeAdaptiveThreadCommand<DecisionValue>(ctx, {
+  returns: commandReturn,
+  handler: async (ctx, args) => {
+    const result = await executeAdaptiveThreadCommand<DecisionValue>(ctx, {
     ...args, commandName: 'decideNextActivity', payload: {}, returnBlockedWhenDeleting: true,
     replayExpiredResult: async (commandCtx, receipt, userId) => {
       const decision = await commandCtx.db.query('learnActivityDecisions')
@@ -249,15 +275,30 @@ export const decideNextActivity = mutation({
         fallback: selected.fallback, overrides: routed.overrides,
         ...(applicationMetadata ? { overrideApplication: applicationMetadata } : {}) }, revision }
     },
-  }),
+    })
+    if (result.kind === 'ok') {
+      const userId = await requireAuth(ctx)
+      const id = ctx.db.normalizeId('learnActivityDecisions', result.value.decisionId)
+      const row = id && await ctx.db.get(id)
+      if (!row || row.userId !== userId || row.threadId !== args.threadId || !await decisionReplays(row))
+        return { kind: 'invalid' as const, code: 'routing_decision_integrity', message: 'Prior routing decision integrity failed', retryable: false }
+      return { kind: 'ok' as const, value: decisionValue(row), revision: result.revision, receiptId: result.receiptId }
+    }
+    return result.kind === 'conflict'
+      ? { kind: result.kind, code: result.code, expectedRevision: result.expectedRevision, actualRevision: result.actualRevision, authority: result.authority }
+      : { kind: result.kind, code: result.code, message: result.message, retryable: result.retryable }
+  },
 })
 
 export const replayDecision = query({
   args: { decisionId: v.id('learnActivityDecisions') },
+  returns: v.union(v.object({ status: v.literal('replayed'), value: decisionValueValidator }), v.object({ status: v.literal('integrity_failed') }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     const row = await ctx.db.get(args.decisionId)
     if (!row || row.userId !== userId) return null
+    const thread = await ctx.db.get(row.threadId)
+    if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined) return null
     if (!(await decisionReplays(row))) return { status: 'integrity_failed' as const }
     return { status: 'replayed' as const, value: decisionValue(row) }
   },

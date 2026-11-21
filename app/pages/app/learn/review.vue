@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { Flag, ArrowLeft, CheckCircle, CircleAlert, Zap, Flame } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import { toast } from 'vue-sonner'
@@ -51,8 +53,9 @@ const dailyReviewCap = computed(() => {
 })
 
 const dueQuery = import.meta.client
-  ? useConvexQuery(api.reviewItems.listDueWithContext, queryArgs)
-  : { data: ref([]) }
+  ? useTeachingQuery(api.reviewItems.listDueWithContext, queryArgs)
+  : { data: ref([]), failure: computed(() => null), refresh: async () => {} }
+const dueFailure = computed(() => dueQuery.failure.value)
 
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)
@@ -174,6 +177,7 @@ async function rateItem(quality: number) {
 
     ratingIdempotencyKeys.delete(itemId)
     ratings.value.push({ itemId, quality })
+    if (duePaused.value) return
 
     if (currentIndex.value >= totalItems.value - 1) {
       sessionComplete.value = await finishSession()
@@ -203,6 +207,18 @@ const flaggingOpen = ref(false)
 const flagCorrectedDef = ref('')
 const flagSaving = ref(false)
 const flagError = ref('')
+
+const duePaused = computed(() => dueFailure.value && !dueFailure.value.retryable ? dueFailure.value : null)
+watch(duePaused, (paused) => {
+  if (!paused) return
+  sessionStarted.value = false
+  sessionItems.value = []
+  currentIndex.value = 0
+  revealed.value = false
+  flaggingOpen.value = false
+  flagCorrectedDef.value = ''
+  flagError.value = ''
+}, { immediate: true })
 
 const flagMutation = import.meta.client
   ? useConvexMutation(api.contentFlags.flagFlashcard)
@@ -329,7 +345,12 @@ function navigateBack() {
       {{ isSyncing ? 'Syncing saved review progress…' : `${pendingCount} review update${pendingCount === 1 ? '' : 's'} waiting to sync` }}
     </div>
 
-    <div v-if="!sessionStarted && !sessionComplete" class="flex flex-1 items-center justify-center px-4">
+    <div v-if="!sessionStarted && !sessionComplete && dueFailure" class="flex flex-1 items-center justify-center px-4">
+      <p v-if="!dueFailure.retryable" role="status" data-testid="review-read-paused" class="flex max-w-md items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ dueFailure.message }}</span></p>
+      <div v-else role="alert" data-testid="review-read-error" class="max-w-md rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load your review items.</p><button type="button" data-testid="review-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="dueQuery.refresh?.()">Try again</button></div>
+    </div>
+
+    <div v-else-if="!sessionStarted && !sessionComplete" class="flex flex-1 items-center justify-center px-4">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
         <p class="text-sm text-stone-400">Loading review items...</p>

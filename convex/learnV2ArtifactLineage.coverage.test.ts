@@ -117,6 +117,55 @@ const coverage = {
       publishedAt: 'Publication time is operational, not content.',
     },
   },
+  audioOverviewInterjections: {
+    projected: ['_id', 'userId', 'audioOverviewId', 'insertedAfterTurnIndex', 'answerTurns', 'taskId'],
+    excluded: {
+      _creationTime: 'Database timestamp is operational, not generated answer content.',
+      question: 'Learner question remains owner work, outside teaching identity and cases.',
+      model: 'Provider diagnostics do not change the generated answer.',
+      chatMessageId: 'Conversation attribution is not generated answer content.',
+    },
+  },
+  audioOverviewInterjectionsV2: {
+    projected: ['_id', 'userId', 'audioOverviewId', 'episodeId', 'sourceManifestId', 'jobId', 'insertedAfterTurnIndex', 'utteranceCount', 'artifactId', 'audioProfileId', 'audioProfileVersion', 'renderer', 'hostAVoice', 'hostBVoice'],
+    excluded: {
+      _creationTime: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      question: 'Learner question remains owner work, outside teaching identity and cases.',
+      idempotencyKey: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      model: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      status: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      quotaDate: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      budgetReservedMicrousd: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      estimatedCostMicrousd: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      scriptingClaimedAt: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      renderAttemptedAt: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      error: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      createdAt: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      updatedAt: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+      completedAt: 'Readiness, quota, retry or provider diagnostics are independent of the generated answer pin.',
+    },
+  },
+  audioOverviewInterjectionUtterances: {
+    projected: ['_id', 'interjectionId', 'episodeId', 'userId', 'order', 'speaker', 'text', 'claimText', 'evidenceQuotes'],
+    excluded: {
+      _creationTime: 'Server verification and generation diagnostics are not additional learner answer content.',
+      claimId: 'Server verification and generation diagnostics are not additional learner answer content.',
+      verificationUtteranceId: 'Server verification and generation diagnostics are not additional learner answer content.',
+      verificationVersion: 'Server verification and generation diagnostics are not additional learner answer content.',
+      verificationModel: 'Server verification and generation diagnostics are not additional learner answer content.',
+      entailmentDecision: 'Server verification and generation diagnostics are not additional learner answer content.',
+      entailmentReason: 'Server verification and generation diagnostics are not additional learner answer content.',
+      createdAt: 'Server verification and generation diagnostics are not additional learner answer content.',
+    },
+  },
+  audioOverviewInterjectionSources: {
+    projected: ['interjectionId', 'utteranceId', 'manifestEntryId', 'episodeId', 'userId'],
+    excluded: {
+      _id: 'Link identity and insertion time are operational; resolved source membership is pinned.',
+      _creationTime: 'Link identity and insertion time are operational; resolved source membership is pinned.',
+      createdAt: 'Link identity and insertion time are operational; resolved source membership is pinned.',
+    },
+  },
   learningThreadArtifacts: {
     projected: ['_id', 'userId', 'threadId', 'activityId', 'artifactKind', 'revision', 'title', 'summary', 'r2ObjectKey'],
     excluded: {
@@ -218,13 +267,12 @@ const coverage = {
     },
   },
   audioOverviewSourceManifestEntries: {
-    projected: ['_id', 'order', 'sourceId', 'documentId', 'revision', 'contentHash', 'displayReference'],
+    projected: ['_id', 'order', 'sourceId', 'documentId', 'revision', 'contentHash', 'displayReference', 'objectKey'],
     excluded: {
       _creationTime: 'Database timestamp is not content; actual returned index ordering is pinned.',
       manifestId: 'Parent query scope; ordered manifest membership is pinned.',
       jobId: 'Workflow parent, absent from the teaching projection.',
       userId: 'Ownership is checked separately; only resolved teaching fields are projected.',
-      objectKey: 'Private source locator, absent from the playback teaching projection.',
       createdAt: 'Creation time is operational; returned content ordering is pinned separately.',
     },
   },
@@ -452,9 +500,14 @@ function projectionReads() {
 // Projected fields the bounded readers consume as joins, index order or a
 // readiness gate before the pure projection runs.
 const readerFields: Partial<Record<CoveredTable, readonly string[]>> = {
+  audioOverviewInterjections: ['_id', 'userId', 'audioOverviewId', 'insertedAfterTurnIndex', 'answerTurns', 'taskId'],
+  audioOverviewInterjectionsV2: ['_id', 'userId', 'audioOverviewId', 'episodeId', 'sourceManifestId', 'jobId', 'insertedAfterTurnIndex', 'utteranceCount', 'artifactId', 'audioProfileId', 'audioProfileVersion', 'renderer', 'hostAVoice', 'hostBVoice'],
+  audioOverviewInterjectionUtterances: ['_id', 'interjectionId', 'episodeId', 'userId', 'order', 'speaker', 'text', 'claimText', 'evidenceQuotes'],
+  audioOverviewInterjectionSources: ['interjectionId', 'utteranceId', 'manifestEntryId', 'episodeId', 'userId'],
+
   audioOverviews: ['episodeId', 'finalArtifactId'],
   audioOverviewEpisodes: ['sourceManifestId', 'outlineId', 'claimLedgerId', 'finalArtifactId', 'alignmentId'],
-  audioOverviewSourceManifestEntries: ['order'],
+  audioOverviewSourceManifestEntries: ['order', 'objectKey'],
   audioOverviewLearningObjectives: ['order'],
   audioOverviewOutlineSources: ['order'],
   audioOverviewAlignments: ['status'],
@@ -470,4 +523,11 @@ describe('B2 projected fields are read', () => {
     expect([...reads[table]].filter(field => schemaFields.includes(field) && !projected.includes(field))).toEqual([])
     for (const field of readers) expect(lineageSource).toMatch(new RegExp(`\\.${field}\\b|_and_${field}'`))
   })
+})
+
+
+test('#540 legacy answer and timing fields have an explicit nested projection', () => {
+  const turns = schema.tables.audioOverviewInterjections.validator.fields.answerTurns.element
+  expect(fieldNames(turns).sort()).toEqual(['speaker', 'text', 'audioFileId', 'durationMs', 'sourceIndex', 'wordTimings'].sort())
+  expect(fieldNames(turns.fields.wordTimings.element).sort()).toEqual(['word', 'start', 'end'].sort())
 })

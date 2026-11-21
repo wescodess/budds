@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { Check, X, HelpCircle, Flag } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { Check, X, HelpCircle, Flag, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 
@@ -23,13 +25,16 @@ const props = defineProps<{
 }>()
 
 const quizQuery = import.meta.client && !props.isOffline && props.quizId
-  ? useConvexQuery(
+  ? useTeachingQuery(
       api.quizzes.getWithQuestions,
       computed(() => ({ id: props.quizId as Id<'quizzes'> })),
     )
-  : { data: ref(null) }
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
+const quizPaused = computed(() => quizQuery.failure.value?.retryable === false)
+const quizFailure = computed(() => quizPaused.value ? quizQuery.failure.value : props.isOffline && props.offlineData ? null : quizQuery.failure.value)
 
 const quizData = computed(() => {
+  if (quizPaused.value) return null
   if (props.isOffline && props.offlineData) {
     return {
       quiz: { title: 'Practice' },
@@ -74,6 +79,17 @@ const flagCorrectedAnswer = ref<Record<string, string>>({})
 const flagCorrectedExplanation = ref<Record<string, string>>({})
 const flagSaving = ref<Record<string, boolean>>({})
 const flagError = ref<Record<string, string>>({})
+
+watch(quizPaused, (paused) => {
+  if (!paused) return
+  answers.value = {}
+  submitted.value = {}
+  correctCount.value = 0
+  flaggingOpen.value = {}
+  flagCorrectedAnswer.value = {}
+  flagCorrectedExplanation.value = {}
+  flagError.value = {}
+})
 
 const flagMutation = import.meta.client && !props.isOffline
   ? useConvexMutation(api.contentFlags.flagQuizQuestion)
@@ -165,7 +181,12 @@ async function saveFlag(questionId: string) {
       <span v-if="isOffline" class="ml-auto text-xs text-amber-400">Offline</span>
     </div>
 
-    <div v-if="!quizData" class="py-8 text-center text-sm text-stone-400">
+    <p v-if="quizFailure && !quizFailure.retryable" role="status" data-testid="quiz-read-paused" class="flex items-start justify-center gap-2 py-8 text-sm text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ quizFailure.message }}</span></p>
+    <div v-else-if="quizFailure" role="alert" data-testid="quiz-read-error" class="py-8 text-center text-sm text-foreground">
+      <p>Could not load these questions.</p>
+      <button type="button" data-testid="quiz-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="quizQuery.refresh()">Try again</button>
+    </div>
+    <div v-else-if="!quizData" class="py-8 text-center text-sm text-stone-400">
       Loading questions...
     </div>
 

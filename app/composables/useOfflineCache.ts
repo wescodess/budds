@@ -237,6 +237,25 @@ async function deleteSection(sectionId: string): Promise<void> {
   db.close()
 }
 
+async function deleteCourseSections(courseId: string): Promise<string[]> {
+  const db = await openDB()
+  const readTx = db.transaction(SECTION_STORE, 'readonly')
+  const records = (await requestResult(readTx.objectStore(SECTION_STORE).getAll()) as EncryptedSectionRecord[]).filter(row => row.courseId === courseId)
+  await transactionDone(readTx)
+  if (records.length === 0) { db.close(); return [] }
+  const key = await offlineKey()
+  const audioUrls = (await Promise.all(records.map(async (row) => {
+    try { return (await decryptOfflineJson<CachedSection>(row.payload, key)).contentBlocks.flatMap(block => block.audioUrls ?? []) }
+    catch { return [] }
+  }))).flat()
+  const writeTx = db.transaction([SECTION_STORE, AUDIO_STORE], 'readwrite')
+  for (const row of records) writeTx.objectStore(SECTION_STORE).delete(row.sectionId)
+  for (const url of audioUrls) writeTx.objectStore(AUDIO_STORE).delete(url)
+  await transactionDone(writeTx)
+  db.close()
+  return records.map(row => row.sectionId)
+}
+
 async function cacheAudioUrls(urls: string[]): Promise<void> {
   if (urls.length === 0) return
   const key = await offlineKey()
@@ -426,12 +445,17 @@ export function useOfflineCache() {
     cacheStatus.value.set(sectionId, false)
   }
 
+  async function forgetCachedCourse(courseId: string): Promise<void> {
+    for (const sectionId of await deleteCourseSections(courseId)) cacheStatus.value.set(sectionId, false)
+  }
+
   return {
     cacheStatus,
     cacheSectionContent,
     getCachedSection,
     checkCacheStatus,
     removeCachedSection,
+    forgetCachedCourse,
     getAudioFromCache,
   }
 }

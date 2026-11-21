@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -41,7 +42,7 @@ function sampleQuestions() {
 
 describe('quizzes.createWithQuestions', () => {
   test('[P0] rejects calls with no identity', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -55,7 +56,7 @@ describe('quizzes.createWithQuestions', () => {
   })
 
   test('[P0] rejects when folder is owned by another user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
 
@@ -71,7 +72,7 @@ describe('quizzes.createWithQuestions', () => {
   })
 
   test('[P0] persists quiz + questions with correct userId mirror and quizId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -98,8 +99,8 @@ describe('quizzes.createWithQuestions', () => {
     }
   })
 
-  test('[P1] drops sourceDocumentId when it does not belong to caller', async () => {
-    const t = convexTest(schema, modules)
+  test('[P1] rejects a foreign source before persisting its copied payload', async () => {
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
 
@@ -120,24 +121,16 @@ describe('quizzes.createWithQuestions', () => {
 
     const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'Alice Folder' })
     const [q0] = sampleQuestions()
-    const { quizId } = await asUserA.mutation(api.quizzes.createWithQuestions, {
-      folderId: folderA,
-      title: 'Q',
-      questions: [
-        { ...q0!, sourceDocumentId: String(bobDocId) },
-      ],
-    })
-
-    const stored = await t.run(async (ctx) =>
-      ctx.db.query('quizQuestions').withIndex('by_quizId', (q) => q.eq('quizId', quizId)).collect(),
-    )
-    expect(stored[0]!.sourceDocumentId).toBeUndefined()
+    await expect(asUserA.mutation(api.quizzes.createWithQuestions, {
+      folderId: folderA, title: 'Q', questions: [{ ...q0!, sourceDocumentId: String(bobDocId) }],
+    })).rejects.toThrow('Teaching input is unavailable')
+    expect(await t.run(ctx => ctx.db.query('quizzes').withIndex('by_userId', q => q.eq('userId', USER_A.tokenIdentifier)).take(1))).toEqual([])
   })
 })
 
 describe('quizzes.addQuestion', () => {
   test('[P0] rejects insertion when the quiz already has the bounded maximum of 200 questions', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -169,7 +162,7 @@ describe('quiz creation bounds', () => {
   }))
 
   test('[P0] rejects oversized user and course-scoped creation before inserting a quiz', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bounded' })
     const { courseId } = await asUser.mutation(api.courses.create, { title: 'Bounded course', sourceType: 'web-only', folderId })
@@ -187,7 +180,7 @@ describe('quiz creation bounds', () => {
 
 describe('quizzes.listByFolder', () => {
   test('[P0] returns only caller\'s quizzes for that folder', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
 
@@ -216,7 +209,7 @@ describe('quizzes.listByFolder', () => {
   })
 
   test('[P0] returns visible quizzes even when newer hidden rows exceed the result window', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Crowded' })
     await t.run(async ctx => {
@@ -235,7 +228,7 @@ describe('quizzes.listByFolder', () => {
 
 describe('quizzes.getWithQuestions', () => {
   test('[P0] returns null when quiz is owned by another user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(USER_A)
     const asUserB = t.withIdentity(USER_B)
 
@@ -251,7 +244,7 @@ describe('quizzes.getWithQuestions', () => {
   })
 
   test('[P0] returns quiz + ordered questions for the owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -272,7 +265,7 @@ describe('quizzes.getWithQuestions', () => {
 
 describe('quizzes.startAttempt', () => {
   test('[P0] resumes the newest in-progress attempt after more than 100 historical attempts', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'History' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Long history', questions: sampleQuestions() })
@@ -292,7 +285,7 @@ describe('quizzes.startAttempt', () => {
 
 describe('quizzes.submitAttempt', () => {
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -314,7 +307,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P0] rejects when quiz is owned by another user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
 
@@ -337,7 +330,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P0] rejects when a questionId belongs to a different quiz owned by the caller', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
 
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -364,7 +357,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P0] persists attempt with correct isCorrect flags (MC + free-response case-insensitive)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
 
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -405,7 +398,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P0] accepts concise list factors without accepting a different factor', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'Careers' })
     const { quizId } = await asA.mutation(api.quizzes.createWithQuestions, {
@@ -485,7 +478,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P0] updates parent quizzes.score as rounded percentage + completedAt', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
 
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -514,7 +507,7 @@ describe('quizzes.submitAttempt', () => {
   })
 
   test('[P1] most-recent attempt wins for the parent quizzes.score (multiple attempts)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
 
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -554,7 +547,7 @@ describe('quizzes.submitAttempt', () => {
 
 describe('quizzes.listAttempts', () => {
   test('[P0] returns caller attempts ordered desc by completedAt; foreign-user attempts are invisible', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
 
@@ -590,7 +583,7 @@ describe('quizzes.listAttempts', () => {
 
 describe('quizzes.updateQuestion', () => {
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -613,7 +606,7 @@ describe('quizzes.updateQuestion', () => {
   })
 
   test('[P0] rejects when question is owned by another user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -637,7 +630,7 @@ describe('quizzes.updateQuestion', () => {
   })
 
   test('[P0] rejects empty question text', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -660,7 +653,7 @@ describe('quizzes.updateQuestion', () => {
   })
 
   test('[P0] rejects MC correct answer not in options', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -684,7 +677,7 @@ describe('quizzes.updateQuestion', () => {
   })
 
   test('[P0] MC persists new options + correct answer; preserves immutable fields', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -720,7 +713,7 @@ describe('quizzes.updateQuestion', () => {
   })
 
   test('[P0] free-response strips provided options (stored as undefined)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -749,7 +742,7 @@ describe('quizzes.updateQuestion', () => {
 
 describe('quizzes incremental and bulk submission convergence', () => {
   test('[P0] includes previously stored correct answers and creates semantic rows for every free-form path', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -783,7 +776,7 @@ describe('quizzes incremental and bulk submission convergence', () => {
   })
 
   test('[P0] excludes previously correct answers whose questions were deleted before bulk completion', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Changing quiz' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Changing', questions: sampleQuestions() })
@@ -803,7 +796,7 @@ describe('quizzes incremental and bulk submission convergence', () => {
   })
 
   test('[P0] rejects question and attempt mutations after the parent quiz is tombstoned', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Deleting' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, { folderId, title: 'Deleting', questions: sampleQuestions() })
@@ -824,7 +817,7 @@ describe('quizzes incremental and bulk submission convergence', () => {
 
 describe('quizzes.deleteQuiz', () => {
   test('[P0] drains more questions than one deletion batch', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large quiz' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -846,7 +839,7 @@ describe('quizzes.deleteQuiz', () => {
   })
 
   test('[P0] drains answers and assessments across deletion batch boundaries', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Large attempt' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -917,7 +910,7 @@ describe('quizzes.deleteQuiz', () => {
   })
 
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { quizId } = await asUser.mutation(api.quizzes.createWithQuestions, {
@@ -932,7 +925,7 @@ describe('quizzes.deleteQuiz', () => {
   })
 
   test('[P0] rejects when quiz is owned by another user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -948,7 +941,7 @@ describe('quizzes.deleteQuiz', () => {
   })
 
   test('[P0] tombstones immediately then drains attempts, questions, and assessments in bounded batches', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
 

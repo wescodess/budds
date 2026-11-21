@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { RotateCcw } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { CircleAlert, RotateCcw } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import type { AttemptHistoryItem } from '~/composables/useQuizHistory'
@@ -22,10 +24,12 @@ const emit = defineEmits<{
   viewAttempt: [attemptId: Id<'quizAttempts'>]
 }>()
 
-const { data: resultsData } = useConvexQuery(
+const resultsQuery = useTeachingQuery(
   api.quizzes.getAttemptResults,
   computed(() => ({ attemptId: props.attemptId })),
 )
+const resultsData = resultsQuery.data
+const resultsFailure = computed(() => resultsQuery.failure.value)
 
 const { data: historyData } = useConvexQuery(
   api.quizzes.getQuizHistory,
@@ -148,6 +152,15 @@ watch(results, (value) => {
   requestPendingAssessment()
 }, { immediate: true })
 
+watch(() => resultsFailure.value?.retryable === false, (paused) => {
+  if (!paused) return
+  cancelScoreAnimation()
+  clearAssessmentRetry()
+  animatedPct.value = 0
+  assessmentRequestedFor.value = null
+  assessmentRequestFailed.value = false
+})
+
 watch(() => props.attemptId, () => {
   clearAssessmentRetry()
   assessmentRequestedFor.value = null
@@ -159,7 +172,18 @@ const { springGentle } = useMotionPresets()
 </script>
 
 <template>
-  <div v-if="!results" class="space-y-3 p-6">
+  <div v-if="resultsFailure && !resultsFailure.retryable" role="status" data-testid="quiz-read-paused" class="p-6">
+    <p class="flex items-start gap-2 rounded-md border p-6 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ resultsFailure.message }}</span></p>
+  </div>
+
+  <div v-else-if="resultsFailure" role="alert" data-testid="quiz-read-error" class="p-6">
+    <div class="rounded-md border p-6 text-center">
+      <p class="font-medium">Could not load these results.</p>
+      <button type="button" data-testid="quiz-read-retry" class="mx-auto mt-2 block text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="resultsQuery.refresh?.()">Try again</button>
+    </div>
+  </div>
+
+  <div v-else-if="!results" class="space-y-3 p-6">
     <UiSkeleton v-for="i in 3" :key="i" class="h-24 w-full rounded-lg" />
   </div>
 

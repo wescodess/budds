@@ -1,4 +1,7 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { getFunctionName, type FunctionReference } from 'convex/server'
+vi.mock('../../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
 const mockQuery = vi.fn()
 const mockMutation = vi.fn()
@@ -20,6 +23,8 @@ const mockBuildClaimEntailmentPrompt = vi.fn()
 const mockBuildClaimEntailmentJsonSchema = vi.fn()
 const mockParseClaimEntailmentResponse = vi.fn()
 const mockObjectIdentity = vi.fn()
+const mockFetchPrivateR2Object = vi.fn()
+const mockTranscribeAudio = vi.fn()
 
 vi.stubGlobal('defineEventHandler', <T>(handler: T) => handler)
 vi.stubGlobal('getRequestHeader', vi.fn(() => 'valid-job-capability'))
@@ -36,7 +41,10 @@ vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({ public: { convex: { url: 'https
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     query = mockQuery
-    mutation = mockMutation
+    mutation(reference: FunctionReference<'mutation'>, args: unknown) {
+      if (getFunctionName(reference) === 'audioOverviewJobs:admitTeachingHelp') return Promise.resolve({ version: 'learn-v2.help-admission.v1', status: 'ordinary' })
+      return mockMutation(reference, args)
+    }
   },
 }))
 
@@ -61,9 +69,9 @@ vi.mock('../../../utils/audio-overview-grounding', () => ({
 }))
 vi.mock('../../../utils/r2-folder', () => ({
   getScopedR2ObjectIdentity: mockObjectIdentity,
-  fetchPrivateR2Object: vi.fn(),
+  fetchPrivateR2Object: mockFetchPrivateR2Object,
 }))
-vi.mock('../../../utils/whisper-workers-ai', () => ({ transcribeAudio: vi.fn() }))
+vi.mock('../../../utils/whisper-workers-ai', () => ({ transcribeAudio: mockTranscribeAudio }))
 vi.mock('../../../utils/audio-overview-alignment', () => ({ alignRecognizedWordsToScript: vi.fn() }))
 
 const handler = (await import('./step.post')).default as (event: { context: Record<string, unknown> }) => Promise<Record<string, unknown>>
@@ -133,6 +141,29 @@ describe('POST /api/audio-overview/jobs/step v2', () => {
     mockObjectIdentity.mockReset().mockResolvedValue({
       key: 'owner/source.pdf', contentHash: sourceHash, revision: `sha256:${sourceHash}`, byteLength: 1024,
     })
+    mockFetchPrivateR2Object.mockReset()
+    mockTranscribeAudio.mockReset()
+  })
+
+  test.each(['prepare', 'scene-context', 'claim-render', 'commit-scene', 'publish', 'align'])('%s stops protected lineage before retrieval, rendering or transcription', async stage => {
+    mockReadBody.mockResolvedValue({ jobId: 'job_1', stage, sceneOrder: 0, attempt: 1, artifact: { sceneId: 'scene_1', sceneCount: 1 }, qualityGate: {} })
+    const denial = Object.assign(new Error('Teaching input is unavailable'), { statusCode: 403 })
+    mockQuery.mockRejectedValue(denial)
+    mockMutation.mockRejectedValue(denial)
+    await expect(handler({ context: {} })).resolves.toEqual({ ok: false, retryable: false, message: 'Teaching input is unavailable' })
+    expect(mockSearchDocuments).not.toHaveBeenCalled()
+    expect(mockFetchFolderDocs).not.toHaveBeenCalled()
+    expect(mockObjectIdentity).not.toHaveBeenCalled()
+    expect(mockGenerateCompletion).not.toHaveBeenCalled()
+    expect(mockFetchPrivateR2Object).not.toHaveBeenCalled()
+    expect(mockTranscribeAudio).not.toHaveBeenCalled()
+  })
+
+  test.each([{ lineage: { kind: 'scoring_spec' } }, { payload: { answerKey: 'private scoring canary' } }])('rejects worker aliases before a workflow RPC: %j', async extra => {
+    mockReadBody.mockResolvedValue({ jobId: 'job_1', stage: 'prepare', ...extra })
+    await expect(handler({ context: {} })).rejects.toThrow('Teaching input is unavailable')
+    expect(mockQuery).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
   })
 
   test('[P0] reports an unavailable PDF search index before script or audio provider work', async () => {

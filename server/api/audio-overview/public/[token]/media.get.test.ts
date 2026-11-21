@@ -9,7 +9,7 @@ vi.stubGlobal('useRuntimeConfig', vi.fn(() => ({ public: { convex: { url: 'https
 vi.stubGlobal('createError', (options: { statusCode: number, message: string }) =>
   Object.assign(new Error(options.message), { statusCode: options.statusCode }),
 )
-vi.mock('convex/browser', () => ({ ConvexHttpClient: class { query = mockQuery } }))
+vi.mock('convex/browser', () => ({ ConvexHttpClient: class { mutation = mockQuery } }))
 vi.mock('../../../../utils/runtime-config', () => ({ readConfiguredRuntimeValue: vi.fn((...values: unknown[]) => values.find(Boolean)) }))
 vi.mock('../../../../utils/audio-overview-media', () => ({ privateAudioResponse: mockPrivateAudioResponse }))
 
@@ -22,7 +22,7 @@ describe('public Audio Overview media route', () => {
   })
 
   test('does not touch R2 after a revoked or unknown share token', async () => {
-    mockQuery.mockResolvedValue(null)
+    mockQuery.mockResolvedValue({admission:{status:'ordinary'},value:null})
 
     await expect(handler({ context: {} })).rejects.toMatchObject({ statusCode: 404 })
     expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
@@ -31,11 +31,17 @@ describe('public Audio Overview media route', () => {
   test('uses only the artifact resolved by the public share projection', async () => {
     const media = { objectKey: 'audio-overviews/jobs/job_1/overview.wav', container: 'wav', contentType: 'audio/wav' }
     const response = new Response('wav')
-    mockQuery.mockResolvedValue(media)
+    mockQuery.mockResolvedValue({admission:{status:'ordinary'},value:media})
     mockPrivateAudioResponse.mockResolvedValue(response)
 
     await expect(handler({ context: {} })).resolves.toBe(response)
-    expect(mockQuery).toHaveBeenCalledWith(expect.anything(), { token: 'shared_token_1234567890' })
-    expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media)
+    expect(mockQuery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ token: 'shared_token_1234567890',idempotencyKey:expect.any(String) }))
+    expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media, expect.any(Function))
+  })
+
+  test('does not touch R2 when the shared publication has protected lineage', async () => {
+    mockQuery.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler({ context: {} })).rejects.toThrow('Teaching input is unavailable')
+    expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
   })
 })

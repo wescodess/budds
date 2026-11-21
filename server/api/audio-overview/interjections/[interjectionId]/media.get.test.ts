@@ -8,7 +8,7 @@ vi.stubGlobal('getRouterParam', vi.fn(() => 'interjection_1'))
 vi.stubGlobal('createError', (options: { statusCode: number, message: string }) =>
   Object.assign(new Error(options.message), { statusCode: options.statusCode }),
 )
-vi.mock('../../../../utils/convex-client', () => ({ makeConvexClient: vi.fn(() => ({ query: mockQuery })) }))
+vi.mock('../../../../utils/convex-client', () => ({ makeConvexClient: vi.fn(() => ({ mutation: mockQuery })) }))
 vi.mock('../../../../utils/audio-overview-media', () => ({ privateAudioResponse: mockPrivateAudioResponse }))
 
 const handler = (await import('./media.get')).default as (event: any) => Promise<Response>
@@ -20,18 +20,24 @@ describe('owner Interjection media route', () => {
   })
 
   test('does not touch R2 when Convex denies ownership', async () => {
-    mockQuery.mockResolvedValue(null)
+    mockQuery.mockResolvedValue({admission:{status:'ordinary'},value:null})
     await expect(handler({ context: { convexToken: 'owner-token' } })).rejects.toMatchObject({ statusCode: 404 })
+    expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
+  })
+
+  test('does not touch R2 when the parent or generated answer has protected lineage', async () => {
+    mockQuery.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler({ context: { convexToken: 'owner-token' } })).rejects.toThrow('Teaching input is unavailable')
     expect(mockPrivateAudioResponse).not.toHaveBeenCalled()
   })
 
   test('proxies only the private artifact resolved from the Interjection ID', async () => {
     const media = { objectKey: 'audio-overviews/jobs/job_1/interjections/interjection_1.wav', container: 'wav', contentType: 'audio/wav' }
     const response = new Response('wav')
-    mockQuery.mockResolvedValue(media)
+    mockQuery.mockResolvedValue({admission:{status:'ordinary'},value:media})
     mockPrivateAudioResponse.mockResolvedValue(response)
     await expect(handler({ context: { convexToken: 'owner-token' } })).resolves.toBe(response)
-    expect(mockQuery).toHaveBeenCalledWith(expect.anything(), { interjectionId: 'interjection_1' })
-    expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media)
+    expect(mockQuery).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ interjectionId: 'interjection_1',idempotencyKey:expect.any(String) }))
+    expect(mockPrivateAudioResponse).toHaveBeenCalledWith(expect.anything(), media, expect.any(Function))
   })
 })

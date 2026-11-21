@@ -1,4 +1,7 @@
 import type { ChatMessage } from '../../utils/ai-gateway'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
+import { messageProvenance } from '../../utils/message-provenance'
+import { normalizeAssistantCitations } from '../../../shared/assistant-citations'
 
 const SYSTEM_PROMPT = `You are Budds, a warm, encouraging study companion.
 You help students think through problems, learn new concepts, and draft ideas.
@@ -6,7 +9,7 @@ Be concise, friendly, and honest about uncertainty.
 When asked something that would benefit from course materials, mention the student can open one of their course folders to get sourced answers.`
 
 export default defineEventHandler(async (event) => {
-  getConvexTokenIdentifier(event)
+  const userId = getConvexTokenIdentifier(event)
 
   const body = await readBody<{
     query: string
@@ -23,6 +26,10 @@ export default defineEventHandler(async (event) => {
   if (!body.model?.trim()) {
     throw createError({ statusCode: 400, message: 'model is required' })
   }
+
+  // Client history/session assertions cannot establish unrelated context.
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'chat', scope: null })
+  await authorizeHelp()
 
   const requestedModel = body.model
   let modelFallback: { requested: string; actual: string } | undefined
@@ -46,6 +53,7 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
+    redactUpstreamErrorBody: true,
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }
@@ -56,6 +64,7 @@ export default defineEventHandler(async (event) => {
   }
   catch (err) {
     if (body.model !== SERVER_DEFAULT_MODEL) {
+      await authorizeHelp()
       modelFallback = { requested: body.model, actual: SERVER_DEFAULT_MODEL }
       completion = await generateCompletion({ model: SERVER_DEFAULT_MODEL, ...completionParams })
     }
@@ -64,8 +73,12 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
+  const provenance = await messageProvenance(event, userId, answer, [], Boolean(body.history?.length), false)
+  await authorizeHelp(Boolean(answer))
   return {
-    answer: completion.choices[0]?.message?.content ?? '',
+    answer,
+    ...(provenance ? { provenance } : {}),
     model: completion.model,
     usage: completion.usage,
     ...(modelFallback && { modelFallback }),
