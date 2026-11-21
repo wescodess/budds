@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -117,7 +118,7 @@ async function reserveCourseAudio(
 
 describe('audioOverviews.listByFolder', () => {
   test('[P0] returns only caller overviews for that folder', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
 
@@ -149,7 +150,7 @@ describe('audioOverviews.listByFolder', () => {
 
 describe('audioOverviews.getWithTurns', () => {
   test('[P0] returns null for other users', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -165,7 +166,7 @@ describe('audioOverviews.getWithTurns', () => {
   })
 
   test('[P0] returns full overview + turns for the owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -186,7 +187,7 @@ describe('audioOverviews.getWithTurns', () => {
 
 describe('audioOverviews.getTurnUrls', () => {
   test('[P0] returns signed URLs in turn order for owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -204,7 +205,7 @@ describe('audioOverviews.getTurnUrls', () => {
   })
 
   test('[P0] returns null for foreign users', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -221,7 +222,7 @@ describe('audioOverviews.getTurnUrls', () => {
 
 describe('audioOverviews.deleteOverview', () => {
   test('[P0] rejects foreign callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -239,7 +240,7 @@ describe('audioOverviews.deleteOverview', () => {
   })
 
   test('[P0] removes row + all turn storage blobs for owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const turns = await sampleTurns(t)
@@ -293,20 +294,20 @@ async function createReadyOverview(t: ReturnType<typeof convexTest>, user: typeo
 
 describe('audioOverviews.publishOverview', () => {
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     await expect(t.mutation(api.audioOverviews.publishOverview, { id: overviewId })).rejects.toThrow(/Unauthenticated/)
   })
 
   test('[P0] rejects callers who do not own the overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     const asB = t.withIdentity(USER_B)
     await expect(asB.mutation(api.audioOverviews.publishOverview, { id: overviewId })).rejects.toThrow(/not found/)
   })
 
   test('[P0] mints a 32-char hex token and persists publishedAt', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token, publishedAt } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
     expect(token).toMatch(/^[0-9a-f]{32}$/)
@@ -318,7 +319,7 @@ describe('audioOverviews.publishOverview', () => {
   })
 
   test('[P0] is idempotent — re-publishing returns the existing token', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const first = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
     const second = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
@@ -327,7 +328,7 @@ describe('audioOverviews.publishOverview', () => {
   })
 
   test('[P0] rejects publishing an overview that is not status=ready', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     await t.run(async (ctx) => {
       await ctx.db.patch(overviewId, { status: 'generating' })
@@ -338,7 +339,7 @@ describe('audioOverviews.publishOverview', () => {
 
 describe('audioOverviews.unpublishOverview', () => {
   test('[P0] rejects callers who do not own the overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser: asA, overviewId } = await createReadyOverview(t, USER_A)
     await asA.mutation(api.audioOverviews.publishOverview, { id: overviewId })
     const asB = t.withIdentity(USER_B)
@@ -346,7 +347,7 @@ describe('audioOverviews.unpublishOverview', () => {
   })
 
   test('[P0] clears shareToken and publishedAt for owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
     await asUser.mutation(api.audioOverviews.unpublishOverview, { id: overviewId })
@@ -358,13 +359,13 @@ describe('audioOverviews.unpublishOverview', () => {
 
 describe('audioOverviews.getByShareToken', () => {
   test('[P0] returns null on unknown token', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const result = await t.query(api.audioOverviews.getByShareToken, { token: 'deadbeefdeadbeefdeadbeefdeadbeef' })
     expect(result).toBeNull()
   })
 
   test('[P0] returns null on tokens that fail the strict regex', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     expect(await t.query(api.audioOverviews.getByShareToken, { token: '' })).toBeNull()
     expect(await t.query(api.audioOverviews.getByShareToken, { token: 'abc' })).toBeNull()
     expect(await t.query(api.audioOverviews.getByShareToken, { token: 'A'.repeat(32) })).toBeNull()
@@ -373,7 +374,7 @@ describe('audioOverviews.getByShareToken', () => {
   })
 
   test('[P0] returns the overview projection without auth given a valid token', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
 
@@ -386,7 +387,7 @@ describe('audioOverviews.getByShareToken', () => {
   })
 
   test('[P0] projection does NOT leak userId / folderId / taskId / model', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
 
@@ -402,7 +403,7 @@ describe('audioOverviews.getByShareToken', () => {
   })
 
   test('[P0] projection includes sourceFilenames derived from sourceDocumentIds', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
 
@@ -412,7 +413,7 @@ describe('audioOverviews.getByShareToken', () => {
   })
 
   test('[P0] stops returning the overview after unshare', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
     await asUser.mutation(api.audioOverviews.unpublishOverview, { id: overviewId })
@@ -424,7 +425,7 @@ describe('audioOverviews.getByShareToken', () => {
 
 describe('audioOverviews.getCourseScopedOverview', () => {
   test('[P0] returns overview with turnUrls and sourceFilenames for owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const turns = await sampleTurns(t)
@@ -446,7 +447,7 @@ describe('audioOverviews.getCourseScopedOverview', () => {
   })
 
   test('[P0] returns null for other users', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -465,14 +466,14 @@ describe('audioOverviews.getCourseScopedOverview', () => {
 
 describe('audioOverviews.getTurnUrlsByShareToken', () => {
   test('[P0] returns null for tokens failing the strict regex or without a matching overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     expect(await t.query(api.audioOverviews.getTurnUrlsByShareToken, { token: 'short' })).toBeNull()
     expect(await t.query(api.audioOverviews.getTurnUrlsByShareToken, { token: 'A'.repeat(32) })).toBeNull()
     expect(await t.query(api.audioOverviews.getTurnUrlsByShareToken, { token: 'a'.repeat(32) })).toBeNull()
   })
 
   test('[P0] returns an array of URLs (or nulls) for a valid token without auth', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, overviewId } = await createReadyOverview(t, USER_A)
     const { token } = await asUser.mutation(api.audioOverviews.publishOverview, { id: overviewId })
 

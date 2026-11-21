@@ -8,6 +8,10 @@ import { QUIZ_RUBRIC_GRADE_VERSION, defaultQuizGradingCriteria, validateQuizGrad
 export const FREE_RESPONSE_ASSESSMENT_KIND = manifest.decisionKinds.freeResponse.kind as 'quiz.free_response_assessment.v1'
 export const FREE_RESPONSE_RUBRIC = manifest.decisionKinds.freeResponse.rubric
 
+export function publicQuizQuestionSnapshot(row: Doc<'quizAnswerAssessments'>['questionSnapshot']) {
+  return { question: row.question, questionType: row.questionType, expectedAnswer: row.expectedAnswer, evidenceExcerpt: row.evidenceExcerpt, sourceFilename: row.sourceFilename, explanation: row.explanation }
+}
+
 export function isQuizGradingEnabled() {
   return process.env.QUIZ_GRADING_MODE === 'graded'
 }
@@ -77,6 +81,8 @@ export async function createPendingAnswerAssessment(
     languageSnapshot: language,
     status: 'pending',
     questionSnapshot: {
+      scopeVersion: 'quiz.source-scope.v1',
+      sourceDocumentId: input.question.sourceDocumentId,
       question: input.question.question,
       questionType: input.question.type,
       expectedAnswer: input.question.correctAnswer,

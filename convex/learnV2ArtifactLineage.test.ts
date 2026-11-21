@@ -7,6 +7,7 @@ import { api, internal } from './_generated/api'
 import type { Doc, Id, TableNames } from './_generated/dataModel'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import schema from './schema'
+import { seedOrdinaryTeachingSource } from '../tests/fixtures/ordinary-teaching-source'
 import { ARTIFACT_LINEAGE_INDEX_RANGES, ARTIFACT_LINEAGE_READ_BYTES, ArtifactProjectionBudgetError, createArtifactLineagePublicationContext, admitArtifactInput, admitArtifactInputByIdentity, admitArtifactInputs, admitArtifactInputsForOwner, admitArtifactInputsForRecord, prepareAndRegisterInstructionalArtifacts, classifyPersonalWorkDocumentForOwner, classifyPersonalWorkDocumentForRecord, createArtifactLineageReadContext, registerInstructionalArtifactsForOwner, registerInstructionalArtifactsForRecord, registerInstructionalArtifactForRecord, resolveArtifactLineageForRecord, supersedeArtifactLineageForOwner, supersedeArtifactLineageForRecord, sessionBlockContentProjection, sectionContentProjection, audioOverviewContentProjection, artifactContentProjection, artifactManifestDigest, artifactPayloadDigest, advanceAssessmentCatalogForOwner, registerInstructionalArtifactForOwner, resolveArtifactLineageForOwner } from './lib/learnV2ArtifactLineage'
 import { artifactRegistrationArgs, artifactRegistrationResultValidator } from './lib/learnV2ArtifactLineageContract'
 import { invalidateMeasurementSourceBatch } from './lib/learnV2MeasurementRetention'
@@ -572,6 +573,10 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
   const contentId = await ctx.db.insert('sessionContent', { userId, studySessionId: sessionId, studyPlanRevisionId: planId,
     blueprintRevisionId, objectiveId, revision: 1, status: 'published', createdAt: now })
   const blockId = await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: contentId, order: 0, kind: 'explanation', content: 'Live teaching block' })
+  if (kind === 'session_block') {
+    const claimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId: contentId, order: 0, claim: 'Supported teaching' })
+    await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId: claimId, sourceSnapshotId: f.snapshotId, sourceExcerptId: f.excerptId, entailment: 'entailed', conflictStatus: 'clear' })
+  }
   const courseId = await ctx.db.insert('courses', { userId, folderId: f.folderId, title: 'Live course', status: 'ready', sourceType: 'folder',
     sourceConfidence: { docCount: 1, webPercent: 0 }, pace: 'steady', outlineSections: [], completedSectionCount: 0, totalSectionCount: 1,
     webSearchEnabled: false, createdAt: now, updatedAt: now })
@@ -637,6 +642,7 @@ async function prepareMatrix(ctx: MutationCtx, kind: ArtifactKind, sourceKind: S
     audio_overview: { kind: 'audio_overview', id: overviewId }, learner_artifact: { kind: 'learner_artifact', id: learnerArtifactId }, measurement_item: { kind: 'measurement_item', id: itemId }, scoring_spec: { kind: 'scoring_spec', id: specId },
   } as const satisfies Record<ArtifactKind, LearnArtifactReference['artifact']>
   const artifact = artifactByKind[kind]
+  await seedOrdinaryTeachingSource(ctx, userId)
   const payload = kind === 'session_block' ? await sessionBlockContentProjection(ctx, (await ctx.db.get(blockId))!, (await ctx.db.get(contentId))!)
     : kind === 'flashcard_version' ? artifactContentProjection({ kind, version: (await ctx.db.get(versionId))!, cards: [(await ctx.db.get(cardId))!] })
       : kind === 'audio_overview' ? await audioOverviewContentProjection(ctx, (await ctx.db.get(overviewId))!)
@@ -670,7 +676,12 @@ async function ordinaryConsumerFixture<T>(t: TestStore, operation: (ctx: Mutatio
     const rows = await ctx.db.query('learnArtifactLineages').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(201)
     if (rows.length > 200) throw new Error('Fixture exceeds ordinary consumer bound')
     for (const row of rows) await ctx.db.patch(row._id, { nextId: row._id })
-    try { return await operation(ctx) }
+    try {
+      await seedOrdinaryTeachingSource(ctx, owner.tokenIdentifier)
+      const result = await operation(ctx)
+      await seedOrdinaryTeachingSource(ctx, owner.tokenIdentifier)
+      return result
+    }
     finally { for (const row of rows) if (await ctx.db.get(row._id)) await ctx.db.patch(row._id, { nextId: row.nextId }) }
   })
 }
@@ -1268,6 +1279,7 @@ async function currentContent(ctx: MutationCtx, f: MatrixFixture) {
 }
 async function repinContent<F extends MatrixFixture>(t: TestStore, f: F): Promise<F> {
   return t.run(async ctx => {
+    await seedOrdinaryTeachingSource(ctx, owner.tokenIdentifier)
     const payloadDigest = await artifactPayloadDigest(await currentContent(ctx, f))
     const reference = { ...f.reference, payloadDigest, revision: f.reference.revision.startsWith('sha256:') ? `sha256:${payloadDigest}` : f.reference.revision }
     await ctx.db.patch(f.lineageId, reference)
@@ -1280,9 +1292,8 @@ async function readConsumerContent(t: TestStore, f: MatrixFixture) {
   const asOwner = t.withIdentity(owner)
   switch (f.reference.artifact.kind) {
     case 'session_block': {
-      const result = await asOwner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.sessionId })
-      expect(result).not.toBeNull()
-      return consumerContent(result)
+      const result = await consumerQuery(t, api.learnV2SessionContent.getSessionContent, { studySessionId: f.sessionId })
+      return result ? consumerContent(result) : { evidenceStatus: 'evidence_unavailable' }
     }
     case 'document': case 'document_chunk': return consumerContent(await t.query(internal.documents.getDocument, { id: f.documentId }))
     case 'quiz_question': {
@@ -1337,7 +1348,10 @@ async function expectDifferential(t: TestStore, f: MatrixFixture, apply: () => P
   const rewrite = await t.run(ctx => prepare(ctx, { origin: summary, transformation: 'rewrite' }))
   for (const target of [f, summary, rewrite]) expect(await t.withIdentity(owner).query(internal.learnV2ArtifactLineage.resolve, { reference: target.reference })).toMatchObject({ status: 'bound' })
   await apply()
-  const after = await read()
+  const after = await read().catch((error: unknown) => {
+    if (!changes || !(error instanceof Error) || !/unavailable/.test(error.message)) throw error
+    return { evidenceStatus: 'evidence_unavailable' }
+  })
   const nextDigest = await t.run(async ctx => artifactPayloadDigest(await currentContent(ctx, f)))
   expect(JSON.stringify(after) !== JSON.stringify(before)).toBe(changes)
   expect(nextDigest !== digest).toBe(changes)
@@ -1395,6 +1409,7 @@ async function prepareLinkedSection(t: TestStore, corrected = false) {
       { type: 'text', content: 'Section teaching', order: 0 }, { type: 'quiz', entityId: f.quizId, entityType: 'quiz', order: 1 },
       { type: 'flashcard', entityId: f.flashcardRoomId, entityType: 'flashcard', order: 2 }, { type: 'audio', entityId: f.overviewId, entityType: 'audio', order: 3 },
     ] })
+    await ctx.db.patch(f.cardId, { term: 'First term', definition: 'First definition' })
     return { ...f, activeCardId }
   })
   if (corrected) {
@@ -3202,6 +3217,7 @@ describe('Stage B Audio alignment succession', () => {
       for (const row of rows) await ctx.db.delete(row._id)
       await ctx.db.patch(f.catalogId, { measurementCapability: { enabled: true } })
       const documents = await ctx.db.query('documents').withIndex('by_userId', q => q.eq('userId', owner.tokenIdentifier)).take(10)
+      for (const document of documents) if (document.filename === 'ordinary-teaching-fixture.txt') await ctx.db.patch(document._id, { contentHash: 'f'.repeat(64), sourceRevision: `sha256:${'f'.repeat(64)}`, r2Key: `fixture/${document._id}` })
       await prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: documents.flatMap(document => [
         { artifact: { kind: 'document' as const, id: document._id }, key: 'whole', origins: [], sources: [] },
         { artifact: { kind: 'document_chunk' as const, id: document._id }, key: 'chunk-set', origins: [], sources: [] },

@@ -52,7 +52,7 @@ describe('messages.appendMessage', () => {
     expect(messages[0].conversationId).toBe(conversationId)
   })
 
-  it('[P0] should append an assistant message with sources and model', async () => {
+  it('[P0] should withhold an assistant message without known source provenance', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { conversationId } = await seedConversation(asUser)
@@ -74,7 +74,9 @@ describe('messages.appendMessage', () => {
     const messages = await asUser.query(api.messages.listByConversation, { conversationId })
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('assistant')
-    expect(messages[0].sources).toEqual(sources)
+    expect(messages[0].content).toBe('')
+    expect(messages[0]).not.toHaveProperty('sources')
+    expect(messages[0]).toHaveProperty('evidenceStatus', 'evidence_unavailable')
     expect(messages[0]).not.toHaveProperty('model')
   })
 
@@ -133,7 +135,7 @@ describe('messages.listByConversation', () => {
     })
 
     const messages = await asUser.query(api.messages.listByConversation, { conversationId })
-    expect(messages.map((m: any) => m.content)).toEqual(['Q1', 'A1', 'Q2'])
+    expect(messages.map((m: any) => m.content)).toEqual(['Q1', '', 'Q2'])
   })
 
   it('[P0] should be scoped to the conversation\'s owner', async () => {

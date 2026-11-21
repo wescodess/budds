@@ -18,7 +18,7 @@ export async function seedTeachingReads(ctx: Pick<MutationCtx, 'db'>, userId: st
   const card = { userId, roomId, displayOrder: 0, term: text, definition: text, sourceDocumentId: documentId }
   const cardId = await ctx.db.insert('flashcardRoomCards', card)
   await ctx.db.insert('flashcardVersionCards', { ...card, versionId })
-  await ctx.db.insert('reviewItems', { userId, courseId, sectionId, flashcardRoomCardId: cardId, prompt: text, answer: text, easeFactor: 2.5, interval: 1, repetitions: 0, nextReviewDate: '2000-01-01', flagged: false, createdAt: now })
+  await ctx.db.insert('reviewItems', { userId, courseId, sectionId, flashcardRoomCardId: cardId, sourceVersionId: versionId, prompt: text, answer: text, easeFactor: 2.5, interval: 1, repetitions: 0, nextReviewDate: '2000-01-01', flagged: false, createdAt: now })
   const taskId = await ctx.db.insert('tasks', { userId, folderId, type: 'audio-overview-generation', title: 'Audio', status: 'completed', createdAt: now, updatedAt: now })
   await ctx.db.patch(taskId, { audioOverviewRequest: { scope: {mode:'explicit', documentIds:[documentId]}, documents:[{documentId,folderId,filename:'fixture.txt',r2Key:objectKey,contentHash,sourceRevision:revision}], preferences:{lengthMinutes:5,complexity:'beginner'}, voiceProfile:{hostA:'asteria',hostB:'orion'},quotaDate:'2027-01-01' } })
   const jobId = await ctx.db.insert('audioOverviewJobs', { userId, folderId, taskId, idempotencyKey: 'teaching_audio_job', capabilityHash: 'fixture', status: 'completed', stage: 'complete', completedTurns: 1, createdAt: now, updatedAt: now })

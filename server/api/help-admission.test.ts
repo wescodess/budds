@@ -10,6 +10,7 @@ import { artifactManifestDigest, prepareAndRegisterInstructionalArtifacts } from
 import { searchDocuments as indexedSearch } from '../utils/ai-search'
 import { buildQuizPrompt, parseQuizResponse } from '../utils/quiz-prompt'
 import { buildFlashcardPrompt, parseFlashcardResponse } from '../utils/flashcard-prompt'
+import { authorizeExport } from '../../tests/fixtures/learn-v2-personal-export'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../../shared/learn-v2-responses'
 
 const policy = vi.hoisted(() => ({ responses: true }))
@@ -447,6 +448,35 @@ describe('Nitro handlers use registered server help admission', () => {
     expect(emitted.join('')).not.toContain('SECOND_WITHHELD')
     expect(cancel).toHaveBeenCalledOnce()
     expect((await s.exposures()).slice(before).map(row => row.status)).toEqual(priorAssistance ? ['granted', 'requested_denied'] : ['requested_denied'])
+  })
+  test.each([false, true])('history-bearing RAG receipts remain unknown through persisted replay and export, streaming=%s', async stream => {
+    await sealed()
+    body({ stream, history: [{ role: 'assistant', content: 'PRIOR_SOURCE_QUOTE' }] })
+    vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({ start(controller) {
+      controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"TEACHING_ANSWER"}}]}\n\n'))
+      controller.enqueue(encoder.encode('data: [DONE]\n\n')); controller.close()
+    } }))
+    const response = await rag(event)
+    const provenance = stream
+      ? JSON.parse(emitted.find(value => value.startsWith('event: provenance'))!.split('data: ')[1]!) as MessageProvenance
+      : (response as { provenance: MessageProvenance }).provenance
+    expect(provenance).toMatchObject({ scope: 'unknown', references: null })
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'History' })
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'user', content: 'My retained question' })
+    const id = await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'TEACHING_ANSWER', provenance,
+      sources: [{ content: 'SOURCE_CONTENT', score: 0.9, filename: 'case.pdf' }] })
+    expect(await s.t.run(ctx => ctx.db.get(id))).toMatchObject({ content: '', sources: [], helpScope: { scope: 'unknown', references: null } })
+    await s.t.run(ctx => ctx.db.delete(s.f.documentId))
+    for (const responses of [true, false]) {
+      policy.responses = responses
+      const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unknown_history_replay' })
+      expect(replay).toMatchObject({ admission: { status: 'denied', reasonCode: 'unavailable' } })
+      expect(replay.messages.map(row => row.content)).toEqual(['My retained question', ''])
+      const exported = await s.owner.query(api.dataExport.getUserDataPage, { collection: 'messages', paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
+      expect(JSON.stringify(exported)).not.toMatch(/TEACHING_ANSWER|SOURCE_CONTENT|PRIOR_SOURCE_QUOTE/)
+      expect(JSON.stringify(exported)).toContain('My retained question')
+      expect(JSON.stringify(exported)).toContain('evidence_unavailable')
+    }
   })
   test.each([false, true])('new RAG answers retain signed cross-folder provenance, streaming=%s', async stream => {
     await sealed()

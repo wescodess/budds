@@ -115,7 +115,10 @@ async function readActivityEvidence(ctx: QueryCtx, userId: string, activityId: s
 // boundary. No raw evidence records or private locators cross the client seam.
 const getThreadActivityEvidenceRead = defineTeachingRead({
   name: 'learnAdaptiveEvidence.getThreadActivityEvidence',
-  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'thread', id: args.threadId }]),
+  scope: async (ctx, userId, args) => {
+    const activity = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId)).unique()
+    return activity?.threadId === args.threadId ? await teachingReadScope(ctx, userId, [{ kind: 'activity', id: activity._id }]) : null
+  },
 
   args: { threadId: v.id('learningThreads'), activityId: v.string() },
   returns: v.union(v.object({ ...evidenceFields, ownerId: v.id('users'), threadId: v.id('learningThreads') }), v.null()),

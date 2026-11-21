@@ -1,15 +1,16 @@
 import { v, type Infer } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema, learnResponseIdempotencyKeySchema } from '../../shared/learn-v2-responses'
-import { MESSAGE_PROVENANCE_VERSION } from '../../shared/learn-v2-message-provenance'
+import { MESSAGE_PROVENANCE_VERSION, LEGACY_MESSAGE_PROVENANCE_VERSION } from '../../shared/learn-v2-message-provenance'
 
 export const messageScopeReference = v.union(
   v.object({ kind: v.literal('document'), id: v.id('documents') }),
   v.object({ kind: v.literal('folder'), id: v.id('folders') }),
 )
-export const messageProvenanceFields = { version: v.literal(MESSAGE_PROVENANCE_VERSION), references: v.array(messageScopeReference), signature: v.string() }
-export const messageHelpScope = { version: v.union(v.literal('learn-v2.message-provenance.v1'), v.literal(MESSAGE_PROVENANCE_VERSION)),
-  references: v.array(messageScopeReference), signature: v.optional(v.string()) }
+const messageScope = v.union(v.literal('known'), v.literal('unknown'), v.literal('independent'))
+export const messageProvenanceFields = { version: v.literal(MESSAGE_PROVENANCE_VERSION), scope: messageScope, references: v.union(v.null(), v.array(messageScopeReference)), signature: v.string() }
+export const messageHelpScope = { version: v.union(v.literal('learn-v2.message-provenance.v1'), v.literal(LEGACY_MESSAGE_PROVENANCE_VERSION), v.literal(MESSAGE_PROVENANCE_VERSION)),
+  scope: v.optional(messageScope), references: v.optional(v.union(v.null(), v.array(messageScopeReference))), signature: v.optional(v.string()) }
 
 export const LEARN_HELP_ADMISSION_VERSION = 'learn-v2.help-admission.v1' as const
 export const LEARN_HELP_LIMITS = { openOpportunities: 8, references: 64, sources: 64, folderDepth: 8 } as const

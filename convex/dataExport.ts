@@ -9,6 +9,7 @@ import { requireAuth } from './lib/auth'
 import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
 import { personalResponsePage } from './lib/learnV2PersonalExportPage'
+import { exportTeachingCopy } from './lib/learnV2TeachingExport'
 import { exportRetainedMessage } from './lib/learnV2ReplayAccess'
 
 // A single Convex document can approach 1 MiB. Keep pages comfortably below
@@ -97,6 +98,7 @@ export const getUserDataPage = query({
         ...(collection === 'learningThreadArtifacts' && 'status' in row && row.status === 'deleted' ? { title: '[deleted]', summary: '' } : {}) })) }
     }
 
+    const result = await (async () => {
     switch (args.collection) {
       case 'folders':
         return await ctx.db.query('folders').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
@@ -349,6 +351,11 @@ export const getUserDataPage = query({
       case 'learnPlanCommandReceipts': { const result = await ctx.db.query('learnPlanCommandReceipts').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts); return { ...result, page: result.page.map(({ idempotencyKey: _idempotencyKey, requestFingerprint: _requestFingerprint, response: _response, ...row }) => row) } }
       case 'learnPlanAuditEvents': return await ctx.db.query('learnPlanAuditEvents').withIndex('by_userId', q => q.eq('userId', userId)).paginate(paginationOpts)
     }
+    })()
+    if (!result) throw new Error('Export unavailable')
+    const page = []
+    for (const row of result.page) page.push(await exportTeachingCopy(ctx, userId, args.collection, row))
+    return { ...result, page }
   },
 })
 

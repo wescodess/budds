@@ -5,8 +5,8 @@ import type { H3Event } from 'h3'
 import { readConfiguredRuntimeValue } from './runtime-config'
 import { normalizeAssistantCitations } from '../../shared/assistant-citations'
 
-export async function messageProvenance(event: H3Event, userId: string, content: string, chunks: AISearchChunk[], hasHistory: boolean) {
-  const known = !hasHistory && !chunks.some(chunk => !chunk.attributes.documentId || !chunk.attributes.folderId)
+export async function messageProvenance(event: H3Event, userId: string, content: string, chunks: AISearchChunk[], hasHistory: boolean, retrievalUsed = true) {
+  const known = !hasHistory && chunks.length > 0 && !chunks.some(chunk => !chunk.attributes.documentId || !chunk.attributes.folderId)
   const references = new Map<string, MessageScopeReference>()
   for (const chunk of known ? chunks : []) {
     const document: MessageScopeReference = { kind: 'document', id: chunk.attributes.documentId as Id<'documents'> }
@@ -16,7 +16,8 @@ export async function messageProvenance(event: H3Event, userId: string, content:
   }
   const secret = readConfiguredRuntimeValue(useRuntimeConfig(event).betterAuthSecret, 'NUXT_BETTER_AUTH_SECRET', 'BETTER_AUTH_SECRET')
   return await signMessageProvenance(secret, userId, normalizeAssistantCitations(content),
-    chunks.map(chunk => ({ content: chunk.content, score: chunk.score, filename: chunk.attributes.filename ?? 'Unknown' })), [...references.values()])
+    chunks.map(chunk => ({ content: chunk.content, score: chunk.score, filename: chunk.attributes.filename ?? 'Unknown' })), known && references.size <= 64 ? [...references.values()] : null,
+    'assistant', !retrievalUsed && !hasHistory && chunks.length === 0 ? 'independent' : 'contextual')
 }
 
 export class StreamMessageContent {

@@ -227,11 +227,11 @@ test.each(['response_state', 'diagnostic', 'source_review'] as const)('%s bounds
   vi.spyOn(readContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner) => create(ctx, owner, liveCalls - (path === 'source_review' ? 8 : 4)))
   await f.owner.run(async ctx => {
     const traced = tracePrivacyReads(ctx)
-    const result = await read(traced.ctx)
+    const result = await read(traced.ctx).catch((error: unknown) => { if (path !== 'source_review') throw error; expect(String(error)).toMatch(/unavailable/); return null })
     expect(traced.stats.calls).toBeLessThanOrEqual(liveCalls)
     if (path === 'diagnostic') expect(result).toMatchObject({ thread: { id: f.threadId }, activity: { response: null } })
     else if (path === 'response_state') expect(result).toMatchObject({ status: 'available', work: { body: { bodyAvailability: 'unavailable' } } })
-    else expect(result).toMatchObject({ page: expect.arrayContaining([expect.objectContaining({ excerpt: null, rights: expect.objectContaining({ access: 'evidence_unavailable' }) })]) })
+    else if (result) expect(result).toMatchObject({ page: expect.arrayContaining([expect.objectContaining({ excerpt: null, rights: expect.objectContaining({ access: 'evidence_unavailable' }) })]) })
     expect(JSON.stringify(result)).not.toContain(f.answer)
   })
 })

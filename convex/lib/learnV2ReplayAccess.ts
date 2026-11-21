@@ -1,21 +1,27 @@
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
-import { MESSAGE_PROVENANCE_VERSION, type MessageScopeReference } from '../../shared/learn-v2-message-provenance'
+import type { MessageScopeReference } from '../../shared/learn-v2-message-provenance'
+import { getOptionalAuthUserId } from './auth'
 import { LEARN_HELP_LIMITS } from './learnV2HelpContract'
-import { admitArtifactInputsByIdentityForOwner } from './learnV2ArtifactLineage'
+import { admitArtifactInputsByIdentityForOwner, admitArtifactInputsByIdentityForRecord } from './learnV2ArtifactLineage'
 import { responsePrivacyReadContext } from './learnV2PrivacyReadContext'
 import { sourceBodyAvailable } from './learnV2ResponsePrivacy'
-import { projectStoredMessage, verifiedStoredMessageScope } from './learnV2MessageProvenance'
+import { projectStoredMessage, inspectStoredMessageProof } from './learnV2MessageProvenance'
 
-export async function exportRetainedMessage(ctx: QueryCtx, userId: string, row: Doc<'messages'>) {
-  const references = await verifiedStoredMessageScope(userId, row)
-  const invalid = row.helpScope?.version === MESSAGE_PROVENANCE_VERSION && references === null
-  const available = !invalid && await currentMessageSourceAccess(ctx, userId, references ?? [])
-  return { ...projectStoredMessage(row, available, !invalid), ...(!available ? { evidenceStatus: 'evidence_unavailable' as const } : {}) }
+export async function messageReplayAccess(ctx: QueryCtx | MutationCtx, userId: string, row: Doc<'messages'>) {
+  const proof = await inspectStoredMessageProof(userId, row)
+  const available = proof.state === 'independent' || proof.state === 'known' && await currentMessageSourceAccess(ctx, userId, proof.references)
+  const teaching = row.role === 'assistant' || Boolean(row.sources?.length || row.model || row.interjectionContext)
+  return { proof, available, unavailable: teaching && !available, ownText: row.role === 'user' && proof.state !== 'invalid' }
 }
 
-export async function currentMessageSourceAccess(ctx: QueryCtx | MutationCtx, userId: string, references: MessageScopeReference[]) {
-  if (references.length > LEARN_HELP_LIMITS.references) return false
+export async function exportRetainedMessage(ctx: QueryCtx, userId: string, row: Doc<'messages'>) {
+  const access = await messageReplayAccess(ctx, userId, row)
+  return { ...projectStoredMessage(row, access.available, access.ownText), ...(access.unavailable ? { evidenceStatus: 'evidence_unavailable' as const } : {}) }
+}
+
+export async function currentMessageSourceAccess(ctx: QueryCtx | MutationCtx, userId: string, references: MessageScopeReference[] | null | undefined) {
+  if (!references?.some(reference => reference.kind === 'document') || references.length > LEARN_HELP_LIMITS.references) return false
   ctx = responsePrivacyReadContext(ctx, userId)
   const folders = new Set<string>()
   const documents = new Set<Id<'documents'>>()
@@ -59,9 +65,10 @@ export async function currentMessageSourceAccess(ctx: QueryCtx | MutationCtx, us
       }
     }
     if (documents.size) {
-      const admission = await admitArtifactInputsByIdentityForOwner(ctx, userId, {
-        artifacts: [...documents].map(id => ({ kind: 'document' as const, id })),
-      })
+      const input = { artifacts: [...documents].map(id => ({ kind: 'document' as const, id })) }
+      const admission = await getOptionalAuthUserId(ctx) === userId
+        ? await admitArtifactInputsByIdentityForOwner(ctx, userId, input)
+        : await admitArtifactInputsByIdentityForRecord(ctx, { kind: 'document', id: [...documents][0]! }, input)
       if (admission.status === 'rejected') return false
     }
     return true

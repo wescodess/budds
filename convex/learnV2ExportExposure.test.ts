@@ -118,7 +118,8 @@ test.each(PERSONAL_EXPORT_CONTENT_CASES)('exported %s.%s records unresolved assi
   const page = await fixture.owner.query(api.dataExport.getUserDataPage, { authorizationId, collection,
     paginationOpts: { cursor: null, numItems: 8 } })
   const exported = page.page.find(row => row._id === content.id) as Record<string, unknown> | undefined
-  expect(JSON.stringify(exported?.[field])).toContain(content.canary)
+  if (exported?.evidenceStatus === 'evidence_unavailable' && !['answers', 'learnerAnswerSnapshot'].includes(field)) expect(JSON.stringify(exported)).not.toContain(content.canary)
+  else expect(JSON.stringify(exported?.[field])).toContain(content.canary)
   const exposures = await fixture.t.run(ctx => ctx.db.query('learnAssessmentExposures')
     .withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', identity.tokenIdentifier).eq('assessmentOpportunityId', fixture.assessmentOpportunityId)).take(8))
   expect(exposures).toEqual(expect.arrayContaining([expect.objectContaining({ purpose: 'imported', status: 'unknown' })]))

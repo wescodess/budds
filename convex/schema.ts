@@ -359,6 +359,8 @@ export default defineSchema({
     nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({
+      scopeVersion: v.optional(v.literal('quiz.source-scope.v1')),
+      sourceDocumentId: v.optional(v.id('documents')),
       question: v.string(),
       questionType: v.union(v.literal('free-response'), v.literal('fill_in_the_blank')),
       expectedAnswer: v.string(),
@@ -1197,6 +1199,7 @@ export default defineSchema({
     courseId: v.id('courses'),
     sectionId: v.id('courseSections'),
     flashcardRoomCardId: v.optional(v.id('flashcardRoomCards')),
+    sourceVersionId: v.optional(v.id('flashcardRoomVersions')),
     prompt: v.string(),
     answer: v.string(),
     easeFactor: v.number(),

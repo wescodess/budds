@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -101,7 +102,7 @@ async function seedSectionWithFlashcards(t: ReturnType<typeof convexTest>) {
 
 describe('reviewItems.extractFromSection', () => {
   test('creates review items from flashcard cards on section completion', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     const count: number = await t.mutation(internal.reviewItems.extractFromSection, {
@@ -128,7 +129,7 @@ describe('reviewItems.extractFromSection', () => {
   })
 
   test('does not duplicate items on second extraction', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     await t.mutation(internal.reviewItems.extractFromSection, {
@@ -150,7 +151,7 @@ describe('reviewItems.extractFromSection', () => {
   })
 
   test('inherits flagged status from flashcard card', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     await t.run(async (ctx) => {
@@ -172,7 +173,7 @@ describe('reviewItems.extractFromSection', () => {
   })
 
   test('returns 0 when section has no flashcard block', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     await t.run(async (ctx) => {
@@ -195,7 +196,7 @@ describe('reviewItems.extractFromSection', () => {
 
 describe('reviewItems.listDueForUser', () => {
   test('returns items due today or earlier, excluding flagged', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -255,7 +256,7 @@ describe('reviewItems.listDueForUser', () => {
   })
 
   test('excludes flagged items from due list', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -297,14 +298,14 @@ describe('reviewItems.listDueForUser', () => {
   })
 
   test('returns empty for unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await expect(t.query(api.reviewItems.listDueForUser, {})).rejects.toThrow('Unauthenticated')
   })
 })
 
 describe('reviewItems.listDueWithContext', () => {
   test('returns enriched items with course and section context', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -335,7 +336,7 @@ describe('reviewItems.listDueWithContext', () => {
   })
 
   test('names the Void when the parent record is absent', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -358,13 +359,11 @@ describe('reviewItems.listDueWithContext', () => {
       await ctx.db.delete(courseId)
     })
 
-    const items = await asUser.query(api.reviewItems.listDueWithContext, {})
-    expect(items).toHaveLength(1)
-    expect(items[0]!.courseTitle).toBe('Unknown Void')
+    await expect(asUser.query(api.reviewItems.listDueWithContext, {})).rejects.toThrow(/unavailable/)
   })
 
   test('respects daily cap from learnProfile', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -400,7 +399,7 @@ describe('reviewItems.listDueWithContext', () => {
   })
 
   test('excludes flagged items', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -442,7 +441,7 @@ describe('reviewItems.listDueWithContext', () => {
 
 describe('reviewItems.listBySection', () => {
   test('returns items for a specific section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     await t.mutation(internal.reviewItems.extractFromSection, {
@@ -457,7 +456,7 @@ describe('reviewItems.listBySection', () => {
   })
 
   test('rejects access from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sectionId } = await seedSectionWithFlashcards(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -468,7 +467,7 @@ describe('reviewItems.listBySection', () => {
 
 describe('completeSection creates review items', () => {
   test('completeSection populates review items from flashcard block', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedSectionWithFlashcards(t)
 
     const result = await asUser.mutation(api.courseSections.completeSection, {
@@ -487,7 +486,7 @@ describe('completeSection creates review items', () => {
 
 describe('reviewItems.submitReview', () => {
   test('Again (quality 0) resets interval and repetitions', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -527,7 +526,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('Hard (quality 3) multiplies interval by 1.2', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -558,7 +557,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('Good (quality 4) multiplies interval by easeFactor', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -589,7 +588,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('Easy (quality 5) multiplies interval by easeFactor * 1.3', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -620,7 +619,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('updates nextReviewDate on the review item', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -655,7 +654,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('rejects invalid quality ratings', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -685,7 +684,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('rejects unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -715,7 +714,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('rejects review of another user\'s item', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -747,7 +746,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('triggers streak update on review submission', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -785,7 +784,7 @@ describe('reviewItems.submitReview', () => {
   })
 
   test('applies the same review idempotency key exactly once', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
     const itemId = await t.run(ctx => ctx.db.insert('reviewItems', {
       userId: USER_A.tokenIdentifier,
@@ -814,7 +813,7 @@ describe('reviewItems.submitReview', () => {
 
 describe('reviewItems.getReviewBacklogCount', () => {
   test('returns due count and daily cap', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -843,7 +842,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
   })
 
   test('excludes flagged items from count', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -882,7 +881,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
   })
 
   test('returns custom daily cap from profile', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -910,7 +909,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
   })
 
   test('returns null for unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const result = await t.query(api.reviewItems.getReviewBacklogCount, {})
     expect(result).toBeNull()
   })
@@ -918,7 +917,7 @@ describe('reviewItems.getReviewBacklogCount', () => {
 
 describe('reviewItems.listDueWithContext quick mode', () => {
   test('quick mode limits to 10 items', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -949,7 +948,7 @@ describe('reviewItems.listDueWithContext quick mode', () => {
   })
 
   test('quick mode caps at dailyReviewCap when cap < 10', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId } = await seedSectionWithFlashcards(t)
 
     const today = new Date().toISOString().slice(0, 10)
@@ -981,7 +980,7 @@ describe('reviewItems.listDueWithContext quick mode', () => {
 
 describe('learnProfile.updateDailyReviewCap', () => {
   test('updates daily review cap', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     await asUser.mutation(api.learnProfile.updateDailyReviewCap, { cap: 30 })
@@ -991,7 +990,7 @@ describe('learnProfile.updateDailyReviewCap', () => {
   })
 
   test('rejects cap below 5', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     await expect(
@@ -1000,7 +999,7 @@ describe('learnProfile.updateDailyReviewCap', () => {
   })
 
   test('rejects cap above 200', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     await expect(
@@ -1009,7 +1008,7 @@ describe('learnProfile.updateDailyReviewCap', () => {
   })
 
   test('rejects unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await expect(
       t.mutation(api.learnProfile.updateDailyReviewCap, { cap: 30 }),
     ).rejects.toThrow()
@@ -1018,7 +1017,7 @@ describe('learnProfile.updateDailyReviewCap', () => {
 
 describe('reviewItems.completeReviewSession', () => {
   test('creates a reviewSessions record', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     const result = await asUser.mutation(api.reviewItems.completeReviewSession, {
@@ -1047,7 +1046,7 @@ describe('reviewItems.completeReviewSession', () => {
   })
 
   test('updates streak on session completion', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     const result = await asUser.mutation(api.reviewItems.completeReviewSession, {
@@ -1071,7 +1070,7 @@ describe('reviewItems.completeReviewSession', () => {
   })
 
   test('allows multiple sessions per day', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     await asUser.mutation(api.reviewItems.completeReviewSession, {
@@ -1099,7 +1098,7 @@ describe('reviewItems.completeReviewSession', () => {
   })
 
   test('records the same session idempotency key exactly once', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const args = {
       itemsReviewed: 4,
@@ -1124,7 +1123,7 @@ describe('reviewItems.completeReviewSession', () => {
   })
 
   test('rejects unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await expect(
       t.mutation(api.reviewItems.completeReviewSession, {
         itemsReviewed: 5,
@@ -1135,7 +1134,7 @@ describe('reviewItems.completeReviewSession', () => {
   })
 
   test('mode is optional', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
 
     await asUser.mutation(api.reviewItems.completeReviewSession, {
@@ -1158,7 +1157,7 @@ describe('reviewItems.completeReviewSession', () => {
 
 describe('flag sync between flashcards and review items', () => {
   test('flagging a flashcard flags the corresponding review item', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     await t.mutation(internal.reviewItems.extractFromSection, {
@@ -1179,7 +1178,7 @@ describe('flag sync between flashcards and review items', () => {
   })
 
   test('unflagging a flashcard unflags the corresponding review item', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sectionId, cardIds } = await seedSectionWithFlashcards(t)
 
     await t.mutation(internal.reviewItems.extractFromSection, {

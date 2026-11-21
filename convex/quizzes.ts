@@ -650,7 +650,7 @@ const startAttemptTeaching = defineTeachingMutation({name:'quizzes.startAttempt'
 })
 export const startAttempt = mutation(startAttemptTeaching)
 
-const submitAnswerTeaching = defineTeachingMutation({name:'quizzes.submitAnswer',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:args.attemptId}]),
+const submitAnswerTeaching = defineTeachingMutation({name:'quizzes.submitAnswer',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'question',id:args.questionId}]),
   args: {
     attemptId: v.id('quizAttempts'),
     questionId: v.id('quizQuestions'),
@@ -722,7 +722,7 @@ const submitAnswerTeaching = defineTeachingMutation({name:'quizzes.submitAnswer'
 })
 export const submitAnswer = mutation(submitAnswerTeaching)
 
-const submitAllAnswersTeaching = defineTeachingMutation({name:'quizzes.submitAllAnswers',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:args.attemptId}]),
+const submitAllAnswersTeaching = defineTeachingMutation({name:'quizzes.submitAllAnswers',scope:async(ctx,userId,args)=>{const row=await ctx.db.get(args.attemptId);return row?.userId===userId?await teachingReadScope(ctx,userId,[{kind:'quiz',id:row.quizId}]):null},
   args: {
     attemptId: v.id('quizAttempts'),
     answers: v.array(v.object({

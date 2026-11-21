@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 const USER_A = { tokenIdentifier: 'https://auth.example.com|semantic_a', name: 'Alice' }
@@ -12,7 +13,7 @@ const WRITE_SECRET = 'test-assessment-write-secret-long-enough'
 process.env.QUIZ_ASSESSMENT_WRITE_SECRET = WRITE_SECRET
 
 async function createAttempt() {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const alice = t.withIdentity(USER_A)
   const folderId = await alice.mutation(api.folders.createFolder, { name: 'Biology' })
   const { quizId } = await alice.mutation(api.quizzes.createWithQuestions, {
@@ -112,7 +113,7 @@ describe('quiz answer semantic assessments', () => {
   })
 
   test('bulk submission snapshots only semantic question types without truncating historical review', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const alice = t.withIdentity(USER_A)
     const folderId = await alice.mutation(api.folders.createFolder, { name: 'Bulk' })
     const { quizId } = await alice.mutation(api.quizzes.createWithQuestions, {

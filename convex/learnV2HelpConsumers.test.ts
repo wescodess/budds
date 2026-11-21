@@ -19,6 +19,43 @@ const modules = import.meta.glob('./**/*.ts')
 beforeEach(() => { policy.responses = true; vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.stubEnv('NUXT_BETTER_AUTH_SECRET', 'message-provenance-fixture-secret'); vi.useFakeTimers(); vi.setSystemTime(1_800_000_000_001) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
+test.each(['legacy', 'signed_unknown', 'stored_signed_unknown', 'signed_v2_empty'] as const)('unknown provenance %s never releases protected copies through ordinary replay or export', async kind => {
+  const s = await helpConsumerFixture(modules, false)
+  const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Retained conversation' })
+  await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'user', content: 'My retained question' })
+  const content = 'UNKNOWN_SOURCE_ANSWER'
+  const sources = [{ content: 'UNKNOWN_SOURCE_QUOTE', filename: 'source.txt', score: 1 }]
+  if (kind === 'legacy') await s.t.run(ctx => ctx.db.insert('messages', { userId: HELP_OWNER.tokenIdentifier, conversationId, role: 'assistant', content, sources }))
+  else if (kind === 'signed_v2_empty') {
+    const version = 'learn-v2.message-provenance.v2' as const
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(process.env.NUXT_BETTER_AUTH_SECRET!), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    const bytes = new TextEncoder().encode(JSON.stringify([version, HELP_OWNER.tokenIdentifier, 'assistant', content, sources.map(source => [source.content, source.score, source.filename]), []]))
+    const signature = Array.from(new Uint8Array(await crypto.subtle.sign('HMAC', key, bytes)), byte => byte.toString(16).padStart(2, '0')).join('')
+    await s.t.run(ctx => ctx.db.insert('messages', { userId: HELP_OWNER.tokenIdentifier, conversationId, role: 'assistant', content, sources, helpScope: { version, references: [], signature } }))
+  } else {
+    const provenance = await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, content, sources, [])
+    if (kind === 'stored_signed_unknown') await s.t.run(ctx => ctx.db.insert('messages', { userId: HELP_OWNER.tokenIdentifier, conversationId, role: 'assistant', content, sources, helpScope: provenance }))
+    else await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, sources, provenance })
+  }
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
+    await ctx.db.delete(s.f.documentId)
+  })
+  for (const responses of [true, false]) {
+    policy.responses = responses
+    const result = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: `unknown_revoked_${kind}` })
+    expect(result.admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+    expect(result.messages.map(row => row.content)).toEqual(['My retained question', ''])
+    expect(result.messages[1]?.sources).toBeUndefined()
+    expect(JSON.stringify(result)).not.toMatch(/UNKNOWN_SOURCE_/)
+    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toMatch(/UNKNOWN_SOURCE_/)
+    const exported = await s.owner.query(api.dataExport.getUserDataPage, { collection: 'messages', paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
+    expect(JSON.stringify(exported)).not.toMatch(/UNKNOWN_SOURCE_/)
+    expect(JSON.stringify(exported)).toContain('My retained question')
+    expect(exported.page).toContainEqual(expect.objectContaining({ role: 'assistant', content: '', evidenceStatus: 'evidence_unavailable' }))
+  }
+})
+
 test.each(['deleted', 'document_owner', 'folder_deleted', 'folder_owner', 'failed', 'identity', 'snapshot', 'excerpt', 'rights', 'pins', 'archived'] as const)('sealed replay revalidates a signed source after %s revocation and preserves learner prose', async revocation => {
   const s = await helpConsumerFixture(modules, false)
   const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Retained conversation' })
@@ -243,8 +280,8 @@ describe('registered message and source help consumers', () => {
     expect((await s.exposures()).filter(row => row.provenanceVersion === 'learn-v2.help-admission.v1')).toHaveLength(1)
     expect((await s.exposures()).at(-1)).toMatchObject({ status: 'requested_denied' })
     policy.responses = false
-    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).toContain('OLD_ANSWER')
-    expect((await s.owner.mutation(api.messages.replayByConversation, args)).admission.status).toBe('ordinary')
+    expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toContain('OLD_ANSWER')
+    expect((await s.owner.mutation(api.messages.replayByConversation, args)).admission).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
   })
   test('authorized message replay commits one assistance fact; the same receipt is denied against a later held-out check', async () => {
     const s = await helpConsumerFixture(modules, false)
@@ -274,7 +311,7 @@ describe('registered message and source help consumers', () => {
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
     const content = 'Answer [1]'
     const provenance = await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
-      content, [], [{ kind: 'folder', id: folderId }])
+      content, [], [{ kind: 'document', id: await s.t.run(ctx => ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })) }])
     await expect(s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant',
       content: `Answer ${replacement}`, provenance })).rejects.toThrow(/verification/)
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content, provenance })
@@ -291,7 +328,7 @@ describe('registered message and source help consumers', () => {
       folderId: s.f.folderId, title: 'Teaching audio', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 }))
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer',
       provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
-        'Other course answer', [], [{ kind: 'folder', id: folderId }]),
+        'Other course answer', [], [{ kind: 'document', id: await s.t.run(ctx => ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })) }]),
       interjectionContext: { overviewId, turnIndex: 0, timeMs: 0, quotedText: 'PROTECTED_AUDIO_QUOTE', sourceFilename: 'PROTECTED_FILENAME' } })
     const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unsigned_audio_context' })
     expect(replay.admission.status).toBe('ordinary')
@@ -304,7 +341,7 @@ describe('registered message and source help consumers', () => {
     const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer',
-      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, 'Other course answer', [], [{ kind: 'folder', id: folderId }]) })
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier, 'Other course answer', [], [{ kind: 'document', id: await s.t.run(ctx => ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })) }]) })
     const before = await s.exposures()
     const result = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unrelated-replay-key' })
     expect(result.admission.status).toBe('ordinary')
@@ -317,7 +354,7 @@ describe('registered message and source help consumers', () => {
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
     await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer', model: 'PROTECTED_MODEL_TEXT',
       provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
-        'Other course answer', [], [{ kind: 'folder', id: folderId }]) })
+        'Other course answer', [], [{ kind: 'document', id: await s.t.run(ctx => ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })) }]) })
     const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unsigned_model_context' })
     expect(replay.admission.status).toBe('ordinary')
     expect(replay.messages[0]?.content).toBe('Other course answer')
@@ -333,7 +370,7 @@ describe('registered message and source help consumers', () => {
       const content = role === 'user' ? 'My own question' : 'Other course answer'
       const messageId = await s.owner.mutation(api.messages.appendMessage, { conversationId, role, content,
         provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
-          content, [], [{ kind: 'folder', id: folderId }]) })
+          content, [], [{ kind: 'document', id: await s.t.run(ctx => ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })) }]) })
       await s.t.run(ctx => ctx.db.patch(messageId, field === 'model' ? { model: 'PROTECTED_MODEL_TEXT' }
         : { interjectionContext: { overviewId, turnIndex: 0, timeMs: 0, quotedText: 'PROTECTED_AUDIO_QUOTE', sourceFilename: 'PROTECTED_FILENAME' } }))
       const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: `stored_unsigned_${field}_${role}` })
@@ -363,8 +400,8 @@ describe('registered message and source help consumers', () => {
     expect((await s.exposures()).at(-1)?.status).toBe('requested_denied')
     await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
     const replay = await s.owner.mutation(api.messages.replayByConversation, args)
-    expect(replay.admission.status).toBe('ordinary')
-    expect(replay.messages[1]?.content).toBe(content)
+    expect(replay.admission.status).toBe(known ? 'ordinary' : 'denied')
+    expect(replay.messages[1]?.content).toBe(known ? content : '')
   })
   test('message provenance is bound to its owner, exact answer, sources and scope', async () => {
     const s = await helpConsumerFixture(modules)
@@ -385,7 +422,7 @@ describe('registered message and source help consumers', () => {
     expect((await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'invalid_receipt_replay' })).admission)
       .toMatchObject({ status: 'denied', reasonCode: 'test_open' })
   })
-  test('missing provenance verification configuration preserves ordinary history with unknown scope', async () => {
+  test('missing provenance verification configuration withholds unknown teaching history', async () => {
     const s = await helpConsumerFixture(modules)
     const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId: s.f.folderId, title: 'Teaching' })
     const content = 'Existing ordinary answer'
@@ -398,7 +435,7 @@ describe('registered message and source help consumers', () => {
     expect((await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unverified_scope_replay' })).admission)
       .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
     policy.responses = false
-    expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe(content)
+    expect((await s.owner.query(api.messages.listByConversation, { conversationId }))[0]?.content).toBe('')
   })
 })
 

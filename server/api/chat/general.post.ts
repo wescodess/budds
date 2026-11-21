@@ -74,7 +74,7 @@ export default defineEventHandler(async (event) => {
   }
 
   const answer = normalizeAssistantCitations(completion.choices[0]?.message?.content ?? '')
-  const provenance = await messageProvenance(event, userId, answer, [], Boolean(body.history?.length))
+  const provenance = await messageProvenance(event, userId, answer, [], Boolean(body.history?.length), false)
   await authorizeHelp(Boolean(answer))
   return {
     answer,

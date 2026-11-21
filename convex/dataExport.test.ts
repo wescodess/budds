@@ -623,7 +623,7 @@ describe('dataExport paginated queries', () => {
     const quiz = await a.asUser.mutation(api.quizzes.createWithQuestions, {
       folderId: a.folderId,
       title: 'Private quiz',
-      questions,
+      questions: questions.map(question => ({ ...question, sourceDocumentId: a.docId })),
     })
     const question = await t.run(async ctx => await ctx.db
       .query('quizQuestions')
@@ -733,12 +733,12 @@ describe('dataExport paginated queries', () => {
     await a.asUser.mutation(api.quizzes.createWithQuestions, {
       folderId: a.folderId,
       title: 'Alice Quiz',
-      questions,
+      questions: questions.map(question => ({ ...question, sourceDocumentId: a.docId })),
     })
     await b.asUser.mutation(api.quizzes.createWithQuestions, {
       folderId: b.folderId,
       title: 'Bob Quiz',
-      questions,
+      questions: questions.map(question => ({ ...question, sourceDocumentId: b.docId })),
     })
 
     const result = await collectUserDataForTest(a.asUser)
@@ -769,12 +769,12 @@ describe('dataExport paginated queries', () => {
     const aQuiz = await a.asUser.mutation(api.quizzes.createWithQuestions, {
       folderId: a.folderId,
       title: 'A',
-      questions,
+      questions: questions.map(question => ({ ...question, sourceDocumentId: a.docId })),
     })
     const bQuiz = await b.asUser.mutation(api.quizzes.createWithQuestions, {
       folderId: b.folderId,
       title: 'B',
-      questions,
+      questions: questions.map(question => ({ ...question, sourceDocumentId: b.docId })),
     })
 
     const aQs = await t.run(async (ctx) =>

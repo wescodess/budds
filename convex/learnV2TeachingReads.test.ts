@@ -4,6 +4,9 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { LearnHelpAdmission } from './lib/learnV2HelpContract'
+import { prepareAndRegisterInstructionalArtifacts } from './lib/learnV2ArtifactLineage'
+import { protectProducerArtifact } from '../tests/fixtures/learn-v2-producer-lineage'
+import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { seedTeachingReads } from '../tests/fixtures/learn-v2-teaching-reads'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { reasonTextForActivity } from '../shared/learn-adaptive-controls'
@@ -102,9 +105,142 @@ async function readFixture() {
     await ctx.db.patch(opportunity._id,{deliveryPins:{version:'learn-v2.response-delivery-pins.v1',confidenceRequested:false}})
     await ctx.db.patch(s.f.rows.learnAssessmentExposures,{projectionDigest:opportunity.assessmentPins.promptDigest,policyVersion:LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION,purpose:'calibration',itemId:undefined,itemRevision:undefined,caseId:opportunity.assessmentPins.caseId})
     await ctx.db.insert('sessionContentBlocks', { userId: HELP_OWNER.tokenIdentifier, sessionContentId: s.f.scope.contextPins.sessionContentId, kind: 'explanation', order: 0, content: 'TEACHING_SESSION_CANARY' })
+    const claimId = await ctx.db.insert('sessionContentClaims', { userId: HELP_OWNER.tokenIdentifier, sessionContentId: s.f.scope.contextPins.sessionContentId, order: 0, claim: 'TEACHING_SESSION_CANARY' })
+    const excerpt = (await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', HELP_OWNER.tokenIdentifier).eq('sourceSnapshotId', s.f.sourceSnapshotId)).unique())!
+    await ctx.db.insert('learnClaimSupports', { userId: HELP_OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceSnapshotId: s.f.sourceSnapshotId, sourceExcerptId: excerpt._id, entailment: 'entailed', conflictStatus: 'clear' })
   })
   return { ...s, r }
 }
+
+test.each(['listDueForUser', 'listDueWithContext', 'listBySection'] as const)('reviewItems.%s revalidates copied content authority without an open check', async name => {
+  const s = await readFixture()
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+  const args = name === 'listBySection' ? { sectionId: s.r.sectionId } : {}
+  expect(JSON.stringify(await s.owner.query(makeFunctionReference<'query', Record<string, unknown>, unknown>(`reviewItems:${name}`), args))).toContain('TEACHING_READ_CANARY')
+  await s.t.run(ctx => ctx.db.delete(s.f.documentId))
+  for (const responses of [true, false]) {
+    policy.responses = responses
+    await expect(s.owner.query(makeFunctionReference<'query', Record<string, unknown>, unknown>(`reviewItems:${name}`), args)).rejects.toMatchObject({ data: { admission: { status: 'denied', reasonCode: 'unavailable' } } })
+    const delivery = makeFunctionReference<'mutation', Record<string, unknown>, { admission: LearnHelpAdmission, value: unknown }>(`reviewItems:${name}Delivery`)
+    const result = await s.owner.mutation(delivery, { ...args, idempotencyKey: 'revoked_review_copy' })
+    expect(result).toMatchObject({ admission: { status: 'denied', reasonCode: 'unavailable' }, value: null })
+    expect(JSON.stringify(result)).not.toContain('TEACHING_READ_CANARY')
+  }
+})
+
+const revocableReads = [
+  ...readPaths,
+  ['audioOverviews.getWithTurns', (s: Awaited<ReturnType<typeof readFixture>>) => ({ id: s.r.overviewId })],
+  ['audioOverviews.getTurnUrls', (s: Awaited<ReturnType<typeof readFixture>>) => ({ id: s.r.overviewId })],
+] as const
+
+test.each(revocableReads.flatMap(([path, args]) => (['deleted', 'restricted'] as const).map(revocation => ({ path, args, revocation }))))('$path and paired delivery withhold copies after source $revocation', async ({ path, args: argumentsFor, revocation }) => {
+  const s = await readFixture()
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+  const args = argumentsFor(s)
+  const read = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
+  const delivery = makeFunctionReference<'mutation', Record<string, unknown>, { admission: LearnHelpAdmission, value: unknown }>(`${path.replace('.', ':')}Delivery`)
+  expect(await s.owner.query(read, args)).not.toBeNull()
+  if (revocation === 'deleted') await s.t.run(ctx => ctx.db.delete(s.f.documentId))
+  else {
+    await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentCatalogs, { measurementCapability: { enabled: true } }))
+    await s.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'document', id: s.f.documentId }, key: 'whole', sources: [], origins: [] }] }))
+    await protectProducerArtifact(s.t, HELP_OWNER.tokenIdentifier, { kind: 'document', id: s.f.documentId }, 'private_scoring')
+  }
+  for (const responses of [true, false]) {
+    policy.responses = responses
+    const queryResult = await s.owner.query(read, args).then(value => ({ value }), (error: unknown) => ({ error }))
+    expect(JSON.stringify(queryResult)).not.toMatch(/TEACHING_READ_CANARY|TEACHING_SESSION_CANARY/)
+    const result = await s.owner.mutation(delivery, { ...args, idempotencyKey: 'revoked_copy_delivery', orchestrationToken: process.env.AUDIO_OVERVIEW_WORKER_TOKEN })
+      .then(value => ({ value }), (error: unknown) => ({ error }))
+    expect(JSON.stringify(result)).not.toMatch(/TEACHING_READ_CANARY|TEACHING_SESSION_CANARY/)
+    if ('value' in result && result.value.admission.status === 'denied') expect(result.value).toMatchObject({ admission: { reasonCode: 'unavailable' }, value: null })
+  }
+})
+
+test.each(['review_copy', 'unknown_snapshot', 'live_card'] as const)('a changed %s cannot inherit authority from unrelated current content', async copy => {
+  const s = await readFixture()
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
+    if (copy === 'review_copy') {
+      const row = (await ctx.db.query('reviewItems').withIndex('by_sectionId', q => q.eq('sectionId', s.r.sectionId)).first())!
+      await ctx.db.patch(row._id, { answer: 'STALE_COPIED_QUOTE' })
+    } else if (copy === 'unknown_snapshot') {
+      const answer = (await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', s.r.attemptId)).first())!
+      await ctx.db.insert('quizAnswerAssessments', { userId: HELP_OWNER.tokenIdentifier, attemptId: s.r.attemptId, attemptAnswerId: answer._id,
+        questionId: s.r.questionId, kind: 'quiz.free_response_assessment.v1', status: 'pending',
+        questionSnapshot: { question: 'STALE_COPIED_QUOTE', questionType: 'free-response', expectedAnswer: 'TEACHING_READ_CANARY', evidenceExcerpt: '' },
+        learnerAnswerSnapshot: answer.userAnswer, deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() })
+    } else {
+      const card = (await ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', s.r.roomId)).first())!
+      await ctx.db.patch(card._id, { definition: 'STALE_COPIED_QUOTE' })
+    }
+  })
+  const result = copy === 'review_copy' ? s.owner.query(api.reviewItems.listBySection, { sectionId: s.r.sectionId })
+    : copy === 'unknown_snapshot' ? s.owner.query(api.quizzes.getAttemptResults, { attemptId: s.r.attemptId })
+    : s.owner.query(api.flashcardRooms.getRoom, { roomId: s.r.roomId })
+  await expect(result).rejects.toThrow(/unavailable/)
+})
+
+test.each((['courses', 'courseSections', 'quizQuestions', 'flashcardRoomCards', 'flashcardRoomVersions', 'flashcardVersionCards', 'reviewItems', 'audioOverviews', 'audioOverviewOutlines', 'audioOverviewUtterances', 'audioOverviewInterjections', 'audioOverviewInterjectionUtterances'] as const)
+  .flatMap(collection => (['deleted', 'restricted'] as const).map(revocation => ({ collection, revocation }))))('authorized export of $collection withholds teaching after source $revocation', async ({ collection, revocation }) => {
+  const s = await readFixture()
+  await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
+  const read = async () => await s.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
+  expect(JSON.stringify(await read())).toContain('TEACHING_READ_CANARY')
+  if (revocation === 'deleted') await s.t.run(ctx => ctx.db.delete(s.f.documentId))
+  else {
+    await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentCatalogs, { measurementCapability: { enabled: true } }))
+    await s.owner.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'document', id: s.f.documentId }, key: 'whole', sources: [], origins: [] }] }))
+    await protectProducerArtifact(s.t, HELP_OWNER.tokenIdentifier, { kind: 'document', id: s.f.documentId }, 'private_scoring')
+  }
+  const result = await read()
+  expect(JSON.stringify(result)).not.toContain('TEACHING_READ_CANARY')
+  expect(JSON.stringify(result)).toContain('evidence_unavailable')
+})
+
+test.each(['review', 'quiz'] as const)('replacing a live $0 origin cannot restore a retained copy after revocation', async kind => {
+  const s = await readFixture()
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
+    const replacement = await ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, status: 'success', filename: 'replacement.txt', fileSize: 1 })
+    if (kind === 'quiz') {
+      const answer = (await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', s.r.attemptId)).first())!
+      await ctx.db.insert('quizAnswerAssessments', { userId: HELP_OWNER.tokenIdentifier, attemptId: s.r.attemptId, attemptAnswerId: answer._id, questionId: s.r.questionId,
+        kind: 'quiz.free_response_assessment.v1', status: 'pending', questionSnapshot: { scopeVersion: 'quiz.source-scope.v1', sourceDocumentId: s.f.documentId,
+          question: 'TEACHING_READ_CANARY', questionType: 'free-response', expectedAnswer: 'TEACHING_READ_CANARY', evidenceExcerpt: '', explanation: 'TEACHING_READ_CANARY' },
+        learnerAnswerSnapshot: answer.userAnswer, deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() })
+      await ctx.db.patch(s.r.questionId, { sourceDocumentId: replacement })
+    } else {
+      const card = (await ctx.db.query('flashcardRoomCards').withIndex('by_roomId', q => q.eq('roomId', s.r.roomId)).first())!
+      const versionId = await ctx.db.insert('flashcardRoomVersions', { userId: HELP_OWNER.tokenIdentifier, roomId: s.r.roomId, title: 'Replacement', origin: 'manual', cardCount: 1 })
+      await ctx.db.insert('flashcardVersionCards', { userId: HELP_OWNER.tokenIdentifier, roomId: s.r.roomId, versionId, displayOrder: card.displayOrder, term: card.term, definition: card.definition, sourceDocumentId: replacement })
+      await ctx.db.patch(s.r.roomId, { activeVersionId: versionId })
+      await ctx.db.patch(card._id, { sourceDocumentId: replacement })
+    }
+    await ctx.db.delete(s.f.documentId)
+  })
+  await expect(kind === 'quiz' ? s.owner.query(api.quizzes.getAttemptResults, { attemptId: s.r.attemptId })
+    : s.owner.query(api.reviewItems.listBySection, { sectionId: s.r.sectionId })).rejects.toThrow(/unavailable/)
+  const collection = kind === 'quiz' ? 'quizAnswerAssessments' as const : 'reviewItems' as const
+  const result = await s.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) })
+  expect(JSON.stringify(result)).not.toContain('TEACHING_READ_CANARY')
+  expect(JSON.stringify(result)).toContain('evidence_unavailable')
+})
+
+test('task summaries and authorized export never return cached teaching bodies', async () => {
+  const s = await readFixture()
+  const taskId = await s.t.run(async ctx => {
+    await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses })
+    const id = await ctx.db.insert('tasks', { userId: HELP_OWNER.tokenIdentifier, folderId: s.f.folderId, type: 'flashcard-generation', title: 'My task', status: 'completed',
+      result: { summary: 'CACHED_TEACHING_QUOTE' }, metadata: { transcript: 'CACHED_TEACHING_QUOTE' }, error: 'CACHED_TEACHING_QUOTE', progress: 'CACHED_TEACHING_QUOTE', createdAt: Date.now(), updatedAt: Date.now(), completedAt: Date.now() })
+    await ctx.db.delete(s.f.documentId)
+    return id
+  })
+  expect(JSON.stringify(await s.owner.query(api.tasks.get, { taskId }))).not.toContain('CACHED_TEACHING_QUOTE')
+  expect(JSON.stringify(await s.owner.query(api.tasks.listByFolder, { folderId: s.f.folderId }))).not.toContain('CACHED_TEACHING_QUOTE')
+  expect(JSON.stringify(await s.owner.query(api.dataExport.getUserDataPage, { collection: 'tasks', paginationOpts: { numItems: 8, cursor: null }, authorizationId: await authorizeExport(s.owner) }))).not.toContain('CACHED_TEACHING_QUOTE')
+})
 
 async function deliveryRevision(read: () => Promise<unknown>) {
   const error: unknown = await read().then(() => null, (cause: unknown) => cause)
@@ -120,7 +256,7 @@ test('accounted Quiz results signal answer and semantic-grading changes without 
     const answer = (await ctx.db.query('attemptAnswers').withIndex('by_attemptId', q => q.eq('attemptId', s.r.attemptId)).first())!
     const assessmentId = await ctx.db.insert('quizAnswerAssessments', { userId: HELP_OWNER.tokenIdentifier, attemptId: s.r.attemptId,
       attemptAnswerId: answer._id, questionId: s.r.questionId, kind: 'quiz.free_response_assessment.v1', status: 'pending',
-      questionSnapshot: { question: 'TEACHING_READ_CANARY', questionType: 'free-response', expectedAnswer: 'TEACHING_READ_CANARY', evidenceExcerpt: 'TEACHING_READ_CANARY' },
+      questionSnapshot: { scopeVersion: 'quiz.source-scope.v1', sourceDocumentId: s.f.documentId, question: 'TEACHING_READ_CANARY', questionType: 'free-response', expectedAnswer: 'TEACHING_READ_CANARY', evidenceExcerpt: '', explanation: 'TEACHING_READ_CANARY' },
       learnerAnswerSnapshot: answer.userAnswer, deterministicIsCorrect: false, rubricVersion: 'quiz.free_response_assessment.v1', rubricSnapshot: [], requestedAt: Date.now() })
     return { answerId: answer._id, assessmentId }
   })
@@ -347,7 +483,7 @@ test('unscoped legacy teaching cannot use its container to prove irrelevance',as
   })
   expect(await s.owner.mutation(api.quizzes.getWithQuestionsDelivery,{id:s.r.quizId,idempotencyKey:'unknown_legacy_teaching'})).toMatchObject({admission:{status:'denied',reasonCode:'disclosure_unknown'},value:null})
   await s.t.run(ctx=>ctx.db.patch(s.f.rows.learnAssessmentOpportunities,{phase:'submitted_sealed',submissionId:s.f.rows.learnResponses}))
-  expect((await s.owner.mutation(api.quizzes.getWithQuestionsDelivery,{id:s.r.quizId,idempotencyKey:'unknown_legacy_teaching'})).admission.status).toBe('ordinary')
+  expect((await s.owner.mutation(api.quizzes.getWithQuestionsDelivery,{id:s.r.quizId,idempotencyKey:'unknown_legacy_teaching'})).admission).toMatchObject({status:'denied',reasonCode:'unavailable'})
 })
 
 async function adaptiveReadFixture(type:'artifact_workspace'|'reflection_next_move'|'cited_explanation') {
@@ -356,6 +492,8 @@ async function adaptiveReadFixture(type:'artifact_workspace'|'reflection_next_mo
   await s.t.run(async ctx=>{
     const userId=HELP_OWNER.tokenIdentifier, activity=(await ctx.db.get(s.f.activityId))!
     const factual=type==='cited_explanation'
+    const existingClaims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', s.f.scope.contextPins.sessionContentId)).take(33)
+    for (const claim of existingClaims) { for (const support of await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', userId).eq('sessionContentClaimId', claim._id)).take(9)) await ctx.db.delete(support._id); await ctx.db.delete(claim._id) }
     const claimId=await ctx.db.insert('sessionContentClaims',{userId,sessionContentId:s.f.scope.contextPins.sessionContentId,order:0,claim:'TEACHING_EVIDENCE_CANARY',verifierVersion:'verifier.fixture',confidence:1})
     const supportId=await ctx.db.insert('learnClaimSupports',{userId,sessionContentClaimId:claimId,sourceExcerptId:s.f.sourceExcerptId,sourceSnapshotId:s.f.sourceSnapshotId,entailment:'entailed',verifierVersion:'verifier.fixture',confidence:1,conflictStatus:'clear',evidenceStatus:'evidence_available'})
     await ctx.db.insert('sessionContentBlocks',{userId,sessionContentId:s.f.scope.contextPins.sessionContentId,order:1,kind:'independent_application',content:'A separate practice challenge'})

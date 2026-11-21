@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -44,7 +45,7 @@ function sampleCards() {
 
 describe('flashcardRooms.createRoom', () => {
   test('[P0] rejects unauthenticated', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -54,7 +55,7 @@ describe('flashcardRooms.createRoom', () => {
   })
 
   test('[P0] rejects on foreign folder with Folder not found', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'Private' })
@@ -65,7 +66,7 @@ describe('flashcardRooms.createRoom', () => {
   })
 
   test('[P0] creates room with default title', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -80,7 +81,7 @@ describe('flashcardRooms.createRoom', () => {
   })
 
   test('[P0] trims title and slices to 120', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -101,7 +102,7 @@ describe('flashcardRooms.createRoom', () => {
   })
 
   test('[P0] blank title falls back to "Flash Cards"', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
 
@@ -116,7 +117,7 @@ describe('flashcardRooms.createRoom', () => {
 
 describe('flashcardRooms.renameRoom', () => {
   test('[P0] rejects unauthenticated', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -127,7 +128,7 @@ describe('flashcardRooms.renameRoom', () => {
   })
 
   test('[P0] cross-user rename rejected with Room not found', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'Bio' })
@@ -139,7 +140,7 @@ describe('flashcardRooms.renameRoom', () => {
   })
 
   test('[P0] trims + slices + falls back', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -156,7 +157,7 @@ describe('flashcardRooms.renameRoom', () => {
 
 describe('flashcardRooms.listRoomsByFolder', () => {
   test('[P0] returns only caller rooms newest-updated first', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderA = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -177,7 +178,7 @@ describe('flashcardRooms.listRoomsByFolder', () => {
   })
 
   test('[P0] cardCount reflects current cards', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -196,7 +197,7 @@ describe('flashcardRooms.listRoomsByFolder', () => {
 
 describe('flashcardRooms.cardCount denormalized', () => {
   test('[P0] cardCount stays correct through create/delete/generate/restore cycle', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -233,7 +234,7 @@ describe('flashcardRooms.cardCount denormalized', () => {
 
 describe('flashcardRooms.getRoom', () => {
   test('[P0] getRoom rejects callers with no identity', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -245,7 +246,7 @@ describe('flashcardRooms.getRoom', () => {
 
 describe('flashcardRooms.createCard', () => {
   test('[P0] rejects unauthenticated', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -256,7 +257,7 @@ describe('flashcardRooms.createCard', () => {
   })
 
   test('[P0] foreign room → Room not found', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -268,7 +269,7 @@ describe('flashcardRooms.createCard', () => {
   })
 
   test('[P0] rejects empty term/def (trimmed)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -283,7 +284,7 @@ describe('flashcardRooms.createCard', () => {
   })
 
   test('[P0] appends with max+1 displayOrder and clears activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Bio' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -301,7 +302,7 @@ describe('flashcardRooms.createCard', () => {
 
 describe('flashcardRooms.updateCard', () => {
   test('[P0] rejects unauthenticated and cross-user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -320,7 +321,7 @@ describe('flashcardRooms.updateCard', () => {
   })
 
   test('[P0] blanks rejected', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -338,7 +339,7 @@ describe('flashcardRooms.updateCard', () => {
   })
 
   test('[P0] patches term + definition trimmed, clears activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -364,7 +365,7 @@ describe('flashcardRooms.updateCard', () => {
 
 describe('flashcardRooms.deleteCard', () => {
   test('[P0] deletes without renumbering siblings, clears activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -387,7 +388,7 @@ describe('flashcardRooms.deleteCard', () => {
   })
 
   test('[P0] cross-user rejected uniform', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -404,7 +405,7 @@ describe('flashcardRooms.deleteCard', () => {
 
 describe('flashcardRooms.reorderCards', () => {
   test('[P0] rejects if any cardId is foreign', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId: r1 } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -432,7 +433,7 @@ describe('flashcardRooms.reorderCards', () => {
   })
 
   test('[P0] rejects partial list with Invalid reorder permutation', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -452,7 +453,7 @@ describe('flashcardRooms.reorderCards', () => {
   })
 
   test('[P0] rejects duplicate displayOrder with Invalid reorder permutation', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -475,7 +476,7 @@ describe('flashcardRooms.reorderCards', () => {
   })
 
   test('[P0] rejects missing-card (duplicate cardId) as Invalid reorder permutation', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -498,7 +499,7 @@ describe('flashcardRooms.reorderCards', () => {
   })
 
   test('[P0] patches displayOrder in one call; clears activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -528,7 +529,7 @@ describe('flashcardRooms.reorderCards', () => {
 
 describe('flashcardRooms.generateRoomCards', () => {
   test('[P0] archives current cards into a version, then replaces with new; sets activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -563,7 +564,7 @@ describe('flashcardRooms.generateRoomCards', () => {
   })
 
   test('[P0] archived version of gen-1 preserves origin:ai and real title', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -591,7 +592,7 @@ describe('flashcardRooms.generateRoomCards', () => {
   })
 
   test('[P0] on empty room, skips archive but still creates a version', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -608,7 +609,7 @@ describe('flashcardRooms.generateRoomCards', () => {
   })
 
   test('[P0] all-blank cards throws and leaves no phantom version', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -631,7 +632,7 @@ describe('flashcardRooms.generateRoomCards', () => {
   })
 
   test('[P0] foreign room rejected', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -649,7 +650,7 @@ describe('flashcardRooms.generateRoomCards', () => {
 
 describe('flashcardRooms.listRoomVersions + getRoomVersion', () => {
   test('[P0] cross-user reads return [] / null', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -670,7 +671,7 @@ describe('flashcardRooms.listRoomVersions + getRoomVersion', () => {
 
 describe('flashcardRooms.restoreRoomVersion', () => {
   test('[P0] archives current then restores target version cards, sets activeVersionId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -709,7 +710,7 @@ describe('flashcardRooms.restoreRoomVersion', () => {
   })
 
   test('[P0] version belonging to different room rejected', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId: r1 } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -729,7 +730,7 @@ describe('flashcardRooms.restoreRoomVersion', () => {
   })
 
   test('[P0] no-op when restoring currently active version — version count unchanged', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -755,7 +756,7 @@ describe('flashcardRooms.restoreRoomVersion', () => {
   })
 
   test('[P0] cross-user rejected', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })
@@ -774,7 +775,7 @@ describe('flashcardRooms.restoreRoomVersion', () => {
 
 describe('flashcardRooms.deleteRoom', () => {
   test('[P0] cascades current cards, version cards, versions, then room', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(USER_A)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'A' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -804,7 +805,7 @@ describe('flashcardRooms.deleteRoom', () => {
   })
 
   test('[P0] cross-user deleteRoom rejected', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asA = t.withIdentity(USER_A)
     const asB = t.withIdentity(USER_B)
     const folderId = await asA.mutation(api.folders.createFolder, { name: 'A' })

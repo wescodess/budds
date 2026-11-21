@@ -7,8 +7,7 @@ import { LEARN_V2_PUBLIC_API_VERSION, parsePublicLearnRequest } from './learnV2P
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION } from '../../shared/learn-v2-responses'
 import { isLearnAssessmentTestOnly } from '../../shared/learn-v2-delayed-check'
-import { verifiedStoredMessageScope } from './learnV2MessageProvenance'
-import { MESSAGE_PROVENANCE_VERSION } from '../../shared/learn-v2-message-provenance'
+import { inspectStoredMessageProof } from './learnV2MessageProvenance'
 import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, LEARN_HELP_OPEN_PHASES, admitHelpSchema,
   type LearnHelpAdmission, type LearnHelpRequest, type LearnHelpReference } from './learnV2HelpContract'
 
@@ -122,11 +121,11 @@ function scopeResolver(ctx: ReadCtx, userId: string) {
         if (messages.length > 500) throw new ScopeUnknown()
         const references = new Map<string, LearnHelpReference>()
         for (const message of messages) {
-          const verified = await verifiedStoredMessageScope(userId, message)
-          if (message.helpScope?.version === MESSAGE_PROVENANCE_VERSION && verified === null) throw new ScopeUnknown()
+          const proof = await inspectStoredMessageProof(userId, message)
+          if (proof.state === 'invalid') throw new ScopeUnknown()
           if (message.role === 'user' && !message.sources?.length && !message.interjectionContext && message.model === undefined) continue
-          if (!verified?.length) throw new ScopeUnknown()
-          for (const item of verified) references.set(`${item.kind}:${item.id}`, item)
+          if (proof.state !== 'known') throw new ScopeUnknown()
+          for (const item of proof.references) references.set(`${item.kind}:${item.id}`, item)
         }
         if (!references.size || references.size > LEARN_HELP_LIMITS.references) throw new ScopeUnknown()
         for (const item of references.values()) await resolveReference(scope, item)

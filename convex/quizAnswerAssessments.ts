@@ -1,10 +1,10 @@
+import { publicQuizQuestionSnapshot, isRubricAssessment, FREE_RESPONSE_RUBRIC } from './lib/quizAnswerAssessment'
 import { assertOrdinaryTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { assertQuizTeaching, assertTeachingInputs, teachingUnavailable } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { mutation, query, type QueryCtx } from './_generated/server'
 import { requireAuth } from './lib/auth'
-import { isRubricAssessment, FREE_RESPONSE_RUBRIC } from './lib/quizAnswerAssessment'
 import type { Doc } from './_generated/dataModel'
 import manifest from '../workers/laya-evaluator/learningDecisionManifest.json'
 
@@ -97,7 +97,7 @@ export const listPendingForAttempt = query({
         .eq('userId', userId).eq('attemptId', args.attemptId).eq('status', 'pending').eq('nextAttemptAt', undefined))
       .take(PENDING_SCAN_LIMIT)
     await guardPending(ctx, userId, [...indexedRows, ...legacyRows])
-    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:attempt._id}]))
+    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'quiz',id:attempt.quizId}, ...[...indexedRows, ...legacyRows].map(row=>({kind:'assessment' as const,id:row._id}))]))
     const rows = [...indexedRows, ...legacyRows]
       .filter(row => !isRubricAssessment(row))
       .filter((row, index, all) => all.findIndex(candidate => candidate._id === row._id) === index)
@@ -108,7 +108,7 @@ export const listPendingForAttempt = query({
       contractVersion: row.contractVersion ?? manifest.contractVersion,
       snapshotVersion: row.snapshotVersion ?? manifest.snapshotVersion,
       languageSnapshot: row.languageSnapshot ?? 'unknown',
-      questionSnapshot: row.questionSnapshot,
+      questionSnapshot: publicQuizQuestionSnapshot(row.questionSnapshot),
       learnerAnswerSnapshot: row.learnerAnswerSnapshot,
       deterministicIsCorrect: row.deterministicIsCorrect,
       rubricVersion: row.rubricVersion,
@@ -137,7 +137,7 @@ export const listPendingForShadowAttempt = query({
         .eq('deterministicIsCorrect', false))
       .take(PENDING_SCAN_LIMIT)
     await guardPending(ctx, userId, rows)
-    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'attempt',id:attempt._id}]))
+    await assertOrdinaryTeachingRead(ctx, userId, async()=>await teachingReadScope(ctx,userId,[{kind:'quiz',id:attempt.quizId}, ...rows.map(row=>({kind:'assessment' as const,id:row._id}))]))
     return rows.filter(row => !isRubricAssessment(row)
       && (row.shadowInputDigest === undefined || (row.shadowLeaseExpiresAt ?? 0) <= now))
       .slice(0, MAX_BATCH).map(row => ({
@@ -146,7 +146,7 @@ export const listPendingForShadowAttempt = query({
         contractVersion: row.contractVersion ?? manifest.contractVersion,
         snapshotVersion: row.snapshotVersion ?? manifest.snapshotVersion,
         languageSnapshot: row.languageSnapshot ?? 'unknown',
-        questionSnapshot: row.questionSnapshot,
+        questionSnapshot: publicQuizQuestionSnapshot(row.questionSnapshot),
         learnerAnswerSnapshot: row.learnerAnswerSnapshot,
         deterministicIsCorrect: row.deterministicIsCorrect,
         rubricVersion: row.rubricVersion,

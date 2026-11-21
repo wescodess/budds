@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 import { enrollProducer, protectProducerArtifact } from '../tests/fixtures/learn-v2-producer-lineage'
 import { prepareAndRegisterInstructionalArtifacts, normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
 import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION } from '../shared/learn-v2-artifact-lineage'
@@ -116,7 +117,7 @@ async function reserveInterjectionTask(
 
 describe('audioOverviewInterjections.create', () => {
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser: _asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -132,7 +133,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects callers who do not own the overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser: _asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -149,7 +150,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects when overview is not status=ready', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -166,7 +167,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects empty answerTurns', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     await expect(
@@ -181,7 +182,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects empty/whitespace question', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -197,7 +198,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] clamps insertedAfterTurnIndex into valid range', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const answerTurns = await sampleAnswerTurns(t)
     const highTaskId = await reserveInterjectionTask(t, folderId)
@@ -228,7 +229,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] persists question truncated to 500 chars', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -246,7 +247,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] stores answerTurns with full shape', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -267,14 +268,14 @@ describe('audioOverviewInterjections.create', () => {
 
 describe('audioOverviewInterjections.listByOverview', () => {
   test('[P0] returns [] for unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     const result = await t.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: overviewId })
     expect(result).toEqual([])
   })
 
   test('[P0] returns [] for non-owners', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     const asB = t.withIdentity(USER_B)
     const result = await asB.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: overviewId })
@@ -282,7 +283,7 @@ describe('audioOverviewInterjections.listByOverview', () => {
   })
 
   test('[P0] returns interjections in ascending insertion order', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const answerTurns = await sampleAnswerTurns(t)
 
@@ -315,7 +316,7 @@ describe('audioOverviewInterjections.listByOverview', () => {
 
 describe('audioOverviewInterjections.deleteInterjection', () => {
   test('[P0] rejects non-owners', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -332,7 +333,7 @@ describe('audioOverviewInterjections.deleteInterjection', () => {
   })
 
   test('[P0] schedules bounded deletion and releases upload ownership', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -359,7 +360,7 @@ describe('audioOverviewInterjections.deleteInterjection', () => {
 
 
 async function enrolledInterjection() {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const f = await createReadyOverview(t, USER_A)
   await enrollProducer(t, USER_A.tokenIdentifier, [])
   await f.asUser.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', sources: [], origins: [] }] }))
@@ -372,7 +373,7 @@ async function enrolledInterjection() {
 
 describe('legacy Interjection producer and replay admission', () => {
   test('unenrolled publication rejects a changed frozen object before consuming claims', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const f = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, f.folderId)
     const answerTurns = await sampleAnswerTurns(t)

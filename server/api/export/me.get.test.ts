@@ -522,7 +522,7 @@ describe('GET /api/export/me', () => {
     expect(err.statusCode).toBe(401)
   })
 
-  test('ZIP and Convex share the classified collection inventory and preserve every audited content projection', async () => {
+  test('ZIP and Convex share the classified collection inventory and preserve permitted work and withhold copies without source authority', async () => {
     expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
     expect(EXPORT_COLLECTIONS).toHaveLength(126)
     expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
@@ -545,7 +545,8 @@ describe('GET /api/export/me', () => {
     for (const content of contents) {
       const rows = JSON.parse(strFromU8(entries[`${content.collection}.json`]!)) as Array<Record<string, unknown>>
       const row = rows.find(row => row._id === content.id)
-      expect(JSON.stringify(row?.[content.field])).toContain(content.canary)
+      if (row?.evidenceStatus === 'evidence_unavailable' && !['answers', 'learnerAnswerSnapshot'].includes(content.field)) expect(JSON.stringify(row)).not.toContain(content.canary)
+      else expect(JSON.stringify(row?.[content.field])).toContain(content.canary)
     }
     expect(strFromU8(entries['messages.json']!)).not.toContain(foreign)
     expect(strFromU8(entries['messages.json']!)).not.toContain('foreign-export-content-canary')

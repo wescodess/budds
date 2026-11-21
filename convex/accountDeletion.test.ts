@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi, beforeEach, afterEach } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 import { backoffMs } from './accountDeletion'
 import { tokenIdentifierForAuthUser } from './auth'
 import { composeAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
@@ -103,7 +104,7 @@ async function seedUserData(
 
 describe('accountDeletion.deleteAccountCascade', () => {
   test('[P0] deletes Adaptive Learn activity children before thread parents in bounded batches', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const ids = await t.run(async (ctx) => {
       const now = Date.now()
       const threadId = await ctx.db.insert('learningThreads', {
@@ -180,7 +181,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
     expect(await t.run(ctx => ctx.db.get(ids.threadId))).toBeNull()
   })
   test('deletes owner search metadata without resetting global product usage', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const ids = await t.run(async (ctx) => {
       const now = Date.now()
       const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Search account deletion', documentCount: 0 })
@@ -232,7 +233,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   test('anonymizes a released circuit owner until drift reconciliation clears its circuit', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-14T12:00:00.000Z'))
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const ids = await t.run(async (ctx) => {
       const now = Date.now()
       const hash = async (value: string) => {
@@ -282,7 +283,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('releases every undispatched search claim before deleting owner metadata', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const ids = await t.run(async (ctx) => {
       const now = Date.now()
       const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'Undispatched deletion', documentCount: 0 })
@@ -316,7 +317,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('releases multiple batches of undispatched claims before anonymizing a shared started claim', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const ids = await t.run(async (ctx) => {
       const now = Date.now()
       const hash = async (value: string) => {
@@ -393,7 +394,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] deletes the V2 lifecycle foundation child-before-parent in bounded batches', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const ids = await t.run(async (ctx) => {
       const folderId = await ctx.db.insert('folders', { userId: TEST_IDENTITY.tokenIdentifier, name: 'V2', documentCount: 0 })
@@ -458,7 +459,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P1] account deletion absorbs an active durable course-deletion job', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     await asUser.mutation(api.users.upsertUser, {})
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Deleting course' })
@@ -480,7 +481,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove all folders/documents/conversations/messages/users rows for the caller', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
 
     await t.run(async (ctx) => {
@@ -508,7 +509,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should leave another user\'s data untouched', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
 
@@ -530,7 +531,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should enqueue pendingCleanup rows for each document needing external cleanup + bulk sentinel', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
 
     await seedUserData(t, asUser, TEST_IDENTITY)
@@ -557,14 +558,14 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should reject unauthenticated caller', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await expect(
       t.mutation(internal.accountDeletion.deleteCurrentUser, {}),
     ).rejects.toThrow()
   })
 
   test('[P0] should preserve Calendar credentials while provider-first disconnect runs', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     await asUser.mutation(api.calendarConnections.upsertConnection, {
       provider: 'google',
@@ -604,7 +605,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should delete all Convex file-storage blobs', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
 
     const { docSuccessId, docProcessingId } = await seedUserData(t, asUser, TEST_IDENTITY)
@@ -628,7 +629,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove caller\'s quizzes + quizQuestions, leaving another user\'s untouched', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
 
@@ -696,7 +697,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove caller\'s quizAttempts, leaving another user\'s untouched (Story 6.2)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
 
@@ -810,7 +811,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove caller rate-limit buckets while leaving another user\'s untouched', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
 
     const { ownBucketId, otherBucketId } = await t.run(async (ctx) => ({
       ownBucketId: await ctx.db.insert('rateLimitBuckets', {
@@ -839,7 +840,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove every audio job turn beyond one batch and preserve another user\'s job', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
     const folderA = await asUserA.mutation(api.folders.createFolder, { name: 'A audio' })
@@ -932,7 +933,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should stage an in-progress v2 episode that has no compatibility overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Orphan v2 audio' })
     const episodeId = await t.run(async (ctx) => {
@@ -1040,7 +1041,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] stable episode pagination does not skip rows when staging mutates status', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Many episodes' })
     await t.run(async (ctx) => {
@@ -1141,7 +1142,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] should remove caller\'s flashcardRooms + cards, leaving another user\'s untouched', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUserA = t.withIdentity(TEST_IDENTITY)
     const asUserB = t.withIdentity(OTHER_IDENTITY)
 
@@ -1187,7 +1188,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] cascade deletes rows from all four flashcardRoom* tables', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'FC' })
     const { roomId } = await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -1213,7 +1214,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] internal deleteAccountCascade accepts userId arg directly', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'FC' })
     await asUser.mutation(api.flashcardRooms.createRoom, { folderId })
@@ -1232,7 +1233,7 @@ describe('accountDeletion.deleteAccountCascade', () => {
   })
 
   test('[P0] completed tombstones reject stale authenticated reads and exports', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
 
     const { folderId, convoId } = await seedUserData(t, asUser, TEST_IDENTITY)
@@ -1273,7 +1274,7 @@ describe('account deletion identity and tombstone authority', () => {
   })
 
   test('[P0] stale authenticated writes are rejected by active and completed tombstones', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Before deletion' })
     const conversationId = await asUser.mutation(api.conversations.createConversation, {
@@ -1313,7 +1314,7 @@ describe('account deletion identity and tombstone authority', () => {
   })
 
   test('[P0] active audio cancellation is bounded and resumable', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asUser = t.withIdentity(TEST_IDENTITY)
     const folderId = await asUser.mutation(api.folders.createFolder, { name: 'Cancellation' })
     await t.run(async (ctx) => {
@@ -1385,7 +1386,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P0] should retain pendingCleanup when the AI Search Items list returns 404', { timeout: 30_000 }, async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const userId = TEST_IDENTITY.tokenIdentifier
 
     await t.run(async (ctx) => {
@@ -1415,7 +1416,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P0] paginates Items, deletes only exact owner/source matches, and verifies absence', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const userId = TEST_IDENTITY.tokenIdentifier
     const rowId = await t.run(async (ctx) => await ctx.db.insert('pendingCleanup', {
       userId,
@@ -1477,7 +1478,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P1] should increment attempts on 500', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const userId = TEST_IDENTITY.tokenIdentifier
 
     const rowId = await t.run(async (ctx) => {
@@ -1501,7 +1502,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P0] skips cleanup rows until their persisted backoff is due', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const userId = TEST_IDENTITY.tokenIdentifier
     const futureId = await t.run(async (ctx) => await ctx.db.insert('pendingCleanup', {
       userId,
@@ -1531,7 +1532,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P1] should retry and clear a dead-letter row when the rescue sweep invokes the drain', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const userId = TEST_IDENTITY.tokenIdentifier
 
     const rowId = await t.run(async (ctx) => {
@@ -1558,7 +1559,7 @@ describe('accountDeletion.drainPendingCleanup', () => {
   })
 
   test('[P0] terminal cleanup sweep reserves fair capacity for every provider', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await t.run(async (ctx) => {
       for (const kind of ['ai-search', 'r2', 'convex-storage'] as const) {
         for (let index = 0; index < 12; index++) {

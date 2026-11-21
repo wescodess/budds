@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example.com|rubrics' }
@@ -21,7 +22,7 @@ const question = {
 const settings = { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: false }
 
 async function setup() {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const user = t.withIdentity(identity)
   const folderId = await user.mutation(api.folders.createFolder, { name: 'Biology' })
   return { t, user, folderId }
