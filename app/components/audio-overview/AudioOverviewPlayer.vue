@@ -4,7 +4,7 @@ import { useTeachingQuery } from '~/composables/useTeachingQuery'
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2 } from '@lucide/vue'
+import { Pause, Play, Rewind, FastForward, Download, Share2, RefreshCw, History, Check, Trash2, Settings2, Mic, Loader2, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id, Doc } from '../../../convex/_generated/dataModel'
 import { buildContinuousPlaybackTurns, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
@@ -40,18 +40,26 @@ const emit = defineEmits<{
   'delete-overview': [id: Id<'audioOverviews'>]
 }>()
 
-const { data: overviewData } = useTeachingQuery(
+const overviewQuery = useTeachingQuery(
   api.audioOverviews.getWithTurns,
   computed(() => ({ id: props.overviewId })),
 )
-const { data: turnUrlData } = useTeachingQuery(
+const turnUrlQuery = useTeachingQuery(
   api.audioOverviews.getTurnUrls,
   computed(() => ({ id: props.overviewId })),
 )
-const { data: v2PlaybackData } = useTeachingQuery(
+const v2PlaybackQuery = useTeachingQuery(
   api.audioOverviewV2.getPlaybackForOwner,
   computed(() => ({ overviewId: props.overviewId })),
 )
+const { data: overviewData } = overviewQuery
+const { data: turnUrlData } = turnUrlQuery
+const { data: v2PlaybackData } = v2PlaybackQuery
+const readQueries = [overviewQuery, turnUrlQuery, v2PlaybackQuery]
+const readFailure = computed(() => readQueries.map(query => query.failure.value).find(Boolean) ?? null)
+function retryRead() {
+  for (const query of readQueries) if (query.failure.value) void query.refresh?.()
+}
 
 type V2Playback = {
   schemaVersion: 2
@@ -410,6 +418,9 @@ const ringMiddleStyle = computed(() => ({
       </p>
       <Loader2 class="h-4 w-4 shrink-0 animate-spin text-primary" />
     </div>
+
+    <p v-if="readFailure && !readFailure.retryable" role="status" data-testid="audio-read-paused" class="mx-auto flex w-full max-w-4xl items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+    <div v-else-if="readFailure" role="alert" data-testid="audio-read-error" class="mx-auto w-full max-w-4xl rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this audio overview.</p><button type="button" data-testid="audio-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="retryRead">Try again</button></div>
 
     <UiAlertDialog :open="deleteTargetId !== null" @update:open="(v) => { if (!v) cancelDelete() }">
       <UiAlertDialogContent>

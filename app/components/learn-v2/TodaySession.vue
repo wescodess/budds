@@ -2,7 +2,7 @@
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
 
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowLeft, BookOpenCheck, ChevronRight, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, BookOpenCheck, ChevronRight, CircleAlert, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useOnlineStatus } from '~/composables/useOnlineStatus'
@@ -81,7 +81,8 @@ function makeKey(prefix: string) {
 
 const contentQuery = import.meta.client
   ? useTeachingQuery(api.learnV2SessionContent.getSessionContent, { studySessionId: candidate.studySessionId as never }, { enabled: started })
-  : { data: ref<SessionContent>(null) }
+  : { data: ref<SessionContent>(null), failure: computed(() => null), refresh: async () => {} }
+const contentFailure = computed(() => contentQuery.failure.value)
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
 const adaptivePresentation = computed(() => (contentQuery.data?.value as SessionContent)?.adaptivePresentation ?? null)
@@ -278,7 +279,9 @@ async function retryScore() { await submit() }
         <article v-if="phase !== 'feedback' && phase !== 'next_review'" class="rounded-xl border border-border bg-card p-5 sm:p-6 forced-colors:border-current" :data-testid="`learn-v2-phase-${phase}`">
           <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-primary">{{ phaseLabel }}</p>
           <h2 class="mt-2 font-dm-sans text-xl font-semibold text-foreground">{{ phase === 'transfer' ? 'Apply it to a new case' : phase === 'confidence' ? 'Reflect on your answer' : phaseLabel }}</h2>
-          <p v-if="currentContent" class="mt-5 whitespace-pre-wrap text-[15px] leading-7 text-foreground">{{ currentContent }}</p>
+          <p v-if="contentFailure && !contentFailure.retryable" role="status" data-testid="learn-v2-content-paused" class="mt-5 flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ contentFailure.message }}</span></p>
+          <div v-else-if="contentFailure" role="alert" data-testid="learn-v2-content-error" class="mt-5 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this part of your session.</p><button type="button" data-testid="learn-v2-content-retry" :disabled="!isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" @click="contentQuery.refresh()">Try again</button></div>
+          <p v-else-if="currentContent" class="mt-5 whitespace-pre-wrap text-[15px] leading-7 text-foreground">{{ currentContent }}</p>
           <p v-else role="status" class="mt-5 text-sm leading-6 text-muted-foreground">Preparing the supported material for this part of your session…</p>
 
           <label v-if="phase === 'prediction'" class="mt-6 block text-sm font-medium text-foreground">Your prediction<textarea v-model="prediction" aria-label="Your prediction" placeholder="Write what you think before seeing the explanation." class="mt-2 min-h-32 w-full rounded-lg border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring forced-colors:border-current" /></label>

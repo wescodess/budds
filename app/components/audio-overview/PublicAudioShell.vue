@@ -4,7 +4,7 @@ import { useTeachingQuery } from '~/composables/useTeachingQuery'
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download } from '@lucide/vue'
+import { Pause, Play, Rewind, FastForward, Download, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { buildContinuousPlaybackTurns, createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 
@@ -14,18 +14,26 @@ const props = defineProps<{
 
 const tokenRef = computed(() => props.token)
 
-const { data: overviewData } = useTeachingQuery(
+const overviewQuery = useTeachingQuery(
   api.audioOverviews.getByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: turnUrlData } = useTeachingQuery(
+const turnUrlQuery = useTeachingQuery(
   api.audioOverviews.getTurnUrlsByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: v2PlaybackData } = useTeachingQuery(
+const v2PlaybackQuery = useTeachingQuery(
   api.audioOverviewV2.getPlaybackByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
+const { data: overviewData } = overviewQuery
+const { data: turnUrlData } = turnUrlQuery
+const { data: v2PlaybackData } = v2PlaybackQuery
+const readQueries = [overviewQuery, turnUrlQuery, v2PlaybackQuery]
+const readFailure = computed(() => readQueries.map(query => query.failure.value).find(Boolean) ?? null)
+function retryRead() {
+  for (const query of readQueries) if (query.failure.value) void query.refresh?.()
+}
 
 type PublicOverview = {
   title: string
@@ -224,7 +232,15 @@ const ringMiddleStyle = computed(() => ({
 
 <template>
   <div
-    v-if="loading"
+    v-if="readFailure"
+    class="flex min-h-[60vh] flex-1 items-center justify-center p-6"
+  >
+    <p v-if="!readFailure.retryable" role="status" data-testid="audio-read-paused" class="flex max-w-md items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+    <div v-else role="alert" data-testid="audio-read-error" class="max-w-md rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this audio overview.</p><button type="button" data-testid="audio-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="retryRead">Try again</button></div>
+  </div>
+
+  <div
+    v-else-if="loading"
     data-testid="public-audio-loading"
     class="flex min-h-[60vh] flex-1 items-center justify-center text-muted-foreground"
   >

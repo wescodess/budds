@@ -1,5 +1,6 @@
 <script setup lang="ts">
 /* eslint-disable @typescript-eslint/no-explicit-any -- session rows are an adapter boundary from the authoritative projection. */
+import { CircleAlert } from '@lucide/vue'
 import { useLearnV2Journey } from '~/composables/useLearnV2Journey'
 import type { LearnScheduleInput, LearnWorkspaceSection } from '~/types/learn-v2-journey'
 
@@ -9,7 +10,7 @@ const id = computed(() => String(route.params.learningVoidId))
 const rawSection = computed(() => String(route.query.section ?? 'overview'))
 const activeSection = computed<LearnWorkspaceSection>(() => ['overview', 'sources', 'map', 'plan', 'progress'].includes(rawSection.value) ? rawSection.value as LearnWorkspaceSection : 'overview')
 const journey = useLearnV2Journey(id)
-const { allowed, checkingAccess, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults } = journey
+const { allowed, checkingAccess, mission, readFailure, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults } = journey
 const editingPlan = ref(false)
 const selectedSourceId = ref<string | null>(null)
 function generationStatusLabel(status: string) { return ({ queued: 'Queued', leased: 'Preparing', running: 'Generating', awaiting_approval: 'Ready for review', completed: 'Completed', failed: 'Needs attention' } as Record<string, string>)[status] ?? status.replaceAll('_', ' ') }
@@ -38,9 +39,11 @@ function nextAction() {
   <main>
     <section v-if="checkingAccess" class="mx-auto max-w-2xl p-6" aria-live="polite">Checking learning access…</section>
     <section v-else-if="!allowed" class="mx-auto max-w-2xl p-6">This learning experience is not available for this account.</section>
+    <section v-else-if="readFailure && !mission" class="mx-auto max-w-2xl p-6"><template v-if="readFailure"><p v-if="!readFailure.retryable" role="status" data-testid="learn-v2-workspace-read-paused" class="flex items-start gap-2 rounded-lg border border-border p-3 text-sm leading-6 text-foreground"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p><div v-else role="alert" data-testid="learn-v2-workspace-read-error" class="rounded-lg border border-destructive/40 p-3 text-sm text-destructive"><p>Could not load this learning workspace.</p><button type="button" data-testid="learn-v2-workspace-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="journey.retryRead">Try again</button></div></template></section>
     <section v-else-if="!mission" class="mx-auto max-w-2xl p-6" aria-live="polite">Loading learning workspace…</section>
     <section v-else-if="!snapshot" class="mx-auto max-w-2xl p-6">Learning workspace not found.</section>
     <LearnV2MissionWorkspaceShell v-else :mission="snapshot" :active-section="activeSection" :readiness="readiness" @navigate="navigate" @act="nextAction">
+      <template v-if="readFailure"><p v-if="!readFailure.retryable" role="status" data-testid="learn-v2-workspace-sources-read-paused" class="flex items-start gap-2 rounded-lg border border-border p-3 text-sm leading-6 text-foreground mb-4"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p><div v-else role="alert" data-testid="learn-v2-workspace-sources-read-error" class="rounded-lg border border-destructive/40 p-3 text-sm text-destructive mb-4"><p>Could not load the sources for this workspace.</p><button type="button" data-testid="learn-v2-workspace-sources-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="journey.retryRead">Try again</button></div></template>
       <p v-if="error" role="alert" class="mb-4 rounded-lg border border-destructive/40 p-3 text-sm text-destructive">{{ error }} Refresh this workspace before retrying if another change was made.</p>
       <section v-if="activeSection === 'overview'" class="space-y-6">
         <UiCard class="p-5"><h2 class="font-dm-sans text-xl font-bold">{{ snapshot.nextAction.label }}</h2><p class="mt-2 text-sm text-muted-foreground">{{ snapshot.nextAction.detail }}</p><UiButton class="mt-4" data-testid="learn-v2-workspace-continue" @click="nextAction">Continue</UiButton></UiCard>

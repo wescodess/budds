@@ -3,6 +3,7 @@ import { useTeachingQuery } from '~/composables/useTeachingQuery'
 
 import { getErrorMessage } from '~~/shared/errors'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
@@ -26,11 +27,11 @@ const usingOfflineData = ref(false)
 
 const courseQuery = import.meta.client
   ? useTeachingQuery(api.courses.get, computed(() => ({ id: courseId.value })))
-  : { data: ref(null) }
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
 const sectionQuery = import.meta.client
   ? useTeachingQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
-  : { data: ref(null) }
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
 const course = computed(() => courseQuery.data?.value ?? null)
 const section = computed(() => sectionQuery.data?.value ?? null)
@@ -76,7 +77,7 @@ usePreFetchSection(courseId, sectionOrder)
 
 const sectionsQuery = import.meta.client
   ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
-  : { data: ref(null) }
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
@@ -211,6 +212,14 @@ const isReady = computed(() => {
   return section.value && (section.value.status === 'ready' || section.value.status === 'completed')
 })
 
+const readFailure = computed(() => usingOfflineData.value ? null : courseQuery.failure.value ?? sectionQuery.failure.value ?? sectionsQuery.failure.value)
+
+function retryRead() {
+  for (const query of [courseQuery, sectionQuery, sectionsQuery]) {
+    if (query.failure.value) void query.refresh?.()
+  }
+}
+
 const isLoading = computed(() => {
   if (usingOfflineData.value) return false
   return !section.value || !course.value
@@ -225,7 +234,12 @@ const isNotReady = computed(() => {
 
 <template>
   <div class="flex min-h-0 w-full flex-1 flex-col overflow-y-auto bg-background">
-    <div v-if="isLoading" class="flex flex-1 items-center justify-center">
+    <div v-if="readFailure" class="mx-auto w-full max-w-3xl px-4 py-8">
+      <p v-if="!readFailure.retryable" role="status" data-testid="section-page-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+      <div v-else role="alert" data-testid="section-page-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive"><p>Could not load this section.</p><button type="button" data-testid="section-page-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="retryRead">Try again</button></div>
+    </div>
+
+    <div v-else-if="isLoading" class="flex flex-1 items-center justify-center">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <p class="text-sm text-muted-foreground">Loading section...</p>

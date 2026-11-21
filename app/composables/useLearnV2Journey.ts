@@ -53,7 +53,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const missionArgs = ref<{ learningVoidId: string | null }>({ learningVoidId: id.value })
   watch(id, learningVoidId => { missionArgs.value = { learningVoidId } }, { flush: 'sync' })
   const hubQuery = import.meta.client ? useConvexQuery(api.learnV2Journey.listHub, {}, { enabled: allowed }) : { data: ref<any>(null), pending: ref(false) }
-  const missionQuery = import.meta.client ? useTeachingQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false) }
+  const missionQuery = import.meta.client ? useTeachingQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
   const sourceReviewArgs = ref<{ blueprintRevisionId: string | null; paginationOpts: { cursor: null; numItems: number } }>({ blueprintRevisionId: null, paginationOpts: { cursor: null, numItems: 64 } })
   const createVoid = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.createLearningVoid) : { mutate: async () => null }
   const updateVoidDraft = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.updateLearningVoidDraft) : { mutate: async () => null }
@@ -85,7 +85,9 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const researchResults = ref<Array<{ title: string; url: string; snippet?: string }>>([])
   const mission = computed(() => missionQuery.data.value as Mission | null | undefined)
   watch(mission, value => { sourceReviewArgs.value = { blueprintRevisionId: value?.currentBlueprint?._id ?? null, paginationOpts: { cursor: null, numItems: 64 } } }, { flush: 'sync' })
-  const sourceReviewQuery = import.meta.client ? useTeachingQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false) }
+  const sourceReviewQuery = import.meta.client ? useTeachingQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
+  const readFailure = computed(() => missionQuery.failure.value ?? sourceReviewQuery.failure.value ?? null)
+  function retryRead() { for (const query of [missionQuery, sourceReviewQuery]) if (query.failure.value) void query.refresh() }
   const hub = computed<LearnHubSnapshot>(() => {
     const rows = (hubQuery.data.value as any)?.items ?? []
     const missions = rows.map((row: any) => missionSnapshot(row))
@@ -222,5 +224,5 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
     return { ok: true }
   } catch (cause) { return { ok: false, reason: isLearnMapChangedError(cause) ? 'changed' : 'failed' } } finally { busy.value = false } }
   async function acceptPlan() { const row = mission.value; const preview = row?.plan?.preview; if (!row || !preview) return; return await run(() => acceptPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedVoidRevision: row.learningVoid.revision, expectedPlanRecordRevision: preview.recordRevision, idempotencyKey: key('accept-plan') })) }
-  return { allowed, checkingAccess, hub, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults, defaultSchedule, planInput, saveOutcomeDraft, createMission, startMapGeneration, editLearningMap, acceptSource, prepareSource, rejectSource, addUrlSource, researchPublicSources, acceptLearningMap, submitCalibrationAttempt, completeCalibration, createPlanPreview, editPlanPreview, acceptPlan }
+  return { allowed, checkingAccess, hub, mission, readFailure, retryRead, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults, defaultSchedule, planInput, saveOutcomeDraft, createMission, startMapGeneration, editLearningMap, acceptSource, prepareSource, rejectSource, addUrlSource, researchPublicSources, acceptLearningMap, submitCalibrationAttempt, completeCalibration, createPlanPreview, editPlanPreview, acceptPlan }
 }

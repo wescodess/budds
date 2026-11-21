@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const mockOverviewData = ref<any>(null)
+const mockOverviewError = ref<any>(null)
+const mockRefresh = vi.fn()
+const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
 
 mockNuxtImport('useConvexQuery', () => {
   return (_apiRef: any, _args?: any) => {
-    return { data: mockOverviewData }
+    return { data: mockOverviewData, error: mockOverviewError, refresh: mockRefresh }
   }
 })
 
@@ -29,6 +32,51 @@ const sampleOverview = {
 describe('AudioBlock', () => {
   beforeEach(() => {
     mockOverviewData.value = null
+    mockOverviewError.value = null
+    mockRefresh.mockReset()
+  })
+
+  it('pauses without retry while a check is open', async () => {
+    mockOverviewError.value = denied('test_open')
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    const paused = wrapper.get('[data-testid="audio-read-paused"]')
+    expect(paused.attributes('role')).toBe('status')
+    expect(paused.text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
+    expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Loading audio data')
+  })
+
+  it('says plainly when disclosure is unknown', async () => {
+    mockOverviewError.value = denied('disclosure_unknown')
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    expect(wrapper.get('[data-testid="audio-read-paused"]').text()).toBe('This isn’t available right now.')
+    expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
+  })
+
+  it('retries a failed read and recovers to the player', async () => {
+    mockOverviewError.value = new Error('network')
+    mockRefresh.mockImplementation(() => {
+      mockOverviewError.value = null
+      mockOverviewData.value = sampleOverview
+    })
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    expect(wrapper.get('[data-testid="audio-read-error"]').text()).toContain('Could not load this audio overview.')
+    expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="audio-read-retry"]').trigger('click')
+    expect(mockRefresh).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(true))
+    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
+  })
+
+  it('ignores read failures when there is no audio to load', async () => {
+    mockOverviewError.value = new Error('network')
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: {} })
+    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('No audio available')
   })
 
   it('shows loading state when no entityId', async () => {

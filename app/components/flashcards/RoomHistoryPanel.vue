@@ -3,7 +3,7 @@ import { useTeachingQuery } from '~/composables/useTeachingQuery'
 
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
-import { ChevronDown, RotateCcw, Sparkles, History } from '@lucide/vue'
+import { ChevronDown, CircleAlert, RotateCcw, Sparkles, History } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
@@ -17,21 +17,25 @@ const emit = defineEmits<{
   'update:open': [value: boolean]
 }>()
 
-const { data: versionsData } = useTeachingQuery(
+const versionsQuery = useTeachingQuery(
   api.flashcardRooms.listRoomVersions,
   computed(() => ({ roomId: props.roomId })),
 )
 
-const versions = computed(() => versionsData.value ?? [])
+const versions = computed(() => versionsQuery.data.value ?? [])
+const versionsFailure = computed(() => versionsQuery.failure.value)
 
 const expandedVersionId = ref<Id<'flashcardRoomVersions'> | null>(null)
 const restoreTargetId = ref<Id<'flashcardRoomVersions'> | null>(null)
 const restoring = ref(false)
 
-const { data: versionDetail } = useTeachingQuery(
+const versionDetailQuery = useTeachingQuery(
   api.flashcardRooms.getRoomVersion,
   computed(() => ({ versionId: expandedVersionId.value ?? undefined })),
 )
+
+const versionDetail = versionDetailQuery.data
+const versionDetailFailure = computed(() => versionDetailQuery.failure.value)
 
 const restoreMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.restoreRoomVersion)
@@ -96,8 +100,10 @@ function formatDate(ts: number) {
       </UiSheetHeader>
 
       <div class="max-h-full flex-1 overflow-y-auto p-4">
+        <p v-if="versionsFailure && !versionsFailure.retryable" role="status" data-testid="flashcard-history-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ versionsFailure.message }}</span></p>
+        <div v-else-if="versionsFailure" role="alert" data-testid="flashcard-history-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load version history.</p><button type="button" data-testid="flashcard-history-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="versionsQuery.refresh?.()">Try again</button></div>
         <div
-          v-if="versions.length === 0"
+          v-else-if="versions.length === 0"
           data-testid="flashcard-room-history-empty"
           class="rounded-lg border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground"
         >
@@ -146,7 +152,9 @@ function formatDate(ts: number) {
               data-testid="flashcard-room-history-preview"
               class="border-t border-border/60 p-3"
             >
-              <div v-if="!versionDetail || !Array.isArray(versionDetail.cards)" class="space-y-2">
+              <p v-if="versionDetailFailure && !versionDetailFailure.retryable" role="status" data-testid="flashcard-version-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ versionDetailFailure.message }}</span></p>
+              <div v-else-if="versionDetailFailure" role="alert" data-testid="flashcard-version-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this version.</p><button type="button" data-testid="flashcard-version-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="versionDetailQuery.refresh?.()">Try again</button></div>
+              <div v-else-if="!versionDetail || !Array.isArray(versionDetail.cards)" class="space-y-2">
                 <UiSkeleton class="h-4 w-2/3" />
                 <UiSkeleton class="h-4 w-full" />
               </div>
