@@ -299,6 +299,8 @@ C2's `prepareLearnResponseAssistanceForOwner` performs the existing scope/eviden
 
 This contract enables no capability, enrollment, UI or producer. C4.2 #430 installs its consumers and executable HTTP/replay tests. The parent orchestrator retains the final C4 review gate.
 
+`admitHelp` checks permission before retrieval and dispatch. Its authorized result has an empty `authorizations` array and records no delivered exposure. `deliverHelp` accepts the same closed input, rechecks current admission, and commits exposure IDs immediately before substantive content is returned or enqueued. Consumers use the same idempotency key for both calls and commit delivery once. A failure before delivery creates no assistance fact; a partial delivery retains its fact after a later failure. Denied requests still record only requested-denied facts. No storage or capability is added. Only delivery invokes the C2 commit closure; permission checks do not.
+
 #### #540 Interjection publication and reads
 
 `audio_interjection` identifies `audioOverviewInterjections`; `audio_interjection_v2` identifies `audioOverviewInterjectionsV2`. Both use `key: 'whole'`, a server-computed content digest/revision, and the existing preparation/admission helpers. The generated answer is teaching. The listener's question is owner-authored work: it is excluded from the teaching projection and case fingerprints, and remains readable as own work when the generated answer is unavailable. Changing only the question does not create a new instructional revision.

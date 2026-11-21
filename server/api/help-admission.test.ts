@@ -10,6 +10,7 @@ import { artifactManifestDigest, prepareAndRegisterInstructionalArtifacts } from
 import { searchDocuments as indexedSearch } from '../utils/ai-search'
 import { buildQuizPrompt, parseQuizResponse } from '../utils/quiz-prompt'
 import { buildFlashcardPrompt, parseFlashcardResponse } from '../utils/flashcard-prompt'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../../shared/learn-v2-responses'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -105,6 +106,26 @@ function noDispatch() {
 async function sealed() { await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, {
   phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses,
 })) }
+async function formative() {
+  s = await helpConsumerFixture(modules, false)
+  await s.t.run(async ctx => {
+    const opportunity = (await ctx.db.get(s.f.rows.learnAssessmentOpportunities))!
+    if (opportunity.assessmentPins.kind !== 'calibration') throw new Error('Expected calibration fixture')
+    await ctx.db.patch(opportunity._id, { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: false } })
+    await ctx.db.patch(s.f.rows.learnAssessmentExposures, { projectionDigest: opportunity.assessmentPins.promptDigest })
+  })
+}
+async function acceptedAssistance() {
+  const target = { assessmentOpportunityId: s.f.rows.learnAssessmentOpportunities }
+  const result = await s.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'help_response_acceptance',
+    response: { target, expectedRevision: 1, payload: { kind: 'text', text: 'My independently written response' } },
+  } })
+  expect(result).toMatchObject({ kind: 'accepted' })
+  const state = await s.owner.query(api.learnV2Responses.getResponseState, { version: 'learn-v2.public-api.v1', target })
+  if (state.status !== 'available' || !state.work) throw new Error('Expected accepted response')
+  return state.work.assistanceSnapshot.state
+}
 
 const generators = [
   ['quiz/topics', topics, () => ({ folderId: s.f.folderId })],
@@ -116,6 +137,110 @@ const generators = [
 ] as const
 
 describe('Nitro handlers use registered server help admission', () => {
+  test('a formative response without help remains unassisted at acceptance', async () => {
+    await formative()
+    expect(await acceptedAssistance()).toBe('unassisted')
+  })
+  test.each([false, true])('retrieval failure streaming=%s before dispatch leaves the accepted response unassisted', async stream => {
+    await formative()
+    body({ stream })
+    vi.mocked(globalThis.searchDocuments).mockRejectedValueOnce(new Error('Fixture retrieval unavailable'))
+    await expect(rag(event)).rejects.toThrow('Fixture retrieval unavailable')
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletionStream).not.toHaveBeenCalled()
+    expect(globalThis.sendStream).not.toHaveBeenCalled()
+    expect(await acceptedAssistance()).toBe('unassisted')
+  })
+  test.each([false, true].flatMap(stream => [SERVER_DEFAULT_MODEL, 'openai/gpt-4o'].map(model => ({ stream, model }))))('provider failure streaming=$stream model=$model before delivery leaves the accepted response unassisted', async ({ stream, model }) => {
+    await formative()
+    body({ stream, model })
+    vi.mocked(stream ? globalThis.generateCompletionStream : globalThis.generateCompletion).mockRejectedValue(new Error('Fixture provider unavailable'))
+    await expect(rag(event)).rejects.toThrow()
+    expect(emitted).toEqual([])
+    expect(await acceptedAssistance()).toBe('unassisted')
+  })
+  test.each(['sources', 'answer'] as const)('partial %s delivery followed by stream failure counts as assistance once', async first => {
+    await formative()
+    if (first === 'answer') vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
+    body({ stream: true })
+    let index = 0
+    vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({
+      pull(controller) {
+        if (first === 'sources' || index === 2) controller.error(new Error('Fixture stream unavailable'))
+        else { index++; controller.enqueue(encoder.encode(`data: {"choices":[{"delta":{"content":"ANSWER_${index}"}}]}\n\n`)) }
+      },
+    }, { highWaterMark: 0 }))
+    const before = (await s.exposures()).length
+    await expect(rag(event)).rejects.toMatchObject({ statusCode: 502 })
+    expect(emitted.join('')).toContain(first === 'sources' ? 'SOURCE_CONTENT' : 'ANSWER_2')
+    expect((await s.exposures()).slice(before).filter(row => row.purpose === 'teaching').map(row => row.status)).toEqual(['granted'])
+    expect(await acceptedAssistance()).toBe('assisted')
+  })
+  test.each(['metadata', 'partial_frame', 'cancelled'] as const)('a stream ending with only %s leaves the accepted response unassisted', async mode => {
+    await formative()
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
+    body({ stream: true })
+    let index = 0
+    vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({
+      pull(controller) {
+        if (index++ === 0) controller.enqueue(encoder.encode(mode === 'partial_frame'
+          ? 'data: {"choices":[{"delta":{"content":"WITHHELD_PARTIAL'
+          : 'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n'))
+        else controller.error(new Error('Fixture stream unavailable'))
+      },
+    }, { highWaterMark: 0 }))
+    if (mode === 'cancelled') vi.mocked(globalThis.sendStream).mockImplementationOnce(async (_event, stream) => {
+      await (stream as ReadableStream).cancel()
+      throw new Error('Fixture client disconnected')
+    })
+    await expect(rag(event)).rejects.toThrow()
+    expect(emitted.join('')).not.toContain('WITHHELD_PARTIAL')
+    expect(await acceptedAssistance()).toBe('unassisted')
+  })
+  test.each([rag, search])('successful content delivery records assistance once at acceptance', async handler => {
+    await formative()
+    body()
+    const before = (await s.exposures()).length
+    await handler(event)
+    expect((await s.exposures()).slice(before).filter(row => row.purpose === 'teaching').map(row => row.status)).toEqual(['granted'])
+    expect(await acceptedAssistance()).toBe('assisted')
+  })
+  test.each(['metadata', 'partial_frame'] as const)('a %s prefix followed by answer delivery records assistance once', async mode => {
+    await formative()
+    vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [] })
+    body({ stream: true })
+    const frames = mode === 'metadata'
+      ? ['data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n', 'data: {"choices":[{"delta":{"content":"DELIVERED_ANSWER"}}]}\n\n']
+      : ['data: {"choices":[{"delta":{"content":"DELIVERED_', 'ANSWER"}}]}\n\n']
+    vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({
+      pull(controller) { const frame = frames.shift(); if (frame) controller.enqueue(encoder.encode(frame)); else controller.close() },
+    }, { highWaterMark: 0 }))
+    const before = (await s.exposures()).length
+    expect(await rag(event)).toContain('DELIVERED_ANSWER')
+    expect((await s.exposures()).slice(before).filter(row => row.purpose === 'teaching').map(row => row.status)).toEqual(['granted'])
+    expect(await acceptedAssistance()).toBe('assisted')
+  })
+  test('a formative opportunity opening midstream receives one delivery fact before the next answer chunk', async () => {
+    await formative()
+    body({ stream: true })
+    let nextOpportunity: Id<'learnAssessmentOpportunities'> | undefined
+    let index = 0
+    vi.mocked(globalThis.generateCompletionStream).mockImplementationOnce(async () => new ReadableStream({
+      async pull(controller) {
+        if (index++ === 0) nextOpportunity = await s.t.run(async ctx => {
+          const { _id: _id, _creationTime: _time, ...row } = (await ctx.db.get(s.f.rows.learnAssessmentOpportunities))!
+          return await ctx.db.insert('learnAssessmentOpportunities', { ...row, delayedCheckId: 'new-formative-opportunity' })
+        })
+        if (index <= 2) controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"NEW_CHECK_CONTENT"}}]}\n\n'))
+        else controller.close()
+      },
+    }, { highWaterMark: 0 }))
+    const before = (await s.exposures()).length
+    await rag(event)
+    expect(nextOpportunity).toBeDefined()
+    expect((await s.exposures()).slice(before).filter(row => row.purpose === 'teaching').map(row => row.assessmentOpportunityId).sort())
+      .toEqual([s.f.rows.learnAssessmentOpportunities, nextOpportunity].sort())
+  })
   test.each(generators)('%s denies an open check before source reads, retrieval or dispatch', async (_name, handler, command) => {
     vi.mocked(globalThis.readBody).mockResolvedValue(command())
     await expect(handler(event)).rejects.toMatchObject({ statusCode: 403, data: { reasonCode: 'test_open' } })

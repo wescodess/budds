@@ -41,4 +41,5 @@ export class StreamMessageContent {
     }
   }
   value() { return this.known && !this.buffer.trim() ? this.content : null }
+  hasContent() { return !this.known || this.content.length > 0 }
 }

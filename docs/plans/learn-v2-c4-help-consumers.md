@@ -6,9 +6,11 @@ it does not authorize activation or a new help-denial interaction.
 
 `learnV2Assistance.admitHelp` accepts the versioned kind, idempotency key and scope
 that the consumer uses. Authentication supplies the owner. Its result is
-`ordinary`, `authorized` with opportunity/exposure IDs, or `denied` with
-`test_open`, `disclosure_unknown` or `unavailable`. The decision and exposure
-writes share one mutation and the same opportunities used by response acceptance.
+`ordinary`, `authorized` without an exposure, or `denied` with
+`test_open`, `disclosure_unknown` or `unavailable`. `deliverHelp` rechecks that same
+input and commits exposure IDs immediately before substantive output. Failed
+retrieval or generation creates no delivered fact. Delivery and response acceptance
+serialize on the same opportunities.
 A previous authorization receipt is never an independent grant.
 
 Teaching generators set the additive `ordinaryOnly: true` request option. The
@@ -38,7 +40,7 @@ returns an empty `results` array.
 
 Message replay takes `{ conversationId, idempotencyKey }` and returns
 `{ admission, messages }`. Denied replay retains message IDs, timestamps, roles,
-model metadata and learner-authored text. It withholds assistant text, expanded
+and learner-authored text. It withholds assistant text, arbitrary model text, expanded
 sources and quoted audio/source context. Repeating a key re-evaluates current
 checks and ownership before looking up an exposure receipt. Provenance is never
 inferred from the conversation's folder, filenames or a caller's unrelated flag.
@@ -54,17 +56,30 @@ configuration is required. Missing secret configuration, unbound history,
 unparseable streamed content or missing source identity leaves scope unknown.
 An invalid receipt cannot establish scope. The message retains its ordinary
 history behavior with unknown provenance. Legacy messages are not backfilled.
+Signed assistant writes strip unsigned model and interjection context fields.
+Stored messages retaining either field have unknown replay scope, including
+conversation-reference admission; denied projections omit those fields.
 Conversation message projections retain their existing fields and omit `helpScope`.
 The client changes transport this metadata without changing presentation.
 
 Streaming uses backpressure and rechecks after reading each upstream chunk and
 before enqueueing it. Each such check costs one bounded teaching-scope query and
-one admission mutation. There is no cached authorization interval. The stream is
+one admission mutation. At the first nonempty source event or answer chunk, that
+mutation commits delivery. Each later forwarded chunk reuses that delivery key,
+so each relevant opportunity records one fact. A newly opened formative
+opportunity records its own fact before its first forwarded chunk. Each matching
+opportunity adds one bounded receipt lookup; existing receipts add no write.
+Metadata-only prefixes and incomplete answer frames are buffered until content
+can be forwarded, within the same byte/chunk limits. A stream is pulled only on
+consumer demand. There is no cached authorization interval. The stream is
 bounded to 512,000 upstream bytes and 2,048 chunks. This adds latency and Convex
 work per chunk; it allows a newly opened check or changed source lineage to stop
 the next delivery. Admission reuses its idempotency key, so previously authorized
 delivery remains recorded once and a later denial records only requested-denied
-exposure. No denied chunk records delivered assistance.
+exposure. No denied chunk records delivered assistance. Provider failure before
+the first substantive output records no assistance; a later failure retains the
+single delivered fact. Source-fetch actions return status and owned references,
+not fetched excerpts, so their permission checks create no delivery exposure.
 
 `messages.listByConversation` remains a query for compatibility. A query cannot
 commit assistance, so with the capability active it provides only the safe

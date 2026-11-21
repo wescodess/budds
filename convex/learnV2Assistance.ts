@@ -17,6 +17,11 @@ export const admitHelp = mutation({
   handler: async (ctx, args): Promise<LearnHelpAdmission> => await admitLearnHelpForOwner(ctx, await requireAuth(ctx), args),
 })
 
+export const deliverHelp = mutation({
+  args: admitHelpArgs, returns: helpAdmissionValidator,
+  handler: async (ctx, args): Promise<LearnHelpAdmission> => await admitLearnHelpForOwner(ctx, await requireAuth(ctx), args, true),
+})
+
 export const authorizeAssistance = mutation({
   args: authorizeAssistanceArgs, returns: assistanceAuthorizationValidator,
   handler: async (ctx, args): Promise<LearnV2AssistanceAuthorization> => {

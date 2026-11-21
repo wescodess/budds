@@ -87,7 +87,7 @@ describe('registered message and source help consumers', () => {
     await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
     const runMutation = vi.fn(async (reference, args) => {
       const name = getFunctionName(reference)
-      if (name === 'learnV2Assistance:admitHelp') return s.owner.mutation(reference, args)
+      if (name === 'learnV2Assistance:admitHelp' || name === 'learnV2Assistance:deliverHelp') return s.owner.mutation(reference, args)
       if (name === 'learnV2Sources:replayOrAcquireFetch') {
         await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'test_open', submissionId: undefined }))
         return { kind: 'acquired', leaseId: 'lease', leaseToken: 'lease-token', url: 'https://source.example', requestFingerprint: 'fingerprint' }
@@ -109,7 +109,7 @@ describe('registered message and source help consumers', () => {
     await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { phase: 'submitted_sealed', submissionId: s.f.rows.learnResponses }))
     const runMutation = vi.fn(async (reference, args) => {
       const name = getFunctionName(reference)
-      if (name === 'learnV2Assistance:admitHelp') return s.owner.mutation(reference, args)
+      if (name === 'learnV2Assistance:admitHelp' || name === 'learnV2Assistance:deliverHelp') return s.owner.mutation(reference, args)
       if (name === 'learnV2Search:replayOrReserve') return { kind: 'acquired', reservationId: 'reservation', executionToken: 'execution', revision: 1 }
       if (name === 'learnV2Search:acquireDispatchLease') return { kind: 'acquired', revision: 1 }
       if (name === 'learnV2Search:authorizeDispatch') return { kind: 'authorized', revision: 2 }
@@ -178,7 +178,8 @@ describe('registered message and source help consumers', () => {
       expect(response.messages).toEqual(rows)
     }
     expect(rows.map(row => row.content)).toEqual(['My own question', ''])
-    expect(rows[1]).toMatchObject({ role: 'assistant', model: 'example-model', conversationId })
+    expect(rows[1]).toMatchObject({ role: 'assistant', conversationId })
+    expect(rows[1]).not.toHaveProperty('model')
     for (const secret of ['OLD_ANSWER', 'EXPANDED_SOURCE', 'AUDIO_SOURCE']) expect(JSON.stringify(rows)).not.toContain(secret)
     expect((await s.exposures()).filter(row => row.provenanceVersion === 'learn-v2.help-admission.v1')).toHaveLength(1)
     expect((await s.exposures()).at(-1)).toMatchObject({ status: 'requested_denied' })
@@ -208,6 +209,22 @@ describe('registered message and source help consumers', () => {
     expect(denied.messages[0]?.sources).toBeUndefined()
     expect(await s.exposures()).toHaveLength(before + 2)
   })
+  test('an unrelated signed answer cannot carry unsigned Audio Overview quotes into replay', async () => {
+    const s = await helpConsumerFixture(modules)
+    const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
+    const overviewId = await s.t.run(ctx => ctx.db.insert('audioOverviews', { userId: HELP_OWNER.tokenIdentifier,
+      folderId: s.f.folderId, title: 'Teaching audio', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 }))
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+        'Other course answer', [], [{ kind: 'folder', id: folderId }]),
+      interjectionContext: { overviewId, turnIndex: 0, timeMs: 0, quotedText: 'PROTECTED_AUDIO_QUOTE', sourceFilename: 'PROTECTED_FILENAME' } })
+    const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unsigned_audio_context' })
+    expect(replay.admission.status).toBe('ordinary')
+    expect(replay.messages[0]?.content).toBe('Other course answer')
+    expect(replay.messages[0]).not.toHaveProperty('interjectionContext')
+    expect(JSON.stringify(replay)).not.toContain('PROTECTED_')
+  })
   test('unrelated message replay remains ordinary and does not contaminate the open check', async () => {
     const s = await helpConsumerFixture(modules)
     const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
@@ -219,6 +236,39 @@ describe('registered message and source help consumers', () => {
     expect(result.admission.status).toBe('ordinary')
     expect(result.messages[0]?.content).toBe('Other course answer')
     expect(await s.exposures()).toEqual(before)
+  })
+  test('an unrelated signed answer cannot return arbitrary unsigned model text', async () => {
+    const s = await helpConsumerFixture(modules)
+    const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
+    const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
+    await s.owner.mutation(api.messages.appendMessage, { conversationId, role: 'assistant', content: 'Other course answer', model: 'PROTECTED_MODEL_TEXT',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+        'Other course answer', [], [{ kind: 'folder', id: folderId }]) })
+    const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: 'unsigned_model_context' })
+    expect(replay.admission.status).toBe('ordinary')
+    expect(replay.messages[0]?.content).toBe('Other course answer')
+    expect(JSON.stringify(replay)).not.toContain('PROTECTED_MODEL_TEXT')
+  })
+  test.each(['model', 'audio'] as const)('stored unsigned %s fields make assistant and learner replay scope unknown', async field => {
+    const s = await helpConsumerFixture(modules)
+    const folderId = await s.owner.mutation(api.folders.createFolder, { name: 'Other course' })
+    const overviewId = await s.t.run(ctx => ctx.db.insert('audioOverviews', { userId: HELP_OWNER.tokenIdentifier,
+      folderId: s.f.folderId, title: 'Teaching audio', status: 'ready', turns: [], voiceProfile: { hostA: 'a', hostB: 'b' }, totalDurationMs: 0 }))
+    for (const role of ['assistant', 'user'] as const) {
+      const conversationId = await s.owner.mutation(api.conversations.createConversation, { folderId, title: 'Other course' })
+      const content = role === 'user' ? 'My own question' : 'Other course answer'
+      const messageId = await s.owner.mutation(api.messages.appendMessage, { conversationId, role, content,
+        provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, HELP_OWNER.tokenIdentifier,
+          content, [], [{ kind: 'folder', id: folderId }]) })
+      await s.t.run(ctx => ctx.db.patch(messageId, field === 'model' ? { model: 'PROTECTED_MODEL_TEXT' }
+        : { interjectionContext: { overviewId, turnIndex: 0, timeMs: 0, quotedText: 'PROTECTED_AUDIO_QUOTE', sourceFilename: 'PROTECTED_FILENAME' } }))
+      const replay = await s.owner.mutation(api.messages.replayByConversation, { conversationId, idempotencyKey: `stored_unsigned_${field}_${role}` })
+      expect(replay.admission).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+      expect(replay.messages[0]?.content).toBe(role === 'user' ? content : '')
+      expect(JSON.stringify(replay)).not.toContain('PROTECTED_')
+      expect(JSON.stringify(await s.owner.query(api.messages.listByConversation, { conversationId }))).not.toContain('PROTECTED_')
+      expect(await s.admit([{ kind: 'conversation', id: conversationId }])).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+    }
   })
   test.each([true, false])('cross-folder replay uses known=%s content provenance and never the conversation folder', async known => {
     const s = await helpConsumerFixture(modules)

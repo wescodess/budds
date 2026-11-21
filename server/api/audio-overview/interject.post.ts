@@ -84,7 +84,7 @@ async function runV2Interjection(
   userId: string,
   overview: Pick<Doc<'audioOverviews'>, 'title'>,
   body: { overviewId: string, insertedAfterTurnIndex: number, question: string },
-  authorizeHelp: () => Promise<void>,
+  authorizeHelp: (delivery?: boolean) => Promise<void>,
 ) {
   const orchestrationToken = getAudioOverviewWorkerToken(event)
   const suppliedKey = getRequestHeader(event, 'idempotency-key')?.trim()
@@ -104,8 +104,9 @@ async function runV2Interjection(
     await authorizeHelp()
     const existing = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
-    await authorizeHelp()
-    return v2Response(existing)
+    const response = v2Response(existing)
+    await authorizeHelp(true)
+    return response
   }
 
   let ownsScripting = false
@@ -122,7 +123,11 @@ async function runV2Interjection(
       const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
         interjectionId: reservation.interjectionId,
       })
-      if (current?.status === 'ready') { await authorizeHelp(); return v2Response(current) }
+      if (current?.status === 'ready') {
+        const response = v2Response(current)
+        await authorizeHelp(true)
+        return response
+      }
       throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
     }
     const teachingScope = await loadTeachingScope(convexClient, { documentIds: reservation.sources.map(source => source.documentId) })
@@ -265,8 +270,9 @@ async function runV2Interjection(
       interjectionId: reservation.interjectionId,
     })
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
-    await authorizeHelp()
-    return v2Response(published)
+    const response = v2Response(published)
+    await authorizeHelp(true)
+    return response
   }
   catch (error) {
     if (workerAttempted && !workerCleanupAttempted) {

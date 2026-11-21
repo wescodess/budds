@@ -76,7 +76,7 @@ export async function orchestratePublicSearch(
 
   const query = admitLearnV2PublicQuery(args.query)
   validateIdempotencyKey(args.idempotencyKey)
-  const authorizeHelp = () => admitActionHelp(ctx, { kind: 'search', scope: { references: [{ kind: 'learning_void', id: args.learningVoidId }] } }, args.idempotencyKey)
+  const authorizeHelp = (delivery = false) => admitActionHelp(ctx, { kind: 'search', scope: { references: [{ kind: 'learning_void', id: args.learningVoidId }] } }, args.idempotencyKey, delivery)
   const help = await authorizeHelp()
   if (help.status === 'denied') return { ok: false, ...help, results: [] }
   const idempotencyKeyHash = await digest({ idempotencyKey: args.idempotencyKey })
@@ -254,7 +254,7 @@ export async function orchestratePublicSearch(
     return { ok: false, status: 'reserved', reconciliationRequired: true, reason: 'public_search_unavailable', results: [] }
   }
 
-  const beforeReturn = await authorizeHelp()
+  const beforeReturn = await authorizeHelp(searched.results.length > 0)
   if (beforeReturn.status === 'denied') return { ok: false, ...beforeReturn, results: [] }
   return {
     ok: true,

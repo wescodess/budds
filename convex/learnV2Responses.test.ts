@@ -460,7 +460,8 @@ describe('help and acceptance serialization', () => {
     const f = await fixture()
     const request = { version: LEARN_HELP_ADMISSION_VERSION, kind: 'chat' as const, idempotencyKey: KEY + '_derived_help',
       scope: { references: [{ kind: 'folder' as const, id: f.f.folderId }] } }
-    const assist = () => f.owner.mutation(api.learnV2Assistance.admitHelp, request)
+    expect((await f.owner.mutation(api.learnV2Assistance.admitHelp, request)).status).toBe('authorized')
+    const assist = () => f.owner.mutation(api.learnV2Assistance.deliverHelp, request)
     if (ordering === 'help_first') expect((await assist()).status).toBe('authorized')
     if (ordering === 'race') await Promise.all([assist(), f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })])
     else accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))

@@ -321,6 +321,8 @@ Producer reads use the original context and never the preparation budget proxy, 
 
 `learnAssessmentOpportunities` adds `by_userId_and_phase` over `[userId, phase]`, registered in the measurement storage manifest. The authenticated help-admission mutation reads preparing, ready and test_open phases with a shared eight-row ceiling plus one overflow sentinel. It never scans owner history or filters an unbounded collection. Phase transitions and response sealing update this same indexed record, so admission and acceptance serialize without another lock or lifecycle table. The index adds no payload, capability, migration, export field or deletion child. Existing exposure storage records authorized and requested_denied facts; no ordinary-help receipt is stored. The public API contract defines the server-only scope resolver, strict wire shapes, bounds and transaction ordering.
 
+Permitted help checks store no exposure; denials retain requested_denied facts. Only the delivery mutation records the existing granted fact, immediately before substantive output. Failed attempts before output leave no assistance fact. This requires no storage, export or deletion change.
+
 ### #540 Interjection lineage amendment
 
 The additive `audio_interjection` and `audio_interjection_v2` artifact identities bind legacy and V2 Interjection generated answers independently of their parent Audio Overview. They reuse `learnArtifactLineages`, origins, source links, case bindings, validations and publication receipts, with the existing retention/deletion/export policy. `LEARN_ARTIFACT_INTERJECTION_REGISTRATIONS` records their tables, parent/source fields, key and split question/answer authority. No new collection, capability, migration or backfill is introduced.

@@ -34,6 +34,6 @@ export default defineEventHandler(async (event) => {
   })
   const current = await loadTeachingScope(client, { documentIds: teachingScope.map(source => source.documentId) })
   for (const chunk of result.data) assertTeachingSourcePins(current, chunk.attributes)
-  await authorizeHelp()
+  await authorizeHelp(result.data.length > 0)
   return result
 })

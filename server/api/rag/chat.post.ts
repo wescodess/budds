@@ -142,11 +142,11 @@ export default defineEventHandler(async (event) => {
     ? { documentIds: [...(scopedDocumentIds ?? [])] as Id<'documents'>[] }
     : { folderId: body.folderId as Id<'folders'> })
   let usedChunks: AISearchChunk[] = []
-  const authorizeContent = async () => {
+  const authorizeContent = async (delivery = false) => {
     const current = await loadTeachingScope(client, { documentIds: teachingScope.map(source => source.documentId) })
     for (const source of teachingScope) assertTeachingSourcePins(current, source)
     for (const chunk of usedChunks) assertTeachingSourcePins(current, chunk.attributes)
-    await authorizeHelp()
+    await authorizeHelp(delivery)
   }
 
   await authorizeContent()
@@ -352,29 +352,48 @@ export default defineEventHandler(async (event) => {
     const reader = stream.getReader()
     const answer = new StreamMessageContent()
     let started = false
+    let delivered = false
+    let pending: Uint8Array[] = []
     const transformedStream = new ReadableStream({
       async pull(controller) {
         try {
           if (!started) {
-            await authorizeContent()
+            await authorizeContent(responseSources.length > 0)
             if (fallbackEvent) controller.enqueue(encoder.encode(fallbackEvent))
             controller.enqueue(encoder.encode(sourcesEvent))
+            delivered = responseSources.length > 0
             started = true
             return
           }
-          const { done, value } = await reader.read()
-          if (done) {
-            const text = answer.value()
-            const provenance = text === null ? undefined : await messageProvenance(event, userId, text, citationChunks, Boolean(body.history?.length))
-            await authorizeContent()
-            if (provenance) controller.enqueue(encoder.encode(`event: provenance\ndata: ${JSON.stringify(provenance)}\n\n`))
-            controller.close()
-            reader.releaseLock()
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) {
+              const text = answer.value()
+              const provenance = text === null ? undefined : await messageProvenance(event, userId, text, citationChunks, Boolean(body.history?.length))
+              await authorizeContent()
+              if (provenance) controller.enqueue(encoder.encode(`event: provenance\ndata: ${JSON.stringify(provenance)}\n\n`))
+              controller.close()
+              reader.releaseLock()
+              return
+            }
+            answer.append(value)
+            if (!delivered && !answer.hasContent()) {
+              await authorizeContent()
+              pending.push(value)
+              continue
+            }
+            let output = value
+            if (pending.length) {
+              output = new Uint8Array(pending.reduce((size, chunk) => size + chunk.byteLength, value.byteLength))
+              let offset = 0
+              for (const chunk of [...pending, value]) { output.set(chunk, offset); offset += chunk.byteLength }
+              pending = []
+            }
+            await authorizeContent(true)
+            controller.enqueue(output)
+            delivered = true
             return
           }
-          await authorizeContent()
-          answer.append(value)
-          controller.enqueue(value)
         } catch (error) {
           await reader.cancel().catch(() => {})
           reader.releaseLock()
@@ -386,7 +405,7 @@ export default defineEventHandler(async (event) => {
         await reader.cancel(reason).catch(() => {})
         reader.releaseLock()
       },
-    })
+    }, { highWaterMark: 0 })
 
     setResponseHeader(event, 'Content-Type', 'text/event-stream')
     setResponseHeader(event, 'Cache-Control', 'no-cache')
@@ -411,7 +430,7 @@ export default defineEventHandler(async (event) => {
 
   const answer = completion.choices[0]?.message?.content ?? ''
   const provenance = await messageProvenance(event, userId, answer, citationChunks, Boolean(body.history?.length))
-  await authorizeContent()
+  await authorizeContent(Boolean(answer || responseSources.length))
   return {
     answer,
     ...(provenance ? { provenance } : {}),

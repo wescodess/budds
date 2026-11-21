@@ -16,8 +16,8 @@ export function createHelpAdmissionGuard(event: H3Event, input: Pick<LearnHelpRe
   const suppliedKey = getRequestHeader(event, 'idempotency-key')
   if (suppliedKey && suppliedKey.length > 512) throw createError({ statusCode: 400, message: 'Invalid request' })
   const key = helpAdmissionKey(`nitro:${input.kind}`, suppliedKey || crypto.randomUUID())
-  return async () => {
-    const result: LearnHelpAdmission = await client.mutation(api.learnV2Assistance.admitHelp, {
+  return async (delivery = false) => {
+    const result: LearnHelpAdmission = await client.mutation(delivery ? api.learnV2Assistance.deliverHelp : api.learnV2Assistance.admitHelp, {
       version: LEARN_HELP_ADMISSION_VERSION, ...input, idempotencyKey: await key,
     })
     assertHelpAdmission(result, input.ordinaryOnly)

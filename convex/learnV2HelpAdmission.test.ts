@@ -156,16 +156,20 @@ describe('registered server-derived help admission', () => {
     const separate = await s.owner.mutation(api.folders.createFolder, { name: 'Separate' })
     expect(await s.admit([{ kind: 'folder', id: separate }])).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
   })
-  test('allowed opportunity help commits once, and a replay rechecks newly open held-out context', async () => {
+  test('authorization records no exposure; delivery commits once and rechecks newly open held-out context', async () => {
     const s = await fixture(false)
     const refs: LearnHelpReference[] = [{ kind: 'folder', id: s.f.folderId }]
     const before = (await s.exposures()).length
-    const first = await s.admit(refs)
+    expect(await s.admit(refs)).toMatchObject({ status: 'authorized', authorizations: [] })
+    expect(await s.admit(refs)).toMatchObject({ status: 'authorized', authorizations: [] })
+    expect(await s.exposures()).toHaveLength(before)
+    const deliver = () => s.owner.mutation(api.learnV2Assistance.deliverHelp, { ...command, scope: { references: refs } })
+    const first = await deliver()
     expect(first).toMatchObject({ status: 'authorized', authorizations: [{ assessmentOpportunityId: s.f.rows.learnAssessmentOpportunities }] })
-    expect(await s.admit(refs)).toEqual(first)
+    expect(await deliver()).toEqual(first)
     expect(await s.exposures()).toHaveLength(before + 1)
     await s.t.run(ctx => ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { purpose: { kind: 'measurement_cold', assignmentId: s.f.rows.learnMeasurementAssignments, protocolVersion: 'protocol.fixture' }, revision: 2 }))
-    expect(await s.admit(refs)).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
+    expect(await deliver()).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
     expect((await s.exposures()).at(-1)).toMatchObject({ status: 'requested_denied' })
   })
 })

@@ -118,6 +118,7 @@ function scopeResolver(ctx: MutationCtx, userId: string) {
         if (messages.length > 500) throw new ScopeUnknown()
         const references = new Map<string, LearnHelpReference>()
         for (const message of messages) {
+          if (message.interjectionContext || message.model !== undefined) throw new ScopeUnknown()
           if (message.role === 'user' && !message.sources?.length && !message.interjectionContext) continue
           if (!message.helpScope) throw new ScopeUnknown()
           for (const item of message.helpScope.references) references.set(`${item.kind}:${item.id}`, item)
@@ -175,9 +176,9 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
     provenanceVersion: LEARN_HELP_ADMISSION_VERSION })
 }
 
-export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
+export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  return await admitLearnHelp(ctx, userId, input)
+  return await admitLearnHelp(ctx, userId, input, delivery)
 }
 
 export async function admitLearnHelpForAudioJob(ctx: MutationCtx, job: Doc<'audioOverviewJobs'>): Promise<LearnHelpAdmission> {
@@ -185,7 +186,7 @@ export async function admitLearnHelpForAudioJob(ctx: MutationCtx, job: Doc<'audi
     idempotencyKey: `audio_help_${job._id}`, scope: { references: [{ kind: 'audio_job', id: job._id }] }, ordinaryOnly: true })
 }
 
-async function admitLearnHelp(ctx: MutationCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
+async function admitLearnHelp(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false): Promise<LearnHelpAdmission> {
   const request = parsePublicLearnRequest(admitHelpSchema, input)
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   const deny = (reasonCode: 'test_open' | 'disclosure_unknown' | 'unavailable'): LearnHelpAdmission => ({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode })
@@ -244,6 +245,7 @@ async function admitLearnHelp(ctx: MutationCtx, userId: string, input: LearnHelp
     for (const row of matches) await recordDenial(ctx, userId, row, request, reason, scopeDigest)
     return deny(reason)
   }
+  if (!delivery) return { version: LEARN_HELP_ADMISSION_VERSION, status: 'authorized', authorizations: [] }
   const authorizations = []
   for (const prepared of preparations) {
     if (!prepared || 'status' in prepared) throw new Error('Help admission unavailable')

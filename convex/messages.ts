@@ -19,7 +19,7 @@ function projectMessage(row: Doc<'messages'>, allowContent: boolean) {
   return {
     _id: row._id, _creationTime: row._creationTime, conversationId: row.conversationId,
     userId: row.userId, role: row.role, content: allowContent || row.role === 'user' ? row.content : '',
-    ...(row.model ? { model: row.model } : {}),
+    ...(allowContent && row.model ? { model: row.model } : {}),
     ...(allowContent && row.sources ? { sources: row.sources } : {}),
     ...(allowContent && row.interjectionContext ? { interjectionContext: row.interjectionContext } : {}),
   }
@@ -28,6 +28,7 @@ function projectMessage(row: Doc<'messages'>, allowContent: boolean) {
 function replayScope(rows: Doc<'messages'>[]) {
   const references = new Map<string, LearnHelpReference>()
   for (const row of rows) {
+    if (row.interjectionContext || row.model !== undefined) return null
     if (row.role === 'user' && !row.sources?.length && !row.interjectionContext) continue
     if (!row.helpScope?.references.length) return null
     for (const reference of row.helpScope.references) references.set(`${reference.kind}:${reference.id}`, reference)
@@ -74,7 +75,7 @@ export const replayByConversation = mutation({
     const rows = await ctx.db.query('messages').withIndex('by_conversationId', q => q.eq('conversationId', conversation._id)).order('asc').take(500)
     const admission = await admitLearnHelpForOwner(ctx, userId, { version: LEARN_HELP_ADMISSION_VERSION,
       kind: 'replay', idempotencyKey: args.idempotencyKey,
-      scope: replayScope(rows) })
+      scope: replayScope(rows) }, rows.some(row => row.role === 'assistant' && row.content.length > 0 || row.sources?.length || row.interjectionContext))
     return { admission, messages: rows.map(row => projectMessage(row, admission.status !== 'denied')) }
   },
 })
@@ -124,8 +125,8 @@ export const appendMessage = mutation({
       content: args.content,
       helpScope,
       sources: args.sources,
-      model: args.model,
-      interjectionContext: args.interjectionContext,
+      model: helpScope ? undefined : args.model,
+      interjectionContext: helpScope ? undefined : args.interjectionContext,
     })
   },
 })

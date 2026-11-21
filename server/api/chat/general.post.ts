@@ -71,9 +71,10 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  await authorizeHelp()
+  const answer = completion.choices[0]?.message?.content ?? ''
+  await authorizeHelp(Boolean(answer))
   return {
-    answer: completion.choices[0]?.message?.content ?? '',
+    answer,
     model: completion.model,
     usage: completion.usage,
     ...(modelFallback && { modelFallback }),
