@@ -1,1 +1,1 @@
-export { normalizeAssistantCitations } from '../../shared/assistant-citations'
+export { normalizeAssistantCitations } from '#shared/assistant-citations'
