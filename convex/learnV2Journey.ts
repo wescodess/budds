@@ -141,8 +141,8 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
   if (LEARN_MEASUREMENT_CAPABILITIES.responses && accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
-  return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview) : null,
-    accepted: accepted ? projectPlan(accepted) : null, sessions: sessions.map(row => projectFields(sessionSummary.fields, row)) }
+  return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview, true) : null,
+    accepted: accepted ? projectPlan(accepted, true) : null, sessions: sessions.map(row => projectFields(sessionSummary.fields, row)) }
 }
 
 async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {

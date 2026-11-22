@@ -245,6 +245,56 @@
     },
     "unresolvedPoint": null
   },
+  "audio.live.audioOverviewInterjections.listByOverview": [
+    {
+      "_creationTime": 1800000000001.082,
+      "_id": "010084audioOverviewInterjections",
+      "answerTurns": [
+        {
+          "audioFileId": "000000000000000000010059_storage",
+          "durationMs": 1000,
+          "speaker": "host_a",
+          "text": "TEACHING_READ_CANARY"
+        }
+      ],
+      "audioOverviewId": "000000000000010083audioOverviews",
+      "insertedAfterTurnIndex": 0,
+      "question": "My own question",
+      "userId": "https://owner.example|help-owner"
+    }
+  ],
+  "audio.live.audioOverviews.getTurnUrls": [
+    "https://some-deployment.convex.cloud/api/storage/btiRnOIEkKXjrYYwpPq2lHUper0H23ORjdXzb8+usRs="
+  ],
+  "audio.live.audioOverviews.getWithTurns": {
+    "_creationTime": 1800000000001.081,
+    "_id": "000000000000010083audioOverviews",
+    "episodeId": "00000010078audioOverviewEpisodes",
+    "finalArtifactId": "10082audioOverviewAudioArtifacts",
+    "folderId": "0000000000000000000010002folders",
+    "publishedAt": 1800000000001,
+    "shareToken": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "sourceDocumentIds": [
+      "00000000000000000010003documents"
+    ],
+    "status": "ready",
+    "taskId": "000000000000000000000010072tasks",
+    "title": "Audio",
+    "totalDurationMs": 1000,
+    "turns": [
+      {
+        "audioFileId": "000000000000000000010059_storage",
+        "durationMs": 1000,
+        "speaker": "host_a",
+        "text": "TEACHING_READ_CANARY"
+      }
+    ],
+    "userId": "https://owner.example|help-owner",
+    "voiceProfile": {
+      "hostA": "a",
+      "hostB": "b"
+    }
+  },
   "chat.append.false": [
     {
       "content": "An ordinary answer",
@@ -13639,6 +13689,150 @@
       ]
     }
   },
+  "nitro.rag.scoped.files": {
+    "result": {
+      "value": {
+        "answer": "{\"title\":\"Generated teaching\",\"topics\":[\"Topic\"],\"cards\":[{\"order\":0,\"front\":\"Term\",\"back\":\"Definition\",\"sourceIndex\":0}],\"questions\":[{\"order\":0,\"question\":\"Question\",\"type\":\"multiple-choice\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctAnswer\":\"A\",\"explanation\":\"Explanation\",\"sourceIndex\":0}],\"sections\":[{\"title\":\"Section\",\"description\":\"Description\",\"knowledgeType\":\"factual\",\"order\":0}]}",
+        "model": "openai/gpt-4o-mini",
+        "sources": [
+          {
+            "content": "SCOPED_SOURCE_0",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          },
+          {
+            "content": "SCOPED_SOURCE_1",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          },
+          {
+            "content": "SCOPED_SOURCE_2",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          }
+        ]
+      }
+    },
+    "searches": [
+      [
+        {
+          "query": "Explain this fact",
+          "userId": "https://owner.example|help-owner",
+          "max_num_results": 4,
+          "score_threshold": 0.05
+        }
+      ]
+    ],
+    "dispatches": [
+      [
+        {
+          "model": "openai/gpt-4o-mini",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a helpful assistant that answers questions based on the provided context.\nUse the context below to answer the user's question accurately.\nIf the context doesn't contain enough information to answer, say so clearly.\nWhen citing sources, use inline numbered references like [1], [2], etc. corresponding to the provided source passages. Each number maps to the source passage at that index.\nUse only the [N] format for citations.\nDo not write citations as (Source 1), Source 1, or [Source 1: filename].\nDo not include a trailing \"References\" or \"Sources\" section in the answer.\nDo not repeat source filenames in the answer body unless the user explicitly asks for them."
+            },
+            {
+              "role": "user",
+              "content": "Context:\n[Source 1: source.txt]\nSCOPED_SOURCE_0\n\n---\n\n[Source 2: source.txt]\nSCOPED_SOURCE_1\n\n---\n\n[Source 3: source.txt]\nSCOPED_SOURCE_2"
+            },
+            {
+              "role": "assistant",
+              "content": "I've reviewed the provided context. How can I help you?"
+            },
+            {
+              "role": "user",
+              "content": "Explain this fact"
+            }
+          ]
+        }
+      ]
+    ]
+  },
+  "nitro.rag.scoped.folders": {
+    "result": {
+      "value": {
+        "answer": "{\"title\":\"Generated teaching\",\"topics\":[\"Topic\"],\"cards\":[{\"order\":0,\"front\":\"Term\",\"back\":\"Definition\",\"sourceIndex\":0}],\"questions\":[{\"order\":0,\"question\":\"Question\",\"type\":\"multiple-choice\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correctAnswer\":\"A\",\"explanation\":\"Explanation\",\"sourceIndex\":0}],\"sections\":[{\"title\":\"Section\",\"description\":\"Description\",\"knowledgeType\":\"factual\",\"order\":0}]}",
+        "model": "openai/gpt-4o-mini",
+        "sources": [
+          {
+            "content": "SCOPED_SOURCE_0",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          },
+          {
+            "content": "SCOPED_SOURCE_1",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          },
+          {
+            "content": "SCOPED_SOURCE_2",
+            "score": 0.8,
+            "attributes": {
+              "documentId": "00000000000000000010003documents",
+              "folderId": "0000000000000000000010002folders",
+              "filename": "source.txt"
+            }
+          }
+        ]
+      }
+    },
+    "searches": [
+      [
+        {
+          "query": "Explain this fact",
+          "userId": "https://owner.example|help-owner",
+          "max_num_results": 4,
+          "score_threshold": 0.05
+        }
+      ]
+    ],
+    "dispatches": [
+      [
+        {
+          "model": "openai/gpt-4o-mini",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a helpful assistant that answers questions based on the provided context.\nUse the context below to answer the user's question accurately.\nIf the context doesn't contain enough information to answer, say so clearly.\nWhen citing sources, use inline numbered references like [1], [2], etc. corresponding to the provided source passages. Each number maps to the source passage at that index.\nUse only the [N] format for citations.\nDo not write citations as (Source 1), Source 1, or [Source 1: filename].\nDo not include a trailing \"References\" or \"Sources\" section in the answer.\nDo not repeat source filenames in the answer body unless the user explicitly asks for them."
+            },
+            {
+              "role": "user",
+              "content": "Context:\n[Source 1: source.txt]\nSCOPED_SOURCE_0\n\n---\n\n[Source 2: source.txt]\nSCOPED_SOURCE_1\n\n---\n\n[Source 3: source.txt]\nSCOPED_SOURCE_2"
+            },
+            {
+              "role": "assistant",
+              "content": "I've reviewed the provided context. How can I help you?"
+            },
+            {
+              "role": "user",
+              "content": "Explain this fact"
+            }
+          ]
+        }
+      ]
+    ]
+  },
   "nitro.rag.stream.error": {
     "error": {
       "message": "Fixture provider failure",
@@ -14360,6 +14554,30 @@
       "userId": "https://owner.example|help-owner"
     }
   ],
+  "scheduling.bounded_collections.snapshots": {
+    "inputSnapshot": "{\"availability\":[{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":1},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":1},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":1},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":1},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":2},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":2},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":2},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":2},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":3},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":3},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":3},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":3},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":4},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":4},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":4},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":4},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":5},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":5},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":5},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":5},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":6},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":6},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":6},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":6},{\"end\":\"10:00\",\"start\":\"09:00\",\"weekday\":7},{\"end\":\"11:00\",\"start\":\"10:00\",\"weekday\":7},{\"end\":\"12:00\",\"start\":\"11:00\",\"weekday\":7},{\"end\":\"13:00\",\"start\":\"12:00\",\"weekday\":7}],\"blackoutDates\":[\"2031-01-01\",\"2031-01-02\",\"2031-01-03\",\"2031-01-04\",\"2031-01-05\",\"2031-01-06\",\"2031-01-07\",\"2031-01-08\",\"2031-01-09\",\"2031-01-10\",\"2031-01-11\",\"2031-01-12\",\"2031-01-13\",\"2031-01-14\",\"2031-01-15\",\"2031-01-16\",\"2031-01-17\",\"2031-01-18\",\"2031-01-19\",\"2031-01-20\",\"2031-01-21\",\"2031-01-22\",\"2031-01-23\",\"2031-01-24\",\"2031-01-25\",\"2031-01-26\",\"2031-01-27\",\"2031-01-28\",\"2031-01-29\",\"2031-01-30\",\"2031-01-31\",\"2031-02-01\",\"2031-02-02\",\"2031-02-03\",\"2031-02-04\",\"2031-02-05\",\"2031-02-06\",\"2031-02-07\",\"2031-02-08\",\"2031-02-09\",\"2031-02-10\",\"2031-02-11\",\"2031-02-12\",\"2031-02-13\",\"2031-02-14\",\"2031-02-15\",\"2031-02-16\",\"2031-02-17\",\"2031-02-18\",\"2031-02-19\",\"2031-02-20\",\"2031-02-21\",\"2031-02-22\",\"2031-02-23\",\"2031-02-24\",\"2031-02-25\",\"2031-02-26\",\"2031-02-27\",\"2031-02-28\",\"2031-03-01\",\"2031-03-02\",\"2031-03-03\",\"2031-03-04\",\"2031-03-05\",\"2031-03-06\",\"2031-03-07\",\"2031-03-08\",\"2031-03-09\",\"2031-03-10\",\"2031-03-11\",\"2031-03-12\",\"2031-03-13\",\"2031-03-14\",\"2031-03-15\",\"2031-03-16\",\"2031-03-17\",\"2031-03-18\",\"2031-03-19\",\"2031-03-20\",\"2031-03-21\",\"2031-03-22\",\"2031-03-23\",\"2031-03-24\",\"2031-03-25\",\"2031-03-26\",\"2031-03-27\",\"2031-03-28\",\"2031-03-29\",\"2031-03-30\",\"2031-03-31\"],\"minRestMinutes\":0,\"reviewIntervalsDays\":[1,3,731,1000],\"sessionMinutes\":30,\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":\"2030-09-20\",\"timezone\":\"America/Toronto\",\"version\":\"learn-v2.schedule-input.v1\",\"nowUtcMs\":1914494400000,\"retainedReviews\":[],\"objectives\":[{\"id\":\"00000000000010007learnObjectives\",\"order\":0,\"estimatedMinutes\":30,\"prerequisiteIds\":[],\"priority\":\"new_learning\"}]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"infeasible\",\"timezone\":\"America/Toronto\",\"placements\":[{\"id\":\"learning:00000000000010007learnObjectives:1\",\"kind\":\"learning\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1915794000000,\"endUtcMs\":1915795800000,\"localDate\":\"2030-09-16\",\"offsetMinutes\":-240,\"priority\":\"new_learning\"},{\"id\":\"review:00000000000010007learnObjectives:1\",\"kind\":\"review\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1915880400000,\"endUtcMs\":1915881300000,\"localDate\":\"2030-09-17\",\"offsetMinutes\":-240,\"priority\":\"due_review\"},{\"id\":\"review:00000000000010007learnObjectives:3\",\"kind\":\"review\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1916053200000,\"endUtcMs\":1916054100000,\"localDate\":\"2030-09-19\",\"offsetMinutes\":-240,\"priority\":\"due_review\"}],\"bufferBlocks\":[{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915797060000,\"endUtcMs\":1915797600000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915800660000,\"endUtcMs\":1915801200000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915804260000,\"endUtcMs\":1915804800000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915807860000,\"endUtcMs\":1915808400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-17\",\"startUtcMs\":1915883460000,\"endUtcMs\":1915884000000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-17\",\"startUtcMs\":1915887060000,\"endUtcMs\":1915887600000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-17\",\"startUtcMs\":1915890660000,\"endUtcMs\":1915891200000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-17\",\"startUtcMs\":1915894260000,\"endUtcMs\":1915894800000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-18\",\"startUtcMs\":1915969860000,\"endUtcMs\":1915970400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-18\",\"startUtcMs\":1915973460000,\"endUtcMs\":1915974000000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-18\",\"startUtcMs\":1915977060000,\"endUtcMs\":1915977600000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-18\",\"startUtcMs\":1915980660000,\"endUtcMs\":1915981200000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-19\",\"startUtcMs\":1916056260000,\"endUtcMs\":1916056800000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-19\",\"startUtcMs\":1916059860000,\"endUtcMs\":1916060400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-19\",\"startUtcMs\":1916063460000,\"endUtcMs\":1916064000000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-19\",\"startUtcMs\":1916067060000,\"endUtcMs\":1916067600000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-20\",\"startUtcMs\":1916142660000,\"endUtcMs\":1916143200000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-20\",\"startUtcMs\":1916146260000,\"endUtcMs\":1916146800000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-20\",\"startUtcMs\":1916149860000,\"endUtcMs\":1916150400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-20\",\"startUtcMs\":1916153460000,\"endUtcMs\":1916154000000,\"offsetMinutes\":-240}],\"earliestCompletionLocalDate\":\"2030-09-19\",\"capacity\":{\"requiredMinutes\":90,\"totalAvailableMinutes\":1200,\"usableMinutesAfterBuffer\":1020,\"reservedBufferMinutes\":180,\"unallocatedMinutes\":1110},\"reasonCodes\":[\"insufficient_capacity\",\"final_buffer_missing\"],\"alternatives\":[{\"code\":\"extend_deadline\",\"earliestCompletionLocalDate\":\"2030-09-19\"}]}"
+  },
+  "scheduling.empty_deadline.snapshots": {
+    "inputSnapshot": "{\"availability\":[{\"end\":\"13:00\",\"start\":\"09:00\",\"weekday\":1}],\"blackoutDates\":[],\"minRestMinutes\":0,\"reviewIntervalsDays\":[1],\"sessionMinutes\":30,\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":\"\",\"timezone\":\"America/Toronto\",\"version\":\"learn-v2.schedule-input.v1\",\"nowUtcMs\":1914494400000,\"retainedReviews\":[],\"objectives\":[{\"id\":\"00000000000010007learnObjectives\",\"order\":0,\"estimatedMinutes\":30,\"prerequisiteIds\":[],\"priority\":\"new_learning\"}]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"feasible\",\"timezone\":\"America/Toronto\",\"placements\":[{\"id\":\"learning:00000000000010007learnObjectives:1\",\"kind\":\"learning\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1915794000000,\"endUtcMs\":1915795800000,\"localDate\":\"2030-09-16\",\"offsetMinutes\":-240,\"priority\":\"new_learning\"},{\"id\":\"review:00000000000010007learnObjectives:1\",\"kind\":\"review\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1916398800000,\"endUtcMs\":1916399700000,\"localDate\":\"2030-09-23\",\"offsetMinutes\":-240,\"priority\":\"due_review\"}],\"bufferBlocks\":[{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915806240000,\"endUtcMs\":1915808400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-23\",\"startUtcMs\":1916411040000,\"endUtcMs\":1916413200000,\"offsetMinutes\":-240}],\"earliestCompletionLocalDate\":\"2030-09-23\",\"capacity\":{\"requiredMinutes\":45,\"totalAvailableMinutes\":480,\"usableMinutesAfterBuffer\":408,\"reservedBufferMinutes\":72,\"unallocatedMinutes\":435},\"reasonCodes\":[\"capacity_available\",\"prerequisites_ordered\",\"reviews_spaced\",\"buffer_reserved\"],\"alternatives\":[]}"
+  },
+  "scheduling.long_review.journey": {
+    "inputSnapshot": "{\"version\":\"learn-v2.schedule-input.v1\",\"timezone\":\"America/Toronto\",\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":null,\"sessionMinutes\":30,\"minRestMinutes\":0,\"availability\":[{\"weekday\":1,\"start\":\"09:00\",\"end\":\"13:00\"}],\"blackoutDates\":[],\"reviewIntervalsDays\":[731]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"infeasible\",\"reasonCodes\":[\"insufficient_capacity\"],\"alternatives\":[{\"code\":\"extend_deadline\"}]}"
+  },
+  "scheduling.long_review.snapshots": {
+    "inputSnapshot": "{\"availability\":[{\"end\":\"13:00\",\"start\":\"09:00\",\"weekday\":1}],\"blackoutDates\":[],\"minRestMinutes\":0,\"reviewIntervalsDays\":[731],\"sessionMinutes\":30,\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":null,\"timezone\":\"America/Toronto\",\"version\":\"learn-v2.schedule-input.v1\",\"nowUtcMs\":1914494400000,\"retainedReviews\":[],\"objectives\":[{\"id\":\"00000000000010007learnObjectives\",\"order\":0,\"estimatedMinutes\":30,\"prerequisiteIds\":[],\"priority\":\"new_learning\"}]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"infeasible\",\"timezone\":\"America/Toronto\",\"placements\":[{\"id\":\"learning:00000000000010007learnObjectives:1\",\"kind\":\"learning\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1915794000000,\"endUtcMs\":1915795800000,\"localDate\":\"2030-09-16\",\"offsetMinutes\":-240,\"priority\":\"new_learning\"}],\"bufferBlocks\":[{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915806240000,\"endUtcMs\":1915808400000,\"offsetMinutes\":-240}],\"earliestCompletionLocalDate\":\"2030-09-16\",\"capacity\":{\"requiredMinutes\":45,\"totalAvailableMinutes\":240,\"usableMinutesAfterBuffer\":204,\"reservedBufferMinutes\":36,\"unallocatedMinutes\":195},\"reasonCodes\":[\"insufficient_capacity\"],\"alternatives\":[{\"code\":\"extend_deadline\",\"earliestCompletionLocalDate\":\"2030-09-16\"}]}"
+  },
+  "scheduling.rest_boundary.snapshots": {
+    "inputSnapshot": "{\"availability\":[{\"end\":\"13:00\",\"start\":\"09:00\",\"weekday\":1}],\"blackoutDates\":[],\"minRestMinutes\":1440,\"reviewIntervalsDays\":[1],\"sessionMinutes\":30,\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":null,\"timezone\":\"America/Toronto\",\"version\":\"learn-v2.schedule-input.v1\",\"nowUtcMs\":1914494400000,\"retainedReviews\":[],\"objectives\":[{\"id\":\"00000000000010007learnObjectives\",\"order\":0,\"estimatedMinutes\":30,\"prerequisiteIds\":[],\"priority\":\"new_learning\"}]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"feasible\",\"timezone\":\"America/Toronto\",\"placements\":[{\"id\":\"learning:00000000000010007learnObjectives:1\",\"kind\":\"learning\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1915794000000,\"endUtcMs\":1915795800000,\"localDate\":\"2030-09-16\",\"offsetMinutes\":-240,\"priority\":\"new_learning\"},{\"id\":\"review:00000000000010007learnObjectives:1\",\"kind\":\"review\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1916398800000,\"endUtcMs\":1916399700000,\"localDate\":\"2030-09-23\",\"offsetMinutes\":-240,\"priority\":\"due_review\"}],\"bufferBlocks\":[{\"localDate\":\"2030-09-16\",\"startUtcMs\":1915806240000,\"endUtcMs\":1915808400000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-23\",\"startUtcMs\":1916411040000,\"endUtcMs\":1916413200000,\"offsetMinutes\":-240}],\"earliestCompletionLocalDate\":\"2030-09-23\",\"capacity\":{\"requiredMinutes\":45,\"totalAvailableMinutes\":480,\"usableMinutesAfterBuffer\":408,\"reservedBufferMinutes\":72,\"unallocatedMinutes\":435},\"reasonCodes\":[\"capacity_available\",\"prerequisites_ordered\",\"reviews_spaced\",\"buffer_reserved\"],\"alternatives\":[]}"
+  },
+  "scheduling.sunday.snapshots": {
+    "inputSnapshot": "{\"availability\":[{\"end\":\"13:00\",\"start\":\"09:00\",\"weekday\":7}],\"blackoutDates\":[],\"minRestMinutes\":0,\"reviewIntervalsDays\":[1],\"sessionMinutes\":30,\"startLocalDate\":\"2030-09-16\",\"targetLocalDate\":null,\"timezone\":\"America/Toronto\",\"version\":\"learn-v2.schedule-input.v1\",\"nowUtcMs\":1914494400000,\"retainedReviews\":[],\"objectives\":[{\"id\":\"00000000000010007learnObjectives\",\"order\":0,\"estimatedMinutes\":30,\"prerequisiteIds\":[],\"priority\":\"new_learning\"}]}",
+    "resultSnapshot": "{\"version\":\"learn-v2.scheduler.v1\",\"status\":\"feasible\",\"timezone\":\"America/Toronto\",\"placements\":[{\"id\":\"learning:00000000000010007learnObjectives:1\",\"kind\":\"learning\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1916312400000,\"endUtcMs\":1916314200000,\"localDate\":\"2030-09-22\",\"offsetMinutes\":-240,\"priority\":\"new_learning\"},{\"id\":\"review:00000000000010007learnObjectives:1\",\"kind\":\"review\",\"objectiveId\":\"00000000000010007learnObjectives\",\"startUtcMs\":1916917200000,\"endUtcMs\":1916918100000,\"localDate\":\"2030-09-29\",\"offsetMinutes\":-240,\"priority\":\"due_review\"}],\"bufferBlocks\":[{\"localDate\":\"2030-09-22\",\"startUtcMs\":1916324640000,\"endUtcMs\":1916326800000,\"offsetMinutes\":-240},{\"localDate\":\"2030-09-29\",\"startUtcMs\":1916929440000,\"endUtcMs\":1916931600000,\"offsetMinutes\":-240}],\"earliestCompletionLocalDate\":\"2030-09-29\",\"capacity\":{\"requiredMinutes\":45,\"totalAvailableMinutes\":480,\"usableMinutesAfterBuffer\":408,\"reservedBufferMinutes\":72,\"unallocatedMinutes\":435},\"reasonCodes\":[\"capacity_available\",\"prerequisites_ordered\",\"reviews_spaced\",\"buffer_reserved\"],\"alternatives\":[]}"
+  },
   "share.audioOverviewV2.getPlaybackByShareToken.anonymous": {
     "alignment": null,
     "hostNames": {
@@ -14643,6 +14861,165 @@
       "hostA": "a",
       "hostB": "b"
     }
+  },
+  "sources.access.deleted": {
+    "continueCursor": "_end_cursor",
+    "isDone": true,
+    "page": [
+      {
+        "_id": "000000010009learnSourceSnapshots",
+        "blueprintRevisionId": "000010006learnBlueprintRevisions",
+        "conflictStatus": "clear",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": 1800000000000,
+        "effectiveStatus": "user_accepted",
+        "excerpt": null,
+        "identity": {
+          "origin": "folder_document",
+          "publisherDomain": "example.com",
+          "title": null
+        },
+        "learningVoidId": "0000000000000010004learningVoids",
+        "publicLocator": "https://example.com/",
+        "recordRevision": 1,
+        "retrieval": {
+          "evaluatedAt": null,
+          "fetchedAt": null,
+          "status": "user_accepted"
+        },
+        "reviewedObjectives": [
+          {
+            "coverage": "strong",
+            "objectiveId": "00000000000010007learnObjectives",
+            "title": "Fixture capability"
+          }
+        ],
+        "revision": 1,
+        "rights": {
+          "access": "evidence_unavailable",
+          "policyVersion": null,
+          "provenance": "none",
+          "status": "permitted"
+        },
+        "rightsStatus": "permitted",
+        "signals": {
+          "authority": "unknown",
+          "freshness": "unknown",
+          "freshnessAt": null
+        },
+        "sourceIdentityId": "00000010008learnSourceIdentities",
+        "status": "user_accepted",
+        "updatedAt": 1800000000000
+      }
+    ],
+    "pageStatus": null,
+    "splitCursor": null
+  },
+  "sources.access.hash": {
+    "continueCursor": "_end_cursor",
+    "isDone": true,
+    "page": [
+      {
+        "_id": "000000010009learnSourceSnapshots",
+        "blueprintRevisionId": "000010006learnBlueprintRevisions",
+        "conflictStatus": "clear",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": 1800000000000,
+        "effectiveStatus": "user_accepted",
+        "excerpt": null,
+        "identity": {
+          "origin": "folder_document",
+          "publisherDomain": "example.com",
+          "title": null
+        },
+        "learningVoidId": "0000000000000010004learningVoids",
+        "publicLocator": "https://example.com/",
+        "recordRevision": 1,
+        "retrieval": {
+          "evaluatedAt": null,
+          "fetchedAt": null,
+          "status": "user_accepted"
+        },
+        "reviewedObjectives": [
+          {
+            "coverage": "strong",
+            "objectiveId": "00000000000010007learnObjectives",
+            "title": "Fixture capability"
+          }
+        ],
+        "revision": 1,
+        "rights": {
+          "access": "evidence_unavailable",
+          "policyVersion": null,
+          "provenance": "none",
+          "status": "permitted"
+        },
+        "rightsStatus": "permitted",
+        "signals": {
+          "authority": "unknown",
+          "freshness": "unknown",
+          "freshnessAt": null
+        },
+        "sourceIdentityId": "00000010008learnSourceIdentities",
+        "status": "user_accepted",
+        "updatedAt": 1800000000000
+      }
+    ],
+    "pageStatus": null,
+    "splitCursor": null
+  },
+  "sources.access.revision": {
+    "continueCursor": "_end_cursor",
+    "isDone": true,
+    "page": [
+      {
+        "_id": "000000010009learnSourceSnapshots",
+        "blueprintRevisionId": "000010006learnBlueprintRevisions",
+        "conflictStatus": "clear",
+        "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "createdAt": 1800000000000,
+        "effectiveStatus": "user_accepted",
+        "excerpt": null,
+        "identity": {
+          "origin": "folder_document",
+          "publisherDomain": "example.com",
+          "title": null
+        },
+        "learningVoidId": "0000000000000010004learningVoids",
+        "publicLocator": "https://example.com/",
+        "recordRevision": 1,
+        "retrieval": {
+          "evaluatedAt": null,
+          "fetchedAt": null,
+          "status": "user_accepted"
+        },
+        "reviewedObjectives": [
+          {
+            "coverage": "strong",
+            "objectiveId": "00000000000010007learnObjectives",
+            "title": "Fixture capability"
+          }
+        ],
+        "revision": 1,
+        "rights": {
+          "access": "evidence_unavailable",
+          "policyVersion": null,
+          "provenance": "none",
+          "status": "permitted"
+        },
+        "rightsStatus": "permitted",
+        "signals": {
+          "authority": "unknown",
+          "freshness": "unknown",
+          "freshnessAt": null
+        },
+        "sourceIdentityId": "00000010008learnSourceIdentities",
+        "status": "user_accepted",
+        "updatedAt": 1800000000000
+      }
+    ],
+    "pageStatus": null,
+    "splitCursor": null
   },
   "sources.mission": {
     "counts": {

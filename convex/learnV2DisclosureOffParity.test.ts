@@ -7,6 +7,7 @@ import { seedTeachingReads } from '../tests/fixtures/learn-v2-teaching-reads'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { expectDev, recordingDev } from '../tests/fixtures/c4-off-parity/expect-dev'
 import { adaptiveEvidenceFixture } from '../tests/fixtures/c4-off-parity/adaptive-evidence'
+import { createSchedulingPreview, schedulingCases } from '../tests/fixtures/c4-off-parity/scheduling'
 import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
 
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -35,6 +36,42 @@ async function fixture() {
   return { ...s, r }
 }
 type Fixture = Awaited<ReturnType<typeof fixture>>
+
+test.each([
+  ['audioOverviews.getWithTurns', s => ({ id: s.r.overviewId })],
+  ['audioOverviews.getTurnUrls', s => ({ id: s.r.overviewId })],
+  ['audioOverviewInterjections.listByOverview', s => ({ audioOverviewId: s.r.overviewId })],
+] satisfies Array<[string, (s: Fixture) => Record<string, unknown>]>)('%s returns the exact live dev audio payload while off', async (path, argsFor) => {
+  const s = await fixture()
+  const reference = makeFunctionReference<'query', Record<string, unknown>, unknown>(path.replace('.', ':'))
+  expectDev(`audio.live.${path}`, await s.owner.query(reference, argsFor(s)))
+  expect((await s.exposures()).filter(row => row.purpose === 'teaching')).toEqual([])
+})
+
+test.each(Object.entries(schedulingCases))('off-state %s scheduling snapshots retain the writer output', async (name, changes) => {
+  vi.setSystemTime(Date.parse('2030-09-01T12:00:00Z'))
+  const s = await fixture()
+  const { id } = await createSchedulingPreview(s, changes)
+  const preview = await s.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: id })
+  expectDev(`scheduling.${name}.snapshots`, { inputSnapshot: preview?.inputSnapshot, resultSnapshot: preview?.resultSnapshot })
+  if (name === 'long_review') {
+    const mission = await s.owner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
+    expectDev(`scheduling.${name}.journey`, { inputSnapshot: mission?.plan.preview?.inputSnapshot, resultSnapshot: mission?.plan.preview?.resultSnapshot })
+  }
+})
+
+test.each(['revision', 'hash', 'deleted'] as const)('off-state source review keeps dev access after source %s changes', async change => {
+  const s = await fixture()
+  await s.t.run(async ctx => {
+    await ctx.db.patch(s.f.sourceSnapshotId, { blueprintRevisionId: s.f.scope.blueprintRevisionId, publicLocator: 'https://example.com/source' })
+    if (change === 'revision') await ctx.db.patch(s.f.documentId, { sourceRevision: 'source.r2' })
+    else if (change === 'hash') await ctx.db.patch(s.f.documentId, { contentHash: 'b'.repeat(64) })
+    else await ctx.db.delete(s.f.documentId)
+  })
+  expectDev(`sources.access.${change}`, await s.owner.query(api.learnV2Sources.listSourceReview, {
+    blueprintRevisionId: s.f.scope.blueprintRevisionId, paginationOpts: { numItems: 8, cursor: null },
+  }))
+})
 
 test.each(['unsigned', 'v1', 'signed_deleted', 'signed_unknown', 'signed_invalid'] as const)('off-state %s chat retains the dev content through query, replay and export', async kind => {
   const s = await fixture()

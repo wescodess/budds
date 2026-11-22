@@ -575,11 +575,9 @@ const listSourceReviewRead = defineTeachingRead({
           status: source.rightsStatus ?? 'unknown',
           provenance: source.rightsProvenance ?? 'none',
           policyVersion: source.rightsPolicyVersion ?? null,
-          access: LEARN_MEASUREMENT_CAPABILITIES.responses ? !available
+          access: !available
             ? 'evidence_unavailable' as const
-            : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const
-            : source.evidencePurgedAt !== undefined || effectiveStatus(source) === 'unavailable' ? 'evidence_unavailable' as const
-              : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const,
+            : hasContent ? 'available' as const : hasLocator ? 'locator_only' as const : 'evidence_unavailable' as const,
         },
         // Owner-scoped, text-only evidence. This is only present when the
         // rights policy allowed retention; private locators stay private.

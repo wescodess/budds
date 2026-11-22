@@ -1,5 +1,4 @@
 import { v, type PropertyValidators, type ObjectType } from 'convex/values'
-import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -18,6 +17,7 @@ import { adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from 
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../../shared/adaptive-v2-pilot-policy'
 import { privacyRead } from './learnV2PrivacyReadContext'
+import { projectSchedulingSnapshot } from './learnV2SchedulingProjection'
 
 type ReadCtx = QueryCtx | MutationCtx
 export const disclosureLiterals = <const T extends string>(values: readonly T[]) => v.union(...values.map(value => v.literal(value)))
@@ -90,36 +90,14 @@ export const planSummary = v.object({
   inputSnapshot: v.optional(v.string()), resultSnapshot: v.optional(v.string()), feasibility: v.optional(disclosureLiterals(['feasible', 'infeasible'])),
   createdAt: v.number(), acceptedAt: v.optional(v.number()), updatedAt: v.optional(v.number()),
 })
-const scheduleResult = z.object({
-  status: z.enum(['feasible', 'infeasible']),
-  reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(16),
-  alternatives: z.array(z.object({ code: z.enum(['extend_deadline', 'add_availability', 'shorten_sessions_increase_cadence', 'reduce_depth', 'remove_lower_priority_objectives']) })).max(8),
-})
-const schedulingPreferences = z.object({
-  version: z.literal('learn-v2.schedule-input.v1'), timezone: z.string().min(1).max(100),
-  startLocalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), targetLocalDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
-  sessionMinutes: z.number().int().min(15).max(60), minRestMinutes: z.number().int().min(0).max(10080),
-  availability: z.array(z.object({ weekday: z.number().int().min(0).max(6), start: z.string().regex(/^\d{2}:\d{2}$/), end: z.string().regex(/^\d{2}:\d{2}$/) })).max(28),
-  blackoutDates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(90), reviewIntervalsDays: z.array(z.number().int().min(1).max(730)).max(4),
-})
-export function projectPlan(row: Doc<'studyPlanRevisions'>) {
+export function projectPlan(row: Doc<'studyPlanRevisions'>, summary = false) {
   const safe = projectFields(planSummary.fields, row)
   delete safe.inputSnapshot
   delete safe.resultSnapshot
-  if (row.inputSnapshot && row.inputSnapshot.length <= 256_000) {
-    try {
-      const input = schedulingPreferences.safeParse(JSON.parse(row.inputSnapshot))
-      if (input.success) safe.inputSnapshot = JSON.stringify(input.data)
-    }
-    catch { /* Scheduling preferences require a valid bounded envelope. */ }
-  }
-  if (row.resultSnapshot && row.resultSnapshot.length <= 256_000) {
-    try {
-      const result = scheduleResult.safeParse(JSON.parse(row.resultSnapshot))
-      if (result.success) safe.resultSnapshot = JSON.stringify(result.data)
-    }
-    catch { /* Unverifiable snapshots have no public payload. */ }
-  }
+  const input = projectSchedulingSnapshot(row.inputSnapshot, 'input', summary)
+  const result = projectSchedulingSnapshot(row.resultSnapshot, 'result', summary)
+  if (input !== undefined) safe.inputSnapshot = input
+  if (result !== undefined) safe.resultSnapshot = result
   return safe
 }
 export const sessionSummary = v.object({

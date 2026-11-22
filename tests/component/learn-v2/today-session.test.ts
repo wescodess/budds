@@ -37,7 +37,7 @@ describe('LearnV2TodaySession', () => {
     contentError.value = null
     isOnline.value = true
   })
-  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate } }) }
+  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate }, route: '/login' }) }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
   async function reachConfidence(wrapper: any) {
     await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')

@@ -158,7 +158,7 @@ export default defineEventHandler(async (event) => {
     query: body.query,
     userId,
     ...(hasScope ? {} : { folderId: body.folderId }),
-    filterDocIds: scopedDocumentIds ? [...scopedDocumentIds] : undefined,
+    ...(LEARN_MEASUREMENT_CAPABILITIES.responses && scopedDocumentIds ? { filterDocIds: [...scopedDocumentIds] } : {}),
     max_num_results: body.max_num_results ?? 50,
     score_threshold: body.score_threshold ?? 0.05,
   })
@@ -324,7 +324,7 @@ export default defineEventHandler(async (event) => {
 
   const completionParams = {
     messages,
-    redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
+    ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { redactUpstreamErrorBody: true } : {}),
     temperature: body.temperature,
     max_tokens: body.max_tokens,
   }

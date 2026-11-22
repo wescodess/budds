@@ -105,6 +105,24 @@ async function outcome(run: () => Promise<unknown>) {
   try { return { value: await run() } }
   catch (error) { const e = error as { message: string, statusCode?: number, data?: unknown }; return { error: { message: e.message, statusCode: e.statusCode, data: e.data } } }
 }
+
+test.each(['files', 'folders'] as const)('scoped RAG %s search keeps the dev search-then-filter order while off', async scopeKind => {
+  const { outsideId } = await s.t.run(async ctx => {
+    const folderId = await ctx.db.insert('folders', { userId: HELP_OWNER.tokenIdentifier, name: 'Other sources', documentCount: 1 })
+    const outsideId = await ctx.db.insert('documents', { userId: HELP_OWNER.tokenIdentifier, folderId, filename: 'other.txt', fileSize: 1, status: 'success' })
+    return { outsideId }
+  })
+  const selected = [0, 1, 2, 3].map(index => ({ id: `selected-${index}`, content: `SCOPED_SOURCE_${index}`, score: 0.8,
+    attributes: { documentId: s.f.documentId, folderId: s.f.folderId, filename: 'source.txt' } }))
+  const outside = { id: 'outside', content: 'OUTSIDE_SOURCE', score: 1, attributes: { documentId: outsideId, filename: 'other.txt' } }
+  vi.mocked(searchDocuments).mockImplementation(async params => ({ data: params.filterDocIds ? selected : [outside, ...selected.slice(0, 3)] }))
+  vi.mocked(readBody).mockResolvedValue({ query: 'Explain this fact', model: SERVER_DEFAULT_MODEL, folderId: s.f.folderId,
+    scope: scopeKind === 'files' ? { fileIds: [s.f.documentId] } : { folderIds: [s.f.folderId] }, max_num_results: 4 })
+  const result = await outcome(() => rag(event))
+  expect(result).toHaveProperty('value')
+  expectDev(`nitro.rag.scoped.${scopeKind}`, { result, searches: vi.mocked(searchDocuments).mock.calls,
+    dispatches: vi.mocked(generateCompletion).mock.calls })
+})
 const handlers = [
   ['flashcards', flashcards, () => ({ folderId: s.f.folderId })],
   ['topics', topics, () => ({ folderId: s.f.folderId })],
