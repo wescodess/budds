@@ -125,29 +125,23 @@ function revealAnswer() {
 
 async function finishSession(): Promise<boolean> {
   const generation = contentGeneration
-  const durationMs = Date.now() - sessionStartTime.value
-  const correct = ratings.value.filter((r) => r.quality >= 3).length
+  const request = {
+    itemsReviewed: ratings.value.length,
+    itemsCorrect: ratings.value.filter((r) => r.quality >= 3).length,
+    durationMs: Date.now() - sessionStartTime.value,
+    mode: reviewMode.value,
+    idempotencyKey: sessionIdempotencyKey.value,
+  }
 
   try {
-    const result = await completeSessionMutation.mutate({
-      itemsReviewed: ratings.value.length,
-      itemsCorrect: correct,
-      durationMs,
-      mode: reviewMode.value,
-      idempotencyKey: sessionIdempotencyKey.value,
-    })
+    const result = await completeSessionMutation.mutate(request)
     if (generation !== contentGeneration) return false
     completionStreak.value = (result as { streakCurrent: number }).streakCurrent
     return true
   } catch {
+    if (generation !== contentGeneration) return false
     try {
-      await queueReviewSessionCompletion({
-        itemsReviewed: ratings.value.length,
-        itemsCorrect: correct,
-        durationMs,
-        mode: reviewMode.value,
-        idempotencyKey: sessionIdempotencyKey.value,
-      })
+      await queueReviewSessionCompletion(request)
       toast.info('Session saved on this device and will sync automatically.')
       return true
     }

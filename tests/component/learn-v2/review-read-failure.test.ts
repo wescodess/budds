@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
+import { getFunctionName } from 'convex/server'
+import { nextTick } from 'vue'
 import { deniedRead, resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
 
 vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
@@ -8,20 +11,82 @@ vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) 
 })
 
 const due = teachingRead('reviewItems:listDueWithContext')
+const submitReview = vi.fn()
+const completeSession = vi.fn()
+const queueCompletion = vi.fn()
 const pausedCopy = 'This is paused while you have a check open. Finish the check, then come back.'
 const item = (id: string, prompt: string, answer: string) => ({ _id: id, prompt, answer, courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false })
 
 mockNuxtImport('useConvex', () => () => teachingClient)
 mockNuxtImport('useRoute', () => () => ({ params: {}, query: {} }))
-mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn() }))
+mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: getFunctionName(reference) === 'reviewItems:submitReview' ? submitReview : completeSession }))
 mockNuxtImport('useConvexQuery', () => () => ({ data: ref(null) }))
-mockNuxtImport('useOfflineAttempts', () => () => ({ queueReviewItemRating: vi.fn(), queueReviewSessionCompletion: vi.fn() }))
+mockNuxtImport('useOfflineAttempts', () => () => ({ queueReviewItemRating: vi.fn(), queueReviewSessionCompletion: queueCompletion }))
 mockNuxtImport('useOfflineSync', () => () => ({ pendingCount: ref(0), isSyncing: ref(false) }))
 
 const path = ['~', 'pages', 'app', 'learn', 'review.vue'].join('/')
 
 describe('Review reads with responses on', () => {
-  beforeEach(() => resetTeachingReads())
+  beforeEach(() => {
+    resetTeachingReads()
+    submitReview.mockReset().mockResolvedValue({})
+    completeSession.mockReset().mockResolvedValue({ streakCurrent: 1 })
+    queueCompletion.mockReset().mockResolvedValue(undefined)
+  })
+
+  it.each(['test_open', 'unavailable'] as const)('does not queue a stale completion under a recovered session key (%s)', async (reason) => {
+    const completion = Promise.withResolvers<unknown>()
+    completeSession.mockReturnValueOnce(completion.promise)
+    due.data.value = [item('old_1', 'Old prompt', 'Old answer')]
+    const Page = (await import(path)).default
+    const wrapper = await mountSuspended(Page, { global: { stubs: {
+      LearnReviewRatingButtons: { template: `<button data-testid="rate" @click="$emit('rate', 5)">Rate</button>` },
+    } } })
+    try {
+      await wrapper.get('[data-testid="reveal-button"]').trigger('click')
+      await wrapper.get('[data-testid="rate"]').trigger('click')
+      await flushPromises()
+      expect(completeSession).toHaveBeenCalledTimes(1)
+      const original = completeSession.mock.calls[0]![0]
+
+      due.error.value = deniedRead(reason)
+      await nextTick()
+      due.data.value = [item('new_1', 'Replacement prompt', 'Replacement answer')]
+      due.error.value = null
+      await flushPromises()
+      expect(wrapper.get('[data-testid="review-prompt"]').text()).toBe('Replacement prompt')
+
+      completion.reject(new Error('Original connection lost'))
+      await flushPromises()
+      expect(queueCompletion).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="session-complete"]').exists()).toBe(false)
+
+      await wrapper.get('[data-testid="reveal-button"]').trigger('click')
+      await wrapper.get('[data-testid="rate"]').trigger('click')
+      await flushPromises()
+      expect(completeSession).toHaveBeenCalledTimes(2)
+      expect(completeSession.mock.calls[1]![0].idempotencyKey).not.toBe(original.idempotencyKey)
+    }
+    finally { wrapper.unmount() }
+  })
+
+  it('queues the original completion request when the current session loses its connection', async () => {
+    completeSession.mockRejectedValueOnce(new Error('Connection lost'))
+    due.data.value = [item('item_1', 'Current prompt', 'Current answer')]
+    const Page = (await import(path)).default
+    const wrapper = await mountSuspended(Page, { global: { stubs: {
+      LearnReviewRatingButtons: { template: `<button data-testid="rate" @click="$emit('rate', 5)">Rate</button>` },
+    } } })
+    try {
+      await wrapper.get('[data-testid="reveal-button"]').trigger('click')
+      await wrapper.get('[data-testid="rate"]').trigger('click')
+      await flushPromises()
+      expect(completeSession).toHaveBeenCalledTimes(1)
+      expect(queueCompletion).toHaveBeenCalledExactlyOnceWith(completeSession.mock.calls[0]![0])
+      expect(wrapper.find('[data-testid="session-complete"]').exists()).toBe(true)
+    }
+    finally { wrapper.unmount() }
+  })
 
   it('pauses review while a check is open', async () => {
     due.error.value = deniedRead('test_open')
