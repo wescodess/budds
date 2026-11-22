@@ -10,7 +10,7 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage
 import { addCalendarDays, localDateAt } from './learn-v2-mastery'
 import { computeLearnReportEstimate, type ReportObservation, type ReportEvidence } from './learn-v2-measurement-report-math'
 import {
-  LEARN_REPORT_INSUFFICIENT_LEARNERS, LEARN_REPORT_PUBLICATION_POLICY_VERSION, learnReportBreakdownsPublishable, learnReportCellPublishable,
+  LEARN_REPORT_INSUFFICIENT_LEARNERS, LEARN_REPORT_PUBLICATION_POLICY_VERSION, learnReportDisclosure,
   publishLearnReportCell, reconcileLearnReportBandDisclosures, type LearnReportDisclosure,
 } from './learn-v2-measurement-report-policy'
 export { LEARN_REPORT_PUBLICATION_POLICY_VERSION, LEARN_REPORT_MINIMUM_CONTRIBUTING_LEARNERS, LEARN_REPORT_INSUFFICIENT_LEARNERS } from './learn-v2-measurement-report-policy'
@@ -1095,36 +1095,8 @@ function reportCell(input: {
       excludingFlagged: computeLearnReportEstimate(matured.filter(row => row.paste !== true && row.focus !== true).map(row => row.observation),
         input.weighting, { ...evidence, emptyStatus: 'no_eligible_population' }, `${input.seed}:excluding_flags`) },
     allocations, sourceAccounting: sourceReportAccounting(gain ? input.inventory : input.sourceRows), attritionByStartingBand })
-  return { cell, disclosure: reportDisclosure(gain, rows, matured) }
+  return { cell, disclosure: learnReportDisclosure(gain, rows, matured) }
 }
-function reportDisclosure(gain: boolean, rows: readonly ComputedReportRow[], matured: readonly ComputedReportRow[]): LearnReportDisclosure {
-  const observed = (values: readonly ComputedReportRow[]) => values.filter(row => row.observation.value !== null)
-  const flagged = matured.filter(row => row.paste === true || row.focus === true)
-  const unflagged = matured.filter(row => row.paste !== true && row.focus !== true)
-  const linked = matured.filter(row => row.secondary !== null)
-  const unlinked = matured.filter(row => row.secondary === null)
-  const buckets = (values: readonly ComputedReportRow[], key: (row: ComputedReportRow) => string | null) => {
-    const grouped = new Map<string, ComputedReportRow[]>()
-    for (const row of values) {
-      const bucket = key(row) ?? 'unknown'
-      grouped.set(bucket, [...(grouped.get(bucket) ?? []), row])
-    }
-    return [...grouped.values()]
-  }
-  const accepted = matured.filter(row => row.accepted)
-  return {
-    cell: learnReportCellPublishable(rows, [rows, matured, observed(matured)]),
-    attrition: true,
-    sensitivity: learnReportBreakdownsPublishable([flagged, observed(flagged), unflagged, observed(unflagged)]),
-    replacements: learnReportBreakdownsPublishable([linked, linked.filter(row => row.secondary!.value !== null), unlinked, observed(unlinked)]),
-    allocations: learnReportBreakdownsPublishable([
-      ...buckets(matured, row => row.order), ...buckets(accepted, row => row.observedOrder),
-      ...buckets(matured, row => row.delayedForm), ...buckets(accepted, row => row.observedDelayedForm),
-      ...(gain ? [...buckets(matured, row => row.coldForm), ...buckets(matured.filter(row => row.acceptedCold), row => row.observedColdForm)] : []),
-    ]),
-  }
-}
-
 type LearnReportBuildInput = {
   reportRunId: string, query: z.infer<typeof learnReportQuerySchema>, provenance: z.infer<typeof learnReportProvenanceSchema>,
   roster: readonly string[], rows: readonly LearnReportInputSnapshot[],

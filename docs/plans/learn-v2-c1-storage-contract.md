@@ -189,11 +189,33 @@ The provisional 95% interval uses 10,000 whole-learner cluster resamples, retain
 
 Report code `learn-v2.report-code.c6.2.v3` pins publication policy `learn-v2.report-publication.minimum-five-learners.v1` (orchestrator decision on #524, 2026-11-22). `buildLearningMeasurementReport` stays an unpublished computation for tests and audits. Every path that releases cells uses `buildPublishedLearningMeasurementReport`: stored cells, `getReport`, `getReportCells`, the owner aggregate export and CLI replay. A sealed run from an earlier code version is withheld as `stale`/`report_policy_changed`, and a repeated request builds a new run instead of reusing it.
 
-- **Cell rule.** A cell publishes values only when its rows come from at least five distinct learners. Each learner set that determines a value must also be empty or reach five: all rows, the matured population, and the observed-outcome contributors. Otherwise the points, interval, missingness bounds, counts, legacy audit, replacements, instrumentation, sensitivity, allocations, source accounting and band attrition are all null. The reason `insufficient_learners` is added, while the cell, its stratum, status, coverage, validity, precision and other reasons remain.
-- **Nested breakdowns.** Within a published cell, each breakdown and its complement must pass the same empty-or-five test, or the breakdown is null with `insufficient_learners`. The pairs are: flagged and unflagged rows for the sensitivity estimate, and linked and unlinked rows for replacements. For allocations, every assigned and observed order and form bucket must pass.
+- **Cell rule.** A cell publishes values only when its rows come from at least five distinct learners. Each learner set that determines a value must also be empty or reach five: all rows, the matured population, the observed-outcome contributors, the missing-outcome contributors, and the missing outcomes whose bound carries data (a missing delayed score with a valid cold score contributes [−c,100−c]). Without the missing-outcome sets, a published mean, count and bound solve for the missing learners. For example, E=6, P=5 and mean −20 with lower bound −26⅔ gives 5×(−20) − 6×(−26⅔) = 60, one learner's cold score (review A2). Otherwise the points, interval, missingness bounds, counts, legacy audit, replacements, instrumentation, sensitivity, allocations, source accounting and band attrition are all null. The reason `insufficient_learners` is added, while the cell, its stratum, status, coverage, validity, precision and other reasons remain.
+- **Nested breakdowns.** Within a published cell, each breakdown and its complement must pass the same sets (all, observed, missing and data-bearing missing), or the breakdown is null with `insufficient_learners`. The pairs are: flagged and unflagged rows for the sensitivity estimate, and linked rows under their replacement observations with unlinked rows under primary observations. For allocations, every assigned and observed order and form bucket must pass.
 - **Complementary suppression.** Band cells partition their group's `all` cell. If any band cell fails, every band cell in the group is suppressed, and so is the `all` cell's band attrition. A nested breakdown that fails in one band cell is suppressed in all of them. Groups that differ by metric, horizon, stratum or policy have no published parent, and cohort-level context (`considered`, `notAdmitted`, VLG source accounting, legacy audit) only appears in cells that already have five or more learners. Both weightings share one decision.
 - **Manifest.** Published provenance replaces `episodeCount` and `inputBytes` with null, because byte size can reveal score digits in a small cohort.
-- The 20-learner bootstrap rule is unchanged. A known residual: publishing both weightings of one cell lets someone who already knows the per-learner episode counts solve for a dominant learner's mean. That is a dominance attack, not a small-cell attack, and needs its own owner decision.
+- The 20-learner bootstrap rule is unchanged.
+
+**Derived-value audit (review A2).** Each published value was checked for whether it combines with published counts to isolate a set of one to four learners:
+- **Covered by the rule:**
+  - observed point: the observed set;
+  - all-eligible point: only when observed equals population;
+  - missingness bounds, under both weightings: observed, missing and data-bearing missing sets;
+  - bootstrap interval: at least 20 contributing learners;
+  - first-check rate and bounds: F/M over the observed set, with missing claims contributing a constant [0,1] while the missing set still needs five;
+  - sensitivity estimate, point and bounds: both sides, all four sets;
+  - replacement estimate: linked rows under secondary observations and the unlinked complement;
+  - band cells and the `all` cell's band attrition: complementary suppression;
+  - allocations: every bucket.
+- **Counts only, with no score value:** dispositions, instrumentation, source accounting, distinct-learner counts, the legacy audit, and `considered`/`notAdmitted`. They appear only in cells that already pass.
+- **Not a parent/child pair:** horizon-7 and horizon-30 cells share cold scores but cover different outcome sets. No published value is their sum, so neither can be subtracted from the other.
+
+**Accepted residuals.** The owner decided "Accept for owner-only (Recommended)" on 2026-11-22 for two residuals:
+- **Temporal differencing:** two sealed snapshots whose cohorts or matured windows differ by one to four learners can be subtracted.
+- **Dual weighting:** the episode-weighted and learner-weighted values of one cell can be solved for a dominant learner whose episode count is known.
+
+Both are accepted only for an owner-only reader. The sole viewer grant is the project owner, who already has direct database access. Reports are internal and default-off. The grant excludes individual pair evidence by policy, not by mathematical guarantee.
+
+**Guard:** before any second viewer grant is issued, both residuals must be fixed or re-reviewed.
 
 A scored endpoint whose form label or family revision conflicts with its frozen assignment is excluded as `pin_flow_treatment_mismatch`, with `form_assignment_mismatch` or `family_revision_mismatch`. It is never counted as missing. Observed form counts use the result's actual label, and a conflicting episode counts toward observed order `unknown`. First-claim rows carry no assigned form. Scorer configuration mismatches add `scorer_configuration_mismatch`. Observed model/upstream labels come only from results scored under the frozen configuration. Horizon labels are pinned by each opportunity's clock.
 

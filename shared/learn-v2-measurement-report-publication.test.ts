@@ -3,6 +3,7 @@ import {
   buildLearningMeasurementReport, buildPublishedLearningMeasurementReport, LEARN_REPORT_PUBLICATION_POLICY_VERSION,
   type LearnPublishedReportMetric, type LearnReportInputSnapshot,
 } from './learn-v2-measurement-report'
+import { learnReportDisclosure, type LearnReportDisclosureRow } from './learn-v2-measurement-report-policy'
 import { computationEpisode, computationInput } from '../tests/fixtures/learn-v2-measurement-computation'
 
 type Episode = Awaited<ReturnType<typeof computationEpisode>>
@@ -114,5 +115,64 @@ describe('minimum contributing learners publication policy', () => {
     const cell = find(await published(await episodes(6, index => ({ order: index === 0 ? 'BA' : 'AB' }))))
     expect(cell).toMatchObject({ observedValue: -20, allocations: null })
     expect(cell.reasonCodes).toContain('insufficient_learners')
+  })
+
+  it('withholds bounds that would reveal a single missing learner\'s cold score', async () => {
+    const sources = await episodes(6, index => ({ delayed: index === 5 ? null : 40 }))
+    const internal = (await buildLearningMeasurementReport(await input(sources))).pages.flatMap(page => page.cells)
+    const unpublished = internal.find(cell => cell.horizonDays === 7 && cell.stratum.startingBand === 'all' && cell.weighting === 'capability_episode')!
+    expect(unpublished).toMatchObject({ observedValue: -20, counts: { maturedEpisodes: 6, comparablePairs: 5 } })
+    expect(5 * unpublished.observedValue! - 6 * unpublished.missingOutcomeBounds!.lower).toBeCloseTo(60)
+    const cells = await published(sources)
+    for (const weighting of ['capability_episode', 'learner_sensitivity'] as const) {
+      expect(find(cells, 'all', weighting)).toMatchObject({ ...suppressed, status: 'partial_observed' })
+    }
+  })
+
+  it('withholds bounds when only a few missing outcomes carry a cold score', async () => {
+    const sources = await episodes(10, index => index < 5 ? {} : index < 9 ? { cold: null, delayed: null } : { delayed: null })
+    expect(find(await published(sources))).toMatchObject(suppressed)
+    const balanced = await published(await episodes(10, index => (index < 5 ? {} : { delayed: null })))
+    expect(find(balanced)).toMatchObject({ observedValue: -20, missingOutcomeBounds: { lower: -40, upper: 10 } })
+  })
+
+  it('suppresses a sensitivity estimate whose missing outcomes are small on either side', async () => {
+    const sources = await episodes(15, index => (index === 5 || index >= 11 ? { delayed: null } : {}))
+    for (const source of sources.slice(0, 6)) source.episode.cold!.pasteObserved = true
+    const cell = find(await published(sources))
+    expect(cell).toMatchObject({ observedValue: -20, sensitivity: null, instrumentation: { pasteFlagged: 6 } })
+    expect(cell.missingOutcomeBounds).not.toBeNull()
+    expect(cell.reasonCodes).toContain('insufficient_learners')
+  })
+})
+
+describe('publication disclosure sets', () => {
+  const row = (learner: number, observation: LearnReportDisclosureRow['observation'], secondary: LearnReportDisclosureRow['secondary'] = null): LearnReportDisclosureRow => ({
+    learnerKey: `learner${learner}`, observation, secondary, paste: false, focus: false, accepted: true, acceptedCold: true,
+    order: 'AB', observedOrder: 'AB', coldForm: 'A', delayedForm: 'B', observedColdForm: 'A', observedDelayedForm: 'B',
+  })
+  const pair = { value: -20, lower: -20, upper: -20 }
+  const withCold = { value: null, lower: -60, upper: 40 }
+  const noCold = { value: null, lower: -100, upper: 100 }
+
+  it('checks the unlinked complement of replacements, including data-bearing missing outcomes', () => {
+    const linked = Array.from({ length: 5 }, (_, index) => row(index, pair, pair))
+    const unlinked = [...Array.from({ length: 5 }, (_, index) => row(index + 10, pair)), ...Array.from({ length: 4 }, (_, index) => row(index + 20, noCold)), row(30, withCold)]
+    const rows = [...linked, ...unlinked]
+    expect(learnReportDisclosure(true, rows, rows).replacements).toBe(false)
+    const safe = [...linked, ...unlinked.slice(0, 5), ...Array.from({ length: 5 }, (_, index) => row(index + 40, withCold))]
+    expect(learnReportDisclosure(true, safe, safe)).toMatchObject({ cell: true, replacements: true })
+  })
+
+  it('checks missing replacement outcomes under their own observations', () => {
+    const rows = [...Array.from({ length: 5 }, (_, index) => row(index, pair, pair)), row(5, pair, withCold)]
+    expect(learnReportDisclosure(true, rows, rows)).toMatchObject({ cell: true, replacements: false })
+  })
+
+  it('treats unresolved first-check bounds as constant but still requires five missing learners', () => {
+    const checked = Array.from({ length: 5 }, (_, index) => row(index, { value: 0, lower: 0, upper: 0 }))
+    const unresolved = Array.from({ length: 5 }, (_, index) => row(index + 10, { value: null, lower: 0, upper: 1 }))
+    expect(learnReportDisclosure(false, [...checked, ...unresolved], [...checked, ...unresolved]).cell).toBe(true)
+    expect(learnReportDisclosure(false, [...checked, unresolved[0]!], [...checked, unresolved[0]!]).cell).toBe(false)
   })
 })
