@@ -12,6 +12,11 @@ import { LEARN_V2_MASTERY_LOOP_BLOCKS } from '../shared/learn-v2-session-content
 import { learnMeasurementCoverage, learnMeasurementAllocationSchema } from '../shared/learn-v2-measurement'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+
 const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
 const modules = import.meta.glob('./**/*.ts')
 const identity = { tokenIdentifier: 'https://auth.example|measurement-publisher', subject: 'publisher' }
@@ -354,7 +359,7 @@ describe('held-out family publication commands', () => {
     expect(state.contents).toHaveLength(1)
     expect(state.contents[0]).not.toHaveProperty('assessmentRubricSnapshot')
     expect(await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', state.contents[0]!._id)).take(1))).toEqual([])
-    expect(await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.studySessionId })).toBeNull()
+    await expect(f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.studySessionId })).rejects.toThrow(/disclosure_unknown/)
     await expect(f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'no-delivery-adapter' })).rejects.toThrow('Assessment delivery is unavailable')
     await expect(f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'no-reroll' })).rejects.toThrow('Assessment generation cannot be retried')
     expect(measurementItemAdapters.generate).toHaveBeenCalledOnce()

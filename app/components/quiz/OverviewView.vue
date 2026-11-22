@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { Pencil, Trash2, Plus, Sparkles, Check, X } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { Pencil, Trash2, Plus, Sparkles, Check, X, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Doc, Id } from '../../../convex/_generated/dataModel'
 import { createSsrMutationStub } from '~/utils/convexSsrMutation'
@@ -14,10 +16,13 @@ const emit = defineEmits<{
   viewAttempt: [attemptId: Id<'quizAttempts'>]
 }>()
 
-const { data: quizData } = useConvexQuery(
+const quizQuery = useTeachingQuery(
   api.quizzes.getWithQuestions,
   computed(() => ({ id: props.quizId })),
 )
+const quizData = quizQuery.data
+const quizFailure = computed(() => quizQuery.failure.value)
+const quizRevoked = computed(() => quizFailure.value?.revoked === true)
 
 const { data: historyData } = useConvexQuery(
   api.quizzes.getQuizHistory,
@@ -33,6 +38,15 @@ const titleDraft = ref('')
 const questionModalOpen = ref(false)
 const editingQuestion = ref<Doc<'quizQuestions'> | null>(null)
 const confirmDeleteId = ref<string | null>(null)
+
+watch(quizRevoked, (revoked) => {
+  if (!revoked) return
+  editingTitle.value = false
+  titleDraft.value = ''
+  questionModalOpen.value = false
+  editingQuestion.value = null
+  confirmDeleteId.value = null
+}, { flush: 'sync' })
 
 const updateQuizMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuiz)
@@ -81,7 +95,18 @@ function typeBadge(type: string) {
 </script>
 
 <template>
-  <div v-if="!quiz" class="space-y-3 p-6">
+  <div v-if="quizFailure && !quizFailure.retryable" role="status" data-testid="quiz-read-paused" class="p-6">
+    <p class="flex items-start gap-2 rounded-md border p-6 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ quizFailure.message }}</span></p>
+  </div>
+
+  <div v-else-if="quizFailure" role="alert" data-testid="quiz-read-error" class="p-6">
+    <div class="rounded-md border p-6 text-center">
+      <p class="font-medium">Could not load this quiz.</p>
+      <button type="button" data-testid="quiz-read-retry" class="mx-auto mt-2 block text-sm font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="quizQuery.refresh?.()">Try again</button>
+    </div>
+  </div>
+
+  <div v-else-if="!quiz" class="space-y-3 p-6">
     <UiSkeleton v-for="i in 3" :key="i" class="h-24 w-full rounded-lg" />
   </div>
 

@@ -1,3 +1,4 @@
+import type { Id } from '../../convex/_generated/dataModel'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 
 vi.stubGlobal('useRuntimeConfig', vi.fn())
@@ -71,6 +72,18 @@ describe('searchDocuments', () => {
     delete process.env.CLOUDFLARE_AI_SEARCH_INSTANCE
     delete process.env.NUXT_CLOUDFLARE_AI_SEARCH_TOKEN
     delete process.env.CLOUDFLARE_AI_SEARCH_TOKEN
+  })
+
+  test('a scoped producer never broadens an empty admitted scope', async () => {
+    expect(await searchDocuments({ query: 'test', userId: 'owner', teachingScope: [] })).toEqual({ data: [] })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  test.each(['hash', 'revision'])('a scoped producer rejects stale %s metadata before returning any chunk', async stale => {
+    vi.mocked(fetch).mockResolvedValueOnce(mockLegacyResponse([makeLegacyResult()]))
+    await expect(searchDocuments({ query: 'test', userId: 'https://cautious-elephant-39.convex.site|user123', teachingScope: [{
+      documentId: 'docXYZ' as Id<'documents'>, folderId: 'folderABC' as Id<'folders'>, filename: 'notes.txt',
+      contentHash: stale === 'hash' ? 'b'.repeat(64) : 'a'.repeat(64), sourceRevision: stale === 'revision' ? 'other.r2' : `sha256:${'a'.repeat(64)}`,
+    }] })).rejects.toThrow('Teaching input is unavailable')
   })
 
   test('returns mapped chunks from legacy response shape', async () => {
@@ -386,4 +399,9 @@ describe('searchDocuments', () => {
     expect(error.statusCode).toBe(503)
     expect(error.message).toBe('Search index unavailable')
   })
+})
+
+vi.mock('../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

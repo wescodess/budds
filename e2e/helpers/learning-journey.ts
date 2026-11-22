@@ -116,12 +116,14 @@ export async function runLearningJourney(page: Page, request: APIRequestContext,
 
   await page.getByTestId('learn-v2-workspace-nav-map').click()
   await expect(page.getByTestId('learn-v2-learning-trail')).toBeVisible()
-  await page.getByTestId('learn-v2-map-edit-objective').click()
+  await page.locator('[data-testid^="learn-v2-map-select-"]').first().click()
   await page.getByTestId('learn-v2-objective-title').fill('Explain transfer orbits')
   await page.getByTestId('learn-v2-objective-capability').fill('Apply orbital mechanics to choose and explain a transfer orbit.')
   await page.getByTestId('learn-v2-save-objective').click()
-  await expect(page.getByTestId('learn-v2-accept-map')).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByTestId('learn-v2-objective-status')).toHaveText('Changes to this objective are saved together.', { timeout: 30_000 })
+  await expect(page.getByTestId('learn-v2-accept-map')).toBeEnabled({ timeout: 30_000 })
   await page.getByTestId('learn-v2-accept-map').click()
+  await page.getByTestId('learn-v2-workspace-nav-overview').click()
 
   const calibrateAction = page.getByTestId('learn-v2-workspace-next-action')
   await expect(calibrateAction).toContainText('Calibrate your starting point', { timeout: 30_000 })

@@ -650,7 +650,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'substantive_hint' })).toMatchObject({ revision: 8, replayed: true })
     await t.withIdentity(OTHER).mutation(api.users.upsertUser, {})
     await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: OTHER.tokenIdentifier, enabled: true })
-    await expect(t.withIdentity(OTHER).mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).rejects.toThrow(/Study session not found/)
+    await expect(t.withIdentity(OTHER).mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).rejects.toThrow(/Study session not found|unavailable/)
     expect(await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 8, kind: 'answer_reveal' })).toMatchObject({ revision: 9, replayed: false, assistance: { content: 'Revealed worked answer.' } })
   })
 
@@ -1154,13 +1154,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
       templateVersion: 'learn-adaptive.feedback-templates.v1',
       taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1',
       misconceptionTags: ['missing_required_step'],
-      criterionResults: [],
+      criterionResults: verdict(80).criterionResults.map(row => expect.objectContaining(row)),
     })
     const state = await setup.t.run(async ctx => ({ activity: await ctx.db.get(activity.activityDocumentId), attempt: await ctx.db.get(result.attemptId) }))
     expect(state.activity).toMatchObject({ status: 'feedback', scoringJobId: acquired.jobId, masteryAttemptId: result.attemptId, feedbackProjection: result.feedback })
     expect(state.attempt).toMatchObject({ misconceptionTagsJson: JSON.stringify(['missing_required_step']), feedbackTemplateVersion: 'learn-adaptive.feedback-templates.v1', misconceptionTaxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1' })
     expect(JSON.parse(state.attempt!.criterionResultsJson!)).toEqual(command.scorerVerdict.criterionResults)
-    expect(JSON.stringify(result.feedback)).not.toContain('Core correctness.')
+    expect(JSON.stringify(result.feedback)).toContain('Core correctness.')
     expect(JSON.stringify(state)).not.toContain('provider-response-private')
     const committedEvents = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))
     expect(committedEvents.map(event => event.eventType)).toEqual(['activity_completed', 'representative_pass'])
@@ -1492,7 +1492,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     await expect(t.mutation(legacyMasteryAttempt, { ...args('unsafe-tag'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), misconceptionTags: ['explain-boundary'] } })).rejects.toThrow(/verdict is invalid/i)
     const command = { ...args('revealed'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), misconceptionTags: ['evidence_mismatch'] } }
     const result = await t.mutation(legacyMasteryAttempt, command)
-    expect(result).toMatchObject({ scorePercent: 100, state: 'guided', nextReviewAt: expect.any(Number), feedback: { templateVersion: 'learn-adaptive.feedback-templates.v1', taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1', misconceptionTags: ['evidence_mismatch'], criterionResults: [] } })
+    expect(result).toMatchObject({ scorePercent: 100, state: 'guided', nextReviewAt: expect.any(Number), feedback: { templateVersion: 'learn-adaptive.feedback-templates.v1', taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1', misconceptionTags: ['evidence_mismatch'], criterionResults: verdict(100).criterionResults.map(row => expect.objectContaining(row)) } })
     expect(JSON.stringify(result)).not.toContain('Provider prose')
     expect(await t.mutation(legacyMasteryAttempt, command)).toMatchObject({ replayed: true, feedback: { misconceptionTags: ['evidence_mismatch'] } })
     const sessions = await t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(3))

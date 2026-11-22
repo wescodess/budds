@@ -9,6 +9,8 @@ export const LEARN_V2_BLUEPRINT_LIMITS = {
   maximumSourcesPerObjective: 10,
   maximumObjectiveSourceLinks: 60,
   maximumPrerequisiteEdges: 60,
+  minimumObjectiveMinutes: 15,
+  maximumObjectiveMinutes: 480,
 } as const
 
 export type LearnV2AssessmentContract = {
@@ -96,7 +98,7 @@ function unique(values: string[], label: string) {
   if (new Set(values).size !== values.length) throw new Error(`${label} must not contain duplicates`)
 }
 
-function assessment(value: unknown, objectiveKey: string): LearnV2AssessmentContract {
+export function validateLearnV2AssessmentContract(value: unknown, objectiveKey: string): LearnV2AssessmentContract {
   const item = record(value, `Assessment ${objectiveKey}`)
   exactKeys(item, ['version', 'kind', 'responseFormat', 'instructions', 'passingScorePercent', 'criteria'], [], `Assessment ${objectiveKey}`)
   if (item.version !== LEARN_V2_ASSESSMENT_VERSION) throw new Error(`Assessment ${objectiveKey} has an unsupported version`)
@@ -228,14 +230,14 @@ export function validateLearnV2BlueprintCandidate(
       order: integer(item.order, 0, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectives - 1, `Objective ${objectiveKey} order`),
       title: text(item.title, `Objective ${objectiveKey} title`, 200),
       capability: text(item.capability, `Objective ${objectiveKey} capability`, 500),
-      estimatedMinutes: integer(item.estimatedMinutes, 15, 480, `Objective ${objectiveKey} estimated minutes`),
+      estimatedMinutes: integer(item.estimatedMinutes, LEARN_V2_BLUEPRINT_LIMITS.minimumObjectiveMinutes, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveMinutes, `Objective ${objectiveKey} estimated minutes`),
       ...(depth === undefined ? {} : { depth }),
       coverage,
       ...(gapReason === undefined ? {} : { gapReason }),
       sourceSnapshotIds,
       gapSourceSnapshotIds,
       prerequisiteObjectiveKeys,
-      assessmentContract: assessment(item.assessmentContract, objectiveKey),
+      assessmentContract: validateLearnV2AssessmentContract(item.assessmentContract, objectiveKey),
     }
   })
   unique(objectives.map(item => item.key), 'Objective keys')

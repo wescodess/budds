@@ -1,3 +1,4 @@
+import type { Id } from '../../convex/_generated/dataModel'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 const config = {
@@ -19,6 +20,16 @@ describe('getScopedR2ObjectIdentity', () => {
   })
 
   afterEach(() => vi.unstubAllGlobals())
+
+  test('an empty admitted scope cannot fall back to listing public or user-wide objects', async () => {
+    expect(await fetchFolderDocs({ userId: 'owner', teachingScope: [] })).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  test('a fallback rejects changed source pins without swallowing the denial', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('Private stale content', { status: 200, headers: { 'x-amz-meta-contenthash': 'b'.repeat(64), 'x-amz-meta-sourcerevision': 'source.r2' } }))
+    await expect(fetchFolderDocs({ userId: 'owner', teachingScope: [{ documentId: 'doc_1' as Id<'documents'>, folderId: 'folder_1' as Id<'folders'>, filename: 'notes.txt', r2Key: 'owner/notes.txt', contentHash: 'a'.repeat(64), sourceRevision: 'source.r1' }] })).rejects.toThrow('Teaching input is unavailable')
+    expect(fetch).toHaveBeenCalledOnce()
+  })
 
   test('uses the immutable SHA-256 stored on new R2 uploads without downloading the source', async () => {
     const contentHash = 'a'.repeat(64)
@@ -95,4 +106,9 @@ describe('getScopedR2ObjectIdentity', () => {
       sourceRevision: `sha256:${contentHash}`,
     }])
   })
+})
+
+vi.mock('../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

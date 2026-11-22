@@ -5,7 +5,8 @@ import { internal } from './_generated/api'
 import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
 import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Access'
-import { LEARN_V2_BLUEPRINT_LIMITS, validateLearnV2BlueprintCandidate } from '../shared/learn-v2-blueprint'
+import { LEARN_V2_BLUEPRINT_LIMITS } from '../shared/learn-v2-blueprint'
+import { mapEditCandidateValidator, rejectStaleMapEdit, requireServerAssessmentContract, resolveMapEditCandidate } from './lib/learnV2MapEdit'
 import { deriveMastery } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
@@ -34,36 +35,6 @@ async function sha256Text(value: string) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
-
-const assessmentContractValidator = v.object({
-  version: v.literal('learn-v2.assessment.v1'),
-  kind: v.union(v.literal('machine_checkable'), v.literal('bounded_rubric')),
-  responseFormat: v.union(v.literal('short_text'), v.literal('structured')),
-  instructions: v.string(),
-  passingScorePercent: v.literal(80),
-  criteria: v.array(v.object({ key: v.string(), description: v.string(), weightPercent: v.number() })),
-})
-
-const blueprintCandidateValidator = v.object({
-  version: v.literal('learn-v2.blueprint-candidate.v1'),
-  generatorVersion: v.string(),
-  milestones: v.array(v.object({ key: v.string(), order: v.number(), title: v.string(), description: v.optional(v.string()) })),
-  objectives: v.array(v.object({
-    key: v.string(),
-    milestoneKey: v.string(),
-    order: v.number(),
-    title: v.string(),
-    capability: v.string(),
-    estimatedMinutes: v.number(),
-    depth: v.optional(v.union(v.literal('foundational'), v.literal('working'), v.literal('advanced'))),
-    coverage: v.union(v.literal('strong'), v.literal('partial'), v.literal('gap')),
-    gapReason: v.optional(v.string()),
-    sourceSnapshotIds: v.array(v.id('learnSourceSnapshots')),
-    gapSourceSnapshotIds: v.optional(v.array(v.id('learnSourceSnapshots'))),
-    prerequisiteObjectiveKeys: v.array(v.string()),
-    assessmentContract: assessmentContractValidator,
-  })),
-})
 
 function assertPositiveInteger(value: number, label: string) {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label} must be a safe positive integer`)
@@ -111,7 +82,7 @@ async function requireLiveVoid(ctx: MutationCtx | QueryCtx, userId: string, lear
   return learningVoid
 }
 
-async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>) {
+async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>, rejectConflict = (): never => { throw new Error('Blueprint revision conflict') }) {
   const blueprint = await ctx.db.get(blueprintRevisionId)
   if (!blueprint || blueprint.userId !== userId) throw new Error('Blueprint revision not found')
   if (blueprint.status === 'accepted' || blueprint.status === 'active') {
@@ -121,7 +92,7 @@ async function requireCurrentBlueprint(ctx: MutationCtx | QueryCtx, userId: stri
   const latest = await ctx.db.query('learnBlueprintRevisions')
     .withIndex('by_userId_and_blueprintId_and_revision', q => q.eq('userId', userId).eq('blueprintId', blueprint.blueprintId))
     .order('desc').first()
-  if (!latest || latest._id !== blueprint._id) throw new Error('Blueprint revision conflict')
+  if (!latest || latest._id !== blueprint._id) rejectConflict()
   return blueprint
 }
 
@@ -192,7 +163,7 @@ export const replaceDraftMap = mutation({
     expectedRecordRevision: v.number(),
     expectedVoidRevision: v.number(),
     idempotencyKey: v.string(),
-    candidate: blueprintCandidateValidator,
+    candidate: mapEditCandidateValidator,
   },
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedRecordRevision, 'Expected Blueprint record revision')
@@ -202,15 +173,15 @@ export const replaceDraftMap = mutation({
     const requestFingerprint = fingerprint('replaceDraftMap', args)
     const replay = await lifecycleReplay(ctx, userId, args.idempotencyKey, requestFingerprint)
     if (replay) return blueprintOutcome(replay)
-    const blueprint = await requireCurrentBlueprint(ctx, userId, args.blueprintRevisionId)
+    const blueprint = await requireCurrentBlueprint(ctx, userId, args.blueprintRevisionId, rejectStaleMapEdit)
     const learningVoid = await requireLiveVoid(ctx, userId, blueprint.learningVoidId)
-    if (blueprint.status !== 'draft' || learningVoid.status !== 'map_review') throw new Error('Blueprint draft is not ready for map editing')
-    if (blueprint.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) throw new Error('Blueprint revision conflict')
+    if (!['draft', 'map_review'].includes(blueprint.status) || learningVoid.status !== 'map_review') throw new Error('Blueprint draft is not ready for map editing')
+    if (blueprint.recordRevision !== args.expectedRecordRevision || learningVoid.revision !== args.expectedVoidRevision) rejectStaleMapEdit()
     const sources = await scopedSources(ctx, userId, blueprint._id)
     const supportingSourceIds = []
     for (const source of sources) if (await sourceCanSupport(ctx, userId, blueprint, source)) supportingSourceIds.push(String(source._id))
     const gapSourceIds = sources.filter(source => source.evidencePurgedAt === undefined && source.status !== 'rejected').map(source => String(source._id))
-    const candidate = validateLearnV2BlueprintCandidate(args.candidate, supportingSourceIds, gapSourceIds)
+    const candidate = await resolveMapEditCandidate(ctx, userId, blueprint._id, args.candidate, supportingSourceIds, gapSourceIds)
     await clearMap(ctx, userId, blueprint._id)
     const milestoneIds = new Map<string, Id<'learnMilestones'>>()
     for (const milestone of candidate.milestones) {
@@ -251,7 +222,7 @@ async function validateStoredMap(ctx: MutationCtx, userId: string, blueprint: Do
   for (const objective of objectives) {
     if (!objective.milestoneId || !milestoneIds.has(String(objective.milestoneId))) throw new Error('Blueprint objective milestone scope mismatch')
     usedMilestoneIds.add(String(objective.milestoneId))
-    if (typeof objective.assessmentContract !== 'object' || objective.assessmentContract.version !== 'learn-v2.assessment.v1' || objective.assessmentContract.passingScorePercent !== 80) throw new Error('Blueprint assessment contract is invalid')
+    requireServerAssessmentContract(objective.assessmentContract)
     const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(LEARN_V2_BLUEPRINT_LIMITS.maximumSourcesPerObjective + 1)
     if (links.length > LEARN_V2_BLUEPRINT_LIMITS.maximumSourcesPerObjective) throw new Error('Blueprint objective source set exceeds its bounded contract')
     sourceLinkCount += links.length
@@ -320,6 +291,7 @@ export const acceptBlueprintMap = mutation({
 })
 
 async function requireLegacyCalibrationScope(ctx: MutationCtx | QueryCtx, userId: string, objectiveId: Id<'learnObjectives'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
   const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', q =>
     q.eq('userId', userId).eq('objectiveId', objectiveId)).take(3)
   if (rows.length > 2 || rows.some(row => row.purpose.kind === 'calibration')) throw new Error('Saved submission and verified execution receipt required')
@@ -496,7 +468,7 @@ export const recordCalibrationAttempt = internalMutation({
   handler: async (ctx, args) => {
     if (!args.scoringJobId || !args.scoringLeaseToken) throw new Error('Saved submission and verified execution receipt required')
     if (LEARN_MEASUREMENT_CAPABILITIES.scoring) throw new Error('Saved submission and verified execution receipt required')
-    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', args.objectiveId)).first()) throw new Error('Saved submission and verified execution receipt required')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', q => q.eq('userId', args.tokenIdentifier).eq('objectiveId', args.objectiveId)).first()) throw new Error('Saved submission and verified execution receipt required')
     return await recordLegacyCalibrationAttemptForOwner(ctx, args)
   },
 })

@@ -12,7 +12,7 @@ import {
   type LearnMeasurementItemPins,
 } from '../../shared/learn-v2-measurement'
 import { learnTextSchema, learnVersionSchema, parseLearnContract } from '../../shared/learn-v2-responses'
-import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export const MEASUREMENT_PUBLICATION_VERSION = 'learn-v2.measurement-publication.v1'
 export const MEASUREMENT_NOVELTY_VERSION = 'learn-v2.measurement-novelty.v1'
@@ -436,7 +436,7 @@ export async function selectUnusedMeasurementReserve(ctx: QueryCtx, userId: stri
 export function isTestOnlyMeasurementSession(session: Pick<Doc<'studySessions'>, 'assessmentPurpose' | 'assessmentOpportunityId' | 'placementKind'>) {
   return session.assessmentPurpose === 'measurement_cold' || session.assessmentPurpose === 'measurement_delayed'
     || session.assessmentPurpose === 'retained_transfer' || session.assessmentPurpose === 'calibration'
-    || session.placementKind === 'retained_review' || session.assessmentOpportunityId !== undefined && session.assessmentPurpose !== 'independent_application'
+    || LEARN_MEASUREMENT_CAPABILITIES.responses && session.placementKind === 'retained_review' || session.assessmentOpportunityId !== undefined && session.assessmentPurpose !== 'independent_application'
 }
 export async function validatedSessionMeasurement(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>) {
   if (!session.assessmentOpportunityId) fail('assessment_opportunity_unavailable')

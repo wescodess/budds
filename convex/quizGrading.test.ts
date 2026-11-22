@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import { createPendingAnswerAssessment } from './lib/quizAnswerAssessment'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 import manifest from '../workers/laya-evaluator/learningDecisionManifest.json'
 import { QUIZ_RUBRIC_GRADE_VERSION, defaultQuizGradingCriteria } from '../shared/quiz-grading'
 
@@ -42,7 +43,7 @@ function expectNoRubricData(value: unknown) {
 }
 
 async function createQuiz() {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const user = t.withIdentity(USER)
   const folderId = await user.mutation(api.folders.createFolder, { name: 'Biology' })
   const { quizId } = await user.mutation(api.quizzes.createWithQuestions, {
@@ -102,6 +103,7 @@ describe('flag-off compatibility', () => {
         kind: 'quiz.free_response_assessment.v1', contractVersion: manifest.contractVersion, snapshotVersion: manifest.snapshotVersion,
         languageSnapshot: 'en', status: 'pending',
         questionSnapshot: {
+          scopeVersion: 'quiz.source-scope.v1', sourceDocumentId: question.sourceDocumentId,
           question: question.question, questionType: question.type, expectedAnswer: question.correctAnswer,
           evidenceExcerpt: 'Original evidence', sourceFilename: 'biology.pdf', explanation: 'Original explanation',
         },

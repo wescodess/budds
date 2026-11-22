@@ -93,6 +93,7 @@
     "@vue/test-utils": "^2.5.1",
     "convex-test": "^0.0.56",
     "eslint": "^10.9.1",
+    "fake-indexeddb": "6.2.5",
     "happy-dom": "^21.0.4",
     "shadcn-nuxt": "^2.5.1",
     "tailwindcss": "^4.0.0",

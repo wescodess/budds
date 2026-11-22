@@ -754,13 +754,18 @@ test('post-seal help and its replay cannot change frozen ordinary assistance or 
 
 test('test-only assistance is gated before an old help replay returns its content', async () => {
   const f = await ordinaryFixture()
-  await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId, expectedSessionRevision: 1, kind: 'substantive_hint' })
+  await f.t.run(ctx => ctx.db.patch(f.f.studySessionId, { substantiveHintUsedAt: NOW, revision: 2 }))
   const basisAttemptId = await f.t.run(ctx => ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier,
     objectiveId: f.f.capability.objectiveId, blueprintRevisionId: f.f.capability.blueprintRevisionId, attemptedAt: NOW, idempotencyKey: 'test-only-basis' }))
-  await f.t.run(ctx => ctx.db.patch(f.opportunityId, { purpose: { kind: 'retained_transfer', basisAttemptId,
-    clock: measurementClock(syntheticProtocol(), { at: NOW, eventId: basisAttemptId }, 'America/Toronto', 7) } }))
+  await f.t.run(async ctx => {
+    const row = (await ctx.db.get(f.opportunityId))!
+    if (row.contextPins.kind !== 'session') throw new Error('Expected session')
+    await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, sessionRevision: 2 }, purpose: { kind: 'retained_transfer', basisAttemptId,
+      clock: measurementClock(syntheticProtocol(), { at: NOW, eventId: basisAttemptId }, 'America/Toronto', 7) } })
+  })
   await expect(f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId,
-    expectedSessionRevision: 2, kind: 'substantive_hint' })).rejects.toThrow('before sealing')
+    expectedSessionRevision: 2, kind: 'substantive_hint' })).rejects.toThrow(/test_open|before sealing/)
+  expect(await f.t.run(ctx => ctx.db.get(f.f.studySessionId))).toMatchObject({ substantiveHintUsedAt: NOW, revision: 2 })
 })
 
 test.each(['numeric', 'ordered'] as const)('sealed %s checks use their private deterministic key without a provider', async kind => {
@@ -820,13 +825,10 @@ test('assisted preservation of Independent creates no new claim', async () => {
   const f = await ordinaryFixture()
   await seedIndependent(f)
   vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
-  await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.f.studySessionId, expectedSessionRevision: 1, kind: 'substantive_hint' })
-  await f.t.run(async ctx => {
-    const row = (await ctx.db.get(f.opportunityId))!
-    if (row.contextPins.kind !== 'session') throw new Error('Expected session')
-    await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, sessionRevision: 2 } })
-  })
-  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { ...f.request, expectedSessionRevision: 2 })).toMatchObject({ status: 'completed', state: 'independent' })
+  const delivered = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.f.studySessionId, idempotencyKey: 'assisted_independent_teaching' })
+  expect(delivered.admission.status).toBe('authorized')
+  expect(delivered.value).not.toBeNull()
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, f.request)).toMatchObject({ status: 'completed', state: 'independent' })
   expect((await f.facts()).filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(0)
 })
 

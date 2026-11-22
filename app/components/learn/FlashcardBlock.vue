@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ChevronLeft, ChevronRight, Layers, Flag } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { ChevronLeft, ChevronRight, CircleAlert, Layers, Flag } from '@lucide/vue'
 import { usePointerSwipe } from '@vueuse/core'
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -20,14 +22,20 @@ const props = defineProps<{
 }>()
 
 const roomQuery = import.meta.client && !props.isOffline && props.roomId
-  ? useConvexQuery(
+  ? useTeachingQuery(
       api.flashcardRooms.getRoom,
       computed(() => ({ roomId: props.roomId as Id<'flashcardRooms'> })),
     )
-  : { data: ref(null) }
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
+
+const roomRevoked = computed(() => roomQuery.failure.value?.revoked === true)
+const offlineRevoked = ref(false)
+watch(() => props.roomId, () => { offlineRevoked.value = false }, { flush: 'sync' })
+const roomFailure = computed(() => roomRevoked.value ? roomQuery.failure.value : props.isOffline && props.offlineData ? null : roomQuery.failure.value)
 
 const roomData = computed(() => {
-  if (props.isOffline && props.offlineData) {
+  if (roomRevoked.value) return null
+  if (props.isOffline && props.offlineData && !offlineRevoked.value) {
     return {
       room: { title: 'Flashcards' },
       cards: props.offlineData.cards.map((c, i) => ({
@@ -74,6 +82,17 @@ const progressLabel = computed(() =>
 )
 
 const practiceComplete = ref(false)
+
+watch(roomRevoked, (revoked) => {
+  if (!revoked) return
+  offlineRevoked.value = true
+  currentIndex.value = 0
+  isFlipped.value = false
+  cardKey.value++
+  flaggingOpen.value = false
+  flagCorrectedDef.value = ''
+  flagError.value = ''
+}, { immediate: true, flush: 'sync' })
 const offlineAttempts = props.isOffline ? useOfflineAttempts() : null
 
 function effectiveDefinition(card: { definition: string; flagged?: boolean; correctedDefinition?: string } | null) {
@@ -190,7 +209,9 @@ if (import.meta.client) {
       <span class="text-xs text-stone-500">{{ progressLabel }}</span>
     </div>
 
-    <div v-if="!roomData" class="py-8 text-center text-sm text-stone-400">
+    <p v-if="roomFailure && !roomFailure.retryable" role="status" data-testid="flashcard-block-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ roomFailure.message }}</span></p>
+    <div v-else-if="roomFailure" role="alert" data-testid="flashcard-block-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load these flashcards.</p><button type="button" data-testid="flashcard-block-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="roomQuery.refresh?.()">Try again</button></div>
+    <div v-else-if="!roomData" class="py-8 text-center text-sm text-stone-400">
       Loading flashcards...
     </div>
 

@@ -425,7 +425,7 @@ describe('Learn V2 source lifecycle', () => {
       const revokedFetcher = vi.fn()
       await expect(orchestrateSourceFetch({
         auth: { getUserIdentity: async () => identity },
-        runMutation: setupResult.t.mutation,
+        runMutation: setupResult.owner.mutation,
       } as never, {
         sourceSnapshotId: registered.sourceSnapshotId,
         expectedRevision: 1,
@@ -709,7 +709,7 @@ describe('Learn V2 source lifecycle', () => {
       const retryable = await register(setupResult, 'retryable-failure')
       const actionContext = {
         auth: { getUserIdentity: async () => identity },
-        runMutation: setupResult.t.mutation,
+        runMutation: setupResult.owner.mutation,
       }
       expect(await orchestrateSourceFetch(actionContext as never, {
         sourceSnapshotId: terminal.sourceSnapshotId,
@@ -1038,7 +1038,7 @@ describe('Learn V2 source lifecycle', () => {
       const registered = await register(setupResult, 'noarchive', 'https://example.com/same?secret=one')
       const actionContext = {
         auth: { getUserIdentity: async () => identity },
-        runMutation: setupResult.t.mutation,
+        runMutation: setupResult.owner.mutation,
       }
       const rights = classifyRetentionRights({ 'x-robots-tag': 'noarchive' })
       await orchestrateSourceFetch(actionContext as never, {

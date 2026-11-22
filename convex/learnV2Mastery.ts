@@ -1,3 +1,5 @@
+import { defineTeachingMutation } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -177,7 +179,49 @@ async function digest(value: unknown) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
+function legacyFeedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProjection {
+  if (attempt.feedbackTemplateVersion === ADAPTIVE_FEEDBACK_TEMPLATE_VERSION
+    && attempt.misconceptionTaxonomyVersion === ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION
+    && attempt.feedbackProjectionJson) {
+    const persisted = JSON.parse(attempt.feedbackProjectionJson) as ControlledFeedbackProjection
+    if (persisted?.templateVersion !== attempt.feedbackTemplateVersion || persisted?.taxonomyVersion !== attempt.misconceptionTaxonomyVersion
+      || !Array.isArray(persisted.criterionResults) || !Array.isArray(persisted.misconceptionTags) || !Array.isArray(persisted.misconceptionFeedback)) throw new Error('Committed feedback projection is invalid')
+    return persisted
+  }
+  let criterionResults: Array<{ key: string, awarded: boolean }> = []
+  let misconceptionTags: string[] = []
+  let criteria: Array<{ key: string, description?: string }> = []
+  try {
+    const parsed = JSON.parse(attempt.criterionResultsJson ?? '[]') as unknown
+    if (Array.isArray(parsed)) criterionResults = parsed.flatMap((row) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) return []
+      const item = row as Record<string, unknown>
+      return typeof item.key === 'string' && typeof item.awarded === 'boolean' ? [{ key: item.key, awarded: item.awarded }] : []
+    })
+  }
+  catch { /* persisted rows before feedback */ }
+  try { misconceptionTags = JSON.parse(attempt.misconceptionTagsJson ?? '[]') } catch { /* persisted rows before feedback */ }
+  try {
+    const rubric = JSON.parse(attempt.rubricSnapshot ?? 'null') as { criteria?: Array<{ key?: unknown, description?: unknown }> } | null
+    if (rubric?.criteria && Array.isArray(rubric.criteria)) criteria = rubric.criteria.flatMap(row => typeof row.key === 'string' ? [{ key: row.key, ...(typeof row.description === 'string' ? { description: row.description } : {}) }] : [])
+  }
+  catch { /* persisted rows before feedback */ }
+  const allowed = new Set<string>(ADAPTIVE_MISCONCEPTION_TAGS)
+  const safeTags = [...new Set(misconceptionTags.filter(tag => typeof tag === 'string' && allowed.has(tag)))].slice(0, MAX_MISCONCEPTIONS)
+  try {
+    return projectControlledFeedback({
+      criteria: criteria.map(row => ({ key: row.key, label: row.description?.trim() || row.key })),
+      outcomes: criterionResults,
+      misconceptionTags: safeTags,
+    })
+  }
+  catch {
+    return { templateVersion: ADAPTIVE_FEEDBACK_TEMPLATE_VERSION, taxonomyVersion: ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION, criterionResults: [], misconceptionTags: [], misconceptionFeedback: [] }
+  }
+}
+
 function feedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProjection {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return legacyFeedback(attempt)
   let tags: unknown = []
   try {
     tags = attempt.feedbackTemplateVersion === ADAPTIVE_FEEDBACK_TEMPLATE_VERSION
@@ -325,7 +369,7 @@ async function projectAdaptiveFeedback(ctx: MutationCtx, job: Doc<'learnJobs'>, 
   const activity = await ctx.db.get(job.adaptiveActivityId)
   if (!activity || activity.userId !== job.userId || activity.threadId !== job.adaptiveThreadId || (activity.scoringJobId && activity.scoringJobId !== job._id)) throw new Error('Adaptive scoring projection is unavailable')
   if (activity.masteryAttemptId === attemptId && activity.scoringJobId === job._id
-    && canonicalJson(activity.feedbackProjection ?? null) === canonicalJson(projection)) return
+    && (!LEARN_MEASUREMENT_CAPABILITIES.responses || canonicalJson(activity.feedbackProjection ?? null) === canonicalJson(projection))) return
   await ctx.db.patch(activity._id, {
     status: 'feedback',
     scoringJobId: job._id,
@@ -524,13 +568,15 @@ async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: 
   return { sessionId, scheduledStartAt }
 }
 
-export const recordAssistanceUse = mutation({
+const recordAssistanceUseTeaching = defineTeachingMutation({name:'learnV2Mastery.recordAssistanceUse',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'session',id:args.studySessionId}]),
   args: { studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), kind: v.union(v.literal('substantive_hint'), v.literal('answer_reveal')) },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx)
     const scope = await sessionScope(ctx, userId, args.studySessionId)
-    const assessments = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', scope.session._id)).take(3)
-    if (assessments.length > 2 || assessments.some(row => !row.submissionId && ['retained_transfer', 'measurement_cold', 'measurement_delayed'].includes(row.purpose.kind))) throw new Error('Assessment assistance is unavailable before sealing')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const assessments = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', scope.session._id)).take(3)
+      if (assessments.length > 2 || assessments.some(row => !row.submissionId && ['retained_transfer', 'measurement_cold', 'measurement_delayed'].includes(row.purpose.kind))) throw new Error('Assessment assistance is unavailable before sealing')
+    }
     const blockKind = args.kind === 'substantive_hint' ? 'faded_example' : 'worked_example'
     const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', scope.content._id)).take(16)
     const matches = blocks.filter(block => block.kind === blockKind && block.content?.trim())
@@ -564,6 +610,7 @@ export const recordAssistanceUse = mutation({
     return { status: 'recorded' as const, revision: scope.session.revision + 1, replayed: false, assistance }
   },
 })
+export const recordAssistanceUse = mutation(recordAssistanceUseTeaching)
 
 export const beginMasteryScoring = internalMutation({
   args: {
@@ -577,7 +624,7 @@ export const beginMasteryScoring = internalMutation({
       throw new Error('Learn V2 access denied')
     }
     validateAttemptRequest(args)
-    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
     const fingerprints = await requestFingerprints(args)
     let scope: Awaited<ReturnType<typeof sessionScope>> | undefined
     let adaptiveActivity: Doc<'learningThreadActivities'> | undefined
@@ -832,7 +879,7 @@ export const getMasteryScoringInput = internalQuery({
   handler: async (ctx, args) => {
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) throw new Error('Learn V2 access denied')
     validateAttemptRequest(args)
-    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
     const fingerprints = await requestFingerprints(args)
     const prior = await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', args.tokenIdentifier).eq('idempotencyKey', args.idempotencyKey)).unique()
     if (prior) {
@@ -1008,6 +1055,7 @@ export async function acceptMasterySubmissionForOwner(
   ctx: MutationCtx, tokenIdentifier: string, input: LearnV2AcceptMasterySubmission,
 ): Promise<LearnResponseReceipt> {
   const request = parsePublicLearnRequest(acceptMasterySubmissionSchema, input)
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await acceptResponseForOwner(ctx, tokenIdentifier, request.submission)
   const entry = 'response' in request.submission ? request.submission.response : request.submission.application
   const target = 'assessmentOpportunityId' in entry.target ? await ctx.db.get(entry.target.assessmentOpportunityId) : null
   const existed = target?.submissionId !== undefined
@@ -1412,8 +1460,8 @@ export async function recordLegacyMasteryAttemptForOwner(ctx: MutationCtx, args:
     if (canonicalJson(rubric) !== canonicalJson(scope.objective.assessmentContract)) throw new Error('Started session rubric is no longer pinned to the objective')
     const scorePercent = scoreCriteria(rubric.criteria, args.scorerVerdict.criterionResults)
     const controlledFeedback = projectControlledFeedback({
-      criteria: [],
-      outcomes: [],
+      criteria: LEARN_MEASUREMENT_CAPABILITIES.responses ? [] : rubric.criteria.map(row => ({ key: row.key, label: row.description?.trim() || row.key })),
+      outcomes: LEARN_MEASUREMENT_CAPABILITIES.responses ? [] : args.scorerVerdict.criterionResults,
       misconceptionTags: args.scorerVerdict.misconceptionTags,
     })
     const evidence = await exactContentEvidence(ctx, args.tokenIdentifier, scope.content)
@@ -1451,7 +1499,7 @@ export const recordMasteryAttempt = internalMutation({
   handler: async (ctx, args) => {
     if (!args.scoringJobId || !args.scoringLeaseToken) throw new Error('Saved submission and verified execution receipt required')
     if (LEARN_MEASUREMENT_CAPABILITIES.scoring) throw new Error('Saved submission and verified execution receipt required')
-    if (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', args.tokenIdentifier).eq('contextPins.studySessionId', args.studySessionId)).first()) throw new Error('Saved submission and verified execution receipt required')
     return await recordLegacyMasteryAttemptForOwner(ctx, args)
   },
 })

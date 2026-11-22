@@ -1,3 +1,5 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { assertTeachingCommand, createTeachingHelpGuard } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -32,6 +34,8 @@ export default defineEventHandler(async (event) => {
     taskId?: string
   }>(event)
 
+  assertTeachingCommand(body, { courseId: 'string', taskId: 'string' })
+
   if (!body?.courseId?.trim()) {
     throw createError({ statusCode: 400, message: 'courseId is required' })
   }
@@ -43,6 +47,9 @@ export default defineEventHandler(async (event) => {
   if (!convexClient) {
     throw createError({ statusCode: 500, message: 'Failed to initialize Convex client' })
   }
+
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { courseId })
+  const teachingScope = await authorizeTeaching()
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -83,7 +90,9 @@ export default defineEventHandler(async (event) => {
           .map(d => d.documentId)
           .filter(Boolean) as string[]
 
+        await authorizeTeaching()
         const results = await searchDocuments({
+          teachingScope,
           query: course.title,
           userId,
           folderId,
@@ -102,7 +111,9 @@ export default defineEventHandler(async (event) => {
       }
 
       if (!documentContent.trim() && docIds.length > 0) {
+        await authorizeTeaching()
         const broadResults = await searchDocuments({
+          teachingScope,
           query: course.title,
           userId,
           max_num_results: 40,
@@ -126,7 +137,9 @@ export default defineEventHandler(async (event) => {
       ? 'openai/gpt-4o'
       : SERVER_DEFAULT_MODEL
 
+    await authorizeTeaching()
     const completion = await generateCompletion({
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       model,
       messages,
       temperature: 0.4,
@@ -149,6 +162,7 @@ export default defineEventHandler(async (event) => {
       ? { docCount: 0, webPercent: 100 }
       : { docCount, webPercent: 0 }
 
+    await authorizeTeaching()
     await convexClient.mutation(api.courses.finalizeOutline, {
       courseId,
       outlineSections: sections.map(s => ({
@@ -168,6 +182,7 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    await authorizeTeaching()
     return {
       courseId,
       sectionCount: sections.length,

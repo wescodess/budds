@@ -16,6 +16,7 @@ Spec: [#515](https://github.com/wescodess/budds/issues/515). Blocks C4: [#514](h
 - Round 1: `recommended answers` (Outline, with the orchestrator's recommended side effects).
 - Round 2: `reccommended answers` (3b).
 - States 3b does not draw follow 3a, with Accept only in the bar: `Yes, follow 3a (Recommended)`.
+- 2026-11-18: `fit`. At 320 wide the bar stays on one row: Order becomes an icon-only button (its existing icon, named "Order", 36px) next to Accept, so the first objective's citations stay in view. It narrows only when the bar is under 21rem; wider bars keep the approved Order button.
 
 **Date:** 2026-11-17
 
@@ -39,6 +40,27 @@ Owner's words, 2026-11-17: `No Add on empty map, Time/depth pop-overs, One objec
 - The saving spinner uses `--learn-attention`, as `DESIGN.md` requires for in-progress states.
 - Split is held with the objective's other changes and sent on Save.
 
+## Approved differences from `approved.html`
+
+Owner's words, 2026-11-18: `Keep disabled + note (Recommended)`.
+
+- At 15 objectives, Add objective stays disabled, with the note "A map holds up to 15 objectives. Remove one to add another."
+
+Owner's words, 2026-11-18: `Tint + border (Recommended)`.
+
+- In the sources pop-over, the selected answer to "Do your sources cover this?" uses the `DESIGN.md` active state: an amber `--primary` border and the same 8% amber tint as the order pop-over's current row and the sidebar's Learn item, with `text-foreground`. Keyboard focus is the ring only, and Accept learning map stays the only filled amber action in view.
+- This replaces 3a's filled amber segment.
+
+## Time range and Split
+
+Owner's words, 2026-11-22: `Split into 15 + 15 minutes, showing the increase before Save (Recommended)`.
+
+- An objective's time is a whole number of minutes from 15 to 480, the same range the server saves. The time pop-over's hint reads "15 to 480", and Save stays disabled outside it.
+- Split under 30 minutes, such as the default 25, makes two 15-minute parts. Before Save, the time chip and a second chip read 15 min each, and a caption in the editor's hint style says "Splitting adds 5 min so each part has the 15-minute minimum." The bar's total includes the added minutes.
+- Split at 30 minutes or more keeps the total: both parts are at least 15, and the first takes the odd minute, so 31 becomes 16 and 15.
+- Split is still held until Save.
+- While Split is held, the time chip and its pop-over set the first part's minutes, 15 to 480. The second part keeps its minutes, and the bar's total is the two parts plus the rest of the map. Save checks the two parts shown, not the time before the split.
+
 ## Product decisions carried into the build
 
 - Learners never see or edit criteria, rubrics or weights. The editor has no assessment section, and learner copy never mentions one.
@@ -55,3 +77,8 @@ Owner's words, 2026-11-17: `No Add on empty map, Time/depth pop-overs, One objec
 ## Building it
 
 Read this file and `approved.html` before writing UI code. `approved.html` draws four states and is 3a plus the bar. The editor's other states are drawn only in [3a](./rejected-2-outline-refined.html): sources, what comes first, saving, both save failures, loading, no objectives and one objective. Follow them there, except that Accept lives only in the bar. After the build, compare it with `approved.html` and `DESIGN.md` in a browser, including mobile, then run the [climb's fidelity mode](../climb.md#fidelity-and-revamp-rounds) with the capture of `docs/design/surfaces/learner-map-editor.json` as `TARGET`.
+
+Build notes, 2026-11-22. These follow the server source limits the owner kept on 2026-11-22. They use the editor's existing hint style and add no components or tokens.
+
+- An objective uses at most 10 sources, counting "Teach this from" and "Looked at, but not enough" together. At 10, the unticked sources in the pop-over are disabled, and a caption in the hint style says "An objective can use up to 10 sources. Untick one to add another."
+- A map uses sources at most 60 times across its objectives, and Split copies the objective's sources into the new part. When a save would go over, Save stays disabled and a one-line hint under it says "A map can use sources up to 60 times across its objectives. Untick a source to save."

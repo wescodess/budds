@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -36,6 +38,7 @@ import { hasAdaptiveExperienceAccess } from "./lib/adaptiveLearnAccess";
 import { loadAdaptiveClaimProjection } from "./lib/adaptiveClaimProjection";
 import { matchesLegacyFingerprint } from "./lib/learnV2ResponsePrivacy";
 import { isTestOnlyMeasurementSession, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
+import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -671,14 +674,16 @@ export const commitSessionContentCandidate = internalMutation({
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
       throw new Error("Session-content lease unavailable");
-    let input: Awaited<ReturnType<typeof inputs>>;
-    try {
-      input = await inputs(ctx, args.tokenIdentifier, job);
-    } catch {
-      await block(ctx, job, "input_revision_conflict");
-      return { status: "blocked" as const };
+    let input: Awaited<ReturnType<typeof inputs>> | undefined;
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      try {
+        input = await inputs(ctx, args.tokenIdentifier, job);
+      } catch {
+        await block(ctx, job, "input_revision_conflict");
+        return { status: "blocked" as const };
+      }
     }
-    if (input.assessment) {
+    if (input?.assessment) {
       const existing = await ctx.db.query("sessionContent")
         .withIndex("by_userId_and_studySessionId_and_revision", q => q.eq("userId", args.tokenIdentifier).eq("studySessionId", input.session._id)).take(1);
       if (existing.length) throw new Error("Session content revision already exists");
@@ -721,6 +726,14 @@ export const commitSessionContentCandidate = internalMutation({
         updatedAt: Date.now(),
       });
       return { status: "generation_failed" as const };
+    }
+    if (!input) {
+      try {
+        input = await inputs(ctx, args.tokenIdentifier, job);
+      } catch {
+        await block(ctx, job, "input_revision_conflict");
+        return { status: "blocked" as const };
+      }
     }
     const sourceToExcerpt = new Map<string, Id<"learnSourceExcerpts">>();
     const sourceEvidence = new Map<string, { sourceExcerptId: string }>();
@@ -787,11 +800,13 @@ export const commitSessionContentCandidate = internalMutation({
       await block(ctx, job, "rubric_revision_conflict");
       return { status: "blocked" as const };
     }
-    const catalogs = await ctx.db.query("learnAssessmentCatalogs").withIndex("by_userId", q => q.eq("userId", args.tokenIdentifier)).take(2);
-    if (catalogs.length) {
-      const scope = catalogs[0]?.measurementCapability?.enabled === true
-        ? (await sessionMeasurementScope(ctx, args.tokenIdentifier, input.session)).scope : null;
-      await publishInstructionalSessionCases(ctx, args.tokenIdentifier, scope, candidate);
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const catalogs = await ctx.db.query("learnAssessmentCatalogs").withIndex("by_userId", q => q.eq("userId", args.tokenIdentifier)).take(2);
+      if (catalogs.length) {
+        const scope = catalogs[0]?.measurementCapability?.enabled === true
+          ? (await sessionMeasurementScope(ctx, args.tokenIdentifier, input.session)).scope : null;
+        await publishInstructionalSessionCases(ctx, args.tokenIdentifier, scope, candidate);
+      }
     }
     const now = Date.now();
     const contentId = await ctx.db.insert("sessionContent", {
@@ -1459,7 +1474,10 @@ export const recordMeaningfulActivityStarted = mutation({
   },
 });
 
-export const getSessionContent = query({
+const getSessionContentRead = defineTeachingRead({
+  name: 'learnV2SessionContent.getSessionContent',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'session', id: args.studySessionId }]),
+
   args: { studySessionId: v.id("studySessions") },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx);
@@ -1548,4 +1566,7 @@ export const getSessionContent = query({
       : null;
     return { ...publicContent, blocks: visibleBlocks, claims, supports, ...(adaptivePresentation ? { adaptivePresentation } : {}) };
   },
-});
+
+})
+export const getSessionContent = query(getSessionContentRead.query)
+export const getSessionContentDelivery = mutation(getSessionContentRead.delivery)
