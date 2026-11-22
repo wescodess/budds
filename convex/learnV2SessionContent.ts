@@ -684,8 +684,9 @@ export const commitSessionContentCandidate = internalMutation({
       }
     }
     if (input?.assessment) {
+      const sessionId = input.session._id;
       const existing = await ctx.db.query("sessionContent")
-        .withIndex("by_userId_and_studySessionId_and_revision", q => q.eq("userId", args.tokenIdentifier).eq("studySessionId", input.session._id)).take(1);
+        .withIndex("by_userId_and_studySessionId_and_revision", q => q.eq("userId", args.tokenIdentifier).eq("studySessionId", sessionId)).take(1);
       if (existing.length) throw new Error("Session content revision already exists");
       const now = Date.now();
       const contentId = await ctx.db.insert("sessionContent", {
