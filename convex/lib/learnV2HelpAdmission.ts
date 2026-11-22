@@ -181,6 +181,25 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
     provenanceVersion: LEARN_HELP_ADMISSION_VERSION })
 }
 
+function futurePreparing(row: Doc<'learnAssessmentOpportunities'>, now: number) {
+  return row.phase === 'preparing' && Number.isFinite(row.openAt) && row.openAt > now
+}
+
+async function recordInterveningPractice(ctx: MutationCtx, userId: string, rows: Doc<'learnAssessmentOpportunities'>[], request: LearnHelpRequest, scopeDigest: string, now: number) {
+  for (const row of rows) {
+    const hash = await privacyDigest(['learn-v2.intervening-practice.v1', request.idempotencyKey, request.kind,
+      row.assignmentId ?? row._id, row.blueprintRevisionId, row.objectiveId])
+    const prior = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', hash)).unique()
+    if (prior) continue
+    // Prior practice belongs to the assignment, not assistance during its future attempt.
+    await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
+      learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId,
+      ...(row.assignmentId ? { assignmentId: row.assignmentId } : {}), purpose: 'practice', status: 'known',
+      projectionDigest: scopeDigest, deliveryReceiptHash: hash, serverTime: now, policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION,
+      provenanceVersion: 'learn-v2.intervening-practice.v1' })
+  }
+}
+
 export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
   return await admitLearnHelp(ctx, userId, input, delivery)
@@ -212,6 +231,7 @@ export async function inspectLearnHelpForAudioJob(ctx: ReadCtx, job: Doc<'audioO
 async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false): Promise<LearnHelpAdmission> {
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
+  const now = Date.now()
   const request = parsePublicLearnRequest(admitHelpSchema, input)
   const deny = (reasonCode: 'test_open' | 'disclosure_unknown' | 'unavailable'): LearnHelpAdmission => ({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode })
   const record = async (row: Doc<'learnAssessmentOpportunities'>, reason: string, scopeDigest: string) => {
@@ -249,21 +269,24 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
     return deny(reason)
   }
   if (!matches.length) return ordinary
+  const future = matches.filter(row => futurePreparing(row, now))
+  const current = matches.filter(row => !futurePreparing(row, now))
   const scopeDigest = await privacyDigest({ kind: request.kind, scope: request.scope })
   if (request.ordinaryOnly) {
-    const reason = matches.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose)) ? 'test_open' : 'unavailable'
-    for (const row of matches) await record(row, reason, scopeDigest)
+    if (!current.length) return ordinary
+    const reason = current.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose)) ? 'test_open' : 'unavailable'
+    for (const row of current) await record(row, reason, scopeDigest)
     return deny(reason)
   }
   if (readOnly) {
-    if (matches.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose))) return deny('test_open')
-    if (matches.some(row => row.phase !== 'test_open')) return deny('unavailable')
+    if (current.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose))) return deny('test_open')
+    if (current.some(row => row.phase !== 'test_open')) return deny('unavailable')
     return { version: LEARN_HELP_ADMISSION_VERSION, status: 'authorized', authorizations: [] }
   }
   if (!isMutationContext(ctx)) throw new Error('Help admission unavailable')
   const key = `help_${(await privacyDigest([request.idempotencyKey, request.kind])).slice(7)}`
   const preparations = []
-  for (const row of matches) {
+  for (const row of current) {
     const prepared = await prepareLearnResponseAssistanceForOwner(ctx, userId, { version: LEARN_V2_PUBLIC_API_VERSION,
       kind: request.kind, idempotencyKey: key, assessmentOpportunityId: row._id }).catch(() => null)
     preparations.push(prepared)
@@ -284,5 +307,6 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
     if (result.status !== 'authorized') throw new Error('Help admission unavailable')
     authorizations.push({ assessmentOpportunityId: prepared.row._id, authorizationId: result.authorizationId })
   }
+  await recordInterveningPractice(ctx, userId, future, request, scopeDigest, now)
   return { version: LEARN_HELP_ADMISSION_VERSION, status: 'authorized', authorizations }
 }

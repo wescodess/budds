@@ -36,9 +36,16 @@ import type { LearnV2AssessmentContract } from "../shared/learn-v2-blueprint";
 import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, writeLearnActivityEvent } from "./lib/learnAdaptiveEvents";
 import { hasAdaptiveExperienceAccess } from "./lib/adaptiveLearnAccess";
 import { loadAdaptiveClaimProjection } from "./lib/adaptiveClaimProjection";
-import { matchesLegacyFingerprint } from "./lib/learnV2ResponsePrivacy";
+import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePrivacy";
 import { isTestOnlyMeasurementSession, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
+import { prepareTodayAssessment, resolveTodayAssessment } from './learnV2Today';
+import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
+import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
+import { getLearnResponseStateForOwner } from './lib/learnV2Responses';
+import { isLearnV2ContentEvidenceReady } from './lib/learnV2ContentEvidenceReady';
+import { normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage';
+import { LEARN_HELP_ADMISSION_VERSION } from './lib/learnV2HelpContract';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -169,6 +176,46 @@ function sessionStartFingerprint(args: {
     expectedSessionRevision: args.expectedSessionRevision,
     expectedContentRevision: args.expectedContentRevision,
   });
+}
+
+async function separateTeachingReady(ctx: QueryCtx | MutationCtx, userId: string, content: Doc<'sessionContent'>, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (isTestOnlyMeasurementSession(content) || !await isLearnV2ContentEvidenceReady(ctx, userId, content, opportunity.learningVoidId)) return false;
+  const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17);
+  const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33);
+  if (!blocks.length || blocks.length > 16 || !claims.length || claims.length > 32) return false;
+  let rubric: unknown;
+  try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? ''); } catch { return false; }
+  for (const text of [...blocks.map(row => row.content ?? ''), ...claims.map(row => row.claim ?? ''), canonicalJson(rubric)]) {
+    const pins = await normalizedInstructionalCaseFingerprints(text, text);
+    const rows = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint_and_solutionFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', pins.scenarioFingerprint).eq('solutionFingerprint', pins.solutionFingerprint)).take(2);
+    const row = rows[0];
+    if (rows.length !== 1 || !row || row.usageClass !== 'instructional' || row.reservedAt !== undefined || !row.identityValidationId) return false;
+    const validation = await ctx.db.get(row.identityValidationId);
+    if (!validation || validation.userId !== userId || validation.subject.kind !== 'case' || validation.subject.caseId !== row._id
+      || validation.decision !== 'pass' || validation.check !== 'same_case_novelty' || validation.evidenceStatus !== 'available'
+      || validation.invalidatedAt !== undefined || validation.learningVoidId !== opportunity.learningVoidId
+      || validation.blueprintRevisionId !== opportunity.blueprintRevisionId || validation.objectiveId !== opportunity.objectiveId) return false;
+  }
+  return true;
+}
+
+async function instructionReceiptHash(content: Doc<'sessionContent'>, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  return await privacyDigest(['learn-v2.today-instruction.v1', opportunity.assignmentId, content.studySessionId, content._id, content.revision, content.inputDigest]);
+}
+
+async function hasInstructionGrant(ctx: QueryCtx | MutationCtx, userId: string, content: Doc<'sessionContent'>, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  const hash = await instructionReceiptHash(content, opportunity);
+  const row = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', hash)).unique();
+  return row !== null && row.assignmentId === opportunity.assignmentId && row.studySessionId === content.studySessionId
+    && row.status === 'granted' && row.purpose === 'teaching' && row.provenanceVersion === 'learn-v2.instructional-flow.v2_today.v1';
+}
+
+async function grantTodayTeaching(ctx: MutationCtx, userId: string, content: Doc<'sessionContent'>, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (!opportunity.assignmentId || !opportunity.submissionId || !await separateTeachingReady(ctx, userId, content, opportunity)) return false;
+  await recordLearnMeasurementInstructionForOwner(ctx, userId, { assignmentId: opportunity.assignmentId, studySessionId: content.studySessionId,
+    flow: 'v2_today', projectionDigest: await privacyDigest([content._id, content.revision, content.inputDigest]),
+    deliveryReceiptHash: await instructionReceiptHash(content, opportunity) });
+  return true;
 }
 
 async function block(ctx: MutationCtx, job: Doc<"learnJobs">, reason: string) {
@@ -1188,6 +1235,14 @@ export const retrySessionContentGeneration = mutation({
       studySessionId: String(args.studySessionId),
       expectedSessionRevision: args.expectedSessionRevision,
     });
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const session = await ctx.db.get(args.studySessionId);
+      if (session?.userId === userId) {
+        const assessment = await resolveTodayAssessment(ctx, userId, session);
+        if (assessment.required && (assessment.reasonCode || !assessment.opportunity?.submissionId || isTestOnlyMeasurementSession(session)))
+          throw new Error('Assessment generation cannot be retried');
+      }
+    }
     const prior = await ctx.db.query("learnPlanCommandReceipts")
       .withIndex("by_userId_and_idempotencyKey", (q) => q.eq("userId", userId).eq("idempotencyKey", args.idempotencyKey))
       .unique();
@@ -1282,6 +1337,7 @@ export const startStudySession = mutation({
     expectedSessionRevision: v.number(),
     expectedContentRevision: v.number(),
     idempotencyKey: v.string(),
+    entryPoint: v.optional(v.union(v.literal('today'), v.literal('session_deep_link'))),
   },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx);
@@ -1290,7 +1346,6 @@ export const startStudySession = mutation({
     const session = await ctx.db.get(args.studySessionId);
     if (!session || session.userId !== userId)
       throw new Error("Study session is not ready");
-    if (isTestOnlyMeasurementSession(session)) throw new Error("Assessment delivery is unavailable");
     const plan = await ctx.db.get(session.studyPlanRevisionId);
     if (!plan || plan.userId !== userId)
       throw new Error("Study session is not ready");
@@ -1304,6 +1359,34 @@ export const startStudySession = mutation({
       || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new Error("Active Blueprint pointer is unavailable");
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (LEARN_MEASUREMENT_CAPABILITIES.enrollment || isTestOnlyMeasurementSession(session))) {
+      if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1
+        || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new Error('Expected session revision is invalid');
+      const content = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', args.expectedContentRevision)).unique();
+      if (!content || content.status !== 'published' || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id
+        || content.objectiveId !== session.primaryObjectiveId || !['ready', 'in_progress'].includes(session.status)
+        || session.status === 'ready' && session.revision !== args.expectedSessionRevision
+        || session.status === 'in_progress' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision)) throw new Error('Study session is not ready');
+      const now = Date.now();
+      if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, session.timezone ?? plan.timezone ?? 'UTC') !== localDateAt(now, session.timezone ?? plan.timezone ?? 'UTC')) throw new Error('Study session is not scheduled for today');
+      if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now) throw new Error('Study session window has expired');
+      const assessment = await prepareTodayAssessment(ctx, userId, session, args.entryPoint ?? 'today');
+      if (assessment.required) {
+        const opportunity = assessment.opportunity;
+        if (assessment.reasonCode || !opportunity || assessment.state?.status !== 'available') return { status: 'assessment' as const,
+          sessionContentId: content._id, sessionContentRevision: content.revision, assessment: assessment.state, deliveryGrant: null };
+        if (isTestOnlyMeasurementSession(session) || !opportunity.submissionId) {
+          const grant = opportunity.submissionId ? null : await grantLearnAssessmentDeliveryForOwner(ctx, userId, {
+            assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision,
+            idempotencyKey: (await privacyDigest(args.idempotencyKey)).slice(7), flow: 'today' });
+          return { status: 'assessment' as const, sessionContentId: content._id, sessionContentRevision: content.revision,
+            assessment: (await resolveTodayAssessment(ctx, userId, session)).state, deliveryGrant: grant };
+        }
+        if (!assessment.state.capabilities.canTeachSeparateCase || !await grantTodayTeaching(ctx, userId, content, opportunity)) return { status: 'assessment' as const,
+          sessionContentId: content._id, sessionContentRevision: content.revision, assessment: assessment.state, deliveryGrant: null };
+      }
+    }
+    if (isTestOnlyMeasurementSession(session)) throw new Error("Assessment delivery is unavailable");
     const fingerprint = sessionStartFingerprint(args);
     const prior = await ctx.db
       .query("learnPlanCommandReceipts")
@@ -1569,5 +1652,61 @@ const getSessionContentRead = defineTeachingRead({
   },
 
 })
-export const getSessionContent = query(getSessionContentRead.query)
-export const getSessionContentDelivery = mutation(getSessionContentRead.delivery)
+async function todayAssessmentContent(ctx: QueryCtx | MutationCtx, studySessionId: Id<'studySessions'>, authorizeTeaching = false) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return undefined;
+  const userId = await requireLearnV2QueryAccess(ctx);
+  const session = await ctx.db.get(studySessionId);
+  if (!session || session.userId !== userId) return null;
+  const assessment = await resolveTodayAssessment(ctx, userId, session);
+  if (!assessment.required) return undefined;
+  if (assessment.reasonCode && isTestOnlyMeasurementSession(session)) return null;
+  if (!['ready', 'in_progress'].includes(session.status)) return null;
+  const content = session.status === 'in_progress'
+    ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
+    : await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first();
+  if (!content || content.status !== 'published' || content.studyPlanRevisionId !== session.studyPlanRevisionId
+    || content.objectiveId !== session.primaryObjectiveId || session.status === 'in_progress' && session.startedSessionContentId !== content._id) return null;
+  const opportunity = assessment.opportunity;
+  if (!isTestOnlyMeasurementSession(session) && !assessment.reasonCode && opportunity?.submissionId
+    && assessment.state?.status === 'available' && assessment.state.capabilities.canTeachSeparateCase
+    && await separateTeachingReady(ctx, userId, content, opportunity)) {
+    if (authorizeTeaching && 'scheduler' in ctx) await grantTodayTeaching(ctx, userId, content, opportunity);
+    if (await hasInstructionGrant(ctx, userId, content, opportunity)) return undefined;
+  }
+  const delivered = opportunity && !assessment.reasonCode ? await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'today') : null;
+  const response = opportunity?.submissionId && !assessment.reasonCode
+    ? await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id }) : null;
+  return { _id: content._id, studySessionId: session._id, studyPlanRevisionId: content.studyPlanRevisionId,
+    blueprintRevisionId: content.blueprintRevisionId, objectiveId: content.objectiveId, revision: content.revision, status: 'published' as const,
+    blocks: [], claims: [], supports: [], assessment: assessment.state, delivered,
+    work: response?.status === 'available' ? response.work : null };
+}
+
+function todayTeachingProjection(value: Awaited<ReturnType<typeof getSessionContentRead.query.handler>>) {
+  if (!value) return null;
+  return { _id: value._id, studySessionId: value.studySessionId, studyPlanRevisionId: value.studyPlanRevisionId,
+    blueprintRevisionId: value.blueprintRevisionId, objectiveId: value.objectiveId, revision: value.revision, status: value.status,
+    blocks: value.blocks.map(row => ({ _id: row._id, sessionContentId: row.sessionContentId, order: row.order, kind: row.kind, content: row.content })),
+    claims: value.claims.map(row => ({ _id: row._id, order: row.order, claim: row.claim })),
+    supports: value.supports.map(row => ({ _id: row._id, sessionContentClaimId: row.sessionContentClaimId, sourceSnapshotId: row.sourceSnapshotId,
+      entailment: row.entailment, conflictStatus: row.conflictStatus, evidenceStatus: row.evidenceStatus, verifierVersion: row.verifierVersion, confidence: row.confidence })) };
+}
+
+export const getSessionContent = query({
+  args: getSessionContentRead.query.args,
+  handler: async (ctx, args) => {
+    const assessment = await todayAssessmentContent(ctx, args.studySessionId);
+    if (assessment !== undefined) return assessment;
+    const content = await getSessionContentRead.query.handler(ctx, args);
+    return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.enrollment ? todayTeachingProjection(content) : content;
+  },
+});
+export const getSessionContentDelivery = mutation({
+  args: getSessionContentRead.delivery.args,
+  handler: async (ctx, args) => {
+    const assessment = await todayAssessmentContent(ctx, args.studySessionId, true);
+    if (assessment !== undefined) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, value: assessment };
+    const result = await getSessionContentRead.delivery.handler(ctx, args);
+    return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.enrollment ? { admission: result.admission, value: todayTeachingProjection(result.value) } : result;
+  },
+});

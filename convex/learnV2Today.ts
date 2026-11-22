@@ -1,9 +1,16 @@
 import type { Doc } from './_generated/dataModel'
 import { query } from './_generated/server'
+import type { MutationCtx, QueryCtx } from './_generated/server'
 import { requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { localDateAt } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
-import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
+import { getScopedMasteryRecord, masteryScopeKey } from './lib/learnV2MasteryScope'
+import { isTestOnlyMeasurementSession } from './lib/learnV2MeasurementItems'
+import { enrollLearnMeasurementForOwner } from './lib/learnV2Measurement'
+import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
@@ -18,6 +25,53 @@ function rank(session: { placementKind?: string, schedulingPriority?: string, sc
 }
 
 type Candidate = { session: Doc<'studySessions'>, plan: Doc<'studyPlanRevisions'>, blueprint: Doc<'learnBlueprintRevisions'>, objective: Doc<'learnObjectives'>, record: Doc<'masteryRecords'> | null }
+
+export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>) {
+  const ordinary = { required: false as const, opportunity: null, state: null, reasonCode: null }
+  const blocked = (reasonCode: string) => ({ required: true as const, opportunity: null, state: null, reasonCode })
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
+  const testOnly = isTestOnlyMeasurementSession(session)
+  if (!testOnly && !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return ordinary
+  let opportunity = session.assessmentOpportunityId ? await ctx.db.get(session.assessmentOpportunityId) : null
+  if (session.assessmentOpportunityId && !opportunity) return blocked('assessment_unavailable')
+  if (!opportunity && testOnly) {
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', session._id)).take(3)
+    if (rows.length !== 1) return blocked('assessment_unavailable')
+    opportunity = rows[0]!
+  }
+  if (!opportunity) {
+    const protocol = getFrozenLearnMeasurementProtocol()
+    if (!protocol) return blocked('protocol_not_frozen')
+    const plan = await ctx.db.get(session.studyPlanRevisionId)
+    if (!plan?.blueprintRevisionId) return blocked('pins_mismatch')
+    const assignmentKey = await privacyDigest(['learn-v2.measurement-episode.v1',
+      await masteryScopeKey(userId, plan.blueprintRevisionId, session.primaryObjectiveId), protocol.epoch])
+    const assignment = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_assignmentKey', q => q.eq('userId', userId).eq('assignmentKey', assignmentKey)).unique()
+    if (!assignment) return blocked('assessment_not_prepared')
+    if (assignment.status !== 'admitted') return blocked('not_admitted')
+    opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
+    if (!opportunity) return blocked('assessment_unavailable')
+  }
+  if (opportunity.userId !== userId || opportunity.objectiveId !== session.primaryObjectiveId
+    || opportunity.contextPins.kind === 'calibration' || opportunity.contextPins.studyPlanRevisionId !== session.studyPlanRevisionId
+    || opportunity.contextPins.kind === 'session' && opportunity.contextPins.studySessionId !== session._id
+    || testOnly && session.assessmentPurpose !== undefined && opportunity.purpose.kind !== session.assessmentPurpose
+    || session.placementKind === 'retained_review' && !['retained_transfer', 'measurement_delayed'].includes(opportunity.purpose.kind)) return blocked('pins_mismatch')
+  const state = await readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, 'today')
+  return { required: true as const, opportunity, state, reasonCode: state.status === 'available' ? null : 'assessment_unavailable' }
+}
+
+export async function prepareTodayAssessment(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>, entryPoint: 'today' | 'session_deep_link') {
+  const current = await resolveTodayAssessment(ctx, userId, session)
+  if (current.reasonCode !== 'assessment_not_prepared' || isTestOnlyMeasurementSession(session)) return current
+  const plan = await ctx.db.get(session.studyPlanRevisionId)
+  if (!plan?.blueprintRevisionId) return current
+  const families = await ctx.db.query('learnMeasurementFamilies').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', plan.blueprintRevisionId!).eq('objectiveId', session.primaryObjectiveId)).take(7)
+  const available = families.filter(row => ['provisional_equivalent', 'empirically_supported'].includes(row.status) && row.evidenceStatus === 'available' && row.invalidatedAt === undefined)
+  await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, entryPoint,
+    ...(families.length <= 6 && available.length === 1 ? { familyId: available[0]!._id } : {}) })
+  return await resolveTodayAssessment(ctx, userId, session)
+}
 
 // The projection intentionally verifies current pins again. A stale shell is not a
 // to-do item: it remains invisible until the plan/generation path repairs it.
@@ -72,6 +126,19 @@ export const getToday = query({
     if (!content || content.status !== 'published'
       || (candidate.session.status === 'in_progress' && (candidate.session.startedSessionContentId !== content._id || candidate.session.startedSessionContentRevision !== content.revision))
       || content.studyPlanRevisionId !== candidate.plan._id || content.blueprintRevisionId !== candidate.blueprint._id || content.objectiveId !== candidate.objective._id) return { status: 'blocked' as const, reason: 'started_content_unavailable', nextScheduledAt }
+    const assessment = await resolveTodayAssessment(ctx, userId, candidate.session)
+    if (assessment.required) {
+      if (assessment.reasonCode || !assessment.state || !assessment.opportunity) return { status: 'blocked' as const, reason: assessment.reasonCode ?? 'assessment_unavailable',
+        sessionId: candidate.session._id, sessionRevision: candidate.session.revision, canRetryGeneration: false, nextScheduledAt }
+      return { status: 'ready' as const, sessionId: candidate.session._id, sessionRevision: candidate.session.revision,
+        scheduledStartAt: candidate.session.scheduledStartAt, scheduledEndAt: candidate.session.scheduledEndAt ?? null,
+        timezone: candidate.session.timezone ?? candidate.plan.timezone ?? 'UTC', placementKind: candidate.session.placementKind ?? 'learning',
+        objective: { id: candidate.objective._id, title: candidate.objective.title, capability: candidate.objective.capability ?? null, estimatedMinutes: candidate.objective.estimatedMinutes ?? null },
+        mastery: { state: candidate.record?.state ?? 'unseen', nextReviewAt: candidate.record?.nextReviewAt ?? null },
+        content: { id: content._id, revision: content.revision, assessmentRubricVersion: null },
+        plan: { revisionId: candidate.plan._id, recordRevision: candidate.plan.recordRevision!, blueprintRevisionId: candidate.blueprint._id, blueprintRecordRevision: candidate.blueprint.recordRevision },
+        assessment: assessment.state, nextScheduledAt }
+    }
     const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(MAX_CLAIMS + 1)
     if (!claims.length || claims.length > MAX_CLAIMS) return { status: 'blocked' as const, reason: 'content_evidence_unavailable', nextScheduledAt }
     for (const claim of claims) {
