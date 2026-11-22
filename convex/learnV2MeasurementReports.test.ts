@@ -151,14 +151,14 @@ describe('bounded real-table report snapshots', () => {
     const f = await fixture()
     const runId = await f.begin()
     await f.complete(runId)
-    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v2' }))
+    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v3' }))
     const stale = { status: 'stale', reasonCodes: ['report_policy_changed'] }
     expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject(stale)
     expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
     expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
     const rebuilt = await f.begin()
     expect(rebuilt).not.toBe(runId)
-    expect(await f.complete(rebuilt)).toMatchObject({ status: 'sealed', provenance: { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v1' } })
+    expect(await f.complete(rebuilt)).toMatchObject({ status: 'sealed', provenance: { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' } })
   })
 
   test('enumerates an ordinary blocked first claim without an assignment or thread and preserves unknown state', async () => {

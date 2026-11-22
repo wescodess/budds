@@ -13,7 +13,7 @@ import { measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-
 const script = fileURLToPath(new URL('./learn-v2-measurement-report.mjs', import.meta.url))
 const fixturePath = fileURLToPath(new URL('./learn-v2-measurement-report.fixture.v1.json', import.meta.url))
 const fixture = () => JSON.parse(readFileSync(fixturePath, 'utf8'))
-const fixtureOutputDigest = '36427bc1936bbf42ace9dea164d306cf7c410cae9e2730778b57fe3e7b359170'
+const fixtureOutputDigest = '39162b65275a145a97ce0cc436fc022be5237ed7dffa7a43f050ac86bec319ba'
 let directory: string
 let guard: string
 let sequence = 0
@@ -148,7 +148,7 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(code).toBe(0)
     expect(output.reasonCodes).toEqual(['offline_replay_only'])
     expect(primary(output)).toMatchObject({ observedValue: -20, allEligibleValue: -20, missingOutcomeBounds: { lower: -20, upper: -20 },
-      confidenceInterval: null, counts: { maturedEpisodes: 5, comparablePairs: 5 }, publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v1' })
+      confidenceInterval: null, counts: { maturedEpisodes: 5, comparablePairs: 5 }, publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' })
     expect(primary(output).reasonCodes).not.toContain('insufficient_learners')
     input.rows = input.rows.filter((row: LearnReportInputSnapshot) => row.learnerKey !== input.roster[0])
     input.roster = input.roster.slice(1)
@@ -159,7 +159,7 @@ describe('Node 24 offline measurement report CLI', () => {
   it('exactly replays a sealed-input envelope without promoting the file to trusted live evidence', () => {
     const { code, output, serialized } = replay(fixture(), '--sealed-input')
     expect(code).toBe(0)
-    expect(createHash('sha256').update(serialized).digest('hex')).toBe('d76926cde2bf22218c1c8450ae293246b563816549fd7dee46c5550fb129c4d0')
+    expect(createHash('sha256').update(serialized).digest('hex')).toBe('796a26fd22e77d73559530e0b611a324743c4a0c09b7ce6d358e2e60843ba3fa')
     expect(output).toMatchObject({ inputClass: 'sealed_input_replay', reasonCodes: ['offline_replay_only', 'insufficient_learners'] })
     expect(output.readiness.sourceAdmission).toBe('pending')
   })

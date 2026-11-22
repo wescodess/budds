@@ -1,6 +1,6 @@
 import type { LearnPublishedReportMetric, LearnReportMetric } from './learn-v2-measurement-report'
 
-export const LEARN_REPORT_PUBLICATION_POLICY_VERSION = 'learn-v2.report-publication.minimum-five-learners.v1' as const
+export const LEARN_REPORT_PUBLICATION_POLICY_VERSION = 'learn-v2.report-publication.minimum-five-learners.v2' as const
 export const LEARN_REPORT_MINIMUM_CONTRIBUTING_LEARNERS = 5
 export const LEARN_REPORT_INSUFFICIENT_LEARNERS = 'insufficient_learners'
 
