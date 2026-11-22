@@ -2,7 +2,6 @@ import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { createResponsePrivacyReadContext, privacyRead, responsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
-import { api } from './_generated/api'
 import { internalMutation, internalQuery, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { hasAdaptiveExperienceAccess, requireAdaptiveMutationAccess, requireAdaptiveQueryAccess } from './lib/adaptiveLearnAccess'
@@ -22,7 +21,8 @@ import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
-import { LEARN_V2_PUBLIC_API_VERSION, type LearnV2AssessmentDelivery, type LearnV2DeliveryGrant } from './lib/learnV2PublicContract'
+import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
+import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '../shared/learn-v2-responses'
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses'
 import { acceptMasterySubmissionForOwner } from './learnV2Mastery'
@@ -32,10 +32,7 @@ import { learnMeasurementItemPinsSchema } from '../shared/learn-v2-measurement'
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
 type CanvasAttachmentRequest = { studySessionId: Id<'studySessions'>, expectedSessionRevision: number, idempotencyKey: string }
-type CanvasDeliveryGrant = (ctx: MutationCtx, userId: string, request: { assessmentOpportunityId: Id<'learnAssessmentOpportunities'>,
-  expectedRevision: number, idempotencyKey: string, flow: 'today' | 'canvas' }) => Promise<LearnV2DeliveryGrant>
-
-export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRequest, grant: CanvasDeliveryGrant) {
+async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRequest) {
   const userId = await requireAdaptiveMutationAccess(ctx)
   const prepared = await prepareAdaptiveCommand({ userId, commandName: 'attachReadySession', targetId: String(args.studySessionId),
     expectedRevision: args.expectedSessionRevision, idempotencyKey: args.idempotencyKey, payload: { studySessionId: String(args.studySessionId) } })
@@ -53,12 +50,14 @@ export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttac
   const learningVoid = await ctx.db.get(opportunity.learningVoidId)
   if (!plan || !content || !learningVoid || [plan, content, learningVoid].some(row => row.userId !== userId)
     || content.studySessionId !== session._id || content.studyPlanRevisionId !== plan._id
+    || content.status !== 'published' || session.primaryObjectiveId !== opportunity.objectiveId
     || content.assessmentOpportunityId !== opportunity._id || content.objectiveId !== opportunity.objectiveId
     || content.blueprintRevisionId !== opportunity.blueprintRevisionId || plan.learningVoidId !== opportunity.learningVoidId
     || !content.inputDigest || !content.generatorVersion || await measurementScopeReason(ctx, userId, opportunity)) return unavailable('pins_mismatch')
   const itemPins = opportunity.assessmentPins.kind === 'measurement' ? learnMeasurementItemPinsSchema.parse(opportunity.assessmentPins.itemPins) : null
   const item = itemPins ? await ctx.db.get(itemPins.itemId) : null
   if (itemPins && (!item || item.userId !== userId || item.responseSpec.kind !== 'bounded_rubric')) return unavailable('response_format_unavailable')
+  if (item && !assessmentPrimitive(item.prompt).ok) return unavailable('response_format_unavailable')
   const responseSpec = item?.responseSpec.kind === 'bounded_rubric' ? item.responseSpec : null
   const claims = item ? await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(33) : []
   const evidenceReferences: Doc<'learningThreadActivities'>['evidenceReferences'] = []
@@ -85,7 +84,8 @@ export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttac
     if (!scope || !await canvasPilotAllowed(userId, scope)) return unavailable('canvas_not_admitted')
     const replay = await replayAdaptiveActivityPlan(storedPlan(scope.activity))
     if (!replay.ok) return unavailable('disclosure_unknown')
-    if (!scope.opportunity.deliveryGrantId) return unavailable('not_delivered')
+    const delivery = await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'canvas')
+    if (delivery.status !== 'delivered') return unavailable('assessment_unavailable')
     if (prior?.resultReference && prior.resultRedactedAt === undefined) {
       const saved = JSON.parse(prior.resultReference) as { threadId: string, activityId: string }
       if (saved.threadId !== scope.thread._id || saved.activityId !== scope.activity.activityId) return unavailable('receipt_conflict')
@@ -96,6 +96,7 @@ export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttac
     || opportunity.deliveryGrantId || opportunity.submissionId || opportunity.contextPins.kind === 'session' && opportunity.contextPins.canvas) return unavailable('flow_already_bound')
   const candidates = await ctx.db.query('learningThreadActivities').withIndex('by_userId_and_sessionContentId_and_updatedAt', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(1)
   if (candidates.length) return unavailable('canvas_unavailable')
+  if (!await canvasPilotDecision(userId, opportunity.scoringBinding, 'learn-adaptive.activity-contract.v1', 'learn-adaptive.evaluation.v1', process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST)) return unavailable('canvas_not_admitted')
   const now = Date.now()
   const threadId = await ctx.db.insert('learningThreads', { userId, originalNeed: 'Complete the assigned check.', outcome: 'Assigned check',
     outcomeProvenance: 'explicit', intent: 'master', availableTime: '15', authorityKind: 'v2_mission', learningVoidId: learningVoid._id,
@@ -103,7 +104,7 @@ export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttac
   const compose = async (deliveryGrantId: Id<'learnAssessmentExposures'> | null) => await composeAdaptiveActivityPlan({
     activityId: `assessment:${String(opportunity._id)}`, threadId: String(threadId), boundaryOrdinal: 1, planRevision: 1,
     activityClass: 'factual', intent: 'master', objectiveId: String(opportunity.objectiveId), purpose: 'Complete the assigned check.', reasonCode: 'assessment_check',
-    primitiveSequence: item ? [] : [{ type: 'independent_application', action: 'submit_response', props: { prompt: 'Complete the assigned application.' } }],
+    primitiveSequence: item ? [] : [{ type: 'independent_application', action: 'submit_response', props: { prompt: 'Complete the assigned application.', responseFormat: 'short_text', draftPersistence: false } }],
     ...(item && responseSpec ? { assessmentReference: { version: ADAPTIVE_ASSESSMENT_PLAN_VERSION, assessmentOpportunityId: opportunity._id, deliveryGrantId,
       item: { itemId: item._id, itemRevision: item.revision, promptDigest: item.promptDigest }, responseSpec,
       claims: claims.map(claim => ({ claimId: claim._id, revision: claim.revision, claimDigest: claim.claimDigest })) } } : {}),
@@ -126,9 +127,19 @@ export async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttac
       rendererVersion: composed.rendererVersion, evaluationVersion: composed.evaluationContract.version,
       pilotConfigurationVersion: process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST ?? '' } }
   await ctx.db.patch(opportunity._id, { contextPins })
-  const receipt = await grant(ctx, userId, { assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision,
+  const receipt = await grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision,
     idempotencyKey: args.idempotencyKey, flow: 'canvas' })
-  if (receipt.status !== 'granted') throw new Error('Canvas delivery is not admitted')
+  if (receipt.status !== 'granted') {
+    await ctx.db.patch(opportunity._id, { contextPins: opportunity.contextPins })
+    await ctx.db.delete(activityId)
+    await ctx.db.delete(threadId)
+    return unavailable(receipt.status === 'unavailable' ? receipt.reasonCodes[0] ?? 'canvas_not_admitted' : 'disabled')
+  }
+  if (session.status === 'ready') {
+    await ctx.db.patch(session._id, { status: 'in_progress', revision: session.revision + 1,
+      startedSessionContentId: content._id, startedSessionContentRevision: content.revision })
+    await ctx.db.patch(opportunity._id, { contextPins: { ...contextPins, sessionRevision: session.revision + 1 } })
+  }
   const sealedPlan = await compose(receipt.deliveryGrantId)
   await ctx.db.patch(activityId, { canonicalInputSnapshot: sealedPlan.canonicalInputSnapshot, inputDigest: sealedPlan.inputDigest })
   const receiptId = await ctx.db.insert('learnActivityCommandReceipts', { userId, threadId, idempotencyKeyHash: prepared.idempotencyKeyHash,
@@ -154,6 +165,7 @@ function referencedClaimOrders(raw: string | undefined): number[] {
 export const attachReadySession = mutation({
   args: { studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), idempotencyKey: v.string() },
   handler: async (ctx, args) => {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) return await attachAssessmentCanvas(ctx, args)
     const userId = await requireAdaptiveMutationAccess(ctx)
     const prepared = await prepareAdaptiveCommand({
       userId, commandName: 'attachReadySession', targetId: String(args.studySessionId),
@@ -483,12 +495,16 @@ async function canvasPilotAllowed(userId: string, scope: NonNullable<Awaited<Ret
   const { opportunity, activity } = scope
   const pins = opportunity.contextPins
   const canvas = pins.kind === 'session' ? pins.canvas : null
-  return Boolean(canvas && canvas.pilotConfigurationVersion === process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
-    && adaptiveV2PilotDecision(canvas.pilotConfigurationVersion, {
-      model: opportunity.scoringBinding.kind === 'model' ? opportunity.scoringBinding.requestedModel : '', now: Date.now(),
-      activityContractVersion: activity.contractVersion, evaluationContractVersion: activity.evaluationContract.version,
-      learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]),
-    }).allowed)
+  return Boolean(canvas && await canvasPilotDecision(userId, opportunity.scoringBinding, activity.contractVersion,
+    activity.evaluationContract.version, canvas.pilotConfigurationVersion))
+}
+
+async function canvasPilotDecision(userId: string, binding: Doc<'learnAssessmentOpportunities'>['scoringBinding'], contractVersion: string, evaluationVersion: string, manifestVersion: string | undefined) {
+  return manifestVersion === process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST && adaptiveV2PilotDecision(manifestVersion, {
+    model: binding.kind === 'model' ? binding.requestedModel : '', now: Date.now(),
+    activityContractVersion: contractVersion, evaluationContractVersion: evaluationVersion,
+    learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]),
+  }).allowed
 }
 
 async function hasCanvasAssessment(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
@@ -503,9 +519,15 @@ async function hasCanvasAssessment(ctx: QueryCtx | MutationCtx, userId: string, 
 
 type CanvasProjection = NonNullable<Awaited<ReturnType<typeof loadLegacyReadyCanvas>>> & {
   declaredStimulus?: string | null,
+  responseSpec?: Extract<LearnV2AssessmentDelivery, { status: 'delivered' }>['responseSpec'] | null,
   assessment?: { assessmentOpportunityId: Id<'learnAssessmentOpportunities'>, phase: Doc<'learnAssessmentOpportunities'>['phase'], revision: number,
     submissionId: Id<'learnResponses'> | null, bodyAvailability: string, currentEligibility: string,
     reasonCode: string | null, observations?: 'no_observations' },
+}
+
+function assessmentPrimitive(prompt: string | undefined) {
+  return validateAdaptiveActivityPrimitive({ type: 'independent_application', action: 'submit_response',
+    props: { prompt, responseFormat: 'short_text', draftPersistence: false } })
 }
 
 async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, options: { includeSavedResponse?: boolean }): Promise<CanvasProjection | null> {
@@ -516,15 +538,13 @@ async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string,
   if (!owner) return null
   const replay = await replayAdaptiveActivityPlan(storedPlan(activity))
   const allowed = LEARN_MEASUREMENT_CAPABILITIES.responses && replay.ok && await canvasPilotAllowed(userId, scope)
-  const assessment: LearnV2AssessmentDelivery | null = allowed ? await ctx.runQuery(api.learnV2Assessments.getAssessment, {
-    version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: opportunity._id,
-  }) : null
+  const assessment: LearnV2AssessmentDelivery | null = allowed ? await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'canvas') : null
   const delivered = assessment?.status === 'delivered' && assessment.responseSpec.kind === 'bounded_rubric' ? assessment : null
   const state = options.includeSavedResponse !== false && allowed
     ? await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id }) : null
   const work = state?.status === 'available' ? state.work : null
   const payload = work?.body.bodyAvailability === 'available' ? work.body.payload : null
-  const primitive = delivered ? validateAdaptiveActivityPrimitive({ type: 'independent_application', action: 'submit_response', props: { prompt: delivered.prompt } }) : null
+  const primitive = delivered ? assessmentPrimitive(delivered.prompt) : null
   const status = !delivered || !primitive?.ok ? 'blocked' as const
     : opportunity.phase === 'test_open' ? 'started' as const
       : opportunity.phase === 'scored_pass' || opportunity.phase === 'scored_fail' ? 'feedback' as const
@@ -549,7 +569,7 @@ async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string,
     session: { studySessionId: session._id, revision: session.revision, contentRevision: content.revision,
       planRecordRevision: opportunity.contextPins.kind === 'session' ? opportunity.contextPins.planRecordRevision : 1, blueprintRecordRevision: opportunity.blueprintRecordRevision,
       scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt ?? null, timezone: session.timezone ?? 'UTC' },
-    responsePrompt: delivered?.prompt ?? null, declaredStimulus: delivered?.declaredStimulus ?? null,
+    responsePrompt: delivered?.prompt ?? null, declaredStimulus: delivered?.declaredStimulus ?? null, responseSpec: delivered?.responseSpec ?? null,
     savedResponse: work?.confidence !== undefined && (payload?.kind === 'text' || payload?.kind === 'source_comparison')
       ? { response: payload.kind === 'text' ? payload.text : encodeSourceComparisonResponse(payload.sourceRef, payload.comparison), confidence: work.confidence } : null,
     assessment: { assessmentOpportunityId: opportunity._id, phase: opportunity.phase, revision: opportunity.revision,
@@ -572,11 +592,13 @@ const getCanvasRead = defineTeachingRead({name:'learnAdaptiveCanvas.getCanvas',s
   },
 }, {hasContent:value=>Boolean(value?.activity.primitive)})
 export const getCanvas = query({ ...getCanvasRead.query, handler: async (ctx, args) => {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.query.handler(ctx, args)
   const userId = await requireAdaptiveQueryAccess(ctx)
   if (await hasCanvasAssessment(ctx, userId, args.threadId)) return await loadReadyCanvas(ctx, userId, args.threadId)
   return await getCanvasRead.query.handler(ctx, args)
 } })
 export const getCanvasDelivery = mutation({ ...getCanvasRead.delivery, handler: async (ctx, args) => {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.delivery.handler(ctx, args)
   const userId = await requireAdaptiveMutationAccess(ctx)
   if (await hasCanvasAssessment(ctx, userId, args.threadId)) return {
     admission: { version: 'learn-v2.help-admission.v1' as const, status: 'ordinary' as const },
@@ -697,8 +719,11 @@ async function acceptCanvasSubmission(ctx: MutationCtx, args: CanvasSubmissionRe
   await prepareAdaptiveCommand({ userId, commandName: 'submitCanvasResponse', targetId: String(args.threadId),
     expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey, payload: {} })
   const scope = await canvasAssessmentScope(ctx, userId, args.threadId)
+  const prior = scope?.opportunity.submissionId ? await ctx.db.get(scope.opportunity.submissionId) : null
+  const acceptedSessionRevision = prior?.scopeKind === 'v2' && prior.contextPins.kind === 'session'
+    && prior.contextPins.canvas?.threadId === args.threadId ? prior.contextPins.sessionRevision : null
   if (!scope || scope.activity.activityId !== args.activityId || scope.session._id !== args.studySessionId
-    || scope.thread.revision !== args.expectedRevision || scope.session.revision !== args.expectedSessionRevision
+    || scope.thread.revision !== args.expectedRevision || scope.session.revision !== args.expectedSessionRevision && acceptedSessionRevision !== args.expectedSessionRevision
     || scope.activity.evaluationContract.kind !== 'server_scored' || !await canvasPilotAllowed(userId, scope)
     || !(await replayAdaptiveActivityPlan(storedPlan(scope.activity))).ok) {
     return { kind: 'rejected' as const, version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode: 'unavailable' as const }
@@ -719,7 +744,6 @@ async function acceptCanvasSubmission(ctx: MutationCtx, args: CanvasSubmissionRe
     const item = await ctx.db.get(opportunity.assessmentPins.itemPins.itemId)
     if (item?.responseSpec.kind !== 'bounded_rubric') return { kind: 'rejected' as const, version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode: 'invalid_payload' as const }
   }
-  const prior = opportunity.submissionId ? await ctx.db.get(opportunity.submissionId) : null
   const receipt = await acceptMasterySubmissionForOwner(ctx, userId, { submission: {
     version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: args.idempotencyKey,
     response: { target: { assessmentOpportunityId: opportunity._id },
@@ -743,7 +767,7 @@ export const getCanvasSubmissionAuthority = internalQuery({
     if (!LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Canvas submissions are disabled')
     const scope = await canvasAssessmentScope(ctx, userId, args.threadId)
     if (!scope || scope.activity.activityId !== args.activityId || scope.opportunity.submissionId !== args.submissionId
-      || !await canvasPilotAllowed(userId, scope)) throw new Error('Canvas submission is unavailable')
+      || !await canvasPilotAllowed(userId, scope) || !(await replayAdaptiveActivityPlan(storedPlan(scope.activity))).ok) throw new Error('Canvas submission is unavailable')
     return { phase: scope.opportunity.phase, replayed: Boolean(scope.opportunity.authoritativeAttemptId) }
   },
 })
@@ -752,12 +776,21 @@ export const recordCanvasSubmissionOutcome = internalMutation({
   args: canvasSubmissionArgs,
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveMutationAccess(ctx)
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Canvas submissions are disabled')
     const scope = await canvasAssessmentScope(ctx, userId, args.threadId)
     if (!scope || scope.activity.activityId !== args.activityId || scope.opportunity.submissionId !== args.submissionId
       || !await canvasPilotAllowed(userId, scope)) throw new Error('Canvas submission is unavailable')
     const { opportunity, activity } = scope
     const attempt = opportunity.authoritativeAttemptId ? await ctx.db.get(opportunity.authoritativeAttemptId) : null
-    if (attempt && (attempt.userId !== userId || attempt.submissionId !== args.submissionId)) throw new Error('Canvas result is unavailable')
+    if (attempt && (attempt.userId !== userId || attempt.submissionId !== args.submissionId
+      || attempt.assessmentOpportunityId !== opportunity._id || attempt.studySessionId !== scope.session._id
+      || attempt.sessionContentId !== scope.content._id)) throw new Error('Canvas result is unavailable')
+    // Ordinary score commit completes the session once. Preserve the sealed
+    // response's acceptance pins while keeping its current delivery anchor live.
+    if (attempt && opportunity.contextPins.kind === 'session' && scope.session.status === 'completed'
+      && scope.session.revision === opportunity.contextPins.sessionRevision + 1) {
+      await ctx.db.patch(opportunity._id, { contextPins: { ...opportunity.contextPins, sessionRevision: scope.session.revision } })
+    }
     await ctx.db.patch(activity._id, { status: attempt ? 'feedback' : opportunity.phase === 'reconciliation_required' ? 'reconciling'
       : opportunity.phase === 'scoring_pending' ? 'scoring' : 'submitted',
       ...(attempt ? { masteryAttemptId: attempt._id } : {}), updatedAt: Date.now() })

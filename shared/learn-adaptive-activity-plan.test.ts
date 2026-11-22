@@ -83,6 +83,8 @@ describe('Adaptive activity plan replay contract', () => {
     const second = await composeAdaptiveActivityPlan(structuredClone(input()))
 
     expect(first).toEqual(second)
+    // Recorded from the original composer at c1ecb5ecf07c1c27b608ff582d4cfc2ad23c8870.
+    expect(first.inputDigest).toBe('sha256:e1f6dc3c46d9f6b7fe461292d52d1156ceb7abf6d3157c06ee07e025cace7e4f')
     expect(first).toMatchObject({
       planVersion: ADAPTIVE_ACTIVITY_PLAN_VERSION,
       replayVersion: ADAPTIVE_ACTIVITY_REPLAY_VERSION,
@@ -143,10 +145,27 @@ describe('Adaptive activity plan replay contract', () => {
     expect(JSON.stringify(plan)).not.toContain('PRIVATE TEACHING PURPOSE')
     expect(JSON.stringify(plan)).not.toContain(input().primitiveSequence[0]!.props.explanation)
     expect(await replayAdaptiveActivityPlan(plan)).toEqual({ ok: true, value: plan })
+    const ungranted = await composeAdaptiveActivityPlan({ ...assessment, assessmentReference: { ...reference, deliveryGrantId: null } })
+    expect(await replayAdaptiveActivityPlan(ungranted)).toEqual({ ok: false, reason: 'replay_integrity_failed' })
     await expect(composeAdaptiveActivityPlan({ ...assessment, primitiveSequence: input().primitiveSequence })).rejects.toThrow('cannot contain teaching')
     await expect(composeAdaptiveActivityPlan({ ...assessment, assessmentReference: { ...reference, key: 'PRIVATE KEY' } } as unknown as AdaptiveActivityPlanInput)).rejects.toThrow()
     await expect(composeAdaptiveActivityPlan({ ...assessment, assessmentReference: { ...reference, claims: [...reference.claims, ...reference.claims] } })).rejects.toThrow()
     expect(await replayAdaptiveActivityPlan({ ...plan, canonicalInputSnapshot: plan.canonicalInputSnapshot.replace('grant-001', 'grant-other') })).toEqual({ ok: false, reason: 'replay_integrity_failed' })
     expect(await composeAdaptiveActivityPlan(input())).toEqual(await composeAdaptiveActivityPlan({ ...input(), assessmentReference: undefined }))
+  })
+
+  test('old diagnostic and contribution variants retain their pinned canonical bytes and replay', async () => {
+    const old = input()
+    const diagnostic: AdaptiveActivityPlanInput = { ...old, activityClass: 'non_factual', objectiveId: null,
+      pins: { learningVoidId: null, blueprintRevisionId: null, objectiveId: null, sessionContentId: null }, evidenceReferences: [],
+      generationInputs: { sessionContentRevision: null, sessionContentInputDigest: null, generatorVersion: null },
+      decisionInputs: { ...old.decisionInputs, sourceInputs: [] },
+      primitiveSequence: [{ type: 'diagnostic_prompt', action: 'submit_response', props: { prompt: 'Describe what you currently know.', responseFormat: 'short_text', assistance: 'none' } }] }
+    const variants = [await composeAdaptiveActivityPlan(diagnostic), await composeAdaptiveActivityPlan({ ...diagnostic,
+      attribution: { contributionId: 'contribution-001', sourceFeature: 'chat', classification: 'non_factual', provenanceVersion: 'learn-adaptive.contribution.v1' } })]
+    // Recorded from the same pre-variant composer as the factual pin above.
+    expect(variants.map(plan => plan.inputDigest)).toEqual(['sha256:b9a35346d293706d46a8a0cced2d332d030245ceb4a517f8083eeccef61d7347',
+      'sha256:3188592911df77f93edcd1d97020b5aa78d495596fa047dd7c332c82e35bf9c7'])
+    for (const plan of variants) expect(await replayAdaptiveActivityPlan(plan)).toEqual({ ok: true, value: plan })
   })
 })

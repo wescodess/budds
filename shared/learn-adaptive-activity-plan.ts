@@ -315,6 +315,7 @@ export async function replayAdaptiveActivityPlan(candidate: ComposedAdaptiveActi
     const stored: unknown = JSON.parse(canonicalInputSnapshot)
     const assessment = stored && typeof stored === 'object' && 'assessmentReference' in stored
       ? adaptiveAssessmentReferenceSchema.parse(stored.assessmentReference) : null
+    if (assessment && !assessment.deliveryGrantId) return { ok: false as const, reason: 'replay_integrity_failed' as const }
     if (canonicalAdaptiveActivityJson({ ...core, ...(assessment ? { assessmentReference: assessment } : {}) }) !== canonicalInputSnapshot) return { ok: false as const, reason: 'replay_integrity_failed' as const }
     if (await sha256(canonicalInputSnapshot) !== inputDigest) return { ok: false as const, reason: 'replay_integrity_failed' as const }
     if (assessment) {
