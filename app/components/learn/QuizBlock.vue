@@ -30,12 +30,14 @@ const quizQuery = import.meta.client && !props.isOffline && props.quizId
       computed(() => ({ id: props.quizId as Id<'quizzes'> })),
     )
   : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
-const quizPaused = computed(() => quizQuery.failure.value?.retryable === false)
-const quizFailure = computed(() => quizPaused.value ? quizQuery.failure.value : props.isOffline && props.offlineData ? null : quizQuery.failure.value)
+const quizRevoked = computed(() => quizQuery.failure.value?.revoked === true)
+const offlineRevoked = ref(false)
+watch(() => props.quizId, () => { offlineRevoked.value = false }, { flush: 'sync' })
+const quizFailure = computed(() => quizRevoked.value ? quizQuery.failure.value : props.isOffline && props.offlineData ? null : quizQuery.failure.value)
 
 const quizData = computed(() => {
-  if (quizPaused.value) return null
-  if (props.isOffline && props.offlineData) {
+  if (quizRevoked.value) return null
+  if (props.isOffline && props.offlineData && !offlineRevoked.value) {
     return {
       quiz: { title: 'Practice' },
       questions: props.offlineData.questions.map((q, i) => ({
@@ -80,8 +82,9 @@ const flagCorrectedExplanation = ref<Record<string, string>>({})
 const flagSaving = ref<Record<string, boolean>>({})
 const flagError = ref<Record<string, string>>({})
 
-watch(quizPaused, (paused) => {
-  if (!paused) return
+watch(quizRevoked, (revoked) => {
+  if (!revoked) return
+  offlineRevoked.value = true
   answers.value = {}
   submitted.value = {}
   correctCount.value = 0
@@ -89,7 +92,7 @@ watch(quizPaused, (paused) => {
   flagCorrectedAnswer.value = {}
   flagCorrectedExplanation.value = {}
   flagError.value = {}
-})
+}, { immediate: true, flush: 'sync' })
 
 const flagMutation = import.meta.client && !props.isOffline
   ? useConvexMutation(api.contentFlags.flagQuizQuestion)

@@ -59,14 +59,14 @@ const runningTaskForRoom = computed(() =>
 const mode = ref<Mode>('editor')
 const historyOpen = ref(false)
 const generateOpen = ref(false)
-const roomPaused = computed(() => roomFailure.value?.retryable === false)
+const roomRevoked = computed(() => roomFailure.value?.revoked === true)
 
-watch(roomPaused, (paused) => {
-  if (!paused) return
+watch(roomRevoked, (revoked) => {
+  if (!revoked) return
   mode.value = 'editor'
   historyOpen.value = false
   generateOpen.value = false
-})
+}, { flush: 'sync' })
 const confirmDeleteOpen = ref(false)
 
 const lastUpdated = computed<number | null>(() => {
@@ -122,7 +122,7 @@ async function handleConfirmDelete() {
             mode === 'editor' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-editor"
-          :disabled="roomPaused"
+          :disabled="roomRevoked"
           @click="mode = 'editor'"
         >
           <Pencil class="h-3.5 w-3.5" />
@@ -135,7 +135,7 @@ async function handleConfirmDelete() {
             mode === 'practice' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
           ]"
           data-testid="flashcard-room-mode-practice"
-          :disabled="roomPaused"
+          :disabled="roomRevoked"
           @click="mode = 'practice'"
         >
           <Play class="h-3.5 w-3.5" />
@@ -148,7 +148,7 @@ async function handleConfirmDelete() {
           variant="outline"
           size="sm"
           data-testid="flashcard-room-history-toggle"
-          :disabled="roomPaused"
+          :disabled="roomRevoked"
           @click="historyOpen = true"
         >
           <History class="mr-1.5 h-4 w-4" />
@@ -157,7 +157,7 @@ async function handleConfirmDelete() {
         <UiButton
           size="sm"
           data-testid="flashcard-room-generate-trigger"
-          :disabled="roomPaused"
+          :disabled="roomRevoked"
           @click="generateOpen = true"
         >
           <Sparkles class="mr-1.5 h-4 w-4" />

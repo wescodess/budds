@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { api } from '#convex/api'
 import type { Id } from '../../../convex/_generated/dataModel'
@@ -30,7 +31,7 @@ const quizQuery = useTeachingQuery(
   computed(() => ({ id: props.quizId })),
 )
 const quizData = quizQuery.data
-const quizPaused = computed(() => quizQuery.failure.value?.retryable === false)
+const quizRevoked = computed(() => quizQuery.failure.value?.revoked === true)
 
 const { data: historyData } = useConvexQuery(
   api.quizzes.getQuizHistory,
@@ -77,12 +78,16 @@ function clearAttemptContent() {
   viewState.value = 'overview'
 }
 
-watch(quizPaused, (paused) => {
-  if (paused) clearAttemptContent()
-})
+let attemptGeneration = 0
+onScopeDispose(() => { attemptGeneration++ })
+watch([quizRevoked, () => LEARN_MEASUREMENT_CAPABILITIES.responses ? props.quizId : null], ([revoked], previous) => {
+  if (!revoked && previous && (LEARN_MEASUREMENT_CAPABILITIES.responses ? props.quizId : null) === previous[1]) return
+  attemptGeneration++
+  clearAttemptContent()
+}, { flush: 'sync' })
 
 function handleTakeQuiz() {
-  if (quizPaused.value) return
+  if (quizRevoked.value) return
   if (hasInProgressAttempt.value) {
     resumeDialogOpen.value = true
   }
@@ -92,7 +97,7 @@ function handleTakeQuiz() {
 }
 
 function applyAttemptResult(result: AttemptResult) {
-  if (quizPaused.value) return
+  if (quizRevoked.value) return
   takingQuestions.value = result.questions
   takingSettings.value = result.settings
   takingAttemptId.value = result.attemptId
@@ -102,21 +107,23 @@ function applyAttemptResult(result: AttemptResult) {
 }
 
 async function handleStartAttempt(settings: AttemptSettings) {
+  const generation = attemptGeneration
   const result = await startAttemptMutation.mutate({
     quizId: props.quizId,
     settings,
     restart: true,
   })
-  if (result) applyAttemptResult(result)
+  if (result && generation === attemptGeneration) applyAttemptResult(result)
 }
 
 async function handleResume() {
+  const generation = attemptGeneration
   const result = await startAttemptMutation.mutate({
     quizId: props.quizId,
     settings: { shuffleQuestions: false, showAllQuestions: false, immediateFeedback: true },
     restart: false,
   })
-  if (result) applyAttemptResult(result)
+  if (result && generation === attemptGeneration) applyAttemptResult(result)
 }
 
 function handleComplete(attemptId: Id<'quizAttempts'>) {

@@ -28,12 +28,14 @@ const roomQuery = import.meta.client && !props.isOffline && props.roomId
     )
   : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
-const roomPaused = computed(() => roomQuery.failure.value?.retryable === false)
-const roomFailure = computed(() => roomPaused.value ? roomQuery.failure.value : props.isOffline && props.offlineData ? null : roomQuery.failure.value)
+const roomRevoked = computed(() => roomQuery.failure.value?.revoked === true)
+const offlineRevoked = ref(false)
+watch(() => props.roomId, () => { offlineRevoked.value = false }, { flush: 'sync' })
+const roomFailure = computed(() => roomRevoked.value ? roomQuery.failure.value : props.isOffline && props.offlineData ? null : roomQuery.failure.value)
 
 const roomData = computed(() => {
-  if (roomPaused.value) return null
-  if (props.isOffline && props.offlineData) {
+  if (roomRevoked.value) return null
+  if (props.isOffline && props.offlineData && !offlineRevoked.value) {
     return {
       room: { title: 'Flashcards' },
       cards: props.offlineData.cards.map((c, i) => ({
@@ -81,15 +83,16 @@ const progressLabel = computed(() =>
 
 const practiceComplete = ref(false)
 
-watch(roomPaused, (paused) => {
-  if (!paused) return
+watch(roomRevoked, (revoked) => {
+  if (!revoked) return
+  offlineRevoked.value = true
   currentIndex.value = 0
   isFlipped.value = false
   cardKey.value++
   flaggingOpen.value = false
   flagCorrectedDef.value = ''
   flagError.value = ''
-})
+}, { immediate: true, flush: 'sync' })
 const offlineAttempts = props.isOffline ? useOfflineAttempts() : null
 
 function effectiveDefinition(card: { definition: string; flagged?: boolean; correctedDefinition?: string } | null) {

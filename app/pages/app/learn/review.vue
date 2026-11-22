@@ -56,6 +56,8 @@ const dueQuery = import.meta.client
   ? useTeachingQuery(api.reviewItems.listDueWithContext, queryArgs)
   : { data: ref([]), failure: computed(() => null), refresh: async () => {} }
 const dueFailure = computed(() => dueQuery.failure.value)
+let contentGeneration = 0
+onScopeDispose(() => { contentGeneration++ })
 
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)
@@ -121,6 +123,7 @@ function revealAnswer() {
 }
 
 async function finishSession(): Promise<boolean> {
+  const generation = contentGeneration
   const durationMs = Date.now() - sessionStartTime.value
   const correct = ratings.value.filter((r) => r.quality >= 3).length
 
@@ -132,6 +135,7 @@ async function finishSession(): Promise<boolean> {
       mode: reviewMode.value,
       idempotencyKey: sessionIdempotencyKey.value,
     })
+    if (generation !== contentGeneration) return false
     completionStreak.value = (result as { streakCurrent: number }).streakCurrent
     return true
   } catch {
@@ -157,6 +161,7 @@ async function rateItem(quality: number) {
   if (!revealed.value || !currentItem.value || submitting.value) return
 
   submitting.value = true
+  const generation = contentGeneration
   const itemId = currentItem.value._id
   const idempotencyKey = ratingIdempotencyKeys.get(itemId)
     ?? createIdempotencyKey(`review-item:${itemId}`)
@@ -176,11 +181,12 @@ async function rateItem(quality: number) {
     }
 
     ratingIdempotencyKeys.delete(itemId)
+    if (generation !== contentGeneration || dueRevoked.value) return
     ratings.value.push({ itemId, quality })
-    if (duePaused.value) return
 
     if (currentIndex.value >= totalItems.value - 1) {
-      sessionComplete.value = await finishSession()
+      const completed = await finishSession()
+      if (generation === contentGeneration && !dueRevoked.value) sessionComplete.value = completed
     }
     else {
       currentIndex.value++
@@ -208,9 +214,10 @@ const flagCorrectedDef = ref('')
 const flagSaving = ref(false)
 const flagError = ref('')
 
-const duePaused = computed(() => dueFailure.value && !dueFailure.value.retryable ? dueFailure.value : null)
-watch(duePaused, (paused) => {
-  if (!paused) return
+const dueRevoked = computed(() => dueFailure.value?.revoked === true)
+watch(dueRevoked, (revoked) => {
+  if (!revoked) return
+  contentGeneration++
   sessionStarted.value = false
   sessionItems.value = []
   currentIndex.value = 0
@@ -218,7 +225,7 @@ watch(duePaused, (paused) => {
   flaggingOpen.value = false
   flagCorrectedDef.value = ''
   flagError.value = ''
-}, { immediate: true })
+}, { immediate: true, flush: 'sync' })
 
 const flagMutation = import.meta.client
   ? useConvexMutation(api.contentFlags.flagFlashcard)

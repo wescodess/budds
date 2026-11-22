@@ -78,7 +78,7 @@ describe('AudioBlock with responses on', () => {
     expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
   })
 
-  it('stops playback and clears the transcript when a check opens mid-play, then reloads on recovery', async () => {
+  it.each(['test_open', 'unavailable'] as const)('stops playback and clears the transcript when a check opens mid-play, then reloads on recovery (%s)', async (reason) => {
     overview.data.value = sampleOverview
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
@@ -93,11 +93,11 @@ describe('AudioBlock with responses on', () => {
     await wrapper.find('[data-testid="audio-block-transcript-toggle"]').trigger('click')
     expect(wrapper.text()).toContain('SN1 reactions')
 
-    overview.error.value = deniedRead('test_open')
+    overview.error.value = deniedRead(reason)
     await nextTick()
     expect(pause).toHaveBeenCalled()
     expect(audio.getAttribute('src')).toBeNull()
-    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(true)
+    expect(wrapper.find(`[data-testid="audio-read-${reason === 'unavailable' ? 'error' : 'paused'}"]`).exists()).toBe(true)
     expect(wrapper.find('audio').exists()).toBe(false)
     expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('SN1 reactions')
@@ -105,7 +105,7 @@ describe('AudioBlock with responses on', () => {
 
     overview.error.value = null
     await nextTick()
-    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
+    expect(wrapper.find(`[data-testid="audio-read-${reason === 'unavailable' ? 'error' : 'paused'}"]`).exists()).toBe(false)
     expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
     expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Play audio primer')
     expect(wrapper.text()).not.toContain('SN1 reactions')

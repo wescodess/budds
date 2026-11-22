@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 import {
   decryptOfflineBytes,
   decryptOfflineJson,
@@ -93,6 +94,12 @@ interface EncryptedAudioRecord {
 
 let keyPromise: Promise<CryptoKey> | null = null
 let migrationPromise: Promise<void> | null = null
+// Shared across callers so a late cache operation cannot undo a revocation.
+let cacheRevision = 0
+let clearRevision = 0
+const courseRevisions = new Map<string, number>()
+const revokedCourses = new Set<string>()
+const courseDeletions = new Map<string, Promise<string[]>>()
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -205,9 +212,11 @@ async function offlineKey(): Promise<CryptoKey> {
   return await keyPromise!
 }
 
-async function storeSection(data: CachedSection): Promise<void> {
+async function storeSection(data: CachedSection, current: () => boolean): Promise<void> {
   const payload = await encryptOfflineJson(data, await offlineKey())
+  if (!current()) return
   const db = await openDB()
+  if (!current()) { db.close(); return }
   const tx = db.transaction(SECTION_STORE, 'readwrite')
   const store = tx.objectStore(SECTION_STORE)
   store.put({ sectionId: data.sectionId, courseId: data.courseId, cachedAt: data.cachedAt, payload })
@@ -221,12 +230,17 @@ async function storeSection(data: CachedSection): Promise<void> {
 }
 
 async function getSection(sectionId: string): Promise<CachedSection | null> {
+  const revision = cacheRevision
+  const cleared = clearRevision
   const db = await openDB()
   const tx = db.transaction(SECTION_STORE, 'readonly')
   const record = await requestResult(tx.objectStore(SECTION_STORE).get(sectionId)) as EncryptedSectionRecord | undefined
   await transactionDone(tx)
   db.close()
-  return record ? await decryptOfflineJson<CachedSection>(record.payload, await offlineKey()) : null
+  if (!record) return null
+  const data = await decryptOfflineJson<CachedSection>(record.payload, await offlineKey())
+  if (cleared !== clearRevision || revokedCourses.has(data.courseId) || (courseRevisions.get(data.courseId) ?? 0) > revision) return null
+  return data
 }
 
 async function deleteSection(sectionId: string): Promise<void> {
@@ -256,8 +270,8 @@ async function deleteCourseSections(courseId: string): Promise<string[]> {
   return records.map(row => row.sectionId)
 }
 
-async function cacheAudioUrls(urls: string[]): Promise<void> {
-  if (urls.length === 0) return
+async function cacheAudioUrls(urls: string[], current: () => boolean): Promise<void> {
+  if (urls.length === 0 || !current()) return
   const key = await offlineKey()
   const records = await Promise.all(urls.map(async (url): Promise<EncryptedAudioRecord | null> => {
     try {
@@ -277,7 +291,9 @@ async function cacheAudioUrls(urls: string[]): Promise<void> {
       return null
     }
   }))
+  if (!current()) return
   const db = await openDB()
+  if (!current()) { db.close(); return }
   const tx = db.transaction(AUDIO_STORE, 'readwrite')
   for (const record of records) if (record) tx.objectStore(AUDIO_STORE).put(record)
   await transactionDone(tx)
@@ -285,6 +301,8 @@ async function cacheAudioUrls(urls: string[]): Promise<void> {
 }
 
 async function getAudioFromCache(url: string): Promise<Response | undefined> {
+  const revision = cacheRevision
+  await Promise.all(courseDeletions.values())
   const db = await openDB()
   const tx = db.transaction(AUDIO_STORE, 'readonly')
   const record = await requestResult(tx.objectStore(AUDIO_STORE).get(url)) as EncryptedAudioRecord | undefined
@@ -292,6 +310,7 @@ async function getAudioFromCache(url: string): Promise<Response | undefined> {
   db.close()
   if (!record) return undefined
   const bytes = await decryptOfflineBytes(record.payload, await offlineKey())
+  if (revision !== cacheRevision) return undefined
   return new Response(bytes, { status: record.status, statusText: record.statusText, headers: record.headers })
 }
 
@@ -382,6 +401,7 @@ export async function clearSyncedAttempts(): Promise<void> {
 }
 
 export async function clearOfflineData(): Promise<void> {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses) clearRevision = ++cacheRevision
   // Sign-out and account deletion must not leave unsent private adaptive
   // responses in this tab, even if IndexedDB deletion is blocked elsewhere.
   try {
@@ -412,8 +432,15 @@ export function useOfflineCache() {
     contentBlocks: CachedSection['contentBlocks'],
     audioUrls: string[],
   ): Promise<void> {
-    await storeSection({ sectionId, courseId, title, contentBlocks, cachedAt: Date.now() })
-    await cacheAudioUrls(audioUrls)
+    const revision = courseRevisions.get(courseId)
+    const cleared = clearRevision
+    const current = () => revision === courseRevisions.get(courseId) && cleared === clearRevision
+    await courseDeletions.get(courseId)
+    if (!current()) return
+    await storeSection({ sectionId, courseId, title, contentBlocks, cachedAt: Date.now() }, current)
+    await cacheAudioUrls(audioUrls, current)
+    if (!current()) return
+    revokedCourses.delete(courseId)
     cacheStatus.value.set(sectionId, true)
   }
 
@@ -422,6 +449,7 @@ export function useOfflineCache() {
   }
 
   async function checkCacheStatus(sectionIds: string[]): Promise<Map<string, boolean>> {
+    const revision = cacheRevision
     const result = new Map<string, boolean>()
     if (sectionIds.length === 0) {
       cacheStatus.value = result
@@ -436,6 +464,7 @@ export function useOfflineCache() {
     }))
     await transactionDone(tx)
     db.close()
+    if (revision !== cacheRevision) return new Map(sectionIds.map(id => [id, false]))
     cacheStatus.value = result
     return result
   }
@@ -446,7 +475,17 @@ export function useOfflineCache() {
   }
 
   async function forgetCachedCourse(courseId: string): Promise<void> {
-    for (const sectionId of await deleteCourseSections(courseId)) cacheStatus.value.set(sectionId, false)
+    courseRevisions.set(courseId, ++cacheRevision)
+    revokedCourses.add(courseId)
+    const previous = courseDeletions.get(courseId)
+    const deletion = previous ? previous.catch(() => []).then(() => deleteCourseSections(courseId)) : deleteCourseSections(courseId)
+    courseDeletions.set(courseId, deletion)
+    try {
+      for (const sectionId of await deletion) cacheStatus.value.set(sectionId, false)
+    }
+    finally {
+      if (courseDeletions.get(courseId) === deletion) courseDeletions.delete(courseId)
+    }
   }
 
   return {

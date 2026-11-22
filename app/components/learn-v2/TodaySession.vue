@@ -84,12 +84,16 @@ const contentQuery = import.meta.client
   : { data: ref<SessionContent>(null), failure: computed(() => null), refresh: async () => {} }
 const contentFailure = computed(() => contentQuery.failure.value)
 const contentPaused = computed(() => contentFailure.value && !contentFailure.value.retryable ? contentFailure.value : null)
-watch(contentPaused, (paused) => {
-  if (!paused) return
+const contentRevoked = computed(() => contentFailure.value?.revoked === true)
+let contentGeneration = 0
+onScopeDispose(() => { contentGeneration++ })
+watch(contentRevoked, (revoked) => {
+  if (!revoked) return
+  contentGeneration++
   hint.value = null
   reveal.value = null
   if (feedback.value?.feedback) feedback.value = { ...feedback.value, feedback: undefined }
-})
+}, { flush: 'sync' })
 
 const blocks = computed(() => ((contentQuery.data?.value as SessionContent)?.blocks ?? []).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0)))
 const adaptivePresentation = computed(() => (contentQuery.data?.value as SessionContent)?.adaptivePresentation ?? null)
@@ -190,12 +194,13 @@ async function start() {
   finally { busy.value = false }
 }
 async function assistance(kind: 'substantive_hint' | 'answer_reveal') {
-  if (!isOnline.value || busy.value || contentPaused.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
+  if (!isOnline.value || busy.value || contentRevoked.value || (kind === 'substantive_hint' && hint.value) || (kind === 'answer_reveal' && reveal.value)) return
   busy.value = true; error.value = null
+  const generation = contentGeneration
   try {
     const result = await assistanceMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, kind }) as { revision: number, assistance: { content: string } }
     sessionRevision.value = result.revision
-    if (contentPaused.value) return
+    if (generation !== contentGeneration || contentRevoked.value) return
     if (kind === 'substantive_hint') hint.value = result.assistance.content
     else reveal.value = result.assistance.content
     notice.value = kind === 'substantive_hint' ? 'Hint added to this session.' : 'Worked example revealed for this session.'
@@ -205,9 +210,11 @@ async function assistance(kind: 'substantive_hint' | 'answer_reveal') {
 async function submit() {
   if (!isOnline.value || busy.value || !canContinue.value) return
   busy.value = true; error.value = null
+  const generation = contentGeneration
   submitKey.value ??= makeKey('learn-v2-attempt')
   try {
     const result = await submitMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, expectedPlanRecordRevision: candidate.planRecordRevision, expectedBlueprintRecordRevision: candidate.blueprintRecordRevision, response: transferResponse.value.trim(), confidence: confidence.value as number, idempotencyKey: submitKey.value }) as Feedback & { status: 'completed' | 'in_progress' }
+    if (generation !== contentGeneration || contentRevoked.value) return
     if (result.status === 'in_progress') { scorePending.value = true; notice.value = 'Scoring is still in progress. Use retry to reconcile this attempt.'; return }
     feedback.value = result; scorePending.value = false; emit('completed'); move('feedback')
   } catch (cause) { error.value = getErrorMessage(cause, 'Could not submit your response. Try again.') }
@@ -296,14 +303,14 @@ async function retryScore() { await submit() }
 
           <template v-if="phase === 'teaching'">
             <div data-testid="learn-v2-assistance-consequence" class="mt-6 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100 forced-colors:border-current"><Eye class="mr-2 inline h-4 w-4 text-primary" aria-hidden="true" />A worked example supports learning. Using it records this attempt as guided, not independent.</div>
-            <button type="button" data-testid="learn-v2-reveal" :disabled="busy || !isOnline || !!reveal || !!contentPaused" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('answer_reveal')"><Eye class="h-4 w-4" aria-hidden="true" />{{ reveal ? 'Worked example shown' : 'Show worked example' }}</button>
+            <button type="button" data-testid="learn-v2-reveal" :disabled="busy || !isOnline || !!reveal || contentRevoked" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('answer_reveal')"><Eye class="h-4 w-4" aria-hidden="true" />{{ reveal ? 'Worked example shown' : 'Show worked example' }}</button>
             <p v-if="reveal" data-testid="learn-v2-reveal-content" class="mt-4 whitespace-pre-wrap rounded-lg border border-border bg-background/60 p-4 text-sm leading-7 text-foreground forced-colors:border-current">{{ reveal }}</p>
           </template>
 
           <template v-if="phase === 'fading'">
             <label class="mt-6 block text-sm font-medium text-foreground">Your faded-practice response<textarea v-model="fadedResponse" aria-label="Your faded-practice response" placeholder="Try it independently first. You can ask for a hint if needed." class="mt-2 min-h-32 w-full rounded-lg border border-input bg-background px-3 py-3 text-sm leading-6 text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring forced-colors:border-current" /></label>
             <div data-testid="learn-v2-assistance-consequence" class="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100 forced-colors:border-current"><Lightbulb class="mr-2 inline h-4 w-4 text-primary" aria-hidden="true" />A hint keeps this attempt in the guided lane. It is useful support, not a penalty.</div>
-            <button type="button" data-testid="learn-v2-hint" :disabled="busy || !isOnline || !!hint || !!contentPaused" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('substantive_hint')"><Lightbulb class="h-4 w-4" aria-hidden="true" />{{ hint ? 'Hint shown' : 'Get a hint' }}</button>
+            <button type="button" data-testid="learn-v2-hint" :disabled="busy || !isOnline || !!hint || contentRevoked" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-4 inline-flex min-h-10 items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:border-stone-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none forced-colors:border-current" @click="assistance('substantive_hint')"><Lightbulb class="h-4 w-4" aria-hidden="true" />{{ hint ? 'Hint shown' : 'Get a hint' }}</button>
             <p v-if="hint" data-testid="learn-v2-hint-content" class="mt-4 whitespace-pre-wrap rounded-lg border border-border bg-background/60 p-4 text-sm leading-7 text-foreground forced-colors:border-current">{{ hint }}</p>
           </template>
 

@@ -78,6 +78,15 @@ describe('course surfaces with responses on', () => {
   })
 
   describe('course page', () => {
+    it('prioritizes an unavailable denial over an earlier transport failure and clears cached sections', async () => {
+      course.error.value = new Error('Network down')
+      sections.error.value = deniedRead('unavailable')
+      const Comp = await import(coursePath)
+      const wrapper = await mountSuspended(Comp.default)
+      expect(forgetCachedCourse).toHaveBeenCalledWith('course_1')
+      expect(wrapper.find('[data-testid="course-view-read-retry"]').exists()).toBe(true)
+    })
+
     it('pauses the course and forgets its offline sections when a check opens', async () => {
       course.data.value = { _id: 'course_1', title: 'Organic Chemistry', completedSectionCount: 0, totalSectionCount: 1, pace: 'steady', status: 'ready' }
       sections.data.value = [{ _id: 'section_1', courseId: 'course_1', title: 'Functional Groups', order: 0, status: 'ready', masteryLevel: 'new' }]

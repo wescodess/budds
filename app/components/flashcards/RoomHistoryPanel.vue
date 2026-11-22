@@ -37,15 +37,15 @@ const versionDetailQuery = useTeachingQuery(
 const versionDetail = versionDetailQuery.data
 const versionDetailFailure = computed(() => versionDetailQuery.failure.value)
 
-watch(() => versionsFailure.value?.retryable === false, (paused) => {
-  if (!paused) return
+watch(() => versionsFailure.value?.revoked === true, (revoked) => {
+  if (!revoked) return
   expandedVersionId.value = null
   restoreTargetId.value = null
-})
+}, { flush: 'sync' })
 
-watch(() => versionDetailFailure.value?.retryable === false, (paused) => {
-  if (paused) restoreTargetId.value = null
-})
+watch(() => versionDetailFailure.value?.revoked === true, (revoked) => {
+  if (revoked) restoreTargetId.value = null
+}, { flush: 'sync' })
 
 const restoreMutation = import.meta.client
   ? useConvexMutation(api.flashcardRooms.restoreRoomVersion)

@@ -24,11 +24,12 @@ const sectionsQuery = import.meta.client
 const course = computed(() => courseQuery.data?.value ?? null)
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
-const readFailure = computed(() => courseQuery.failure.value ?? sectionsQuery.failure.value)
+const revokedFailure = computed(() => [courseQuery, sectionsQuery].map(query => query.failure.value).find(failure => failure?.revoked) ?? null)
+const readFailure = computed(() => revokedFailure.value ?? courseQuery.failure.value ?? sectionsQuery.failure.value)
 const { forgetCachedCourse } = useOfflineCache()
-watch(() => readFailure.value && !readFailure.value.retryable, (paused) => {
-  if (paused) void forgetCachedCourse(courseId.value).catch(() => {})
-}, { immediate: true })
+watch([revokedFailure, courseId], ([revoked]) => {
+  if (revoked) void forgetCachedCourse(courseId.value).catch(() => {})
+}, { immediate: true, flush: 'sync' })
 
 function retryRead() {
   for (const query of [courseQuery, sectionsQuery]) {

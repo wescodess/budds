@@ -46,7 +46,7 @@ describe('Review reads with responses on', () => {
     expect(wrapper.find('[data-testid="review-read-error"]').exists()).toBe(false)
   })
 
-  it('clears an active session when a check opens mid-review', async () => {
+  it.each(['test_open', 'unavailable'] as const)('clears an active session when a check opens mid-review (%s)', async (reason) => {
     due.data.value = [item('item_1', 'What is inertia?', 'Resistance to change in motion')]
     const Page = await import(path)
     const wrapper = await mountSuspended(Page.default)
@@ -54,8 +54,8 @@ describe('Review reads with responses on', () => {
     await wrapper.get('[data-testid="reveal-button"]').trigger('click')
     expect(wrapper.get('[data-testid="review-answer"]').text()).toContain('Resistance to change in motion')
 
-    due.error.value = deniedRead('test_open')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="review-read-paused"]').exists()).toBe(true))
+    due.error.value = deniedRead(reason)
+    await vi.waitFor(() => expect(wrapper.find(`[data-testid="review-read-${reason === 'unavailable' ? 'error' : 'paused'}"]`).exists()).toBe(true))
     expect(wrapper.text()).not.toContain('What is inertia?')
     expect(wrapper.text()).not.toContain('Resistance to change in motion')
     expect(wrapper.find('[data-testid="review-card"]').exists()).toBe(false)

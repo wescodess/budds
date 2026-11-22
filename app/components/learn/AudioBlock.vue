@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { ref, computed, onUnmounted, watch } from 'vue'
 import { Headphones, Play, Pause, FileText, ChevronDown, ChevronUp, CircleAlert } from '@lucide/vue'
@@ -33,6 +34,7 @@ const isPlaying = ref(false)
 const currentTurnIndex = ref(0)
 const currentTime = ref(0)
 const transcriptExpanded = ref(false)
+let playbackGeneration = 0
 
 const totalDurationMs = computed(() => turns.value.reduce((sum, turn) => sum + turn.durationMs, 0))
 
@@ -84,6 +86,7 @@ function playTurn(index: number) {
 function togglePlay() {
   const el = audioEl.value
   if (!el || readFailure.value) return
+  const generation = playbackGeneration
 
   if (isPlaying.value) {
     el.pause()
@@ -92,11 +95,16 @@ function togglePlay() {
     const url = turnUrls.value[currentTurnIndex.value]
     if (!url) return
     if (!el.src || el.src !== url) el.src = url
-    el.play().then(() => { isPlaying.value = true }).catch(() => { isPlaying.value = false })
+    el.play().then(() => {
+      if (generation === playbackGeneration && el === audioEl.value && !readFailure.value) isPlaying.value = true
+    }).catch(() => {
+      if (generation === playbackGeneration) isPlaying.value = false
+    })
   }
 }
 
 function releaseAudio() {
+  playbackGeneration++
   const el = audioEl.value
   if (el) {
     el.pause()
@@ -112,13 +120,9 @@ function releaseAudio() {
 watch(readFailure, (failure) => {
   if (failure) releaseAudio()
 }, { flush: 'sync' })
+if (LEARN_MEASUREMENT_CAPABILITIES.responses) watch(() => props.entityId, releaseAudio, { flush: 'sync' })
 
-onUnmounted(() => {
-  if (audioEl.value) {
-    audioEl.value.pause()
-    audioEl.value.src = ''
-  }
-})
+onUnmounted(releaseAudio)
 
 function seekTo(absMs: number) {
   const el = audioEl.value

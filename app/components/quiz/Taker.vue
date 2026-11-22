@@ -23,7 +23,7 @@ const quizQuery = useTeachingQuery(
 )
 const quizData = quizQuery.data
 const quizFailure = computed(() => quizQuery.failure.value)
-const quizPaused = computed(() => quizFailure.value?.retryable === false)
+const quizRevoked = computed(() => quizFailure.value?.revoked === true)
 
 const { data: attemptsData } = useConvexQuery(
   api.quizzes.listAttempts,
@@ -93,14 +93,18 @@ watch(
   { immediate: true },
 )
 
-watch(quizPaused, (paused) => {
-  if (!paused) return
+let attemptGeneration = 0
+onScopeDispose(() => { attemptGeneration++ })
+watch(quizRevoked, (revoked) => {
+  if (!revoked) return
+  attemptGeneration++
+  answerState.value = {}
   resultsByQuestion.value = {}
   scoreSummary.value = null
   reviewMode.value = false
   hydratedFromAttempt.value = false
   if (state.value !== 'submitting') state.value = 'loading'
-})
+}, { flush: 'sync' })
 
 const allAnswered = computed(() => {
   if (questions.value.length === 0) return false
@@ -117,6 +121,7 @@ function updateResponse(questionId: string, value: string) {
 async function handleSubmit() {
   if (!allAnswered.value || state.value === 'submitting') return
   state.value = 'submitting'
+  const generation = attemptGeneration
   try {
     const payload = {
       quizId: props.quizId,
@@ -138,7 +143,7 @@ async function handleSubmit() {
       }>
     }
 
-    if (quizPaused.value) {
+    if (generation !== attemptGeneration || quizRevoked.value) {
       state.value = 'loading'
       return
     }
@@ -155,6 +160,7 @@ async function handleSubmit() {
     state.value = 'results'
   }
   catch (e) {
+    if (generation !== attemptGeneration || quizRevoked.value) return
     toast.error(getErrorMessage(e, 'Failed to submit quiz'))
     state.value = 'answering'
   }

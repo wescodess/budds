@@ -44,7 +44,7 @@ const quizQuery = useTeachingQuery(
 )
 const quizData = quizQuery.data
 const quizFailure = computed(() => quizQuery.failure.value)
-const quizPaused = computed(() => quizFailure.value?.retryable === false)
+const quizRevoked = computed(() => quizFailure.value?.revoked === true)
 
 const updateQuestionMutation = import.meta.client
   ? useConvexMutation(api.quizzes.updateQuestion)
@@ -56,11 +56,11 @@ const editingQuestionId = ref<string | null>(null)
 const drafts = ref<Record<string, Draft>>({})
 const saving = ref(false)
 
-watch(quizPaused, (paused) => {
-  if (!paused) return
+watch(quizRevoked, (revoked) => {
+  if (!revoked) return
   drafts.value = {}
   editingQuestionId.value = null
-})
+}, { flush: 'sync' })
 
 const quiz = computed(() => quizData.value?.quiz ?? null)
 const questions = computed<Question[]>(() => (quizData.value?.questions ?? []) as Question[])

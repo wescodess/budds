@@ -105,6 +105,32 @@ describe('RoomHistoryPanel teaching read failures', () => {
     expect(document.querySelector('[data-testid="flashcard-room-history-empty"]')).not.toBeNull()
   })
 
+  it.each(['list', 'detail'] as const)('clears retained history state after an unavailable %s denial', async (source) => {
+    versionsData.value = [{ _id: 'version_1', _creationTime: 1, title: 'Previous lesson', cardCount: 1, origin: 'manual' }]
+    const detail = teachingRead('flashcardRooms:getRoomVersion')
+    detail.data.value = { cards: [{ _id: 'card_1', term: 'Revoked history term' }] }
+    const Comp = await import(panelPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { open: true, roomId: 'room_1' } })
+    await flushPromises()
+    ;(document.querySelector('[data-testid="flashcard-room-history-expand"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.body.textContent).toContain('Revoked history term')
+    ;(document.querySelector('[data-testid="flashcard-room-history-restore"]') as HTMLButtonElement).click()
+    await flushPromises()
+    expect(document.querySelector('[data-testid="flashcard-room-history-restore-confirm"]')).not.toBeNull()
+    const read = source === 'list' ? versions : detail
+    read.error.value = denied('unavailable')
+    await flushPromises()
+    expect(document.body.textContent).not.toContain('Revoked history term')
+    expect(document.querySelector('[data-testid="flashcard-room-history-restore-confirm"]')).toBeNull()
+    expect(document.querySelector(`[data-testid="flashcard-${source === 'list' ? 'history' : 'version'}-read-retry"]`)).not.toBeNull()
+    read.error.value = null
+    await flushPromises()
+    if (source === 'list') expect(document.querySelector('[data-testid="flashcard-room-history-preview"]')).toBeNull()
+    expect(document.querySelector('[data-testid="flashcard-room-history-restore-confirm"]')).toBeNull()
+    wrapper.unmount()
+  })
+
 describe('RoomShell denial after cards were shown', () => {
   beforeEach(() => {
     resetTeachingReads()
@@ -112,16 +138,16 @@ describe('RoomShell denial after cards were shown', () => {
     document.body.innerHTML = ''
   })
 
-  it('removes the cards, closes history and disables the room actions', async () => {
+  it.each(['test_open', 'unavailable'] as const)('removes the cards, closes history and disables the room actions (%s)', async (reason) => {
     const wrapper = await mountShell()
     expect(wrapper.text()).toContain('Mitosis')
     await wrapper.get('[data-testid="flashcard-room-mode-practice"]').trigger('click')
     await flushPromises()
 
-    roomError.value = denied('test_open')
+    roomError.value = denied(reason)
     roomData.value = null
     await flushPromises()
-    expect(wrapper.get('[data-testid="flashcards-read-paused"]').exists()).toBe(true)
+    expect(wrapper.get(`[data-testid="flashcards-read-${reason === 'unavailable' ? 'error' : 'paused'}"]`).exists()).toBe(true)
     expect(wrapper.text()).not.toContain('Mitosis')
     expect(wrapper.text()).not.toContain('Cell division')
     for (const id of ['flashcard-room-mode-editor', 'flashcard-room-mode-practice', 'flashcard-room-history-toggle', 'flashcard-room-generate-trigger']) {

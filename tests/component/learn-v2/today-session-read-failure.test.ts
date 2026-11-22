@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { flushPromises } from '@vue/test-utils'
 import { deniedRead, resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
 
 vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
@@ -51,7 +52,7 @@ describe('LearnV2TodaySession with responses on', () => {
     expect(wrapper.get('[data-testid="learn-v2-continue"]').attributes('disabled')).toBeDefined()
   })
 
-  it('drops server-delivered hints and worked examples when a check opens mid-session', async () => {
+  it.each(['test_open', 'unavailable'] as const)('drops server-delivered hints and worked examples after %s', async (reason) => {
     content.data.value = { revision: 2, blocks, adaptivePresentation }
     const wrapper = await mount(); await startSession(wrapper)
     await vi.waitFor(() => expect(wrapper.text()).toContain('retrieval content'))
@@ -62,13 +63,16 @@ describe('LearnV2TodaySession with responses on', () => {
     await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-v2-reveal-content"]').text()).toContain('Server assistance'))
     expect(wrapper.text()).toContain('explanation content')
 
-    content.error.value = deniedRead('test_open')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-content-paused"]').exists()).toBe(true))
+    content.error.value = deniedRead(reason)
+    await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-content-paused"], [data-testid="learn-v2-content-error"]').exists()).toBe(true))
     expect(wrapper.find('[data-testid="learn-v2-reveal-content"]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('Server assistance')
     expect(wrapper.text()).not.toContain('explanation content')
     expect(wrapper.get('[data-testid="learn-v2-reveal"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="learn-v2-continue"]').attributes('disabled')).toBeDefined()
+    content.error.value = null
+    await nextTick()
+    expect(wrapper.text()).not.toContain('Server assistance')
   })
 
   it('says plainly when disclosure is unknown', async () => {
@@ -76,6 +80,27 @@ describe('LearnV2TodaySession with responses on', () => {
     const wrapper = await mount(); await startSession(wrapper)
     expect(wrapper.get('[data-testid="learn-v2-content-paused"]').text()).toBe('This isn’t available right now.')
     expect(wrapper.find('[data-testid="learn-v2-content-retry"]').exists()).toBe(false)
+  })
+
+  it('rejects assistance begun before revocation even when the subscription recovers first', async () => {
+    content.data.value = { revision: 2, blocks, adaptivePresentation }
+    const result = Promise.withResolvers<unknown>()
+    assist.mockReturnValue(result.promise)
+    const wrapper = await mount(); await startSession(wrapper)
+    await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+    await wrapper.find('textarea[aria-label="Your prediction"]').setValue('prediction')
+    await wrapper.get('[data-testid="learn-v2-continue"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-reveal"]').trigger('click')
+    expect(assist).toHaveBeenCalledTimes(1)
+    content.error.value = deniedRead('unavailable')
+    await nextTick()
+    content.error.value = null
+    await nextTick()
+    result.resolve({ revision: 3, assistance: { content: 'Revoked assistance' } })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('Revoked assistance')
+    expect(wrapper.find('[data-testid="learn-v2-reveal-content"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('retries an unavailable read by subscribing again and recovers', async () => {
