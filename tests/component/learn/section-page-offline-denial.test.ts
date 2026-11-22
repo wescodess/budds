@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 import { flushPromises } from '@vue/test-utils'
@@ -49,6 +49,7 @@ async function mountPage() {
 }
 
 describe('section page offline copy after a denial, responses on', () => {
+  beforeAll(async () => { await import(pagePath) })
   afterEach(() => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
     vi.unstubAllGlobals()

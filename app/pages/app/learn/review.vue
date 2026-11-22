@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { Flag, ArrowLeft, CheckCircle, CircleAlert, Zap, Flame } from '@lucide/vue'
 import { api } from '#convex/api'
@@ -57,7 +58,7 @@ const dueQuery = import.meta.client
   : { data: ref([]), failure: computed(() => null), refresh: async () => {} }
 const dueFailure = computed(() => dueQuery.failure.value)
 let contentGeneration = 0
-onScopeDispose(() => { contentGeneration++ })
+onScopeDispose(() => { if (LEARN_MEASUREMENT_CAPABILITIES.responses) contentGeneration++ })
 
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)

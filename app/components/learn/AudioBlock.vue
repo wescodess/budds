@@ -79,8 +79,11 @@ function playTurn(index: number) {
   const el = audioEl.value
   const url = turnUrls.value[index]
   if (!el || !url) return
+  const generation = playbackGeneration
   el.src = url
-  el.play().catch(() => { isPlaying.value = false })
+  el.play().catch(() => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses || (generation === playbackGeneration && el === audioEl.value)) isPlaying.value = false
+  })
 }
 
 function togglePlay() {
@@ -96,9 +99,9 @@ function togglePlay() {
     if (!url) return
     if (!el.src || el.src !== url) el.src = url
     el.play().then(() => {
-      if (generation === playbackGeneration && el === audioEl.value && !readFailure.value) isPlaying.value = true
+      if (!LEARN_MEASUREMENT_CAPABILITIES.responses || (generation === playbackGeneration && el === audioEl.value && !readFailure.value)) isPlaying.value = true
     }).catch(() => {
-      if (generation === playbackGeneration) isPlaying.value = false
+      if (!LEARN_MEASUREMENT_CAPABILITIES.responses || generation === playbackGeneration) isPlaying.value = false
     })
   }
 }
@@ -122,7 +125,13 @@ watch(readFailure, (failure) => {
 }, { flush: 'sync' })
 if (LEARN_MEASUREMENT_CAPABILITIES.responses) watch(() => props.entityId, releaseAudio, { flush: 'sync' })
 
-onUnmounted(releaseAudio)
+onUnmounted(() => {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses) playbackGeneration++
+  if (audioEl.value) {
+    audioEl.value.pause()
+    audioEl.value.src = ''
+  }
+})
 
 function seekTo(absMs: number) {
   const el = audioEl.value

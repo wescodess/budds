@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { ArrowLeft, BookOpenCheck, ChevronRight, CircleAlert, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
@@ -86,7 +87,7 @@ const contentFailure = computed(() => contentQuery.failure.value)
 const contentPaused = computed(() => contentFailure.value && !contentFailure.value.retryable ? contentFailure.value : null)
 const contentRevoked = computed(() => contentFailure.value?.revoked === true)
 let contentGeneration = 0
-onScopeDispose(() => { contentGeneration++ })
+onScopeDispose(() => { if (LEARN_MEASUREMENT_CAPABILITIES.responses) contentGeneration++ })
 watch(contentRevoked, (revoked) => {
   if (!revoked) return
   contentGeneration++

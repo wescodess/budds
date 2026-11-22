@@ -302,7 +302,7 @@ async function cacheAudioUrls(urls: string[], current: () => boolean): Promise<v
 
 async function getAudioFromCache(url: string): Promise<Response | undefined> {
   const revision = cacheRevision
-  await Promise.all(courseDeletions.values())
+  if (courseDeletions.size) await Promise.all(courseDeletions.values())
   const db = await openDB()
   const tx = db.transaction(AUDIO_STORE, 'readonly')
   const record = await requestResult(tx.objectStore(AUDIO_STORE).get(url)) as EncryptedAudioRecord | undefined
@@ -435,7 +435,8 @@ export function useOfflineCache() {
     const revision = courseRevisions.get(courseId)
     const cleared = clearRevision
     const current = () => revision === courseRevisions.get(courseId) && cleared === clearRevision
-    await courseDeletions.get(courseId)
+    const deletion = courseDeletions.get(courseId)
+    if (deletion) await deletion
     if (!current()) return
     await storeSection({ sectionId, courseId, title, contentBlocks, cachedAt: Date.now() }, current)
     await cacheAudioUrls(audioUrls, current)

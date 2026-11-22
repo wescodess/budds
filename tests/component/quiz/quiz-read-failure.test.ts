@@ -256,4 +256,24 @@ describe('quiz teaching-read failures', () => {
     expect(wrapper.find('input').exists()).toBe(false)
   })
 
+  it('keeps a recovered quiz usable when a pre-revocation submission resolves late', async () => {
+    teachingData.value = { ...quiz, questions: [{ ...quiz.questions[0], type: 'free-response' }] }
+    const result = Promise.withResolvers<unknown>()
+    mutate.mockReturnValue(result.promise)
+    const wrapper = await mount('Taker')
+    await wrapper.get('[data-testid="quiz-question-textarea"]').setValue('My answer')
+    await wrapper.get('[data-testid="quiz-submit-button"]').trigger('click')
+    expect(mutate).toHaveBeenCalledTimes(1)
+    teachingError.value = denied('unavailable')
+    await nextTick()
+    teachingError.value = null
+    await nextTick()
+    result.resolve({ attemptId: 'attempt_1', score: 1, total: 1, correctCount: 1, results: [{ questionId: 'q_1', isCorrect: true, correctAnswer: 'Revoked answer', userResponse: 'My answer' }] })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="quiz-question-textarea"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="quiz-submit-button"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="quiz-results-score"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Revoked answer')
+  })
+
 })

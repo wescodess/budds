@@ -79,7 +79,7 @@ function clearAttemptContent() {
 }
 
 let attemptGeneration = 0
-onScopeDispose(() => { attemptGeneration++ })
+onScopeDispose(() => { if (LEARN_MEASUREMENT_CAPABILITIES.responses) attemptGeneration++ })
 watch([quizRevoked, () => LEARN_MEASUREMENT_CAPABILITIES.responses ? props.quizId : null], ([revoked], previous) => {
   if (!revoked && previous && (LEARN_MEASUREMENT_CAPABILITIES.responses ? props.quizId : null) === previous[1]) return
   attemptGeneration++

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
@@ -94,7 +95,7 @@ watch(
 )
 
 let attemptGeneration = 0
-onScopeDispose(() => { attemptGeneration++ })
+onScopeDispose(() => { if (LEARN_MEASUREMENT_CAPABILITIES.responses) attemptGeneration++ })
 watch(quizRevoked, (revoked) => {
   if (!revoked) return
   attemptGeneration++
@@ -103,7 +104,7 @@ watch(quizRevoked, (revoked) => {
   scoreSummary.value = null
   reviewMode.value = false
   hydratedFromAttempt.value = false
-  if (state.value !== 'submitting') state.value = 'loading'
+  state.value = 'loading'
 }, { flush: 'sync' })
 
 const allAnswered = computed(() => {
@@ -144,7 +145,6 @@ async function handleSubmit() {
     }
 
     if (generation !== attemptGeneration || quizRevoked.value) {
-      state.value = 'loading'
       return
     }
     const byId: Record<string, QuestionResult> = {}

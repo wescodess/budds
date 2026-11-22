@@ -118,4 +118,31 @@ describe('AudioBlock with responses on', () => {
     expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('No audio available')
   })
+
+  it('ignores a late autoplay rejection after revoked audio has been replaced and played', async () => {
+    overview.data.value = sampleOverview
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    const oldAudio = wrapper.get('audio').element as HTMLAudioElement
+    const latePlay = Promise.withResolvers<undefined>()
+    vi.spyOn(oldAudio, 'play').mockResolvedValueOnce(undefined).mockReturnValueOnce(latePlay.promise)
+    vi.spyOn(oldAudio, 'pause').mockImplementation(() => {})
+    vi.spyOn(oldAudio, 'load').mockImplementation(() => {})
+    await wrapper.get('[data-testid="audio-block-play"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('audio').trigger('ended')
+    overview.error.value = deniedRead('unavailable')
+    await nextTick()
+    overview.error.value = null
+    await flushPromises()
+    const freshAudio = wrapper.get('audio').element as HTMLAudioElement
+    expect(freshAudio).not.toBe(oldAudio)
+    vi.spyOn(freshAudio, 'play').mockResolvedValue(undefined)
+    await wrapper.get('[data-testid="audio-block-play"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Pause audio primer')
+    latePlay.reject(new Error('Old audio failed'))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Pause audio primer')
+  })
 })
