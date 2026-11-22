@@ -59,7 +59,7 @@ Owner's words, 2026-11-22: `Split into 15 + 15 minutes, showing the increase bef
 - Split under 30 minutes, such as the default 25, makes two 15-minute parts. Before Save, the time chip and a second chip read 15 min each, and a caption in the editor's hint style says "Splitting adds 5 min so each part has the 15-minute minimum." The bar's total includes the added minutes.
 - Split at 30 minutes or more keeps the total: both parts are at least 15, and the first takes the odd minute, so 31 becomes 16 and 15.
 - Split is still held until Save.
-- While Split is held, the time chip and its pop-over set the first part's minutes, 15 to 480. The second part keeps its minutes, and the bar's total is the two parts plus the rest of the map.
+- While Split is held, the time chip and its pop-over set the first part's minutes, 15 to 480. The second part keeps its minutes, and the bar's total is the two parts plus the rest of the map. Save checks the two parts shown, not the time before the split.
 
 ## Product decisions carried into the build
 
