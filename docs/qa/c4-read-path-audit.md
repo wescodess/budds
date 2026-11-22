@@ -191,6 +191,14 @@ All 128 public query names are listed below. Every new `Delivery`/`Preparation` 
 
 Additional content returns audited:
 
+C5.4 implements the existing assessment delivery registrations through `convex/lib/learnV2AssessmentDelivery.ts`. The shared helper accepts a server-selected Today/Canvas flow; Canvas-specific admission remains with the Canvas adapter. Grants record consumption transactionally and replay only after current authority is revalidated.
+
+| Entry point | Handling | Capability |
+| --- | --- | --- |
+| `learnV2Assessments.grantAssessmentDelivery` | `assessment_or_own_response`: one exact-item grant receipt, with no prompt or teaching snapshot. The public adapter selects Today; Canvas uses the shared owner helper after its admission. | Responses; enrollment and frozen protocol additionally required for measurement. Off retains the disabled result. |
+| `learnV2Assessments.getAssessment` | `assessment_or_own_response`: the granted prompt and declared stimulus only, through the shared disclosure projection. No grant, mismatched flow, stale pins or revoked evidence withhold the body. | Responses; off retains the disabled result. |
+| `learnV2Assessments.getAssessmentState` | `assessment_or_own_response`: lifecycle, owned references and closed capabilities only. No read creates a grant. | Responses; off retains the disabled result. |
+
 C5.1–C5.3 adds one public enrollment mutation and implements the existing sealed-scoring entry points. These classifications supplement the C4 inventory above; there are no new public queries.
 
 | Entry point | Handling | Capability |

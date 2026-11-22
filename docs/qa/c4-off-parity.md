@@ -29,6 +29,7 @@ Run the current differential with `pnpm exec vitest run convex/learnV2Disclosure
 | Disposition | Entry point / path | Off behavior / classification |
 | --- | --- | --- |
 | Gated | `learnV2Measurement.enrollProspect` | `summary_or_own_work`: no body or grant; missing frozen protocol returns `protocol_not_frozen`, enrollment remains disabled. |
+| Gated | `learnV2Assessments.grantAssessmentDelivery`, `getAssessment`, `getAssessmentState`; `convex/lib/learnV2AssessmentDelivery.ts` | `assessment_or_own_response`: existing disabled results while responses are off. Enabled grant/replay and reads validate exact item, current source/pins, protocol, novelty and server flow. No new public registration or flag default. |
 | Gated | `learnV2Mastery.acceptMasterySubmission`, `scoreMasterySubmission` | `assessment_or_own_response`: existing disabled receipts/results; no acceptance-time snapshot, scoring dispatch or mastery write while disabled. |
 | Gated | `learnV2Mastery.submitMasteryAttempt`; `learnV2MapCalibration.submitCalibrationAttempt` | Ordinary compatibility actions retain dev scoring and replay. New sealed scoring and opportunity-only exclusions apply on the enabled path. |
 | Gated | `learnV2Mastery.getMasterySubmissionScoringState`, `getSealedMasteryAttemptOutcome` | Internal fixed assessment/state projections; no teaching body or public query added. |
