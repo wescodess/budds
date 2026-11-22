@@ -757,5 +757,310 @@
     "sessionContentId": "000000000000010009sessionContent",
     "sessionContentRevision": 1,
     "status": "in_progress"
+  },
+  "today.delivery.false": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "today.delivery.true": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "today.list.false": {
+    "nextScheduledAt": null,
+    "reason": "content_evidence_unavailable",
+    "status": "blocked"
+  },
+  "today.list.ready.false": {
+    "content": {
+      "assessmentRubricVersion": "learn-v2.assessment.v1",
+      "id": "000000000000010009sessionContent",
+      "revision": 1
+    },
+    "mastery": {
+      "nextReviewAt": null,
+      "state": "unseen"
+    },
+    "nextScheduledAt": null,
+    "objective": {
+      "capability": null,
+      "estimatedMinutes": null,
+      "id": "00000000000010005learnObjectives",
+      "title": "Apply a rule"
+    },
+    "placementKind": "learning",
+    "plan": {
+      "blueprintRecordRevision": 1,
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "recordRevision": 1,
+      "revisionId": "00000000010007studyPlanRevisions"
+    },
+    "scheduledEndAt": null,
+    "scheduledStartAt": 1800000000001,
+    "sessionId": "0000000000000010008studySessions",
+    "sessionRevision": 1,
+    "status": "ready",
+    "timezone": "UTC"
+  },
+  "today.list.ready.true": {
+    "content": {
+      "assessmentRubricVersion": "learn-v2.assessment.v1",
+      "id": "000000000000010009sessionContent",
+      "revision": 1
+    },
+    "mastery": {
+      "nextReviewAt": null,
+      "state": "unseen"
+    },
+    "nextScheduledAt": null,
+    "objective": {
+      "capability": null,
+      "estimatedMinutes": null,
+      "id": "00000000000010005learnObjectives",
+      "title": "Apply a rule"
+    },
+    "placementKind": "learning",
+    "plan": {
+      "blueprintRecordRevision": 1,
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "recordRevision": 1,
+      "revisionId": "00000000010007studyPlanRevisions"
+    },
+    "scheduledEndAt": null,
+    "scheduledStartAt": 1800000000001,
+    "sessionId": "0000000000000010008studySessions",
+    "sessionRevision": 1,
+    "status": "ready",
+    "timezone": "UTC"
+  },
+  "today.list.true": {
+    "nextScheduledAt": null,
+    "reason": "content_evidence_unavailable",
+    "status": "blocked"
+  },
+  "today.read.false": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.ready.false": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [
+      {
+        "_creationTime": 1800000000001.0156,
+        "_id": "000000010016sessionContentClaims",
+        "claim": "The rule applies.",
+        "order": 0,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [
+      {
+        "_creationTime": 1800000000001.0166,
+        "_id": "00000000010017learnClaimSupports",
+        "confidence": 0.95,
+        "conflictStatus": "clear",
+        "entailment": "entailed",
+        "evidenceStatus": "evidence_available",
+        "sessionContentClaimId": "000000010016sessionContentClaims",
+        "sourceSnapshotId": "000000010014learnSourceSnapshots",
+        "userId": "https://auth.example|c5-off-parity",
+        "verifierVersion": "learn-v2.entailment.v2"
+      }
+    ],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.ready.true": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [
+      {
+        "_creationTime": 1800000000001.0156,
+        "_id": "000000010016sessionContentClaims",
+        "claim": "The rule applies.",
+        "order": 0,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [
+      {
+        "_creationTime": 1800000000001.0166,
+        "_id": "00000000010017learnClaimSupports",
+        "confidence": 0.95,
+        "conflictStatus": "clear",
+        "entailment": "entailed",
+        "evidenceStatus": "evidence_available",
+        "sessionContentClaimId": "000000010016sessionContentClaims",
+        "sourceSnapshotId": "000000010014learnSourceSnapshots",
+        "userId": "https://auth.example|c5-off-parity",
+        "verifierVersion": "learn-v2.entailment.v2"
+      }
+    ],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.true": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.retry": {
+    "jobId": "00000000000000000010016learnJobs",
+    "sessionRevision": 2,
+    "status": "pending"
+  },
+  "today.start": {
+    "sessionContentId": "000000000000010009sessionContent",
+    "sessionContentRevision": 1,
+    "status": "in_progress"
+  },
+  "today.start.replay": {
+    "sessionContentId": "000000000000010009sessionContent",
+    "sessionContentRevision": 1,
+    "status": "in_progress"
   }
 }

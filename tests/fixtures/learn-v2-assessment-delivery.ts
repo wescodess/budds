@@ -6,6 +6,8 @@ import { api, internal } from '../../convex/_generated/api'
 import schema from '../../convex/schema'
 import { MEASUREMENT_HARNESS_VERSION, measurementDigest, measurementItemAdapters } from '../../convex/lib/learnV2MeasurementItems'
 import { learnMeasurementProtocolSchema } from '../../convex/lib/learnV2MeasurementAssignment'
+import { LEARN_V2_MASTERY_LOOP_BLOCKS } from '../../shared/learn-v2-session-content'
+import type { LearnScorerBinding } from '../../shared/learn-v2-measurement'
 
 const modules = import.meta.glob('../../convex/**/*.ts')
 const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('../../convex/learnV2MeasurementItems') }>).learnV2MeasurementItems
@@ -35,7 +37,7 @@ export function syntheticDeliveryProtocol(now = Date.now(), model = false) {
     scoringBinding: model ? modelBinding : binding })
 }
 
-export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean } = {}) {
+export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding } = {}) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const t = convexTest(schema, modules)
   const owner = t.withIdentity(identity)
@@ -84,7 +86,7 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
       privateScoring: options.rubric ? privateRubric : options.keyed ? { kind: 'keyed', acceptedSets: [[String(groups * size)]], normalizationVersion: 'normalize.v1' }
         : { kind: 'numeric', expected: groups * size, unit: 'members', absoluteTolerance: 0, relativeTolerance: 0, normalizationVersion: 'normalize.v1' },
       referenceSolution: `PRIVATE-SOLUTION-${formLabel}: ${groups} * ${size} = ${groups * size}.`, derivation: `${groups} * ${size} follows the source multiplication rule.`,
-      scoringBinding: options.rubric ? modelBinding : binding,
+      scoringBinding: options.scorerBinding ?? (options.rubric ? modelBinding : binding),
       claims: (['stimulus', options.rubric ? 'rubric' : 'key', 'solution'] as const).map((part, order) => ({ order, part,
         claim: `${part} uses the multiplication rule.`, revision: 1, supports: [graph.support] })) }
   })
@@ -120,4 +122,22 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
   if (validated.status !== 'validated') throw new Error('Synthetic family did not validate')
   await t.mutation(commands.publishFamily, { ...args, expectedRevision: validated.revision })
   return { t, owner, graph, begun, args, generated, descriptor }
+}
+
+export async function publishDeliveryTeaching(f: Awaited<ReturnType<typeof assessmentDeliveryFixture>>) {
+  const jobId = await f.t.run(ctx => ctx.db.insert('learnJobs', { userId, learningVoidId: f.graph.learningVoidId,
+    blueprintRevisionId: f.graph.blueprintRevisionId, studyPlanRevisionId: f.graph.studyPlanRevisionId, studySessionId: f.graph.studySessionId,
+    type: 'session_content_generation', status: 'running', revision: 1, idempotencyKey: 'synthetic-teaching-job', inputDigest: 'synthetic-teaching-input',
+    expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 1,
+    leaseToken: 'synthetic-teaching-lease', leaseExpiresAt: Date.now() + 60_000, dispatchSupportingSourceSnapshotIds: [f.graph.sourceSnapshotId] }))
+  const candidate = { version: 'learn-v2.session-content.v1', generatorVersion: 'synthetic.teaching.v1', assessmentRubric: rubric,
+    blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: `TEACHING-CANARY-${kind}: a separate practice case.`, claimOrders: [0] })),
+    claims: [{ order: 0, claim: 'TEACHING-CLAIM-CANARY: the source supports the separate practice case.', supportSourceSnapshotIds: [String(f.graph.sourceSnapshotId)] }] }
+  const published = await f.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+    tokenIdentifier: userId, jobId, leaseToken: 'synthetic-teaching-lease', expectedRevision: 1, candidateJson: JSON.stringify(candidate),
+    verifierDecisionsJson: JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: [{ claimOrder: 0, sourceSnapshotId: String(f.graph.sourceSnapshotId),
+      sourceExcerptId: String(f.graph.sourceExcerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.99 }] }),
+  })
+  if (published.status !== 'ready') throw new Error('Synthetic teaching did not publish')
+  return published.sessionContentId
 }

@@ -504,3 +504,25 @@ test.each((['measurement_cold', 'measurement_delayed', 'retained_transfer', 'ind
   })
   expect(network).toHaveBeenCalledTimes(1)
 })
+
+test.each(['v2_canvas', 'v2_today'] as const)('merged Today start races Canvas attachment without changing the %s stratum', async flow => {
+  const s = await fixture({ attach: false, flow })
+  const [canvas, today] = await Promise.all([
+    s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach),
+    s.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: s.f.studySessionId,
+      expectedSessionRevision: 1, expectedContentRevision: 1, idempotencyKey: 'merged_today_canvas_race_1234567890', entryPoint: 'today' }),
+  ])
+  if (flow === 'v2_canvas') {
+    expect(canvas).toMatchObject({ kind: 'attached' })
+    expect(today).toMatchObject({ status: 'assessment', assessment: { reasonCode: 'flow_mismatch' }, deliveryGrant: null })
+  } else {
+    expect(canvas).toMatchObject({ kind: 'not_admitted', observations: 'no_observations' })
+    expect(today).toMatchObject({ status: 'assessment', deliveryGrant: { status: 'granted' } })
+  }
+  expectSafeCanvas(today, s)
+  const grants = await s.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))
+  expect(grants).toHaveLength(1)
+  expect(grants[0]!.provenanceVersion).toBe(`learn-v2.assessment-delivery.${flow === 'v2_canvas' ? 'canvas' : 'today'}.v1`)
+  expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toEqual([])
+  expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toEqual([])
+})

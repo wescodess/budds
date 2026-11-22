@@ -1,0 +1,327 @@
+/// <reference types="vite/client" />
+import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { api } from './_generated/api'
+import type { Doc } from './_generated/dataModel'
+import { deterministicLearnScoringReceipt } from './lib/learnV2MeasurementScoring'
+import { normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '../shared/learn-v2-responses'
+import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+
+const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
+const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
+const due = makeFunctionReference<'mutation', { userId: string, through?: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
+const policy = vi.hoisted(() => ({ responses: true, enrollment: true, protocol: null as unknown }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, scoring: true,
+    get responses() { return policy.responses }, get enrollment() { return policy.enrollment } } }
+})
+vi.mock('./lib/learnV2MeasurementAssignment', async original => {
+  const value = await original<typeof import('./lib/learnV2MeasurementAssignment')>()
+  return { ...value, getFrozenLearnMeasurementProtocol: () => policy.protocol }
+})
+
+const userId = deliveryIdentity.tokenIdentifier
+const PRIVATE = ['PRIVATE-SOLUTION', 'PRIVATE-ORDINARY-RUBRIC', 'PRIVATE-RUBRIC-CANARY', 'scoringSpecDigest', 'supportManifestDigest', 'assessmentRubricSnapshot', 'randomizationSeed']
+const TEACHING = ['TEACHING-CANARY', 'TEACHING-CLAIM-CANARY']
+type Entry = 'today' | 'session_deep_link'
+
+beforeEach(() => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+  policy.responses = true; policy.enrollment = true; policy.protocol = syntheticDeliveryProtocol()
+})
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
+
+async function fixture() {
+  const f = await assessmentDeliveryFixture()
+  const contentId = await publishDeliveryTeaching(f)
+  const request = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'today_start_command' }
+  const settle = <T,>(value: Promise<T>) => value.catch((error: { data?: unknown }) => ({ rejected: error.data ?? String(error) }))
+  const reads = async (key = 'today_content_delivery') => ({
+    today: await settle(f.owner.query(api.learnV2Today.getToday, {})),
+    candidate: await settle(f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: f.graph.studySessionId })),
+    content: await settle(f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.studySessionId })),
+    delivery: await settle(f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: key })),
+  })
+  const opportunities = () => f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(16))
+  const exposures = () => f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(32))
+  const cold = async () => (await opportunities()).find(row => row.purpose.kind === 'measurement_cold')!
+  async function open(entryPoint: Entry = 'today') {
+    const started = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { ...request, entryPoint })
+    expect(started).toMatchObject({ status: 'assessment', assessment: { kind: 'check' }, deliveryGrant: { status: 'granted' } })
+    return await cold()
+  }
+  async function seal(entryPoint: Entry = 'today', payload: LearnResponsePayload = { kind: 'numeric', value: 0, unit: 'members' }) {
+    const opportunity = await open(entryPoint)
+    const accepted = await f.owner.mutation(mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'today_accept_command', response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision, payload } } })
+    if (accepted.kind !== 'accepted') throw new Error(`Expected seal: ${JSON.stringify(accepted)}`)
+    return { opportunity, accepted }
+  }
+  async function pending(entryPoint: Entry = 'today') {
+    const sealed = await seal(entryPoint)
+    const command = { tokenIdentifier: userId, submissionId: sealed.accepted.submissionId }
+    const reserved = await f.owner.mutation(mastery.beginSealedMasteryScoring, command)
+    if (reserved.kind !== 'acquired') throw new Error('Expected scoring lease')
+    const input = await f.owner.query(mastery.getSealedMasteryScoringInput, command)
+    const receipt = await deterministicLearnScoringReceipt(input, { dispatchedAt: Date.now(), dispatchOrdinal: 1, leaseIdentityHash: await privacyDigest(reserved.leaseToken) })
+    const executionId = await f.owner.mutation(mastery.registerSealedMasteryScoring, { ...command, receiptJson: JSON.stringify(receipt) })
+    return { ...sealed, command, reserved, executionId }
+  }
+  return { ...f, contentId, request, reads, opportunities, exposures, cold, open, seal, pending }
+}
+
+function forms(value: unknown) {
+  return new Set([...JSON.stringify(value).matchAll(/Hypothetical ([A-F]):/gu)].map(match => match[1]))
+}
+
+test.each(['no_grant', 'open', 'sealed', 'pending', 'scored', 'revoked'] as const)('both Today entry points enforce the %s disclosure boundary', async state => {
+  for (const entryPoint of ['today', 'session_deep_link'] as const) {
+    const f = await fixture()
+    if (state === 'open' || state === 'revoked') await f.open(entryPoint)
+    if (state === 'sealed') await f.seal(entryPoint)
+    if (state === 'pending') await f.pending(entryPoint)
+    if (state === 'scored') {
+      const pending = await f.pending(entryPoint)
+      await f.owner.mutation(mastery.commitSealedMasteryAttempt, { ...pending.command, executionId: pending.executionId })
+    }
+    if (state === 'revoked') await f.t.run(ctx => ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() }))
+    const reads = await f.reads()
+    const coldForm = (await f.cold())?.assessmentPins
+    const coldLabel = coldForm?.kind === 'measurement' ? coldForm.itemPins.formLabel : null
+    for (const [name, value] of Object.entries(reads)) {
+      const serialized = JSON.stringify(value)
+      for (const canary of PRIVATE) expect(serialized, `${state}:${entryPoint}:${name}`).not.toContain(canary)
+      const teachingAllowed = name === 'delivery' && ['sealed', 'pending', 'scored'].includes(state)
+      if (!teachingAllowed) for (const canary of TEACHING) expect(serialized, `${state}:${entryPoint}:${name}`).not.toContain(canary)
+      if (name === 'today' || name === 'candidate' || ['no_grant', 'revoked'].includes(state)) expect(forms(value).size, `${state}:${name}`).toBe(0)
+      else expect([...forms(value)].every(label => label === coldLabel)).toBe(true)
+    }
+    if (state === 'open') {
+      expect(reads.today).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { phase: 'test_open' } } })
+      expect(reads.content).toMatchObject({ blocks: [], claims: [], supports: [], delivered: { status: 'delivered', phase: 'test_open' } })
+    }
+    if (state === 'no_grant') expect(reads.today).toMatchObject({ status: 'ready', assessment: { kind: 'unprepared' } })
+    if (state === 'revoked') expect(reads.today).toMatchObject({ status: 'blocked', reason: 'evidence_unavailable' })
+    if (['sealed', 'pending', 'scored'].includes(state)) {
+      expect(JSON.stringify(reads.content)).toContain('"value":0')
+      expect(JSON.stringify(reads.delivery)).toContain('TEACHING-CANARY-explanation')
+    }
+    if (state === 'pending') {
+      expect(JSON.stringify(reads.content)).toContain('scoring_pending')
+      for (const field of ['scorePercent', 'feedbackCodes', 'diagnosis', 'retained']) expect(JSON.stringify(reads)).not.toContain(field)
+    }
+    expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(4))).toEqual(state === 'no_grant' ? [] : [expect.objectContaining({ entryPoint, flow: 'v2_today' })])
+  }
+})
+
+test('one grant survives cross-tab starts, both entry points, lost responses and public retries', async () => {
+  const f = await fixture()
+  const [first, second] = await Promise.all((['session_deep_link', 'today'] as const).map(entryPoint => f.owner.mutation(api.learnV2SessionContent.startStudySession,
+    { ...f.request, entryPoint, idempotencyKey: `cross_tab_${entryPoint}` })))
+  if (first.status !== 'assessment' || first.deliveryGrant?.status !== 'granted') throw new Error('Expected a grant')
+  expect(second).toMatchObject({ status: 'assessment', deliveryGrant: { deliveryGrantId: first.deliveryGrant.deliveryGrantId } })
+  const lost = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { ...f.request, entryPoint: 'session_deep_link', idempotencyKey: 'cross_tab_session_deep_link' })
+  expect(lost).toMatchObject({ deliveryGrant: { deliveryGrantId: first.deliveryGrant.deliveryGrantId } })
+  const opportunity = await f.cold()
+  const publicGrant = await f.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: opportunity._id, expectedRevision: 1, idempotencyKey: 'another_tab_public_grant' })
+  expect(publicGrant).toMatchObject({ status: 'granted', deliveryGrantId: first.deliveryGrant.deliveryGrantId })
+  await expect(f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, idempotencyKey: 'no_reroll_after_grant' })).rejects.toThrow()
+  expect(await f.opportunities()).toHaveLength(1)
+  expect(await f.exposures()).toEqual([expect.objectContaining({ _id: first.deliveryGrant.deliveryGrantId, purpose: 'cold_measurement', status: 'granted' })])
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(4))).toEqual([expect.objectContaining({ entryPoint: 'session_deep_link' })])
+  expect(forms(await f.reads()).size).toBe(1)
+})
+
+test('no teaching payload leaves Today before the cold check is sealed', async () => {
+  const f = await fixture()
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const reads = await f.reads(`pre_seal_${attempt}`)
+    for (const canary of TEACHING) expect(JSON.stringify(reads)).not.toContain(canary)
+    expect(reads.delivery).toMatchObject({ value: { blocks: [], claims: [], supports: [] } })
+    if (!attempt) await f.open()
+  }
+  expect((await f.exposures()).filter(row => row.purpose === 'teaching')).toHaveLength(0)
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: 'ready' })
+})
+
+test('sealing permits separate-case teaching before scoring, recorded once with frozen assistance', async () => {
+  const f = await fixture()
+  const sealed = await f.seal()
+  const started = await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+  expect(started.status).toBe('in_progress')
+  const content = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'post_seal_teaching_delivery' })
+  expect(JSON.stringify(content)).toContain('TEACHING-CANARY-explanation')
+  for (const canary of PRIVATE) expect(JSON.stringify(content)).not.toContain(canary)
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toEqual(started)
+  expect(await f.t.run(ctx => ctx.db.get(sealed.accepted.submissionId))).toMatchObject({ assistanceSnapshot: { state: 'unassisted' } })
+  expect((await f.exposures()).filter(row => row.purpose === 'teaching')).toEqual([expect.objectContaining({ provenanceVersion: 'learn-v2.instructional-flow.v2_today.v1' })])
+  expect(await f.cold()).toMatchObject({ operationalEligibility: 'eligible', phase: 'submitted_sealed' })
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(0)
+})
+
+test('provider failure after seal reveals no score or diagnosis and keeps separate-case teaching', async () => {
+  const f = await fixture()
+  const pending = await f.pending()
+  await f.owner.mutation(mastery.failSealedMasteryScoring, { ...pending.command, leaseToken: pending.reserved.leaseToken })
+  expect(['retryable_failure', 'reconciliation_required']).toContain((await f.cold()).phase)
+  const reads = await f.reads('provider_failure_delivery')
+  for (const field of ['scorePercent', 'feedbackCodes', 'diagnosis', 'scored_pass', 'scored_fail']) expect(JSON.stringify(reads)).not.toContain(field)
+  expect(JSON.stringify(reads.delivery)).toContain('TEACHING-CANARY-explanation')
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toHaveLength(0)
+})
+
+test('source loss before enrollment, before the grant and after the seal never falls back to a lesson', async () => {
+  const unenrolled = await fixture()
+  await unenrolled.t.run(ctx => ctx.db.patch(unenrolled.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() }))
+  await unenrolled.owner.mutation(api.learnV2SessionContent.startStudySession, unenrolled.request)
+  expect(await unenrolled.t.run(ctx => ctx.db.query('learnMeasurementAssignments').unique())).toMatchObject({ status: 'not_admitted' })
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(await unenrolled.reads('unenrolled_source_loss'))).not.toContain(canary)
+  expect(await unenrolled.exposures()).toHaveLength(0)
+
+  const before = await fixture()
+  await before.owner.mutation(measurement.enrollProspect, { studySessionId: before.graph.studySessionId, familyId: before.begun.familyId, entryPoint: 'today' })
+  await before.t.run(ctx => ctx.db.patch(before.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() }))
+  const blocked = await before.owner.mutation(api.learnV2SessionContent.startStudySession, before.request)
+  expect(blocked).toMatchObject({ status: 'assessment', assessment: { reasonCode: 'evidence_unavailable' }, deliveryGrant: null })
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(await before.reads('enrolled_source_loss'))).not.toContain(canary)
+  expect(await before.exposures()).toHaveLength(0)
+
+  const after = await fixture()
+  await after.seal()
+  await after.t.run(ctx => ctx.db.patch(after.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() }))
+  const reads = await after.reads('revoked_after_seal')
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(reads)).not.toContain(canary)
+  expect(await after.owner.mutation(api.learnV2SessionContent.startStudySession, after.request)).toMatchObject({ status: 'assessment' })
+  expect((await after.exposures()).filter(row => row.purpose === 'teaching')).toHaveLength(0)
+})
+
+test('a missing protocol blocks the episode; a recorded non-admission continues the ordinary lesson', async () => {
+  const f = await fixture()
+  policy.protocol = null
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'assessment', assessment: { reasonCode: 'protocol_not_frozen' }, deliveryGrant: null })
+  for (const canary of TEACHING) expect(JSON.stringify(await f.reads('no_protocol'))).not.toContain(canary)
+  policy.protocol = syntheticDeliveryProtocol()
+  await f.t.run(ctx => ctx.db.patch(f.begun.familyId, { status: 'quarantined' }))
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'in_progress' })
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').unique())).toMatchObject({ status: 'not_admitted', exclusionReasons: expect.arrayContaining(['novel_item_unavailable']) })
+  expect(await f.opportunities()).toHaveLength(0)
+  expect(JSON.stringify(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'ordinary_lesson' }))).toContain('TEACHING-CANARY')
+})
+
+test('a missed cold check releases the lesson and records teaching before measurement', async () => {
+  const f = await fixture()
+  await f.open()
+  expect(JSON.stringify(await f.reads('cold_open'))).not.toContain('TEACHING-CANARY')
+  vi.advanceTimersByTime(3_600_000)
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'teach' } })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { ...f.request, idempotencyKey: 'after_missed_cold' })).toMatchObject({ status: 'in_progress' })
+  expect(await f.cold()).toMatchObject({ phase: 'abandoned', operationalEligibility: 'blocked' })
+  expect(JSON.stringify(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'missed_cold_lesson' }))).toContain('TEACHING-CANARY')
+  expect((await f.exposures()).filter(row => row.purpose === 'teaching')).toHaveLength(1)
+})
+
+test('a Canvas episode cannot launder its cold check or teaching through Today', async () => {
+  const f = await fixture()
+  await f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
+  const assignment = await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').unique())
+  await f.t.run(ctx => ctx.db.patch(assignment!._id, { flow: 'v2_canvas' }))
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'assessment', assessment: { reasonCode: 'flow_mismatch' }, deliveryGrant: null })
+  const opportunity = await f.cold()
+  expect(await f.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision, idempotencyKey: 'launder_canvas_episode_grant' })).toMatchObject({ reasonCodes: ['flow_mismatch'] })
+  const reads = await f.reads('canvas_episode')
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(reads)).not.toContain(canary)
+  expect(forms(reads).size).toBe(0)
+  expect(await f.exposures()).toHaveLength(0)
+})
+
+test('owners outside the measurement catalogue and capability-off sessions keep the ordinary Today path', async () => {
+  for (const variant of ['responses_off', 'enrollment_off', 'catalogue_off'] as const) {
+    const f = await fixture()
+    policy.responses = variant !== 'responses_off'
+    policy.enrollment = variant !== 'enrollment_off'
+    if (variant === 'catalogue_off') await f.t.run(ctx => ctx.db.patch(f.graph.catalogId, { measurementCapability: { enabled: false } }))
+    const today = await f.owner.query(api.learnV2Today.getToday, {})
+    expect(today).toMatchObject({ status: 'ready', content: { assessmentRubricVersion: 'learn-v2.assessment.v1' } })
+    expect(today).not.toHaveProperty('assessment')
+    expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toEqual({ status: 'in_progress', sessionContentId: f.contentId, sessionContentRevision: 1 })
+    expect(JSON.stringify(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: `ordinary_${variant}` }))).toContain('TEACHING-CANARY')
+    expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(4))).toHaveLength(0)
+    expect(await f.exposures()).toHaveLength(0)
+  }
+})
+
+test('a retained_review placement stays test-only and blocks without an opportunity', async () => {
+  const f = await fixture()
+  await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { placementKind: 'retained_review' }))
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'blocked', reason: 'assessment_unavailable', canRetryGeneration: false })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'assessment', assessment: { kind: 'blocked' }, deliveryGrant: null })
+  const reads = await f.reads('retained_review')
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(reads)).not.toContain(canary)
+  await expect(f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, idempotencyKey: 'retained_retry' })).rejects.toThrow('Assessment generation cannot be retried')
+})
+
+async function sealedWithDelayedSlots() {
+  const f = await fixture()
+  await f.seal()
+  await f.t.mutation(due, { userId })
+  const delayed = (await f.opportunities()).filter(row => row.purpose.kind === 'measurement_delayed')
+  expect(delayed.map(row => [row.horizonDays, row.phase])).toEqual(expect.arrayContaining([[7, 'preparing'], [30, 'preparing']]))
+  expect(delayed.every(row => row.openAt > Date.now())).toBe(true)
+  return { ...f, delayed: delayed as Array<Doc<'learnAssessmentOpportunities'>> }
+}
+
+test('help admission: a future day-7 opportunity allows separate-case teaching after a sealed cold check', async () => {
+  const f = await sealedWithDelayedSlots()
+  const first = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'future_slot_teaching' })
+  expect(first.admission.status).not.toBe('denied')
+  expect(JSON.stringify(first)).toContain('TEACHING-CANARY-explanation')
+  await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'future_slot_teaching_again' })
+  const exposures = await f.exposures()
+  expect(exposures.filter(row => row.status === 'requested_denied')).toHaveLength(0)
+  const intervening = exposures.filter(row => row.provenanceVersion === 'learn-v2.intervening-learning.v1')
+  expect(intervening).toHaveLength(2)
+  expect(intervening.every(row => row.assessmentOpportunityId === undefined && row.caseId === undefined && row.assignmentId === f.delayed[0]!.assignmentId)).toBe(true)
+})
+
+test('help admission: a delayed opportunity at or past openAt is denied even before due work runs', async () => {
+  const f = await sealedWithDelayedSlots()
+  const day7 = f.delayed.find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt)
+  const denied = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'past_open_teaching' })
+  expect(denied).toMatchObject({ admission: { status: 'denied' }, value: null })
+  expect((await f.exposures()).filter(row => row.status === 'requested_denied' && row.assessmentOpportunityId === day7._id)).toHaveLength(1)
+})
+
+test('help admission: unknown delayed timing is denied', async () => {
+  const f = await sealedWithDelayedSlots()
+  const day30 = f.delayed.find(row => row.horizonDays === 30)!
+  await f.t.run(ctx => ctx.db.patch(day30._id, { openAt: Number.NaN }))
+  const denied = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'unknown_timing_teaching' })
+  expect(denied).toMatchObject({ admission: { status: 'denied' }, value: null })
+  expect(JSON.stringify(denied)).not.toContain('TEACHING-CANARY')
+})
+
+test('help admission: the reserved case and its sibling forms are never taught', async () => {
+  const f = await sealedWithDelayedSlots()
+  const block = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', f.contentId)).first())
+  const pins = await normalizedInstructionalCaseFingerprints(block!.content!, block!.content!)
+  await f.t.run(async ctx => {
+    const row = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint_and_solutionFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', pins.scenarioFingerprint).eq('solutionFingerprint', pins.solutionFingerprint)).unique()
+    await ctx.db.patch(row!._id, { reservedAt: Date.now() })
+  })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'assessment', assessment: { reasonCode: 'instructional_holdout_unknown' } })
+  const reads = await f.reads('reserved_case')
+  for (const canary of [...TEACHING, ...PRIVATE]) expect(JSON.stringify(reads)).not.toContain(canary)
+  const cold = (await f.cold()).assessmentPins
+  const allowed = cold.kind === 'measurement' ? cold.itemPins.formLabel : null
+  expect([...forms(reads)].every(label => label === allowed)).toBe(true)
+  expect((await f.exposures()).filter(row => row.purpose === 'teaching')).toHaveLength(0)
+})
