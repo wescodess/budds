@@ -59,6 +59,7 @@ Owner's words, 2026-11-22: `Split into 15 + 15 minutes, showing the increase bef
 - Split under 30 minutes, such as the default 25, makes two 15-minute parts. Before Save, the time chip and a second chip read 15 min each, and a caption in the editor's hint style says "Splitting adds 5 min so each part has the 15-minute minimum." The bar's total includes the added minutes.
 - Split at 30 minutes or more keeps the total: both parts are at least 15, and the first takes the odd minute, so 31 becomes 16 and 15.
 - Split is still held until Save.
+- While Split is held, the time chip and its pop-over set the first part's minutes, 15 to 480. The second part keeps its minutes, and the bar's total is the two parts plus the rest of the map.
 
 ## Product decisions carried into the build
 
@@ -76,3 +77,8 @@ Owner's words, 2026-11-22: `Split into 15 + 15 minutes, showing the increase bef
 ## Building it
 
 Read this file and `approved.html` before writing UI code. `approved.html` draws four states and is 3a plus the bar. The editor's other states are drawn only in [3a](./rejected-2-outline-refined.html): sources, what comes first, saving, both save failures, loading, no objectives and one objective. Follow them there, except that Accept lives only in the bar. After the build, compare it with `approved.html` and `DESIGN.md` in a browser, including mobile, then run the [climb's fidelity mode](../climb.md#fidelity-and-revamp-rounds) with the capture of `docs/design/surfaces/learner-map-editor.json` as `TARGET`.
+
+Build notes, 2026-11-22. These follow the server source limits the owner kept on 2026-11-22. They use the editor's existing hint style and add no components or tokens.
+
+- An objective uses at most 10 sources, counting "Teach this from" and "Looked at, but not enough" together. At 10, the unticked sources in the pop-over are disabled, and a caption in the hint style says "An objective can use up to 10 sources. Untick one to add another."
+- A map uses sources at most 60 times across its objectives, and Split copies the objective's sources into the new part. When a save would go over, Save stays disabled and a one-line hint under it says "A map can use sources up to 60 times across its objectives. Untick a source to save."
