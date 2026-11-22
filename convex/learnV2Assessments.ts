@@ -4,11 +4,12 @@ import { requireOwnedResponseTarget } from './lib/learnV2PublicAccess'
 import {
   assessmentReferenceArgs, assessmentReferenceSchema, assessmentDeliveryValidator, assessmentStateValidator,
   grantAssessmentDeliveryArgs, grantAssessmentDeliverySchema, grantAssessmentDeliveryValidator,
-  disabledLearnV2Result, featureReadinessValidator, LEARN_V2_PUBLIC_API_VERSION, parsePublicLearnRequest,
+  featureReadinessValidator, LEARN_V2_PUBLIC_API_VERSION, parsePublicLearnRequest,
   type LearnV2FeatureReadiness, type LearnV2DeliveryGrant, type LearnV2AssessmentDelivery, type LearnV2AssessmentState,
   postSealTeachingArgs, postSealTeachingReferenceSchema, postSealTeachingValidator, type LearnV2PostSealTeaching,
 } from './lib/learnV2PublicContract'
 import { unavailableLearnPostSealTeaching } from '../shared/learn-v2-assessment-disclosure'
+import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner, readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 
 export const getFeatureReadiness = query({
   args: {}, returns: featureReadinessValidator,
@@ -29,8 +30,8 @@ export const grantAssessmentDelivery = mutation({
   handler: async (ctx, args): Promise<LearnV2DeliveryGrant> => {
     const userId = await requireAuth(ctx)
     const request = parsePublicLearnRequest(grantAssessmentDeliverySchema, args)
-    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
-    return disabledLearnV2Result()
+    return await grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId,
+      expectedRevision: request.expectedRevision, idempotencyKey: request.idempotencyKey, flow: 'today' })
   },
 })
 
@@ -39,8 +40,7 @@ export const getAssessment = query({
   handler: async (ctx, args): Promise<LearnV2AssessmentDelivery> => {
     const userId = await requireAuth(ctx)
     const request = parsePublicLearnRequest(assessmentReferenceSchema, args)
-    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
-    return disabledLearnV2Result()
+    return await readLearnAssessmentForOwner(ctx, userId, request.assessmentOpportunityId, 'today')
   },
 })
 
@@ -49,8 +49,7 @@ export const getAssessmentState = query({
   handler: async (ctx, args): Promise<LearnV2AssessmentState> => {
     const userId = await requireAuth(ctx)
     const request = parsePublicLearnRequest(assessmentReferenceSchema, args)
-    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
-    return disabledLearnV2Result()
+    return await readLearnAssessmentStateForOwner(ctx, userId, request.assessmentOpportunityId, 'today')
   },
 })
 
