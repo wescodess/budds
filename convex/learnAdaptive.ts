@@ -1452,8 +1452,13 @@ export function toAdaptiveSubmissionAdmission(result: MasteryAttemptActionResult
 // adaptive command receipt/revision and feedback projection; Slice 1.6 returns
 // only bounded admission status and an opaque completed-attempt reference.
 export const submitResponse = action({
-  args: v.union(v.object({ threadId: v.id('learningThreads'), activityId: v.string(), ...masteryAttemptArgs }),
-    v.object({ threadId: v.id('learningThreads'), activityId: v.string(), submissionId: v.id('learnResponses'), idempotencyKey: v.string() })),
+  args: {
+    threadId: v.id('learningThreads'), activityId: v.string(), submissionId: v.optional(v.id('learnResponses')),
+    studySessionId: v.optional(masteryAttemptArgs.studySessionId), expectedSessionRevision: v.optional(masteryAttemptArgs.expectedSessionRevision),
+    expectedContentRevision: v.optional(masteryAttemptArgs.expectedContentRevision), expectedPlanRecordRevision: v.optional(masteryAttemptArgs.expectedPlanRecordRevision),
+    expectedBlueprintRecordRevision: v.optional(masteryAttemptArgs.expectedBlueprintRecordRevision), response: v.optional(masteryAttemptArgs.response),
+    confidence: v.optional(masteryAttemptArgs.confidence), idempotencyKey: masteryAttemptArgs.idempotencyKey,
+  },
   returns: v.union(v.object({ kind: v.literal('accepted'), status: v.literal('completed'), attemptReference: v.string(), replayed: v.boolean() }),
     v.object({ kind: v.literal('accepted'), status: v.literal('in_progress'), replayed: v.literal(false) }),
     v.object({ kind: disclosureLiterals(['denied', 'blocked', 'invalid']), code: v.string(), message: v.string(), retryable: v.boolean(),
@@ -1463,7 +1468,11 @@ export const submitResponse = action({
   }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false, fallbackRoute: CLASSIC_LEARN_FALLBACK_ROUTE }
-    if ('submissionId' in args) {
+    if (args.submissionId !== undefined) {
+      if ([args.studySessionId, args.expectedSessionRevision, args.expectedContentRevision, args.expectedPlanRecordRevision,
+        args.expectedBlueprintRecordRevision, args.response, args.confidence].some(value => value !== undefined)) {
+        throw new Error('Saved Canvas scoring accepts only a submission reference')
+      }
       if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'blocked', code: 'disabled', message: 'Canvas submissions are unavailable.', retryable: false }
       const { threadId, activityId, submissionId } = args
       try {
@@ -1480,8 +1489,12 @@ export const submitResponse = action({
       }
     }
     if (LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'invalid', code: 'saved_submission_required', message: 'A saved Canvas submission is required.', retryable: false }
-    const { threadId, activityId, ...attempt } = args
-    const result = await submitMasteryAttemptForOwner(ctx, identity.tokenIdentifier, attempt, {
+    const { threadId, activityId, studySessionId, expectedSessionRevision, expectedContentRevision, expectedPlanRecordRevision, expectedBlueprintRecordRevision, response, confidence, idempotencyKey } = args
+    if (studySessionId === undefined || expectedSessionRevision === undefined || expectedContentRevision === undefined
+      || expectedPlanRecordRevision === undefined || expectedBlueprintRecordRevision === undefined || response === undefined || confidence === undefined) throw new Error('Canvas scoring request is incomplete')
+    const result = await submitMasteryAttemptForOwner(ctx, identity.tokenIdentifier, {
+      studySessionId, expectedSessionRevision, expectedContentRevision, expectedPlanRecordRevision, expectedBlueprintRecordRevision, response, confidence, idempotencyKey,
+    }, {
       threadId,
       activityId,
       manifestVersion: process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST?.trim() ?? '',

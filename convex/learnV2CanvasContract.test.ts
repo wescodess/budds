@@ -541,3 +541,15 @@ test('source revocation rejects attachment and saved-receipt replay while retain
   expect(await s.t.run(ctx => ctx.db.query('learnResponses').take(8))).toHaveLength(1)
   expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toEqual([])
 })
+
+test('saved-ID scoring rejects hybrid raw requests before dispatch', async () => {
+  const s = await fixture()
+  const receipt = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (receipt.kind !== 'accepted') throw new Error(JSON.stringify(receipt))
+  const network = vi.fn(async () => modelReply())
+  vi.stubGlobal('fetch', network)
+  await expect(s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: receipt.submissionId, response: 'A replacement raw body', idempotencyKey: 'hybrid_saved_score_1234567890' })).rejects.toThrow(/only a submission reference/)
+  expect(network).not.toHaveBeenCalled()
+  expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toHaveLength(1)
+})
