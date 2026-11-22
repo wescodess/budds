@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -45,14 +46,14 @@ async function setupCalendarAndCourse(t: ReturnType<typeof convexTest>) {
 
 describe('calendarEvents', () => {
   test('listByUser returns empty when no events exist', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const asAlice = t.withIdentity(USER_A)
     const result = await asAlice.query(api.calendarEvents.listByUser, {})
     expect(result).toEqual([])
   })
 
   test('create adds a new calendar event (internal)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
     const scheduledAt = Date.now() + 86_400_000
@@ -77,7 +78,7 @@ describe('calendarEvents', () => {
   })
 
   test('listByCourse filters events by course', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
     await t.mutation(internal.calendarEvents.create, {
@@ -96,7 +97,7 @@ describe('calendarEvents', () => {
   })
 
   test('listScheduled returns scheduled and rescheduled active events', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -134,7 +135,7 @@ describe('calendarEvents', () => {
   })
 
   test('updateStatus changes event status', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -157,7 +158,7 @@ describe('calendarEvents', () => {
   })
 
   test('updateStatus rejects if user does not own event', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
     const eventId = await t.mutation(internal.calendarEvents.create, {
@@ -179,7 +180,7 @@ describe('calendarEvents', () => {
   })
 
   test('deleteByCourse removes all events for a course (internal)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -211,7 +212,7 @@ describe('calendarEvents', () => {
   })
 
   test('events are user-isolated', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
     await t.mutation(internal.calendarEvents.create, {
@@ -229,14 +230,14 @@ describe('calendarEvents', () => {
   })
 
   test('listByUser requires authentication', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     await expect(
       t.query(api.calendarEvents.listByUser, {}),
     ).rejects.toThrow('Unauthenticated')
   })
 
   test('deleteByUser removes all events for a user (internal)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -270,7 +271,7 @@ describe('calendarEvents', () => {
   })
 
   test('missed candidates remain scheduled until rescheduling commits', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -324,7 +325,7 @@ describe('calendarEvents', () => {
   })
 
   test('getMissedCandidates returns empty when no events are past due', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
 
     await t.mutation(internal.calendarEvents.create, {
@@ -346,7 +347,7 @@ describe('calendarEvents', () => {
   })
 
   test('getMissedCandidates excludes already missed events', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -374,7 +375,7 @@ describe('calendarEvents', () => {
   })
 
   test('createRescheduled creates event with rescheduled status', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -399,7 +400,7 @@ describe('calendarEvents', () => {
   })
 
   test('missed detection and rescheduling flow end-to-end (data layer)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
 
@@ -445,7 +446,7 @@ describe('calendarEvents', () => {
   })
 
   test('[P1] failed provider deletion keeps the local event and credentials for retry', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
     await t.mutation(internal.calendarEvents.create, {
@@ -481,7 +482,7 @@ describe('calendarEvents', () => {
   })
 
   test('disconnectCalendar removes one bounded provider batch and finalizes when drained', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
     await t.run(async (ctx) => {
@@ -521,7 +522,7 @@ describe('calendarEvents', () => {
   })
 
   test('[P1] missed-candidate pages include every rescheduled replacement beyond 200 rows', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     await t.run(async (ctx) => {
       for (let index = 0; index < 205; index++) {
@@ -557,7 +558,7 @@ describe('calendarEvents', () => {
   })
 
   test('[P1] missed-session continuation carries slot position across page boundaries', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
     await asAlice.mutation(api.calendarConnections.updatePreferences, {
@@ -623,7 +624,7 @@ describe('calendarEvents', () => {
   })
 
   test('[P2] separate missed-session runs allocate after existing future events', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
     await asAlice.mutation(api.calendarConnections.updatePreferences, {
@@ -681,7 +682,7 @@ describe('owned V1 Calendar destinations', () => {
   })
 
   async function setupWriter(writer: 'sync' | 'missed') {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { folderId, courseId, connectionId } = await setupCalendarAndCourse(t)
     const asAlice = t.withIdentity(USER_A)
     await asAlice.mutation(api.courses.finalizeOutline, {

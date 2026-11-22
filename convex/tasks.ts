@@ -1,3 +1,4 @@
+import { publicTask } from './lib/publicTask'
 import { ConvexError, v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query, internalMutation } from './_generated/server'
@@ -558,7 +559,7 @@ export const listByFolder = query({
       if (t.status === 'pending' || t.status === 'running') return true
       if (t.completedAt && t.completedAt > thirtyMinutesAgo) return true
       return false
-    })
+    }).map(task => publicTask(ctx, task))
   },
 })
 
@@ -570,7 +571,7 @@ export const get = query({
 
     const task = await ctx.db.get(args.taskId)
     if (!task || task.userId !== userId) return null
-    return task
+    return publicTask(ctx, task)
   },
 })
 

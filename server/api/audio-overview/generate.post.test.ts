@@ -1,6 +1,10 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
+import { getFunctionName, type FunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ConvexError } from "convex/values";
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
+const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const mockMutation = vi.fn();
 const mockQuery = vi.fn();
 const mockBindingFetch = vi.fn();
@@ -23,7 +27,7 @@ vi.stubGlobal(
 );
 
 vi.mock("../../utils/convex-client", () => ({
-  makeConvexClient: vi.fn(() => ({ mutation: mockMutation, query: mockQuery })),
+  makeConvexClient: vi.fn(() => ({ mutation: mockMutation, query: (reference: FunctionReference<'query'>, args: unknown) => getFunctionName(reference) === 'documents:getTeachingScope' ? mockTeachingScope() : mockQuery(reference, args) })),
 }));
 vi.mock("../../utils/convex-identity", () => ({
   getConvexTokenIdentifier: vi.fn(() => "user-id"),
@@ -69,6 +73,7 @@ afterEach(() => {
 
 describe("POST /api/audio-overview/generate", () => {
   beforeEach(() => {
+    mockTeachingScope.mockReset().mockResolvedValue([])
     mockMutation.mockReset().mockResolvedValue({
       jobId: "job_1",
       taskId: "task_1",
@@ -87,6 +92,15 @@ describe("POST /api/audio-overview/generate", () => {
       .mockResolvedValue(validBody);
   });
 
+
+  test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue(validBody)
+    mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(mockBindingFetch).not.toHaveBeenCalled()
+    expect(mockGetScopedR2ObjectIdentity).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+  })
   test("[P0] reserves, launches, and returns 202 without forwarding the user JWT", async () => {
     const event = makeEvent();
     const result = await handler(event);
@@ -484,3 +498,8 @@ describe("POST /api/audio-overview/generate", () => {
     expect(mockBindingFetch).not.toHaveBeenCalled();
   });
 });
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})

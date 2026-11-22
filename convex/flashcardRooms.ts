@@ -1,3 +1,7 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { cardCopyOrigins, teachingSourcePinsValidator, admitTeachingSourcePins, assertTeachingInputs, assertRoomTeaching, teachingDocuments, publishTeaching, publishCardRoom, publishContainingSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { mutation, query, internalMutation } from './_generated/server'
@@ -38,6 +42,12 @@ async function requireOwnedRoom(
   return room
 }
 
+async function requireTeachingRoom(ctx: MutationCtx, roomId: Id<'flashcardRooms'>, userId: string) {
+  const room = await requireOwnedRoom(ctx, roomId, userId)
+  await assertRoomTeaching(ctx, userId, roomId)
+  return room
+}
+
 async function resolveDocumentId(
   ctx: MutationCtx,
   userId: string,
@@ -45,9 +55,10 @@ async function resolveDocumentId(
 ): Promise<Id<'documents'> | undefined> {
   if (!raw) return undefined
   const normalized = ctx.db.normalizeId('documents', raw)
-  if (!normalized) return undefined
+  if (!normalized) { if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Teaching input is unavailable'); return undefined }
   const doc = await ctx.db.get(normalized)
-  if (!doc || doc.userId !== userId) return undefined
+  if (!doc || doc.userId !== userId) { if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw new Error('Teaching input is unavailable'); return undefined }
+  await teachingDocuments(ctx, userId, [normalized])
   return normalized
 }
 
@@ -156,9 +167,11 @@ async function archiveCurrentCards(
       term: card.term,
       definition: card.definition,
       metadata: card.metadata,
+      ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename } : {}),
     })
   }
 
+  await publishTeaching(ctx, room.userId, [{ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', origins: await cardCopyOrigins(ctx, room.userId, room.activeVersionId) }])
   return versionId
 }
 
@@ -175,6 +188,10 @@ export const createCourseScopedRoom = internalMutation({
     })),
   },
   handler: async (ctx, args) => {
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : args.userId
+    if (userId !== args.userId) throw new Error('Learn access denied')
+    const folder = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(args.folderId) : null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!folder || folder.userId !== userId)) throw new Error('Folder not found')
     const title = normalizeTitle(args.title, 'Section Flashcards')
     const now = Date.now()
 
@@ -227,6 +244,7 @@ export const createCourseScopedRoom = internalMutation({
 
     await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.cards.length })
 
+    await publishCardRoom(ctx, userId, roomId)
     return { roomId }
   },
 })
@@ -292,7 +310,12 @@ export const listRoomsByFolder = query({
 
     const rooms = allRooms.filter((r) => r.courseScoped !== true)
 
-    const summaries = rooms.map((room) => ({
+    const admitted = []
+    for (const room of rooms) {
+      try { await assertRoomTeaching(ctx, userId, room._id); admitted.push(room) }
+      catch { continue }
+    }
+    const summaries = admitted.map((room) => ({
       _id: room._id,
       _creationTime: room._creationTime,
       title: room.title,
@@ -306,7 +329,10 @@ export const listRoomsByFolder = query({
   },
 })
 
-export const getRoom = query({
+const getRoomRead = defineTeachingRead({
+  name: 'flashcardRooms.getRoom',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'room', id: args.roomId }]),
+
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -314,15 +340,20 @@ export const getRoom = query({
     const room = await ctx.db.get(args.roomId)
     if (!room || room.userId !== userId) return null
 
-    const cards = await ctx.db
+    await assertRoomTeaching(ctx, userId, room._id)
+    const collection = ctx.db
       .query('flashcardRoomCards')
       .withIndex('by_roomId', (q) => q.eq('roomId', room._id))
-      .collect()
+    const cards = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(201) : await collection.collect()
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { room, cards }
   },
-})
+
+}, { hasContent: value => Boolean(value?.cards.length) })
+export const getRoom = query(getRoomRead.query)
+export const getRoomDelivery = mutation(getRoomRead.delivery)
 
 export const createCard = mutation({
   args: {
@@ -333,7 +364,7 @@ export const createCard = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const term = args.term.trim()
     if (term.length === 0) throw new Error('Term required')
@@ -358,6 +389,7 @@ export const createCard = mutation({
       cardCount: (room.cardCount ?? 0) + 1,
     })
 
+    await publishCardRoom(ctx, userId, room._id, room.activeVersionId)
     return { cardId }
   },
 })
@@ -376,6 +408,8 @@ export const updateCard = mutation({
       throw new Error('Card not found')
     }
 
+    await assertRoomTeaching(ctx, userId, existing.roomId)
+    const previousVersionId = (await ctx.db.get(existing.roomId))?.activeVersionId
     const term = args.term.trim()
     if (term.length === 0) throw new Error('Term required')
     const definition = args.definition.trim()
@@ -392,6 +426,7 @@ export const updateCard = mutation({
       updatedAt: Date.now(),
     })
 
+    await publishCardRoom(ctx, userId, existing.roomId, previousVersionId)
     return { cardId: args.cardId }
   },
 })
@@ -405,6 +440,8 @@ export const deleteCard = mutation({
       throw new Error('Card not found')
     }
 
+    await assertRoomTeaching(ctx, userId, existing.roomId)
+    const previousVersionId = (await ctx.db.get(existing.roomId))?.activeVersionId
     const roomId = existing.roomId
     await ctx.db.delete(args.cardId)
     const room = await ctx.db.get(roomId)
@@ -415,6 +452,7 @@ export const deleteCard = mutation({
       cardCount: nextCount,
     })
 
+    await publishCardRoom(ctx, userId, existing.roomId, previousVersionId)
     return { cardId: args.cardId, roomId }
   },
 })
@@ -431,7 +469,7 @@ export const reorderCards = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const currentCards = await ctx.db
       .query('flashcardRoomCards')
@@ -479,6 +517,7 @@ export const reorderCards = mutation({
       updatedAt: Date.now(),
     })
 
+    await publishCardRoom(ctx, userId, room._id, room.activeVersionId)
     return { roomId: room._id, updated: args.order.length }
   },
 })
@@ -489,6 +528,7 @@ export const generateRoomCards = mutation({
     origin: v.union(v.literal('ai'), v.literal('manual')),
     prompt: v.optional(v.string()),
     requestedCardCount: v.optional(v.number()),
+    sourcePins: v.optional(teachingSourcePinsValidator),
     model: v.optional(v.string()),
     title: v.optional(v.string()),
     cards: v.array(
@@ -501,8 +541,11 @@ export const generateRoomCards = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (args.requestedCardCount !== undefined && (!Number.isInteger(args.requestedCardCount) || args.requestedCardCount < 1 || args.requestedCardCount > 200)
+      || args.cards.length > (args.requestedCardCount ?? 200))) throw new Error('Flashcards exceed the requested publication size')
+    const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
     const archiveOpts = await resolveArchiveOpts(ctx, room)
     await archiveCurrentCards(ctx, room, archiveOpts)
 
@@ -562,11 +605,15 @@ export const generateRoomCards = mutation({
       cardCount: inserted,
     })
 
+    await publishContainingSections(ctx, userId, room._id, [{ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', sources }])
     return { roomId: room._id, versionId, cardCount: inserted }
   },
 })
 
-export const listRoomVersions = query({
+const listRoomVersionsRead = defineTeachingRead({
+  name: 'flashcardRooms.listRoomVersions',
+  scope: async(ctx,userId,args)=>{const rows=await ctx.db.query('flashcardRoomVersions').withIndex('by_roomId',q=>q.eq('roomId',args.roomId)).order('desc').take(100);return await teachingReadScope(ctx,userId,rows.map(row=>({kind:'version' as const,id:row._id})))},
+
   args: { roomId: v.id('flashcardRooms') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -580,6 +627,7 @@ export const listRoomVersions = query({
       .order('desc')
       .take(100)
 
+    await assertTeachingInputs(ctx, userId, versions.map(version => ({ kind: 'flashcard_version', id: version._id })))
     return versions.map((v) => ({
       _id: v._id,
       _creationTime: v._creationTime,
@@ -591,9 +639,15 @@ export const listRoomVersions = query({
       model: v.model,
     }))
   },
-})
 
-export const getRoomVersion = query({
+}, { hasContent: value => value.some(row => Boolean(row.prompt)) })
+export const listRoomVersions = query(listRoomVersionsRead.query)
+export const listRoomVersionsDelivery = mutation(listRoomVersionsRead.delivery)
+
+const getRoomVersionRead = defineTeachingRead({
+  name: 'flashcardRooms.getRoomVersion',
+  scope: async(ctx,userId,args)=>args.versionId?await teachingReadScope(ctx,userId,[{kind:'version',id:args.versionId}]):null,
+
   args: { versionId: v.optional(v.id('flashcardRoomVersions')) },
   handler: async (ctx, args) => {
     if (!args.versionId) return null
@@ -603,15 +657,20 @@ export const getRoomVersion = query({
     const version = await ctx.db.get(args.versionId)
     if (!version || version.userId !== userId) return null
 
-    const cards = await ctx.db
+    await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: version._id }])
+    const collection = ctx.db
       .query('flashcardVersionCards')
       .withIndex('by_versionId', (q) => q.eq('versionId', args.versionId!))
-      .collect()
+    const cards = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(201) : await collection.collect()
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && cards.length > 200) throw new Error('Teaching content exceeds its read limit')
 
     cards.sort((a, b) => a.displayOrder - b.displayOrder)
     return { version, cards }
   },
-})
+
+}, { hasContent: value => Boolean(value?.cards.length) })
+export const getRoomVersion = query(getRoomVersionRead.query)
+export const getRoomVersionDelivery = mutation(getRoomVersionRead.delivery)
 
 export const restoreRoomVersion = mutation({
   args: {
@@ -620,12 +679,13 @@ export const restoreRoomVersion = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireIdentity(ctx)
-    const room = await requireOwnedRoom(ctx, args.roomId, userId)
+    const room = await requireTeachingRoom(ctx, args.roomId, userId)
 
     const version = await ctx.db.get(args.versionId)
     if (!version || version.userId !== userId) throw new Error('Version not found')
     if (version.roomId !== room._id) throw new Error('Version not found')
 
+    await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: version._id }])
     if (room.activeVersionId === args.versionId) {
       const currentCards = await ctx.db
         .query('flashcardRoomCards')
@@ -654,6 +714,7 @@ export const restoreRoomVersion = mutation({
         term: card.term,
         definition: card.definition,
         metadata: card.metadata,
+        ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { sourceDocumentId: card.sourceDocumentId, sourceChunkContent: card.sourceChunkContent, sourceFilename: card.sourceFilename } : {}),
       })
     }
 
@@ -663,6 +724,7 @@ export const restoreRoomVersion = mutation({
       cardCount: sorted.length,
     })
 
+    await publishCardRoom(ctx, userId, room._id)
     return { roomId: room._id, versionId: args.versionId, cardCount: sorted.length }
   },
 })

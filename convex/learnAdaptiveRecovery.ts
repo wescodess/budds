@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
 import { v } from 'convex/values'
 import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
@@ -9,6 +10,8 @@ import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
 import { hasLearnActivityEvent, writeLearnActivityEvent } from './lib/learnAdaptiveEvents'
 import { projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { activityResponseAvailable } from './lib/learnV2ResponsePrivacy'
+import { adaptiveActivityStatus, adaptiveControls, adaptiveFallback, adaptiveIntent, canReadActivityTeaching,
+  nonFactualPrimitive, projectNonFactualPayload } from './lib/learnV2AssessmentDisclosure'
 
 const DIAGNOSTIC_ROUTER_VERSION = 'learn-adaptive.preparing-diagnostic.v1'
 
@@ -171,6 +174,10 @@ export const recordDiagnosticRendered = mutation({
 
 export const getDiagnosticCanvas = query({
   args: { threadId: v.id('learningThreads') },
+  returns: v.union(v.object({ ownerId: v.id('users'), thread: v.object({ id: v.id('learningThreads'), outcome: v.string(), intent: adaptiveIntent, revision: v.number() }),
+    status: v.string(), evidenceState: v.string(), recovery: v.object({ title: v.string(), body: v.string(), action: v.string() }), decisionPending: v.boolean(),
+    activity: v.union(v.object({ id: v.string(), status: adaptiveActivityStatus, planRevision: v.number(), primitive: v.union(nonFactualPrimitive, v.null()), controls: adaptiveControls,
+      response: v.union(v.string(), v.null()), fallback: adaptiveFallback, requiredAction: v.object({ kind: v.literal('submit_response'), label: v.literal('Save response') }) }), v.null()) }), v.null()),
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
     ctx = createResponsePrivacyReadContext(ctx, userId).ctx
@@ -183,7 +190,10 @@ export const getDiagnosticCanvas = query({
     const recovery = adaptiveRecoveryCopy(evidenceState)
     if (!activity) return { ownerId: owner._id, thread: { id: thread._id, outcome: thread.outcome ?? thread.originalNeed, intent: thread.intent, revision: thread.revision }, status: 'draft' as const, evidenceState, recovery, decisionPending: !thread.initialDecision || thread.initialDecision.status === 'pending', activity: null }
     if (activity.userId !== userId || activity.threadId !== thread._id || activity.activityClass !== 'non_factual') return null
-    const primitive = await isOperableDiagnosticActivity(activity) ? activity.primitivePlan[0] : null
+    const teachingAllowed = await canReadActivityTeaching(ctx, thread, activity)
+    const allowed = teachingAllowed && await isOperableDiagnosticActivity(activity)
+    const payload = projectNonFactualPayload(activity, allowed, teachingAllowed)
+    const primitive = payload.primitive
     const selectedOverride = await ctx.db.query('learnActivityOverrides')
       .withIndex('by_userId_and_activityId_and_createdAt', q => q.eq('userId', userId).eq('activityId', activity._id))
       .order('desc').first()
@@ -192,10 +202,10 @@ export const getDiagnosticCanvas = query({
       activity: { id: activity.activityId, status: activity.status, planRevision: activity.planRevision, primitive,
         controls: projectAdaptiveControls({ activityClass: 'non_factual', activityStatus: primitive ? activity.status : 'blocked', lifecycle: thread.lifecycle,
           evidenceReady: evidenceState === 'ready', sourceCount: 0, currentTime: thread.availableTime,
-          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: activity.reasonText,
-          purpose: activity.purpose, reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
+          selected: selectedOverride?.option, fixedNextPlan: selectedOverride?.fixedNextPlan, reasonText: !LEARN_MEASUREMENT_CAPABILITIES.responses && teachingAllowed ? activity.reasonText : undefined,
+          purpose: teachingAllowed && (!LEARN_MEASUREMENT_CAPABILITIES.responses || allowed) ? activity.purpose : '', reasonCode: activity.reasonCode, sourceState: activity.decisionInputs.sourceState }),
         response: await activityResponseAvailable(ctx, userId, activity) ? activity.submittedResponse ?? null : null,
-        fallback: activity.fallback, requiredAction: activity.requiredAction } }
+        fallback: payload.fallback, requiredAction: { kind: 'submit_response' as const, label: 'Save response' as const } } }
   },
 })
 

@@ -1,3 +1,7 @@
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { assertAudioTeaching } from './lib/learnV2AssessmentLineage'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -71,7 +75,10 @@ export const createCourseScopedOverview = mutation({
   },
 })
 
-export const getCourseScopedOverview = query({
+const getCourseScopedOverviewRead = defineTeachingRead({
+  name: 'audioOverviews.getCourseScopedOverview',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'audio_overview', id: args.id }]),
+
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -79,6 +86,7 @@ export const getCourseScopedOverview = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const turnUrls: (string | null)[] = []
     for (const turn of overview.turns) {
       turnUrls.push(await ctx.storage.getUrl(turn.audioFileId))
@@ -103,7 +111,10 @@ export const getCourseScopedOverview = query({
       sourceFilenames,
     }
   },
-})
+
+}, {hasContent:value=>Boolean(value?.turns.length || value?.turnUrls.some(Boolean))})
+export const getCourseScopedOverview = query(getCourseScopedOverviewRead.query)
+export const getCourseScopedOverviewDelivery = mutation(getCourseScopedOverviewRead.delivery)
 
 export const listByFolder = query({
   args: { folderId: v.id('folders') },
@@ -114,17 +125,23 @@ export const listByFolder = query({
     const folder = await ctx.db.get(args.folderId)
     if (!folder || folder.userId !== userId) return []
 
-    const allRows = await ctx.db
+    const collection = ctx.db
       .query('audioOverviews')
       .withIndex('by_userId_and_folderId', (q) =>
         q.eq('userId', userId).eq('folderId', args.folderId),
       )
       .order('desc')
-      .collect()
+    const allRows = LEARN_MEASUREMENT_CAPABILITIES.responses ? await collection.take(101) : await collection.collect()
 
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && allRows.length > 100) throw new Error('Teaching input is unavailable')
     const rows = allRows.filter((r) => r.courseScoped !== true)
 
-    return rows.map((row) => ({
+    const admitted = []
+    for (const row of rows) {
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map((row) => ({
       _id: row._id,
       _creationTime: row._creationTime,
       title: row.title,
@@ -152,9 +169,13 @@ export const listByRoom = query({
       .order('desc')
       .take(100)
 
-    return rows
-      .filter(row => row.courseScoped !== true)
-      .map(row => ({
+    const admitted = []
+    for (const row of rows) {
+      if (row.courseScoped === true) continue
+      try { await assertAudioTeaching(ctx, row); admitted.push(row) }
+      catch { continue }
+    }
+    return admitted.map(row => ({
         _id: row._id,
         _creationTime: row._creationTime,
         title: row.title,
@@ -169,7 +190,9 @@ export const listByRoom = query({
   },
 })
 
-export const getWithTurns = query({
+const getWithTurnsRead = defineTeachingRead({
+  name: 'audioOverviews.getWithTurns',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx,userId,[{kind:'audio_overview',id:args.id}]),
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -177,11 +200,27 @@ export const getWithTurns = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     return overview
+  },
+}, { hasContent: value => Boolean(value?.turns.length) })
+export const getWithTurns = query(getWithTurnsRead.query)
+export const getWithTurnsDelivery = mutation(getWithTurnsRead.delivery)
+
+export const getInterjectionMetadata = query({
+  args: { id: v.id('audioOverviews') },
+  handler: async (ctx, args) => {
+    const userId = await getOptionalAuthUserId(ctx)
+    const row = await ctx.db.get(args.id)
+    if (!userId || !row || row.userId !== userId) return null
+    return { _id: row._id, title: row.title, status: row.status, folderId: row.folderId,
+      episodeId: row.episodeId, scopeDocIds: row.scopeDocIds, hostNames: row.hostNames, voiceProfile: row.voiceProfile }
   },
 })
 
-export const getTurnUrls = query({
+const getTurnUrlsRead = defineTeachingRead({
+  name: 'audioOverviews.getTurnUrls',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx,userId,[{kind:'audio_overview',id:args.id}]),
   args: { id: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -189,13 +228,16 @@ export const getTurnUrls = query({
     const overview = await ctx.db.get(args.id)
     if (!overview || overview.userId !== userId) return null
 
+    await assertAudioTeaching(ctx, overview, true)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))
     }
     return urls
   },
-})
+}, { hasContent: value => Boolean(value?.some(Boolean)) })
+export const getTurnUrls = query(getTurnUrlsRead.query)
+export const getTurnUrlsDelivery = mutation(getTurnUrlsRead.delivery)
 
 export const deleteOverview = mutation({
   args: { id: v.id('audioOverviews') },
@@ -353,6 +395,7 @@ export const publishOverview = mutation({
     if (!overview || overview.userId !== userId) throw new Error('Audio overview not found')
     if (overview.status !== 'ready') throw new Error('Audio overview is not ready to share')
 
+    await assertAudioTeaching(ctx, overview, true)
     if (overview.shareToken) {
       return { token: overview.shareToken, publishedAt: overview.publishedAt ?? Date.now() }
     }
@@ -385,7 +428,11 @@ export const unpublishOverview = mutation({
   },
 })
 
-export const getByShareToken = query({
+const getByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviews.getByShareToken',
+  anonymousShare: true,
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -405,6 +452,7 @@ export const getByShareToken = query({
       sourceFilenames.push(doc?.filename ?? 'Source')
     }
 
+    await assertAudioTeaching(ctx, overview, false)
     return {
       title: overview.title,
       turns: overview.turns.map(t => ({
@@ -421,9 +469,16 @@ export const getByShareToken = query({
       hostNames: overview.hostNames,
     }
   },
-})
 
-export const getTurnUrlsByShareToken = query({
+}, {hasContent:value=>Boolean(value?.turns.length)})
+export const getByShareToken = query(getByShareTokenRead.query)
+export const getByShareTokenDelivery = mutation(getByShareTokenRead.delivery)
+
+const getTurnUrlsByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviews.getTurnUrlsByShareToken',
+  anonymousShare: true,
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -436,10 +491,14 @@ export const getTurnUrlsByShareToken = query({
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
 
+    await assertAudioTeaching(ctx, overview, false)
     const urls: (string | null)[] = []
     for (const turn of overview.turns) {
       urls.push(await ctx.storage.getUrl(turn.audioFileId))
     }
     return urls
   },
-})
+
+}, { hasContent: value => Boolean(value?.some(Boolean)) })
+export const getTurnUrlsByShareToken = query(getTurnUrlsByShareTokenRead.query)
+export const getTurnUrlsByShareTokenDelivery = mutation(getTurnUrlsByShareTokenRead.delivery)

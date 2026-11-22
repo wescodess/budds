@@ -7,6 +7,7 @@ const recordMeaningfulStart = vi.fn()
 const assist = vi.fn()
 const submit = vi.fn()
 const content = ref<any>(null)
+const contentError = ref<Error | null>(null)
 const isOnline = ref(true)
 
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
@@ -19,7 +20,7 @@ mockNuxtImport('useConvexMutation', () => (reference: any) => {
   return { mutate: vi.fn() }
 })
 mockNuxtImport('useConvexAction', () => (reference: any) => ({ mutate: getFunctionName(reference)?.includes('submitMasteryAttempt') ? submit : vi.fn() }))
-mockNuxtImport('useConvexQuery', () => (reference: any) => ({ data: getFunctionName(reference)?.includes('getSessionContent') ? content : ref(null) }))
+mockNuxtImport('useConvexQuery', () => (reference: any) => getFunctionName(reference)?.includes('getSessionContent') ? { data: content, error: contentError } : { data: ref(null) })
 
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
 const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
@@ -33,9 +34,10 @@ describe('LearnV2TodaySession', () => {
     assist.mockReset().mockResolvedValue({ revision: 3, assistance: { content: 'Server assistance' } })
     submit.mockReset().mockResolvedValue({ status: 'completed', scorePercent: 80, state: 'independent', nextReviewAt: Date.UTC(2026, 8, 24, 13), feedback: { criterionResults: [{ key: 'accuracy', label: 'Accuracy', awarded: true, message: 'Accuracy: criterion met.' }], misconceptionFeedback: [] } })
     content.value = { revision: 2, blocks, adaptivePresentation }
+    contentError.value = null
     isOnline.value = true
   })
-  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate } }) }
+  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate }, route: '/login' }) }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
   async function reachConfidence(wrapper: any) {
     await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')
@@ -194,5 +196,26 @@ describe('LearnV2TodaySession', () => {
     const wrapper = await mount(); await startSession(wrapper); await reachConfidence(wrapper)
     await wrapper.find('textarea[aria-label="Teach it back"]').setValue('teach'); await wrapper.find('input[value="5"]').setValue(); await wrapper.find('[data-testid="learn-v2-submit"]').trigger('click')
     await vi.waitFor(() => expect(wrapper.text()).toContain('Score: 80%')); expect(wrapper.text()).toContain('Accuracy: criterion met.'); expect(submit).toHaveBeenCalledWith(expect.objectContaining({ response: 'transfer answer' })); expect(wrapper.find('[data-testid="learn-v2-live"]').attributes('aria-live')).toBe('polite'); await wrapper.find('[data-testid="learn-v2-next-review"]').trigger('click'); expect(wrapper.find('[data-testid="learn-v2-next-review-panel"]').text()).not.toContain('No further review')
+  })
+
+  it('matches dev while responses are off: a stale query error never hides content that later arrives', async () => {
+    content.value = null
+    contentError.value = new Error('SSR query failed')
+    const wrapper = await mount(); await startSession(wrapper)
+    expect(wrapper.text()).toContain('Preparing the supported material')
+    content.value = { revision: 2, blocks, adaptivePresentation }
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').text()).toContain('retrieval content'))
+    expect(contentError.value).not.toBeNull()
+    expect(wrapper.find('[data-testid="learn-v2-content-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="learn-v2-content-paused"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-v2-continue"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('ignores denial-shaped errors while responses are off', async () => {
+    content.value = { revision: 2, blocks, adaptivePresentation }
+    contentError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
+    const wrapper = await mount(); await startSession(wrapper)
+    expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').text()).toContain('retrieval content')
+    expect(wrapper.find('[data-testid="learn-v2-content-paused"]').exists()).toBe(false)
   })
 })

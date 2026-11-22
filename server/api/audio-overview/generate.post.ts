@@ -1,3 +1,5 @@
+import { assertTeachingCommand, createTeachingHelpGuard } from '../../utils/teaching-source-scope'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { H3Event } from "h3";
@@ -131,6 +133,7 @@ async function repairLegacySourceIdentities(
   event: H3Event,
   convexClient: ReturnType<typeof makeConvexClient> & {},
   body: AudioOverviewRequestBody,
+  authorizeHelp: () => Promise<void>,
 ): Promise<number> {
   const documents = await convexClient.query(
     api.documents.listDocumentsByFolder,
@@ -158,6 +161,7 @@ async function repairLegacySourceIdentities(
           message: "A selected source cannot be re-indexed automatically",
         });
       }
+      await authorizeHelp();
       const identity = await getScopedR2ObjectIdentity(document.r2Key);
       return { document, identity };
     }),
@@ -293,12 +297,19 @@ async function startDeterministicWorkflow(
 export default defineEventHandler(async (event) => {
   const userId = getConvexTokenIdentifier(event);
   const body = await readBody<AudioOverviewRequestBody>(event);
+  assertTeachingCommand(body, { taskId: 'string', folderId: 'string', roomId: 'string', scope: 'object', preferences: 'object', voiceProfile: 'object', hostNames: 'object', idempotencyKey: 'string' });
   const convexClient = makeConvexClient(event);
   if (!convexClient)
     throw createError({
       statusCode: 500,
       message: "Convex client unavailable",
     });
+  const checkScope = body?.folderId
+    ? createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>,
+        documentIds: body.scope?.mode === 'explicit' ? body.scope.documentIds as Id<'documents'>[] : undefined }, 'audio')
+    : createHelpAdmissionGuard(event, { kind: 'audio', ordinaryOnly: true, scope: null }, convexClient);
+  const authorizeHelp = async () => { await checkScope(); };
+  await authorizeHelp();
   const config = useRuntimeConfig(event);
   const jobSecret = readConfiguredRuntimeValue(
     config.audioOverviewJobSecret,
@@ -371,6 +382,7 @@ export default defineEventHandler(async (event) => {
           event,
           convexClient,
           body!,
+          authorizeHelp,
         );
         if (repairing > 0) {
           throw createError({
@@ -387,6 +399,9 @@ export default defineEventHandler(async (event) => {
     result.status === "failed" ||
     result.status === "cancelled";
   if (!terminal) {
+    const authorizeJobHelp = createHelpAdmissionGuard(event, { kind: 'audio', ordinaryOnly: true,
+      scope: { references: [{ kind: 'audio_job', id: result.jobId }] } }, convexClient);
+    await authorizeJobHelp();
     try {
       await startDeterministicWorkflow(event, {
         jobId: String(result.jobId),

@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import * as measurementStorage from './lib/learnV2MeasurementStorage'
 import * as artifactLineage from './lib/learnV2ArtifactLineageContract'
+import { messageHelpScope } from './lib/learnV2HelpContract'
 import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
@@ -98,6 +99,7 @@ export default defineSchema({
     .index('by_userId_and_conversationId', ['userId', 'conversationId']),
 
   messages: defineTable({
+    helpScope: v.optional(v.object(messageHelpScope)),
     conversationId: v.id('conversations'),
     userId: v.string(),
     role: v.union(v.literal('user'), v.literal('assistant')),
@@ -357,6 +359,8 @@ export default defineSchema({
     nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({
+      scopeVersion: v.optional(v.literal('quiz.source-scope.v1')),
+      sourceDocumentId: v.optional(v.id('documents')),
       question: v.string(),
       questionType: v.union(v.literal('free-response'), v.literal('fill_in_the_blank')),
       expectedAnswer: v.string(),
@@ -993,6 +997,7 @@ export default defineSchema({
     .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
+    taskId: v.optional(v.id('tasks')),
     audioOverviewId: v.id('audioOverviews'),
     userId: v.string(),
     insertedAfterTurnIndex: v.number(),
@@ -1194,6 +1199,7 @@ export default defineSchema({
     courseId: v.id('courses'),
     sectionId: v.id('courseSections'),
     flashcardRoomCardId: v.optional(v.id('flashcardRoomCards')),
+    sourceVersionId: v.optional(v.id('flashcardRoomVersions')),
     prompt: v.string(),
     answer: v.string(),
     easeFactor: v.number(),
@@ -1830,6 +1836,7 @@ export default defineSchema({
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_phase', ['userId', 'phase'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])
@@ -1886,6 +1893,13 @@ export default defineSchema({
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])
     .index('by_userId_and_fact_assessmentOpportunityId', ['userId', 'fact.assessmentOpportunityId'])
     .index('by_userId_and_fact_submissionId', ['userId', 'fact.submissionId'])
+    .index('by_fact_claimKey', ['fact.claimKey'])
+    .index('by_fact_basisAttemptId', ['fact.basisAttemptId'])
+    .index('by_userId_and_fact_objectiveId_and_fact_stratum_epoch', ['userId', 'fact.objectiveId', 'fact.stratum.epoch'])
+    .index('by_fact_firstCheckOpportunityId', ['fact.firstCheckOpportunityId'])
+    .index('by_fact_firstSlot_firstCheckOpportunityId', ['fact.firstSlot.firstCheckOpportunityId'])
+    .index('by_fact_slot_firstCheckOpportunityId', ['fact.slot.firstCheckOpportunityId'])
+    .index('by_userId_and_fact_kind', ['userId', 'fact.kind'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
     .index('by_userId', ['userId'])

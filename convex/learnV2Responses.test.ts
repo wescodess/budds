@@ -24,6 +24,7 @@ import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, deriveLearnReportLearnerKey
 import { measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
+import { LEARN_HELP_ADMISSION_VERSION } from './lib/learnV2HelpContract'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -193,6 +194,33 @@ test.each(['units', 'different-units'])('numeric response unit %s must match the
   const submission = { ...f.submission, response: { ...f.submission.response, payload: { kind: 'numeric' as const, value: 42, unit } } }
   const result = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission })
   expect(result).toMatchObject(unit === 'units' ? { kind: 'accepted' } : { kind: 'rejected', reasonCode: 'invalid_payload' })
+})
+
+test.each(['measurement', 'session_application'] as const)('canonical delayed acceptance requires compatible %s pins', async kind => {
+  const f = await fixture('measurement')
+  await f.t.run(async ctx => {
+    const assignment = (await ctx.db.get(f.f.rows.learnMeasurementAssignments))!
+    if (assignment.status !== 'admitted' || assignment.allocation.kind !== 'three_case') throw new Error('Expected admitted three-case allocation')
+    const itemPins = assignment.allocation.day7
+    await ctx.db.patch(itemPins.publicationValidationId, { ...f.capability, subject: { kind: 'item', itemId: itemPins.itemId } })
+    await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, {
+      contextPins: f.context,
+      purpose: { kind: 'measurement_delayed', assignmentId: assignment._id, horizonDays: 7,
+        clock: { protocolVersion: 'protocol.fixture', schedulingPolicyVersion: 'schedule.fixture', anchorKind: 'cold_acceptance',
+          anchorEventId: 'cold-acceptance', anchorAt: NOW - 7 * 86_400_000, horizonDays: 7, timezone: 'UTC',
+          dueLocalDate: new Date(NOW).toISOString().slice(0, 10), dueAt: NOW, openAt: NOW - 1_000, closeAt: NOW + 100_000 } },
+      horizonDays: 7,
+      assessmentPins: kind === 'measurement' ? { kind, itemPins }
+        : { kind, caseId: itemPins.caseId, promptDigest: itemPins.promptDigest, rubricVersion: 'rubric.v1',
+            rubricDigest: HASH, supportManifestDigest: HASH },
+    })
+    await ctx.db.patch(f.f.rows.learnAssessmentExposures, { purpose: 'delayed_measurement', caseId: itemPins.caseId,
+      itemId: itemPins.itemId, itemRevision: itemPins.itemRevision, familyId: itemPins.familyId, formLabel: itemPins.formLabel,
+      projectionDigest: itemPins.promptDigest })
+  })
+  const result = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })
+  if (kind === 'measurement') expect(result.kind, JSON.stringify(result)).toBe('accepted')
+  else expect(result).toMatchObject({ kind: 'rejected', reasonCode: 'pins_mismatch' })
 })
 
 async function ledger(t: Awaited<ReturnType<typeof fixture>>['t']) {
@@ -430,6 +458,45 @@ describe('terminalization and receipt replay', () => {
 })
 
 describe('help and acceptance serialization', () => {
+  test.each(['help_first', 'seal_first', 'race'] as const)('server-derived help serializes with acceptance for %s', async ordering => {
+    const f = await fixture()
+    const request = { version: LEARN_HELP_ADMISSION_VERSION, kind: 'chat' as const, idempotencyKey: KEY + '_derived_help',
+      scope: { references: [{ kind: 'folder' as const, id: f.f.folderId }] } }
+    expect((await f.owner.mutation(api.learnV2Assistance.admitHelp, request)).status).toBe('authorized')
+    const assist = () => f.owner.mutation(api.learnV2Assistance.deliverHelp, request)
+    if (ordering === 'help_first') expect((await assist()).status).toBe('authorized')
+    if (ordering === 'race') await Promise.all([assist(), f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })])
+    else accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const before = await ledger(f.t)
+    const response = before.responses[0]!
+    if (ordering !== 'race') expect(response.assistanceSnapshot.state).toBe(ordering === 'help_first' ? 'assisted' : 'unassisted')
+    else {
+      const delivered = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(16))
+      expect(response.assistanceSnapshot.state).toBe(delivered.some(row => row.assessmentOpportunityId === f.assessmentTarget.assessmentOpportunityId && row.purpose === 'teaching') ? 'assisted' : 'unassisted')
+    }
+    const assisted = response.assistanceSnapshot.state === 'assisted'
+    expect(response.assistanceSnapshot).toMatchObject({ assistanceRevision: assisted ? 1 : 0,
+      substantiveHintUsedAt: assisted ? NOW : null, answerRevealedAt: null })
+    const grants = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures')
+      .withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', OWNER.tokenIdentifier).eq('assessmentOpportunityId', f.assessmentTarget.assessmentOpportunityId)).take(16))
+    expect(grants.filter(row => row.purpose === 'teaching').map(row => ({ status: row.status, serverTime: row.serverTime })))
+      .toEqual(assisted ? [{ status: 'granted', serverTime: NOW }] : [])
+    expect((await assist()).status).toBe('ordinary')
+    expect(await ledger(f.t)).toEqual(before)
+  })
+  test('server-derived denied help never contaminates measurement acceptance; teaching after seal preserves it', async () => {
+    const f = await fixture('measurement')
+    const request = { version: LEARN_HELP_ADMISSION_VERSION, kind: 'replay' as const, idempotencyKey: KEY + '_derived_help',
+      scope: { references: [{ kind: 'folder' as const, id: f.f.folderId }] } }
+    expect(await f.owner.mutation(api.learnV2Assistance.admitHelp, request)).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
+    accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const before = await ledger(f.t)
+    expect(before.responses[0]).toMatchObject({ assistanceSnapshot: { state: 'unassisted', assistanceRevision: 0,
+      substantiveHintUsedAt: null, answerRevealedAt: null }, validitySnapshot: { status: 'valid', measurementEligible: true } })
+    expect(await f.t.run(ctx => ctx.db.query('learnResponseIntegrityEvents').take(8))).toEqual([])
+    expect((await f.owner.mutation(api.learnV2Assistance.admitHelp, request)).status).toBe('ordinary')
+    expect(await ledger(f.t)).toEqual(before)
+  })
   test.each(['open', 'sealed'] as const)('an archived Void denies %s assistance authorization and replay', async phase => {
     const f = await fixture()
     if (phase === 'sealed') accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))

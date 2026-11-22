@@ -1,3 +1,5 @@
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -1422,7 +1424,10 @@ export const recordMeaningfulActivityStarted = mutation({
   },
 });
 
-export const getSessionContent = query({
+const getSessionContentRead = defineTeachingRead({
+  name: 'learnV2SessionContent.getSessionContent',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'session', id: args.studySessionId }]),
+
   args: { studySessionId: v.id("studySessions") },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx);
@@ -1509,4 +1514,7 @@ export const getSessionContent = query({
       : null;
     return { ...publicContent, blocks: visibleBlocks, claims, supports, ...(adaptivePresentation ? { adaptivePresentation } : {}) };
   },
-});
+
+})
+export const getSessionContent = query(getSessionContentRead.query)
+export const getSessionContentDelivery = mutation(getSessionContentRead.delivery)

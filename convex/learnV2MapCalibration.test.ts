@@ -1,9 +1,11 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
+import type { FunctionArgs } from 'convex/server'
 import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { applyLearnMapEdit, isLearnMapChangedError } from '../app/utils/learn-v2-map-editor'
 
 vi.mock('../server/utils/ai-gateway', () => ({
   classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
@@ -52,7 +54,7 @@ async function setupMap() {
   return { t, owner, learningVoid: learningVoid!, blueprint: blueprint!, ...seeded }
 }
 
-function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
+function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>): FunctionArgs<typeof api.learnV2MapCalibration.replaceDraftMap>['candidate'] {
   return {
     version: 'learn-v2.blueprint-candidate.v1' as const,
     generatorVersion: 'human-map-editor.v1',
@@ -69,10 +71,239 @@ function editedCandidate(sourceSnapshotId: Id<'learnSourceSnapshots'>) {
       sourceSnapshotIds: [sourceSnapshotId],
       gapSourceSnapshotIds: [],
       prerequisiteObjectiveKeys: index === 0 ? [] : [`objective-${index}`],
-      assessmentContract: assessment,
     })),
   }
 }
+
+type MapFixture = Awaited<ReturnType<typeof setupMap>>
+const privateInstructions = 'PRIVATE_MAP_INSTRUCTIONS'
+const privateCriterion = 'PRIVATE_MAP_CRITERION'
+
+async function editableMap() {
+  const f = await setupMap()
+  await f.t.run(async ctx => {
+    await ctx.db.patch(f.blueprint._id, { status: 'draft' })
+    for (const [index, id] of f.objectives.entries()) await ctx.db.patch(id, { stableKey: `objective-${index + 1}`, assessmentContract: {
+      ...assessment, instructions: `  ${privateInstructions}_${index}  `, criteria: [{ key: `private-${index}`, description: `${privateCriterion}_${index}`, weightPercent: 100 }],
+    } })
+  })
+  return f
+}
+
+function editCommand(f: MapFixture) {
+  return { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2,
+    idempotencyKey: 'private-contract-map-edit', candidate: editedCandidate(f.sourceSnapshotId) }
+}
+
+async function storedObjectives(f: MapFixture) {
+  return await f.t.run(ctx => ctx.db.query('learnObjectives').withIndex('by_userId_and_blueprintRevisionId_and_order', q => q
+    .eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', f.blueprint._id)).take(16))
+}
+
+async function mapState(f: MapFixture) {
+  const objectives = await storedObjectives(f)
+  return await f.t.run(async ctx => ({ blueprint: await ctx.db.get(f.blueprint._id), learningVoid: await ctx.db.get(f.learningVoid._id),
+    objectives, receipts: await ctx.db.query('learnLifecycleReceipts').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', identity.tokenIdentifier).eq('learningVoidId', f.learningVoid._id)).take(20) }))
+}
+
+async function assertPrivateMap(f: MapFixture) {
+  const reads = [await f.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: f.blueprint._id }),
+    await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }),
+    await f.owner.query(api.learnV2Journey.getCurrentMission, {})]
+  const serialized = JSON.stringify(reads)
+  for (const value of [privateInstructions, privateCriterion, 'assessmentContract', 'weightPercent', 'Demonstrate the capability using the accepted evidence.']) expect(serialized).not.toContain(value)
+}
+
+describe('server-owned map assessment contracts', () => {
+  test.each(['command', 'candidate', 'objective', 'milestone'].flatMap(level => ['assessmentContract', 'instructions', 'criteria', 'weightPercent', 'weights', 'rubric'].map(field => ({ level, field }))))('$level rejects client $field before changing the map', async ({ level, field }) => {
+    const f = await editableMap()
+    const args = editCommand(f)
+    const target = level === 'command' ? args : level === 'candidate' ? args.candidate : level === 'objective' ? args.candidate.objectives[0]! : args.candidate.milestones[0]!
+    Reflect.set(target, field, field === 'assessmentContract' ? assessment : 'CLIENT_PRIVATE_ASSESSMENT_PAYLOAD')
+    const before = await mapState(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).rejects.toThrow()
+    expect(await mapState(f)).toEqual(before)
+  })
+
+  test('a stale map edit returns a structured revision conflict that the editor shows as changed elsewhere', async () => {
+    const f = await editableMap()
+    const before = await mapState(f)
+    const conflict = { data: { version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'revision_conflict' } }
+    const stale = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...editCommand(f), expectedRecordRevision: 7, idempotencyKey: 'stale-record' }).catch((error: unknown) => error)
+    expect(stale).toMatchObject(conflict)
+    expect(isLearnMapChangedError(stale)).toBe(true)
+    expect(await mapState(f)).toEqual(before)
+
+    await f.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-elsewhere' })
+    const superseded = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editCommand(f)).catch((error: unknown) => error)
+    expect(superseded).toMatchObject(conflict)
+    expect(isLearnMapChangedError(superseded)).toBe(true)
+    const staleFork = await f.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: f.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-stale' }).catch((error: unknown) => error)
+    expect(staleFork).toMatchObject(conflict)
+    expect(isLearnMapChangedError(staleFork)).toBe(true)
+  })
+
+  test('stable identities preserve exact private contracts through edits and repeated reorders', async () => {
+    const f = await editableMap()
+    const before = new Map((await storedObjectives(f)).map(row => [row.stableKey, row.assessmentContract]))
+    const args = editCommand(f)
+    args.candidate.objectives.reverse().forEach((row, index) => { row.order = index; row.title = `Renamed ${index}` })
+    const result = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)
+    expect(JSON.stringify(result)).not.toContain(privateInstructions)
+    for (const row of await storedObjectives(f)) expect(row.assessmentContract).toEqual(before.get(row.stableKey))
+    args.candidate.objectives.reverse().forEach((row, index) => { row.order = index })
+    await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...args, expectedRecordRevision: 2, expectedVoidRevision: 3, idempotencyKey: 'second-order', candidate: args.candidate })
+    for (const row of await storedObjectives(f)) expect(row.assessmentContract).toEqual(before.get(row.stableKey))
+    await assertPrivateMap(f)
+    const state = await mapState(f)
+    expect(JSON.stringify(state.receipts)).not.toContain(privateInstructions)
+  })
+
+  test('a new objective receives the exact fixed server default without learner text or a provider call', async () => {
+    const f = await editableMap()
+    const args = editCommand(f)
+    args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: 'new-objective', order: 6,
+      title: 'LEARNER_TEXT_MUST_NOT_ENTER_CONTRACT', capability: 'LEARNER_TEXT_MUST_NOT_ENTER_CONTRACT' })
+    const { generateCompletion } = await import('../server/utils/ai-gateway')
+    vi.mocked(generateCompletion).mockClear()
+    await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)
+    expect((await storedObjectives(f)).find(row => row.stableKey === 'new-objective')?.assessmentContract).toEqual({
+      version: 'learn-v2.assessment.v1', kind: 'bounded_rubric', responseFormat: 'short_text',
+      instructions: 'Demonstrate the capability using the accepted evidence.', passingScorePercent: 80,
+      criteria: [{ key: 'correct', description: 'The response is correct and supported by the accepted evidence.', weightPercent: 100 }],
+    })
+    expect(generateCompletion).not.toHaveBeenCalled()
+    await assertPrivateMap(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+      expectedRecordRevision: 2, expectedVoidRevision: 3, idempotencyKey: 'accept-default' })).resolves.toMatchObject({ status: 'accepted' })
+    await assertPrivateMap(f)
+  })
+
+  test.each(['split-child', ' split-child '])('an explicit split inherits the unchanged stored parent contract for both children and replays without rewriting: %s', async childKey => {
+    const f = await editableMap()
+    const parentContract = (await storedObjectives(f))[0]!.assessmentContract
+    const args = editCommand(f)
+    args.candidate.objectives[0]!.title = 'First split capability'
+    args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: childKey, order: 6, title: 'Second split capability', splitFromObjectiveKey: 'objective-1' })
+    const result = await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)
+    const rows = await storedObjectives(f)
+    for (const key of ['objective-1', 'split-child']) expect(rows.find(row => row.stableKey === key)?.assessmentContract).toEqual(parentContract)
+    expect(await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).toEqual(result)
+    expect(await storedObjectives(f)).toEqual(rows)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...args, candidate: { ...args.candidate,
+      objectives: args.candidate.objectives.map(row => row.key === childKey ? { ...row, splitFromObjectiveKey: 'objective-2' } : row) } })).rejects.toThrow('different request')
+    await f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+      expectedRecordRevision: 2, expectedVoidRevision: 3, idempotencyKey: 'accept-split' })
+    await assertPrivateMap(f)
+  })
+
+  test.each([
+    { name: 'default 25-minute held split', minutes: 25, split: true, stored: [['objective-1', 15], ['editor-split', 15]] },
+    { name: '15-minute edit', minutes: 15, split: false, stored: [['objective-1', 15]] },
+  ])('editor adapter output saves through the registered map command: $name', async ({ minutes, split, stored }) => {
+    const f = await editableMap()
+    const args = editCommand(f)
+    const objective = { objectiveKey: 'objective-1', title: 'First ability', capability: 'Edited capability 1', milestoneKey: 'milestone-1', effortMinutes: minutes,
+      depth: 'working' as const, coverage: 'strong' as const, supportingSourceKeys: ['source'], gapSourceKeys: [], prerequisiteKeys: [] }
+    const current = { ...args.candidate, objectives: args.candidate.objectives.map(row => ({ ...row, gapSourceSnapshotIds: row.gapSourceSnapshotIds ?? [] })) }
+    args.candidate = applyLearnMapEdit(current, { kind: 'save_objective', objective, order: args.candidate.objectives.map(row => row.key),
+      ...(split ? { split: { secondTitle: 'First ability: apply' } } : {}) }, { source: f.sourceSnapshotId }, () => 'editor-split') as typeof args.candidate
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).resolves.toMatchObject({ status: 'map_review' })
+    const rows = await storedObjectives(f)
+    expect(stored.map(([key]) => [key, rows.find(row => row.stableKey === key)?.estimatedMinutes])).toEqual(stored)
+  })
+
+  test.each(['missing', 'foreign', 'other-revision', 'removed', 'existing-child', 'padded-existing-child', 'new-parent', 'self'] as const)('rejects a %s split parent atomically', async failure => {
+    const f = await editableMap()
+    const args = editCommand(f)
+    let parentKey = 'objective-1'
+    if (failure === 'missing') parentKey = 'missing-parent'
+    if (failure === 'self') parentKey = 'split-child'
+    if (failure === 'removed') args.candidate.objectives.shift()
+    if (failure === 'new-parent') { parentKey = 'new-parent'; args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: parentKey, order: 6 }) }
+    if (failure === 'foreign' || failure === 'other-revision') {
+      parentKey = 'outside-parent'
+      await f.t.run(async ctx => {
+        const { _id: _rowId, _creationTime: _rowTime, ...objective } = (await ctx.db.get(f.objectives[0]!))!
+        let blueprintRevisionId = f.blueprint._id
+        if (failure === 'other-revision') {
+          const { _id: _blueprintId, _creationTime: _blueprintTime, ...blueprint } = (await ctx.db.get(blueprintRevisionId))!
+          blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { ...blueprint, revision: 0 })
+        }
+        await ctx.db.insert('learnObjectives', { ...objective, blueprintRevisionId, stableKey: parentKey, userId: failure === 'foreign' ? 'foreign-owner' : identity.tokenIdentifier })
+      })
+      args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: parentKey, order: 6 })
+    }
+    if (failure === 'existing-child' || failure === 'padded-existing-child') {
+      args.candidate.objectives[1]!.splitFromObjectiveKey = parentKey
+      if (failure === 'padded-existing-child') args.candidate.objectives[1]!.key = ' objective-2 '
+    }
+    else args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: 'split-child', order: args.candidate.objectives.length, splitFromObjectiveKey: parentKey })
+    args.candidate.objectives.forEach((row, index) => { row.order = index; row.prerequisiteObjectiveKeys = [] })
+    const before = await mapState(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'invalid_split_parent' } })
+    expect(await mapState(f)).toEqual(before)
+  })
+
+  test('a split cannot replace an unavailable parent contract with the new-objective default', async () => {
+    const f = await editableMap()
+    await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: undefined }))
+    const args = editCommand(f)
+    args.candidate.objectives.push({ ...args.candidate.objectives[0]!, key: 'split-child', order: 6, splitFromObjectiveKey: 'objective-1' })
+    const before = await mapState(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).rejects.toMatchObject({ data: { reasonCode: 'assessment_contract_unavailable' } })
+    expect(await mapState(f)).toEqual(before)
+  })
+
+  test.each(['duplicate', 'overflow'] as const)('a %s stored objective identity set rejects before replacement', async failure => {
+    const f = await editableMap()
+    await f.t.run(async ctx => {
+      if (failure === 'duplicate') await ctx.db.patch(f.objectives[1]!, { stableKey: 'objective-1' })
+      else {
+        const { _id: _rowId, _creationTime: _rowTime, ...objective } = (await ctx.db.get(f.objectives[0]!))!
+        for (let index = 0; index < 10; index++) await ctx.db.insert('learnObjectives', { ...objective, stableKey: `extra-${index}`, order: index + 6 })
+      }
+    })
+    const before = await mapState(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editCommand(f))).rejects.toMatchObject({ data: { reasonCode: 'objective_identity_unavailable' } })
+    expect(await mapState(f)).toEqual(before)
+  })
+
+  test('an ordinary edit keeps a purged contract absent and acceptance returns a typed rejection', async () => {
+    const f = await editableMap()
+    await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: undefined }))
+    await f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, editCommand(f))
+    expect((await storedObjectives(f))[0]!.assessmentContract).toBeUndefined()
+    const before = await mapState(f)
+    await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+      expectedRecordRevision: 2, expectedVoidRevision: 3, idempotencyKey: 'accept-purged' })).rejects.toMatchObject({ data: {
+      version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'assessment_contract_unavailable',
+    } })
+    expect(await mapState(f)).toEqual(before)
+    await assertPrivateMap(f)
+  })
+
+  test.each(['blank-instructions', 'empty-criteria', 'duplicate-keys', 'wrong-total', 'fractional-weight', 'blank-description', 'too-many-criteria'] as const)('acceptance rejects a %s private contract without leaking it or changing authority', async failure => {
+    const f = await setupMap()
+    const contract = { ...assessment, instructions: privateInstructions, criteria: [{ key: 'private-key', description: privateCriterion, weightPercent: 100 }] }
+    if (failure === 'blank-instructions') contract.instructions = ' '
+    if (failure === 'empty-criteria') contract.criteria = []
+    if (failure === 'duplicate-keys') contract.criteria = [0, 1].map(() => ({ key: 'private-key', description: privateCriterion, weightPercent: 50 }))
+    if (failure === 'wrong-total') contract.criteria[0]!.weightPercent = 99
+    if (failure === 'fractional-weight') contract.criteria[0]!.weightPercent = 99.5
+    if (failure === 'blank-description') contract.criteria[0]!.description = ' '
+    if (failure === 'too-many-criteria') contract.criteria = Array.from({ length: 9 }, (_, i) => ({ key: `key-${i}`, description: privateCriterion, weightPercent: i === 8 ? 20 : 10 }))
+    await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: contract }))
+    const before = await mapState(f)
+    const error = await f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
+      expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'invalid-private-contract' }).catch(error => error)
+    expect(error.data).toEqual({ version: 'learn-v2.map-edit.v1', status: 'rejected', reasonCode: 'assessment_contract_unavailable' })
+    expect(String(error)).not.toContain(privateCriterion)
+    expect(String(error)).not.toContain(privateInstructions)
+    expect(await mapState(f)).toEqual(before)
+    await assertPrivateMap(f)
+  })
+})
 
 describe('Learn V2 revision-safe map editing and calibration', () => {
   test.each([false, true])('map acceptance cleanly rejects a missing or legacy stored contract with legacy=%s while the projection remains editable', async legacy => {
@@ -80,9 +311,9 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     await f.t.mutation(internal.learnV2Retention.purgeLegacyObjectiveCopies, { userId: identity.tokenIdentifier,
       sourceSnapshotId: f.sourceSnapshotId, objectiveId: f.objectives[0]! })
     if (legacy) await f.t.run(ctx => ctx.db.patch(f.objectives[0]!, { assessmentContract: 'Legacy rubric cache' }))
-    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[0]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+    expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[0]).not.toHaveProperty('assessmentContract')
     await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
-      expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'missing-contract' })).rejects.toThrow('Blueprint assessment contract is invalid')
+      expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'missing-contract' })).rejects.toMatchObject({ data: { status: 'rejected', reasonCode: 'assessment_contract_unavailable' } })
   })
 
   test('map receipt replay recognizes the purged fingerprint without restoring the request', async () => {
@@ -120,13 +351,13 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         await ctx.db.patch(f.objectives[0]!, { coverage: 'gap', gapReason: 'This source does not support the objective.' })
         return documentId
       })
-      expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[1]?.assessmentContract).toEqual(assessment)
+      expect((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id }))?.map?.objectives[1]).not.toHaveProperty('assessmentContract')
       await f.owner.mutation(api.documents.deleteDocument, { id: documentId })
       await f.t.finishAllScheduledFunctions(vi.runAllTimers)
       expect((await f.t.run(ctx => ctx.db.get(f.objectives[0]!)))?.assessmentContract).toEqual(assessment)
       expect((await f.t.run(ctx => ctx.db.get(f.objectives[1]!)))?.assessmentContract).toBeUndefined()
       const mission = await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.learningVoid._id })
-      expect(mission?.map?.objectives[1]?.assessmentContract).toMatchObject({ instructions: '', criteria: [] })
+      expect(mission?.map?.objectives[1]).not.toHaveProperty('assessmentContract')
       await expect(f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
         expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'reject-missing-contract' })).rejects.toThrow('Blueprint objective evidence is unavailable')
     }
@@ -192,7 +423,7 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
         }
       })
       const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })
-      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map-stale' })).rejects.toThrow(/revision conflict/)
+      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
       expect(await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: 2, idempotencyKey: 'fork-map' })).toEqual(fork)
       const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: setup.blueprint._id })
       const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: fork!._id })
@@ -200,6 +431,68 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
       expect(child?.objectives).toHaveLength(6)
       expect(child?.objectives[0]?.title).toBe(parent?.objectives[0]?.title)
       expect(child?.objectives[0]?._id).not.toBe(parent?.objectives[0]?._id)
+      expect(child?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId).not.toBe(parent?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('a retry after a failed save reuses the draft fork and saves the whole map', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const mission = () => setup.owner.query(api.learnV2Journey.getMission, { learningVoidId: setup.learningVoid._id })
+      const before = (await mission())!
+      expect(before.map!.objectives).toHaveLength(6)
+      const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: before.currentBlueprint!._id, expectedRecordRevision: before.currentBlueprint!.recordRevision, expectedVoidRevision: before.learningVoid.revision, idempotencyKey: 'retry-fork' })
+      const clonedSource = await setup.t.run(ctx => ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id)).first())
+      const rejected = editedCandidate(clonedSource!._id)
+      rejected.objectives = rejected.objectives.slice(0, 5)
+      const afterFork = (await mission())!
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { blueprintRevisionId: fork!._id, expectedRecordRevision: 1, expectedVoidRevision: afterFork.learningVoid.revision, idempotencyKey: 'retry-rejected', candidate: rejected })).rejects.toThrow()
+
+      const afterFailure = (await mission())!
+      expect(afterFailure.currentBlueprint).toMatchObject({ _id: fork!._id, status: 'draft' })
+      expect(afterFailure.map!.objectives).toHaveLength(6)
+      expect(afterFailure.sources.items).toHaveLength(before.sources.items.length)
+
+      const retry = { blueprintRevisionId: afterFailure.currentBlueprint!._id, expectedRecordRevision: afterFailure.currentBlueprint!.recordRevision, expectedVoidRevision: afterFailure.learningVoid.revision, idempotencyKey: 'retry-save', candidate: editedCandidate(clonedSource!._id) }
+      const saved = await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, retry)
+      expect(await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, retry)).toEqual(saved)
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...retry, idempotencyKey: 'retry-save-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
+
+      const after = (await mission())!
+      expect(after.currentBlueprint).toMatchObject({ _id: fork!._id, status: 'map_review' })
+      expect(after.map!.objectives.map(row => row.title)).toEqual(Array.from({ length: 6 }, (_, index) => `Edited objective ${index + 1}`))
+      expect(after.sources.items).toHaveLength(before.sources.items.length)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('a fork of a draft fork carries its map instead of an empty one', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const mission = () => setup.owner.query(api.learnV2Journey.getMission, { learningVoidId: setup.learningVoid._id })
+      const before = (await mission())!
+      const first = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: before.learningVoid.revision, idempotencyKey: 'draft-fork-first' })
+      const draft = (await mission())!
+      const secondArgs = { blueprintRevisionId: first!._id, expectedRecordRevision: 1, expectedVoidRevision: draft.learningVoid.revision, idempotencyKey: 'draft-fork-second' }
+      const second = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, secondArgs)
+      expect(await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, secondArgs)).toEqual(second)
+      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { ...secondArgs, idempotencyKey: 'draft-fork-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
+
+      const after = (await mission())!
+      expect(after.currentBlueprint).toMatchObject({ _id: second!._id, status: 'draft' })
+      expect(after.map!.objectives.map(row => row.title)).toEqual(before.map!.objectives.map(row => row.title))
+      expect(after.sources.items).toHaveLength(before.sources.items.length)
+      const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: first!._id })
+      const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: second!._id })
       expect(child?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId).not.toBe(parent?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId)
     }
     finally {

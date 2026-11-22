@@ -16,7 +16,7 @@ export const LEARN_ARTIFACT_LINEAGE_LIMITS = { maxNodes: 16, maxDepth: 8, maxOri
 // and one prose aggregate. Other kinds keep the original per-node bound.
 export const LEARN_ARTIFACT_CASE_LIMITS = {
   session_block: 32, document: 32, document_chunk: 32, quiz_question: 32, section_block: 401, flashcard_version: 201,
-  audio_overview: 32, learner_artifact: 32, measurement_item: 32, scoring_spec: 32,
+  audio_overview: 32, audio_interjection: 32, audio_interjection_v2: 32, learner_artifact: 32, measurement_item: 32, scoring_spec: 32,
 } as const
 export const LEARN_ARTIFACT_DOCUMENT_CHUNK_SET_KEY = 'chunk-set' as const
 export const LEARN_ARTIFACT_CLASSIFICATIONS = ['teaching', 'genuine_personal_work', 'legacy_history', 'measurement', 'private_scoring', 'unknown'] as const
@@ -33,6 +33,8 @@ export const learnArtifactReferenceSchema = z.strictObject({
     z.strictObject({ kind: z.literal('learner_artifact'), id: learnIdSchema<'learningThreadArtifacts'>() }),
     z.strictObject({ kind: z.literal('measurement_item'), id: learnIdSchema<'learnMeasurementItems'>() }),
     z.strictObject({ kind: z.literal('scoring_spec'), id: learnIdSchema<'learnMeasurementScoringSpecs'>() }),
+    z.strictObject({ kind: z.literal('audio_interjection'), id: learnIdSchema<'audioOverviewInterjections'>() }),
+    z.strictObject({ kind: z.literal('audio_interjection_v2'), id: learnIdSchema<'audioOverviewInterjectionsV2'>() }),
   ]),
   key: learnVersionSchema, revision: learnVersionSchema, payloadDigest: learnDigestSchema,
 })
@@ -108,7 +110,7 @@ export const learnArtifactBatchRegistrationResultSchema = z.strictObject({
   catalogRevision: learnRevisionSchema, readUsage: learnArtifactReadUsageSchema,
 })
 const artifactKinds = learnArtifactReferenceSchema.shape.artifact.options
-const preparationArtifactSchema = z.discriminatedUnion('kind', [artifactKinds[0], artifactKinds[1], artifactKinds[2], artifactKinds[3], artifactKinds[4], artifactKinds[5], artifactKinds[6]])
+const preparationArtifactSchema = z.discriminatedUnion('kind', [artifactKinds[0], artifactKinds[1], artifactKinds[2], artifactKinds[3], artifactKinds[4], artifactKinds[5], artifactKinds[6], artifactKinds[10], artifactKinds[11]])
 export const learnArtifactPreparationArgsSchema = z.strictObject({
   artifacts: z.array(z.strictObject({
     artifact: preparationArtifactSchema, key: learnVersionSchema,
