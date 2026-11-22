@@ -9,12 +9,14 @@ import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistorySt
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 import { addCalendarDays, localDateAt } from './learn-v2-mastery'
 import { computeLearnReportEstimate, type ReportObservation, type ReportEvidence } from './learn-v2-measurement-report-math'
+import { LearnReportContributions, LEARN_REPORT_PUBLICATION_POLICY_VERSION, publishLearnReportCell } from './learn-v2-measurement-report-policy'
+export { LEARN_REPORT_PUBLICATION_POLICY_VERSION, LEARN_REPORT_MINIMUM_CONTRIBUTING_LEARNERS } from './learn-v2-measurement-report-policy'
 export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v2' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v3' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -583,8 +585,6 @@ export const learnReportMetricSchema = z.strictObject({
     .some(number => number != null && (number < minimum || number > maximum)))) ctx.addIssue({ code: 'custom', message: 'Estimate exceeds the frozen metric scale' })
   const sum = (counts: Record<string, number>) => Object.values(counts).reduce((total, number) => total + number, 0)
   const bands = Object.values(value.attritionByStartingBand)
-  const originalFormsMatch = (assigned: z.infer<typeof learnReportFormCountsSchema>, observed: z.infer<typeof learnReportFormCountsSchema>) =>
-    Object.keys(assigned).every(key => observed[key as keyof typeof observed] <= assigned[key as keyof typeof assigned])
   const selectedBand = { '0_40': 'below40', '40_80': 'from40To80', '80_100': 'from80To100', unknown: 'unknown' } as const
   if (sum(value.counts.dispositions) !== population || value.counts.dispositions.valid_scored > scored
     || value.replacements.originalPopulation !== population || value.replacements.primaryIncludedPairs > observed
@@ -601,8 +601,6 @@ export const learnReportMetricSchema = z.strictObject({
     || sum(value.allocations.assignedColdForms) !== value.counts.maturedEpisodes
     || sum(value.allocations.observedColdForms) !== value.counts.acceptedColdSubmissions
     || sum(value.allocations.assignedDelayedForms) !== population || sum(value.allocations.observedDelayedForms) !== accepted
-    || (value.replacements.policy.kind === 'secondary_only' && (!originalFormsMatch(value.allocations.assignedColdForms, value.allocations.observedColdForms)
-      || !originalFormsMatch(value.allocations.assignedDelayedForms, value.allocations.observedDelayedForms)))
     || value.sourceAccounting.population < Math.max(population, value.counts.considered)
     || value.sourceAccounting.replacement.affected < value.replacements.withLinkedReplacement
     || bands.reduce((total, band) => total + band.population, 0) !== population
@@ -631,10 +629,42 @@ export function validateLearnMeasurementReportCells(input: unknown) {
   return parseLearnContract(learnMeasurementReportCellsSchema, input, LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportPageBytes)
 }
 
+export const learnPublishedReportMetricSchema = z.strictObject({ ...learnReportMetricSchema.shape,
+  publicationPolicyVersion: z.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION),
+  counts: learnReportPopulationCountsSchema.nullable(), legacyIndependentAudit: learnReportLegacyIndependentAuditSchema.nullable(),
+  replacements: learnReportReplacementAccountingSchema.nullable(), instrumentation: learnReportInstrumentationCountsSchema.nullable(),
+  sensitivity: learnReportSensitivitySchema.nullable(), allocations: learnReportAllocationCountsSchema.nullable(),
+  sourceAccounting: learnReportSourceAccountingSchema.nullable(), attritionByStartingBand: z.strictObject({
+    below40: bandCounts.nullable(), from40To80: bandCounts.nullable(), from80To100: bandCounts.nullable(), unknown: bandCounts.nullable(),
+  }).nullable(),
+}).refine(value => value.counts !== null || (value.observedValue === null && value.allEligibleValue === null
+  && value.missingOutcomeBounds === null && value.confidenceInterval === null && value.legacyIndependentAudit === null
+  && value.replacements === null && value.instrumentation === null && value.sensitivity === null && value.allocations === null
+  && value.sourceAccounting === null && value.attritionByStartingBand === null && value.reasonCodes.includes('insufficient_learners')),
+'Suppressed cells contain statuses and no value-bearing fields')
+export const learnPublishedReportProvenanceSchema = z.strictObject({ ...learnReportProvenanceSchema.shape,
+  publicationPolicyVersion: z.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION), episodeCount: z.null(), inputBytes: z.null(),
+})
+export function publishLearnReportProvenance(provenance: z.infer<typeof learnReportProvenanceSchema>) {
+  return learnPublishedReportProvenanceSchema.parse({ ...provenance,
+    publicationPolicyVersion: LEARN_REPORT_PUBLICATION_POLICY_VERSION, episodeCount: null, inputBytes: null })
+}
+export const learnPublishedMeasurementReportSchema = z.discriminatedUnion('status', [
+  learnMeasurementReportSchema.options[0].extend({ provenance: learnPublishedReportProvenanceSchema }),
+  learnMeasurementReportSchema.options[1],
+])
+export const learnPublishedMeasurementReportCellsSchema = z.strictObject({ ...learnMeasurementReportCellsSchema.shape,
+  cells: z.array(learnPublishedReportMetricSchema).max(8),
+}).refine(value => value.isDone === (value.cursor === null))
+export function validateLearnPublishedMeasurementReportCells(input: unknown) {
+  return parseLearnContract(learnPublishedMeasurementReportCellsSchema, input, LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportPageBytes)
+}
+
 export type LearnReportSourceFact = z.infer<typeof learnReportFactSchema>
 export type LearnReportInputSnapshot = z.infer<typeof learnReportInputSnapshotSchema>
 export type LearnMeasurementReport = z.infer<typeof learnMeasurementReportSchema>
 export type LearnReportMetric = z.infer<typeof learnReportMetricSchema>
+export type LearnPublishedReportMetric = z.infer<typeof learnPublishedReportMetricSchema>
 
 type ReportEpisode = z.infer<typeof learnReportEpisodeSnapshotSchema>
 type ReportClaim = z.infer<typeof learnReportFirstClaimSnapshotSchema>
@@ -768,6 +798,8 @@ function endpointReasons(result: ReportResult | null, acceptance: ReportAcceptan
   if (result.scoringKind !== configuration.scoringKind || result.configurationDigest !== configuration.configurationDigest
     || result.scorerVersion !== configuration.scorerVersion || ['mismatch', 'unknown', 'unverified_legacy'].includes(result.identityStatus)
     || (result.scoringKind === 'model' && (result.observedModel === null || result.observedUpstream === null))) reasons.push('pin_flow_treatment_mismatch')
+  if (result.scoringKind !== configuration.scoringKind || result.configurationDigest !== configuration.configurationDigest
+    || result.scorerVersion !== configuration.scorerVersion) reasons.push('scorer_configuration_mismatch')
   if (clock && (result.acceptedAt < clock.openAt || result.acceptedAt >= clock.closeAt)) reasons.push('invalid_item_novelty')
   if (result.validityStatus !== 'valid' || !result.measurementEligible) {
     for (const reason of result.exclusionReasons) {
@@ -797,6 +829,8 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
   const selectedDelayedAcceptance = useDelayedReplacement ? row.replacementAcceptance : row.delayedAcceptance
   const selectedClock = useDelayedReplacement ? row.replacementClock : row.clock
   const coldWindow = useColdReplacement ? coldReplacement : null
+  const coldFormMismatch = !useColdReplacement && resultBy(selectedCold, cutoff) !== null && selectedCold?.formLabel !== coldForm
+  const delayedFormMismatch = !useDelayedReplacement && resultBy(selectedDelayed, cutoff) !== null && selectedDelayed?.formLabel !== delayedForm
   const familyValid = assignment.familyValidationStatus !== 'quarantined' && assignment.historyStatus !== 'unknown'
   const coldValid = familyValid && validReportResult(selectedCold, cutoff, configuration, coldWindow)
     && selectedCold?.familyRevision === assignment.familyRevision && (useColdReplacement || selectedCold?.formLabel === coldForm)
@@ -818,9 +852,10 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
   ]
   if (row.mixedFlow || row.treatmentEpochChanged) reasons.push('pin_flow_treatment_mismatch')
   if (!familyValid || (cold && delayed && !comparableReportPair(cold, delayed))) reasons.push('invalid_item_novelty')
+  if (coldFormMismatch || delayedFormMismatch) reasons.push('form_assignment_mismatch', 'invalid_item_novelty')
   if (assignment.historyStatus === 'unknown') reasons.push('unknown_history')
-  if (!cold) reasons.push('missing_cold')
-  if (!delayed) reasons.push('missing_delayed')
+  if (!cold && !coldFormMismatch) reasons.push('missing_cold')
+  if (!delayed && !delayedFormMismatch) reasons.push('missing_delayed')
   if (row.disposition !== 'valid_scored' && !['missing_cold', 'missing_delayed'].includes(row.disposition)) reasons.push(row.disposition)
   const linked = coldReplacement !== null || row.replacementOpportunityId !== null
   const secondaryCold = coldReplacement ? coldReplacement.result : row.cold
@@ -846,8 +881,8 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
     primaryIncluded: pair && (useColdReplacement || useDelayedReplacement),
     paste: reportFlags([resultBy(selectedCold, cutoff), resultBy(selectedDelayed, cutoff)], 'pasteObserved'),
     focus: reportFlags([resultBy(selectedCold, cutoff), resultBy(selectedDelayed, cutoff)], 'focusLossObserved'),
-    order, coldForm, delayedForm, observedColdForm: acceptedBy(selectedColdAcceptance, cutoff) ? (useColdReplacement ? selectedCold?.formLabel ?? 'unknown' : coldForm) : null,
-    observedDelayedForm: acceptedBy(selectedDelayedAcceptance, cutoff) ? (useDelayedReplacement ? selectedDelayed?.formLabel ?? 'unknown' : delayedForm) : null }
+    order, coldForm, delayedForm, observedColdForm: acceptedBy(selectedColdAcceptance, cutoff) ? resultBy(selectedCold, cutoff)?.formLabel ?? 'unknown' : null,
+    observedDelayedForm: acceptedBy(selectedDelayedAcceptance, cutoff) ? resultBy(selectedDelayed, cutoff)?.formLabel ?? 'unknown' : null }
 }
 
 function isReportFirstClaim(row: LearnReportInputSnapshot): row is ReportFirstClaim {
@@ -1038,11 +1073,11 @@ function reportCell(input: {
     allocations, sourceAccounting: sourceReportAccounting(gain ? input.inventory : input.sourceRows), attritionByStartingBand })
 }
 
-/** Whole-run action/offline computation. Public adapters publish only the returned manifest and cell pages. */
+/** Internal computation; publication must apply the whole-run disclosure policy. */
 export async function buildLearningMeasurementReport(input: {
   reportRunId: string, query: z.infer<typeof learnReportQuerySchema>, provenance: z.infer<typeof learnReportProvenanceSchema>,
   roster: readonly string[], rows: readonly LearnReportInputSnapshot[],
-}): Promise<{ report: LearnMeasurementReport, pages: z.infer<typeof learnMeasurementReportCellsSchema>[] }> {
+}, contributions = new LearnReportContributions()): Promise<{ report: LearnMeasurementReport, pages: z.infer<typeof learnMeasurementReportCellsSchema>[] }> {
   const metadata = z.strictObject({ reportRunId: learnIdSchema<'learnMeasurementReportRuns'>(), query: learnReportQuerySchema,
     provenance: learnReportProvenanceSchema, roster: z.array(learnReportOpaqueKeySchema).max(10_000), rows: z.array(z.unknown()).max(40_000) }).parse(input)
   const source = validatedReportRows(metadata.rows)
@@ -1094,6 +1129,13 @@ export async function buildLearningMeasurementReport(input: {
   const inventory = [...inventoryByAssignment.values()]
   const audit = rollUpLearnReportLegacyAudit(metadata.roster, source.rows)
   const watermarks = source.rows.filter(row => row.kind === 'owner_watermark')
+  for (const row of watermarks) contributions.add(row.learnerKey, ['audit', row.historyCoverage,
+    row.legacyIndependentAudit.sourceCoverage, row.legacyIndependentAudit.unknownCount === null ? 'unknown'
+      : row.legacyIndependentAudit.unknownCount === 0 ? 'none' : 'some'])
+  for (const row of inventory) contributions.add(row.learnerKey, ['inventory', row.assignment.status,
+    row.assignment.sourceCoverage, row.assignment.historyStatus, [...row.reasonCodes].sort(), row.treatmentEpochChanged,
+    row.coldReplacement !== null, row.replacementOpportunityId !== null,
+    ...[row.cold, row.delayed, row.replacement].map(result => [...(result?.exclusionReasons ?? [])].sort())])
   const sourceKnown = metadata.provenance.sourceCoverage === 'complete' && watermarks.every(row => row.historyCoverage === 'complete'
     && row.dueWorkThrough !== null && row.dueWorkThrough >= metadata.query.cutoff)
   const groups = new Map<string, ReportGroup>()
@@ -1163,6 +1205,11 @@ export async function buildLearningMeasurementReport(input: {
   }
   const cells: LearnReportMetric[] = []
   for (const [key, group] of [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+    for (const row of group.rows) contributions.add(row.learnerKey, ['cell', key, row.band, row.stage, row.known,
+      row.disposition, row.eligible, row.acceptedCold, row.accepted, row.validCold, row.validDelayed,
+      row.observation.value !== null, group.metric === FALSE_MASTERY_NEXT_DELAYED_VERSION && row.observation.value === 1,
+      row.secondary !== null, row.secondary?.value !== null, row.replacementAccepted, row.replacementValid,
+      row.primaryIncluded, row.paste, row.focus, row.order, row.coldForm, row.delayedForm, row.observedColdForm, row.observedDelayedForm])
     const bands: LearnReportMetric['stratum']['startingBand'][] = ['all', ...[...new Set(group.rows.map(row => row.band))].sort()]
     for (const band of bands) for (const weighting of ['capability_episode', 'learner_sensitivity'] as const) {
       cells.push(reportCell({ ...group, weighting, stratum: { ...group.stratum, startingBand: band }, inventory,
@@ -1177,4 +1224,15 @@ export async function buildLearningMeasurementReport(input: {
   }
   return { report: learnMeasurementReportSchema.parse({ version: LEARN_V2_MEASUREMENT_REPORT_VERSION, status: 'sealed',
     reportRunId: metadata.reportRunId, query: metadata.query, provenance: metadata.provenance }), pages }
+}
+
+export async function buildPublishedLearningMeasurementReport(input: Parameters<typeof buildLearningMeasurementReport>[0]) {
+  const contributions = new LearnReportContributions()
+  const computed = await buildLearningMeasurementReport(input, contributions)
+  if (computed.report.status !== 'sealed') return { report: computed.report, pages: [] }
+  const suppress = contributions.requiresComplementarySuppression()
+  const pages = computed.pages.map(page => validateLearnPublishedMeasurementReportCells({ ...page,
+    cells: page.cells.map(cell => learnPublishedReportMetricSchema.parse(publishLearnReportCell(cell, suppress))) }))
+  return { report: learnPublishedMeasurementReportSchema.parse({ ...computed.report,
+    provenance: publishLearnReportProvenance(computed.report.provenance) }), pages }
 }

@@ -383,6 +383,7 @@ export const reportRowFields = {
 export const reportCellFields = {
   ...base, reportRunId: v.id('learnMeasurementReportRuns'), cellKey: v.string(), sequence: v.number(),
   reportVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), ...learnReportMetricValidator.fields,
+  publicationPolicyVersion: v.optional(learnReportMetricValidator.fields.publicationPolicyVersion),
 }
 export const reportViewerGrantFields = {
   ...base, cohortVersion: v.string(), epoch: v.string(), principalBindingVersion: v.string(),

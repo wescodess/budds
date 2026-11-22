@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
 export const REPLAY_VERSION = 'learn-v2.measurement-report-replay.v2'
-export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v2'
+export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v3'
 const MAX_FILE_BYTES = 65 * 1024 * 1024
 
 // Node 24 strips types natively. Resolve only this worktree's shared module
@@ -84,7 +84,7 @@ export async function replayMeasurementReport(input, inputClass) {
     const rows = envelope.rows.map(row => contract.learnReportInputSnapshotSchema.parse(row))
     const reconciliation = contract.reconcileLearnReportSourceRows(envelope.roster, rows)
     if (reconciliation.status === 'incomplete') return result(inputClass, 'incomplete', reconciliation.reasonCodes)
-    const computed = await contract.buildLearningMeasurementReport({
+    const computed = await contract.buildPublishedLearningMeasurementReport({
       reportRunId: report.reportRunId, query: report.query, provenance: report.provenance, roster: envelope.roster, rows,
     })
     if (computed.report.status !== 'sealed') return result(inputClass, computed.report.status, computed.report.reasonCodes)
@@ -99,7 +99,7 @@ export async function replayMeasurementReport(input, inputClass) {
       reportVersion: report.version,
       metricVersions: [contract.VERIFIED_LEARNING_GAIN_VERSION, contract.FALSE_MASTERY_NEXT_DELAYED_VERSION],
       replayVersion: REPLAY_VERSION, cutoffDate: new Date(report.query.cutoff).toISOString(),
-      query: report.query, provenance: report.provenance,
+      query: report.query, provenance: contract.publishLearnReportProvenance(report.provenance),
     }, cells)
   }
   catch {

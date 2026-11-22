@@ -31,6 +31,17 @@ async function v2Claim(index: number, mode: 'linked' | 'unresolved' | 'late' | '
 }
 
 describe('versioned report computation', () => {
+  it('excludes a conflicting delayed form and counts its actual observed pin', async () => {
+    const source = await computationEpisode(1)
+    source.episode.delayed!.formLabel = 'C'
+    const report = cell(await buildLearningMeasurementReport(await computationInput([source.watermark, source.episode])))
+    expect(report.counts.comparablePairs).toBe(0)
+    expect(report.counts.dispositions.invalid_item_novelty).toBe(1)
+    expect(report.reasonCodes).toContain('form_assignment_mismatch')
+    expect(report.reasonCodes).not.toContain('missing_delayed')
+    expect(report.allocations.observedDelayedForms).toMatchObject({ B: 0, C: 1 })
+  })
+
   it('counts legacy, v2 linked, unresolved and late-linked claims exactly once', async () => {
     const legacy = await computationClaim(1)
     const linked = await v2Claim(2)

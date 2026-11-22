@@ -18,7 +18,7 @@
       "sourceVersion": "learn-v2.measurement-report-source.v4",
       "queryVersion": "learn-v2.measurement-report-query.v1",
       "adapterVersion": "fixture.v1",
-      "codeVersion": "learn-v2.report-code.c6.2.v2",
+      "codeVersion": "learn-v2.report-code.c6.2.v3",
       "cutoff": 1793577600000,
       "extractionStartedAt": 1793577600000,
       "extractionEndedAt": 1793577600000,
