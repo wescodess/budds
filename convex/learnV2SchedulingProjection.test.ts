@@ -14,20 +14,20 @@ const modules = import.meta.glob('./**/*.ts')
 beforeEach(() => { vi.stubEnv('LEARN_V2_ENABLED', 'true'); vi.useFakeTimers(); vi.setSystemTime(Date.parse('2030-09-01T12:00:00Z')) })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
-test.each([false, true])('writer-valid scheduling inputs survive preview and Journey reads with responses=%s', async responses => {
+test.each([false, true].flatMap(responses =>
+  Object.entries(schedulingCases).map(([caseName, changes]) => ({ responses, caseName, changes })),
+))('writer-valid scheduling inputs survive preview and Journey reads for $caseName with responses=$responses', async ({ responses, changes }) => {
   policy.responses = responses
-  for (const changes of Object.values(schedulingCases)) {
-    const s = await helpConsumerFixture(modules)
-    await s.t.run(ctx => ctx.db.delete(s.f.rows.learnAssessmentOpportunities))
-    const { id, schedulingInput } = await createSchedulingPreview(s, changes)
-    const stored = (await s.t.run(ctx => ctx.db.get(id)))!
-    const preview = await s.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: id })
-    expect(preview?.inputSnapshot).toBe(stored.inputSnapshot)
-    expect(preview?.resultSnapshot).toBe(stored.resultSnapshot)
-    const mission = await s.owner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
-    expect(JSON.parse(mission?.plan.preview?.inputSnapshot ?? 'null')).toEqual(schedulingInput)
-    expect(JSON.parse(mission?.plan.preview?.resultSnapshot ?? 'null')).toMatchObject({ status: stored.feasibility })
-  }
+  const s = await helpConsumerFixture(modules)
+  await s.t.run(ctx => ctx.db.delete(s.f.rows.learnAssessmentOpportunities))
+  const { id, schedulingInput } = await createSchedulingPreview(s, changes)
+  const stored = (await s.t.run(ctx => ctx.db.get(id)))!
+  const preview = await s.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: id })
+  expect(preview?.inputSnapshot).toBe(stored.inputSnapshot)
+  expect(preview?.resultSnapshot).toBe(stored.resultSnapshot)
+  const mission = await s.owner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
+  expect(JSON.parse(mission?.plan.preview?.inputSnapshot ?? 'null')).toEqual(schedulingInput)
+  expect(JSON.parse(mission?.plan.preview?.resultSnapshot ?? 'null')).toMatchObject({ status: stored.feasibility })
 })
 
 test.each([false, true])('scheduling edits and reflow preserve writer results with responses=%s', async responses => {
