@@ -3,6 +3,7 @@ import { computed, nextTick, ref, shallowRef, useId, watch } from 'vue'
 import { useElementBounding, useEventListener, useIntersectionObserver } from '@vueuse/core'
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, CircleDot, ListOrdered, LoaderCircle, Pencil, Plus, Scissors, Trash2 } from '@lucide/vue'
 import type { LearnCoverage, LearnMapEdit, LearnMapSaveResult, LearnObjectiveDraft, LearnObjectiveSnapshot, LearnSourceOrigin, LearnSourceSnapshot } from '~/types/learn-v2-journey'
+import { isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MINIMUM_MINUTES, splitLearnMapMinutes } from '~/utils/learn-v2-map-editor'
 
 type Depth = LearnObjectiveDraft['depth']
 type Panel = 'time' | 'depth' | 'first' | 'sources'
@@ -24,7 +25,8 @@ const depthLabel: Record<Depth, string> = { foundational: 'Foundation', working:
 const coverageLabel: Record<LearnCoverage, string> = { strong: 'Yes', partial: 'Partly', gap: 'Not yet' }
 const originLabel: Record<LearnSourceOrigin, string> = { folder_document: 'Your folder', user_url: 'Added by you', open_database: 'Open databases', general_web_search: 'Web research' }
 const destructiveGhost = 'text-foreground hover:bg-destructive/10 hover:text-foreground dark:text-destructive dark:hover:bg-destructive/15 dark:hover:text-destructive [&>svg]:text-destructive aria-pressed:bg-destructive/10'
-const chipClass = 'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 font-inter text-xs font-medium text-foreground hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50'
+const chipBaseClass = 'inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 font-inter text-xs font-medium text-foreground'
+const chipClass = `${chipBaseClass} hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50`
 const citeClass = 'inline-flex h-6 min-w-6 shrink-0 items-center justify-center rounded-sm bg-primary px-1 font-inter text-xs font-medium text-primary-foreground'
 const numberClass = 'flex size-6 shrink-0 items-center justify-center rounded-full border border-border font-inter text-xs'
 const checkBoxClass = 'mt-0.5 grid size-4 shrink-0 place-content-center rounded-[4px] border border-input text-transparent shadow-xs peer-checked:border-primary peer-checked:bg-primary peer-checked:text-primary-foreground peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/50 peer-disabled:opacity-50'
@@ -110,7 +112,9 @@ const rows = computed(() => {
 const placed = computed(() => rows.value.filter(row => row.key !== NEW))
 const numberOf = computed(() => new Map(rows.value.map(row => [row.key, row.number])))
 const groups = computed(() => milestones.value.map(milestone => ({ ...milestone, rows: rows.value.filter(row => row.milestoneKey === milestone.key) })))
-const totalMinutes = computed(() => placed.value.reduce((total, row) => total + (Number(row.view.effortMinutes) || 0), 0))
+const splitParts = computed(() => splitting.value && draft.value && isLearnMapMinutes(draft.value.effortMinutes) ? splitLearnMapMinutes(draft.value.effortMinutes) : null)
+const splitAddedMinutes = computed(() => splitParts.value && draft.value ? splitParts.value[0] + splitParts.value[1] - draft.value.effortMinutes : 0)
+const totalMinutes = computed(() => placed.value.reduce((total, row) => total + (Number(row.view.effortMinutes) || 0), 0) + splitAddedMinutes.value)
 const baselineOrder = computed(() => milestones.value.flatMap(milestone => objectives.filter(item => item.milestoneKey === milestone.key)).map(item => item.stableKey).join())
 const selectedNumber = computed(() => selectedKey.value ? numberOf.value.get(selectedKey.value) ?? 0 : 0)
 
@@ -148,7 +152,7 @@ const valid = computed(() => {
   const value = draft.value
   if (!value) return false
   if (removing.value) return true
-  if (!value.title.trim() || !value.capability.trim() || !Number.isInteger(value.effortMinutes) || value.effortMinutes < 5 || value.effortMinutes > 480) return false
+  if (!value.title.trim() || !value.capability.trim() || !isLearnMapMinutes(value.effortMinutes)) return false
   if (value.coverage !== 'gap' && !value.supportingSourceKeys.length) return false
   return value.coverage === 'strong' || Boolean(value.gapReason?.trim())
 })
@@ -456,7 +460,8 @@ function closeOrder() {
                     <div v-if="draft.coverage !== 'strong' && draft.gapReason?.trim()" class="mt-2 flex items-start gap-2 text-sm text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" /><span class="min-w-0">{{ draft.gapReason }}</span></div>
                     <div class="relative mt-3">
                       <div class="flex flex-wrap gap-1.5">
-                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('time')">{{ draft.effortMinutes }} min<span class="sr-only">, change time</span></button>
+                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('time')">{{ splitParts?.[0] ?? draft.effortMinutes }} min<span class="sr-only">{{ splitParts ? ', first part, change time' : ', change time' }}</span></button>
+                        <span v-if="splitParts" :class="[chipBaseClass, 'border-border']" data-testid="learn-v2-map-split-second-time">{{ splitParts[1] }} min<span class="sr-only">, second part</span></span>
                         <button :id="`${uid}-chip-depth`" type="button" :aria-expanded="panel === 'depth'" :class="[chipClass, panel === 'depth' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('depth')">{{ depthLabel[draft.depth] }}<span class="sr-only">, change depth</span></button>
                         <button :id="`${uid}-chip-first`" type="button" :aria-expanded="panel === 'first'" :class="[chipClass, panel === 'first' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('first')">{{ afterLabel(draft) }}<span class="sr-only">, change what to learn first</span></button>
                         <button :id="`${uid}-chip-sources`" type="button" :aria-expanded="panel === 'sources'" :class="[chipClass, panel === 'sources' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" data-testid="learn-v2-objective-sources" @click="togglePanel('sources')">
@@ -464,10 +469,11 @@ function closeOrder() {
                           <template v-else><Plus class="size-3.5" />Add a source</template>
                         </button>
                       </div>
+                      <p v-if="splitAddedMinutes > 0" class="mt-1.5 text-xs text-muted-foreground" data-testid="learn-v2-map-split-added">Splitting adds {{ splitAddedMinutes }} min so each part has the {{ LEARN_MAP_MINIMUM_MINUTES }}-minute minimum.</p>
                       <div v-if="panel" :id="`${uid}-panel`" role="dialog" :aria-labelledby="`${uid}-panel-title`" class="z-10 mt-2 flex w-full flex-col rounded-lg border bg-popover text-popover-foreground shadow-md sm:absolute sm:top-full sm:left-0" :class="panel === 'first' ? 'sm:w-[26rem]' : 'sm:w-96'" @keydown.esc.stop="closePanel">
                         <p :id="`${uid}-panel-title`" class="border-b border-border px-3 py-2.5 text-sm font-medium text-foreground">{{ panel === 'time' ? `Time for objective ${row.number}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}` }}</p>
                         <div role="region" tabindex="0" :aria-label="`${panel === 'time' ? `Time for objective ${row.number}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}`}, scrolls`" class="max-h-[min(22rem,calc(100dvh-14rem))] overflow-y-auto overscroll-contain px-3 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
-                          <label v-if="panel === 'time'" class="block text-sm font-medium text-foreground">Minutes<span class="mt-1.5 block font-normal"><UiInput v-model.number="draft.effortMinutes" type="number" min="5" max="480" step="5" data-testid="learn-v2-objective-effort" /></span><span class="mt-1 block text-xs font-normal text-muted-foreground">5 to 480</span></label>
+                          <label v-if="panel === 'time'" class="block text-sm font-medium text-foreground">Minutes<span class="mt-1.5 block font-normal"><UiInput v-model.number="draft.effortMinutes" type="number" :min="LEARN_MAP_MINIMUM_MINUTES" :max="LEARN_MAP_MAXIMUM_MINUTES" step="5" data-testid="learn-v2-objective-effort" /></span><span class="mt-1 block text-xs font-normal text-muted-foreground">{{ LEARN_MAP_MINIMUM_MINUTES }} to {{ LEARN_MAP_MAXIMUM_MINUTES }}</span></label>
                           <div v-else-if="panel === 'depth'" role="radiogroup" aria-label="Depth" class="flex flex-wrap gap-1 rounded-xl border border-input p-1">
                             <label v-for="(label, value) in depthLabel" :key="value" :class="segmentClass"><input v-model="draft.depth" type="radio" class="sr-only" :name="`${uid}-depth`" :value="value">{{ label }}</label>
                           </div>

@@ -7,7 +7,7 @@ useHead({ title: 'Learning map fixture', htmlAttrs: { lang: 'en' } })
 
 // Static, synthetic map fixtures for design captures. They are not learner data.
 // The production map editor and workspace shell render unchanged.
-const states = ['full', 'order', 'unsaved', 'sources', 'first', 'saving', 'failed', 'changed', 'long', 'empty', 'loading', 'one'] as const
+const states = ['full', 'order', 'unsaved', 'sources', 'first', 'saving', 'failed', 'changed', 'long', 'split', 'empty', 'loading', 'one'] as const
 const route = useRoute()
 const state = states.find(value => value === route.query.state) ?? states[0]
 const ready = ref(false)
@@ -92,6 +92,10 @@ onMounted(async () => {
     await type('[data-testid=learn-v2-objective-effort]', '40')
     await click('[role=dialog] [data-slot=button]')
     await click('[data-testid=learn-v2-save-objective]')
+  }
+  if (state === 'split') {
+    await click('[data-testid=learn-v2-map-select-objective-1]')
+    await click('[data-testid=learn-v2-map-split-objective]')
   }
   if (state === 'long') {
     await click('[data-testid=learn-v2-map-select-objective-5]')

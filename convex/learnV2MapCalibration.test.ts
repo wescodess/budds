@@ -5,7 +5,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
-import { isLearnMapChangedError } from '../app/utils/learn-v2-map-editor'
+import { applyLearnMapEdit, isLearnMapChangedError } from '../app/utils/learn-v2-map-editor'
 
 vi.mock('../server/utils/ai-gateway', () => ({
   classifyAiGatewayFailure: vi.fn(() => 'definitive_failure'),
@@ -195,6 +195,22 @@ describe('server-owned map assessment contracts', () => {
     await f.owner.mutation(api.learnV2MapCalibration.acceptBlueprintMap, { blueprintRevisionId: f.blueprint._id,
       expectedRecordRevision: 2, expectedVoidRevision: 3, idempotencyKey: 'accept-split' })
     await assertPrivateMap(f)
+  })
+
+  test.each([
+    { name: 'default 25-minute held split', minutes: 25, split: true, stored: [['objective-1', 15], ['editor-split', 15]] },
+    { name: '15-minute edit', minutes: 15, split: false, stored: [['objective-1', 15]] },
+  ])('editor adapter output saves through the registered map command: $name', async ({ minutes, split, stored }) => {
+    const f = await editableMap()
+    const args = editCommand(f)
+    const objective = { objectiveKey: 'objective-1', title: 'First ability', capability: 'Edited capability 1', milestoneKey: 'milestone-1', effortMinutes: minutes,
+      depth: 'working' as const, coverage: 'strong' as const, supportingSourceKeys: ['source'], gapSourceKeys: [], prerequisiteKeys: [] }
+    const current = { ...args.candidate, objectives: args.candidate.objectives.map(row => ({ ...row, gapSourceSnapshotIds: row.gapSourceSnapshotIds ?? [] })) }
+    args.candidate = applyLearnMapEdit(current, { kind: 'save_objective', objective, order: args.candidate.objectives.map(row => row.key),
+      ...(split ? { split: { secondTitle: 'First ability: apply' } } : {}) }, { source: f.sourceSnapshotId }, () => 'editor-split') as typeof args.candidate
+    await expect(f.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, args)).resolves.toMatchObject({ status: 'map_review' })
+    const rows = await storedObjectives(f)
+    expect(stored.map(([key]) => [key, rows.find(row => row.stableKey === key)?.estimatedMinutes])).toEqual(stored)
   })
 
   test.each(['missing', 'foreign', 'other-revision', 'removed', 'existing-child', 'padded-existing-child', 'new-parent', 'self'] as const)('rejects a %s split parent atomically', async failure => {

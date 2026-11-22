@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { ConvexError } from 'convex/values'
-import { applyLearnMapEdit, isLearnMapChangedError, LearnMapChangedError, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
+import { applyLearnMapEdit, isLearnMapChangedError, isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MINIMUM_MINUTES, LearnMapChangedError, splitLearnMapMinutes, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
+import { LEARN_V2_BLUEPRINT_LIMITS } from '../../../shared/learn-v2-blueprint'
 
 function candidate(): LearnMapCandidate {
   return {
@@ -59,6 +60,19 @@ describe('Learning map revision transform', () => {
       ['objective-5', 'Objective 5', 20, undefined], ['objective-6', 'Objective 6', 20, undefined],
     ])
     expect(edited.objectives.find(item => item.key === 'objective-3')?.prerequisiteObjectiveKeys).toEqual(['learner-split'])
+  })
+
+  it.each([[25, [15, 15]], [30, [15, 15]], [31, [16, 15]], [15, [15, 15]], [480, [240, 240]]] as const)('splits %i minutes into two parts of at least 15', (minutes, parts) => {
+    const map = candidate()
+    map.objectives[1]!.estimatedMinutes = minutes
+    const edited = applyLearnMapEdit(map, { kind: 'split_objective', objectiveKey: 'objective-2', firstTitle: 'Recognise', secondTitle: 'Apply' }, {}, () => 'learner-split')
+    expect(edited.objectives.slice(1, 3).map(item => item.estimatedMinutes)).toEqual(parts)
+    expect(splitLearnMapMinutes(minutes)).toEqual(parts)
+  })
+
+  it('accepts only whole minutes from 15 to 480, the range the server saves', () => {
+    expect([LEARN_MAP_MINIMUM_MINUTES, LEARN_MAP_MAXIMUM_MINUTES]).toEqual([LEARN_V2_BLUEPRINT_LIMITS.minimumObjectiveMinutes, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveMinutes])
+    expect([5, 14, 14.5, 15, 25, 480, 481, Number.NaN].map(isLearnMapMinutes)).toEqual([false, false, false, true, true, true, false, false])
   })
 
   it('marks a map that changed under the edit as changed elsewhere', () => {

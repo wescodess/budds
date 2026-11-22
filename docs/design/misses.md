@@ -32,6 +32,14 @@ A promotion is done when the new rule, check or surface entry fails or shows the
 
 ## Log
 
+### 2026-11-22 learner-map-editor: time range and Split below the map's 15-minute minimum
+
+- Source: [#514](https://github.com/wescodess/budds/pull/514)
+- Words: "Split into 15 + 15 minutes, showing the increase before Save (Recommended)"
+- Type: not captured
+- Judges: not run
+- Promotion: [split surface entry](surfaces/learner-map-editor-build.json), [split and time-range regressions](../../tests/component/learn-v2/learning-trail.test.ts), [registered save regressions](../../convex/learnV2MapCalibration.test.ts)
+
 ### 2026-11-22 Audio Overview: stale interjection failure restored released media
 
 - Source: [#514](https://github.com/wescodess/budds/pull/514)

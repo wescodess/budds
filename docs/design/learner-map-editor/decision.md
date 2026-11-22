@@ -51,6 +51,15 @@ Owner's words, 2026-11-18: `Tint + border (Recommended)`.
 - In the sources pop-over, the selected answer to "Do your sources cover this?" uses the `DESIGN.md` active state: an amber `--primary` border and the same 8% amber tint as the order pop-over's current row and the sidebar's Learn item, with `text-foreground`. Keyboard focus is the ring only, and Accept learning map stays the only filled amber action in view.
 - This replaces 3a's filled amber segment.
 
+## Time range and Split
+
+Owner's words, 2026-11-22: `Split into 15 + 15 minutes, showing the increase before Save (Recommended)`.
+
+- An objective's time is a whole number of minutes from 15 to 480, the same range the server saves. The time pop-over's hint reads "15 to 480", and Save stays disabled outside it.
+- Split under 30 minutes, such as the default 25, makes two 15-minute parts. Before Save, the time chip and a second chip read 15 min each, and a caption in the editor's hint style says "Splitting adds 5 min so each part has the 15-minute minimum." The bar's total includes the added minutes.
+- Split at 30 minutes or more keeps the total: both parts are at least 15, and the first takes the odd minute, so 31 becomes 16 and 15.
+- Split is still held until Save.
+
 ## Product decisions carried into the build
 
 - Learners never see or edit criteria, rubrics or weights. The editor has no assessment section, and learner copy never mentions one.

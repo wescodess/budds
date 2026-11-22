@@ -9,6 +9,8 @@ export const LEARN_V2_BLUEPRINT_LIMITS = {
   maximumSourcesPerObjective: 10,
   maximumObjectiveSourceLinks: 60,
   maximumPrerequisiteEdges: 60,
+  minimumObjectiveMinutes: 15,
+  maximumObjectiveMinutes: 480,
 } as const
 
 export type LearnV2AssessmentContract = {
@@ -228,7 +230,7 @@ export function validateLearnV2BlueprintCandidate(
       order: integer(item.order, 0, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectives - 1, `Objective ${objectiveKey} order`),
       title: text(item.title, `Objective ${objectiveKey} title`, 200),
       capability: text(item.capability, `Objective ${objectiveKey} capability`, 500),
-      estimatedMinutes: integer(item.estimatedMinutes, 15, 480, `Objective ${objectiveKey} estimated minutes`),
+      estimatedMinutes: integer(item.estimatedMinutes, LEARN_V2_BLUEPRINT_LIMITS.minimumObjectiveMinutes, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveMinutes, `Objective ${objectiveKey} estimated minutes`),
       ...(depth === undefined ? {} : { depth }),
       coverage,
       ...(gapReason === undefined ? {} : { gapReason }),

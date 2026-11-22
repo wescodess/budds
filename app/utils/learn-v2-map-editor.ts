@@ -1,6 +1,18 @@
 import { ConvexError } from 'convex/values'
 import type { LearnMapEdit } from '../types/learn-v2-journey'
 
+export const LEARN_MAP_MINIMUM_MINUTES = 15
+export const LEARN_MAP_MAXIMUM_MINUTES = 480
+
+export function isLearnMapMinutes(minutes: number) {
+  return Number.isInteger(minutes) && minutes >= LEARN_MAP_MINIMUM_MINUTES && minutes <= LEARN_MAP_MAXIMUM_MINUTES
+}
+
+export function splitLearnMapMinutes(minutes: number): [number, number] {
+  if (minutes < LEARN_MAP_MINIMUM_MINUTES * 2) return [LEARN_MAP_MINIMUM_MINUTES, LEARN_MAP_MINIMUM_MINUTES]
+  return [Math.ceil(minutes / 2), Math.floor(minutes / 2)]
+}
+
 export class LearnMapChangedError extends Error {}
 
 export function isLearnMapChangedError(cause: unknown) {
@@ -97,11 +109,12 @@ function splitObjective(candidate: LearnMapCandidate, objectiveKey: string, firs
   const original = candidate.objectives[index]!
   const secondKey = createObjectiveKey(existingKeys, nextKey)
   const second = structuredClone(original)
+  const [firstMinutes, secondMinutes] = splitLearnMapMinutes(original.estimatedMinutes)
   original.title = firstTitle
-  original.estimatedMinutes = Math.max(5, Math.ceil(original.estimatedMinutes / 2))
+  original.estimatedMinutes = firstMinutes
   second.key = secondKey
   second.title = secondTitle
-  second.estimatedMinutes = Math.max(5, Math.floor(second.estimatedMinutes / 2))
+  second.estimatedMinutes = secondMinutes
   second.prerequisiteObjectiveKeys = [original.key]
   second.splitFromObjectiveKey = original.splitFromObjectiveKey ?? original.key
   for (const dependant of candidate.objectives) {

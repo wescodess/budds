@@ -194,6 +194,43 @@ describe('Learner map editor', () => {
     wrapper.unmount()
   })
 
+  it('shows two 15-minute parts and the added time before a short split is saved', async () => {
+    const { wrapper } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    expect(wrapper.find('[data-testid="learn-v2-map-split-added"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    expect(wrapper.get(`[id$="-chip-time"]`).text()).toBe('15 min, first part, change time')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toBe('15 min, second part')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-added"]').text()).toBe('Splitting adds 5 min so each part has the 15-minute minimum.')
+    expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr')
+
+    await wrapper.findAll('[aria-expanded]').find(chip => chip.text().includes('change time'))!.trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-effort"]').setValue('31')
+    expect(wrapper.get(`[id$="-chip-time"]`).text()).toContain('16 min')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toContain('15 min')
+    expect(wrapper.find('[data-testid="learn-v2-map-split-added"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    expect(wrapper.find('[data-testid="learn-v2-map-split-second-time"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('holds time to the 15 to 480 minute range the map saves with', async () => {
+    const { wrapper } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    await wrapper.findAll('[aria-expanded]').find(chip => chip.text().includes('change time'))!.trigger('click')
+    const input = wrapper.get('[data-testid="learn-v2-objective-effort"]')
+    expect(input.attributes()).toMatchObject({ min: '15', max: '480' })
+    expect(wrapper.get('[role="dialog"]').text()).toContain('15 to 480')
+    for (const [value, enabled] of [['5', false], ['14', false], ['15', true], ['480', true], ['481', false]] as const) {
+      await input.setValue(value)
+      expect(wrapper.get('[data-testid="learn-v2-save-objective"]').attributes('disabled') === undefined).toBe(enabled)
+    }
+    wrapper.unmount()
+  })
+
   it('discards a held split on Cancel', async () => {
     const { wrapper, save } = await mountTrail()
 
