@@ -22,6 +22,7 @@ export default defineConfig({
       '@@': fileURLToPath(new URL('.', import.meta.url)),
       '~': fileURLToPath(new URL('./app', import.meta.url)),
       '@': fileURLToPath(new URL('./app', import.meta.url)),
+      '#shared': fileURLToPath(new URL('./shared', import.meta.url)),
       '#convex/api': fileURLToPath(new URL('./convex/_generated/api.js', import.meta.url)),
     },
   },

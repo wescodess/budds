@@ -1,4 +1,7 @@
 import { getErrorMessage } from '../../../shared/errors'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { teachingDeliveryValue, needsTeachingDelivery } from '../../utils/teaching-delivery'
+import { assertTeachingCommand, loadTeachingScope, assertTeachingSourcePins } from '../../utils/teaching-source-scope'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
 import { api } from '../../../convex/_generated/api'
@@ -17,6 +20,7 @@ import {
   requestInterjectionWorker,
   type InterjectionArtifactEvidence,
 } from '../../utils/audio-overview-interjection-worker'
+import { createHelpAdmissionGuard } from '../../utils/learn-v2-help-admission'
 
 const SCRIPT_MODEL = 'google/gemini-2.5-flash'
 const MAX_SEARCH_RESULTS = 10
@@ -42,7 +46,8 @@ async function sha256Base64Url(value: string): Promise<string> {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-type V2Projection = Doc<'audioOverviewInterjectionsV2'> & {
+type V2Projection = Pick<Doc<'audioOverviewInterjectionsV2'>, '_id' | 'insertedAfterTurnIndex' | 'model'> & {
+  answerAvailability?: 'available' | 'unavailable'
   utterances: Array<{ text: string }>
   artifact: {
     artifactId: Id<'audioOverviewAudioArtifacts'>
@@ -53,6 +58,7 @@ type V2Projection = Doc<'audioOverviewInterjectionsV2'> & {
 }
 
 function v2Response(interjection: V2Projection) {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && (interjection.answerAvailability === 'unavailable' || !interjection.artifact || !interjection.utterances.length)) throw createError({ statusCode: 403, message: 'Teaching input is unavailable' })
   const artifactUrl = `/api/audio-overview/interjections/${interjection._id}/media`
   const durationMs = interjection.artifact?.durationMs ?? 0
   return {
@@ -81,6 +87,7 @@ async function runV2Interjection(
   userId: string,
   overview: Pick<Doc<'audioOverviews'>, 'title'>,
   body: { overviewId: string, insertedAfterTurnIndex: number, question: string },
+  authorizeHelp: (delivery?: boolean) => Promise<void>,
 ) {
   const orchestrationToken = getAudioOverviewWorkerToken(event)
   const suppliedKey = getRequestHeader(event, 'idempotency-key')?.trim()
@@ -97,9 +104,13 @@ async function runV2Interjection(
     throw createError({ statusCode: 409, message: 'Audio interjection generation is not available' })
   }
   if (reservation.status === 'ready') {
-    const existing = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
+    await authorizeHelp()
+    const existing = needsTeachingDelivery()
+      ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+      : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!existing) throw createError({ statusCode: 404, message: 'Interjection not found' })
-    return v2Response(existing)
+    const response = v2Response(existing)
+    return response
   }
 
   let ownsScripting = false
@@ -112,20 +123,32 @@ async function runV2Interjection(
     })
     ownsScripting = claim.claimed
     if (!claim.claimed) {
-      const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+      await authorizeHelp()
+      const current = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviewInterjectionsV2.getStatusForOwner : api.audioOverviewInterjectionsV2.getForOwner, {
         interjectionId: reservation.interjectionId,
       })
-      if (current?.status === 'ready') return v2Response(current)
+      if (current?.status === 'ready') {
+        const delivered = needsTeachingDelivery()
+          ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, { interjectionId: reservation.interjectionId, idempotencyKey }))
+          : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
+        if (!delivered) throw createError({ statusCode: 404, message: 'Interjection not found' })
+        const response = v2Response(delivered)
+        return response
+      }
       throw createError({ statusCode: 409, message: 'Audio interjection generation is already in progress' })
     }
+    const teachingScope = await loadTeachingScope(convexClient, { documentIds: reservation.sources.map(source => source.documentId) })
+    for (const source of reservation.sources) assertTeachingSourcePins(teachingScope, { documentId: source.documentId, contentHash: source.contentHash, sourceRevision: source.revision })
     const allowedDocuments = reservation.sources.map(source => String(source.documentId))
     const allowedSourceByDocument = new Map(reservation.sources.map(source => [String(source.documentId), source]))
+    await authorizeHelp()
     const result = await searchDocuments({
       query: body.question,
       userId,
       max_num_results: MAX_SEARCH_RESULTS,
       score_threshold: 0.05,
       filterDocIds: allowedDocuments,
+      teachingScope,
     })
     const indexedChunks = result.data ?? []
     let rejectedFrozenIdentity = false
@@ -151,8 +174,10 @@ async function runV2Interjection(
       })
     }
 
+    await authorizeHelp()
     const completion = await generateCompletion({
       model: SCRIPT_MODEL,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       messages: buildV2InterjectionPrompt({ question: body.question, overviewTitle: overview.title, sources: evidence }),
       temperature: 0.4,
       max_tokens: 1_500,
@@ -173,8 +198,10 @@ async function runV2Interjection(
         evidenceQuotes: utterance.evidenceQuotes,
       }],
     }))
+    await authorizeHelp()
     const verificationCompletion = await generateCompletion({
       model: SCRIPT_MODEL,
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       messages: buildClaimEntailmentPrompt(entailmentInput),
       temperature: 0,
       max_tokens: Math.min(1_000, Math.max(500, entailmentInput.length * 100)),
@@ -216,6 +243,7 @@ async function runV2Interjection(
     if (!renderClaim.claimed) {
       throw createError({ statusCode: 409, message: 'Audio interjection rendering was already attempted' })
     }
+    await authorizeHelp()
     workerAttempted = true
     const render = await requestInterjectionWorker<{ artifact: InterjectionArtifactEvidence }>(event, 'POST', {
       jobId: String(reservation.jobId),
@@ -224,7 +252,7 @@ async function runV2Interjection(
       utterances: script.utterances,
     })
     const renderedArtifact = render.artifact
-    const current = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
+    const current = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviewInterjectionsV2.getStatusForOwner : api.audioOverviewInterjectionsV2.getForOwner, {
       interjectionId: reservation.interjectionId,
     })
     if (!current || current.status !== 'rendering') {
@@ -245,11 +273,12 @@ async function runV2Interjection(
       orchestrationToken,
       artifact: renderedArtifact,
     })
-    const published = await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, {
-      interjectionId: reservation.interjectionId,
-    })
+    const published = needsTeachingDelivery() ? teachingDeliveryValue(await convexClient.mutation(api.audioOverviewInterjectionsV2.getForOwnerDelivery, {
+      interjectionId: reservation.interjectionId, idempotencyKey,
+    })) : await convexClient.query(api.audioOverviewInterjectionsV2.getForOwner, { interjectionId: reservation.interjectionId })
     if (!published || published.status !== 'ready') throw createError({ statusCode: 502, message: 'Interjection publication failed' })
-    return v2Response(published)
+    const response = v2Response(published)
+    return response
   }
   catch (error) {
     if (workerAttempted && !workerCleanupAttempted) {
@@ -263,7 +292,7 @@ async function runV2Interjection(
       await convexClient.mutation(api.audioOverviewInterjectionsV2.fail, {
         interjectionId: reservation.interjectionId,
         orchestrationToken,
-        error: getErrorMessage(error, 'Audio interjection generation failed'),
+        error: LEARN_MEASUREMENT_CAPABILITIES.responses ? 'Audio interjection generation failed' : getErrorMessage(error, 'Audio interjection generation failed'),
       }).catch(() => {})
     }
     throw error
@@ -298,6 +327,7 @@ export default defineEventHandler(async (event) => {
   if (!body?.overviewId) {
     throw createError({ statusCode: 400, message: 'overviewId is required' })
   }
+  assertTeachingCommand(body, { overviewId: 'string', insertedAfterTurnIndex: 'number', question: 'string' })
   const question = (body.question ?? '').trim().slice(0, 500)
   if (!question) {
     throw createError({ statusCode: 400, message: 'question is required' })
@@ -307,8 +337,11 @@ export default defineEventHandler(async (event) => {
     : 0
 
   const convexClient = makeConvexClient(event)
+  const authorizeHelp = createHelpAdmissionGuard(event, { kind: 'audio',
+    scope: { references: [{ kind: 'audio_overview', id: body.overviewId as Id<'audioOverviews'> }] } }, convexClient)
+  await authorizeHelp()
 
-  const overview = await convexClient.query(api.audioOverviews.getWithTurns, {
+  const overview = await convexClient.query(LEARN_MEASUREMENT_CAPABILITIES.responses ? api.audioOverviews.getInterjectionMetadata : api.audioOverviews.getWithTurns, {
     id: body.overviewId as Id<'audioOverviews'>,
   })
   if (!overview) {
@@ -323,7 +356,7 @@ export default defineEventHandler(async (event) => {
       overviewId: body.overviewId,
       insertedAfterTurnIndex: afterIndex,
       question,
-    })
+    }, authorizeHelp)
   }
 
   // Version 1 remains readable and playable, but Ask must never create new

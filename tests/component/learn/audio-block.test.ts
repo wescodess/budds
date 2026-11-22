@@ -2,10 +2,11 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const mockOverviewData = ref<any>(null)
+const mockOverviewError = ref<any>(null)
 
 mockNuxtImport('useConvexQuery', () => {
   return (_apiRef: any, _args?: any) => {
-    return { data: mockOverviewData }
+    return { data: mockOverviewData, error: mockOverviewError }
   }
 })
 
@@ -29,6 +30,31 @@ const sampleOverview = {
 describe('AudioBlock', () => {
   beforeEach(() => {
     mockOverviewData.value = null
+    mockOverviewError.value = null
+  })
+
+  it('matches dev while responses are off: a stale SSR error never hides the overview that arrives later', async () => {
+    mockOverviewError.value = new Error('SSR query failed')
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    expect(wrapper.text()).toContain('Loading audio data')
+    mockOverviewData.value = sampleOverview
+    await nextTick()
+    expect(mockOverviewError.value).not.toBeNull()
+    expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
+    expect(wrapper.find('audio').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
+  })
+
+  it('ignores denial-shaped errors while responses are off', async () => {
+    mockOverviewData.value = sampleOverview
+    mockOverviewError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
+    const Comp = await import(componentPath)
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
   })
 
   it('shows loading state when no entityId', async () => {

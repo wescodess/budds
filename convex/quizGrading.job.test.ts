@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 import { gradeAttempt as scheduledEntry } from './quizGrading'
 import { generateCompletion, serializeCompletionRequest, type GenerateParams, type GenerateResponse } from '../server/utils/ai-gateway'
 import { QUIZ_GRADER_POLICY, quizGradingRequestBytes, QUIZ_GRADING_MAX_REQUEST_BYTES, type QuizGradingInput } from '../server/utils/quiz-grading'
@@ -52,7 +53,7 @@ afterEach(() => {
 })
 
 async function createQuiz(count = 1, extra: Question[] = []) {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const user = t.withIdentity(USER)
   const folderId = await user.mutation(api.folders.createFolder, { name: 'Biology' })
   const { quizId } = await user.mutation(api.quizzes.createWithQuestions, {
@@ -138,7 +139,7 @@ async function expectHistoryGrade(fixture: Fixture, attemptId: Id<'quizAttempts'
 }
 
 async function createCourseQuiz() {
-  const t = convexTest(schema, modules)
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
   const user = t.withIdentity(USER)
   const folderId = await user.mutation(api.folders.createFolder, { name: 'Course biology' })
   const { courseId } = await user.mutation(api.courses.create, { title: 'Cell division', sourceType: 'web-only', folderId })
@@ -417,7 +418,8 @@ describe('course parent grading fence', () => {
     await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, userId: OTHER.tokenIdentifier })).rejects.toThrow('Course not found')
     await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, { ...input, folderId: otherFolder })).rejects.toThrow('Course not found')
     expect(await fixture.t.run(ctx => ctx.db.query('quizzes').withIndex('by_folderId', q => q.eq('folderId', fixture.folderId)).take(10))).toEqual(before)
-    const { quizId } = await fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, input)
+    await expect(fixture.t.mutation(internal.quizzes.createCourseScopedQuiz, input)).rejects.toThrow('Unauthenticated')
+    const { quizId } = await fixture.user.mutation(internal.quizzes.createCourseScopedQuiz, input)
     expect(await fixture.t.run(ctx => ctx.db.get(quizId))).toMatchObject({
       courseId: fixture.courseId, courseScoped: true, userId: USER.tokenIdentifier, folderId: fixture.folderId,
     })
@@ -827,9 +829,8 @@ describe('history grading attention', () => {
       })),
     })).toBe(1)
     await expectHistoryGrade(fixture, attemptId, { score: 0, gradingStatus: 'settled', gradingNeedsAttention: true })
-    const results = await fixture.user.query(api.quizzes.getAttemptResults, { attemptId })
-    expect(results?.results.map(result => result.questionId)).toEqual([questionId])
-    expect(results?.grading).toEqual({ pending: 0, needsReview: 1, unavailable: 0 })
+    await expect(fixture.user.query(api.quizzes.getAttemptResults, { attemptId })).rejects.toThrow(/unavailable/)
+    expect((await assessments(fixture, attemptId)).find(row => row.questionId === questionId)?.learnerAnswerSnapshot).toBe(answer.userAnswer)
     const eligible = (await assessments(fixture, attemptId)).find(row => row.questionId === questionId)!
     await fixture.user.mutation(api.quizGrading.selfAssess, { attemptAnswerId: eligible.attemptAnswerId, verdict: 'correct' })
     await expectHistoryGrade(fixture, attemptId, { score: 1, gradingStatus: 'settled', gradingNeedsAttention: false })
@@ -1453,13 +1454,14 @@ describe('Stage B folder ownership and deletion phases', () => {
     await expect(fixture.user.mutation(api.quizzes.submitAttempt, { quizId: fixture.quizId, answers: [] })).rejects.toThrow(/unavailable/)
   })
 
-  test('legacy flag-off acceptance retains its behavior on an orphaned folder', async () => {
+  test('legacy flag-off acceptance rejects an orphaned folder without creating grading state', async () => {
     vi.stubEnv('QUIZ_GRADING_MODE', 'off')
     const fixture = await createQuiz()
     const quiz = (await fixture.t.run(ctx => ctx.db.get(fixture.quizId)))!
     await fixture.user.mutation(api.folders.deleteFolder, { id: quiz.folderId })
-    const attemptId = await finish(fixture, undefined, 'submitAttempt')
-    expect((await assessments(fixture, attemptId))[0]!.rubricVersion).toBe('quiz.free_response_assessment.v1')
+    await expect(finish(fixture, undefined, 'submitAttempt')).rejects.toThrow('Teaching input is unavailable')
+    expect(await fixture.t.run(ctx => ctx.db.query('quizAttempts').withIndex('by_quizId', q => q.eq('quizId', fixture.quizId)).take(1))).toEqual([])
+    expect(await fixture.t.run(ctx => ctx.db.query('quizAnswerAssessments').take(1))).toEqual([])
     expect(await gradingCounters(fixture)).toEqual([])
   })
 })
@@ -1475,4 +1477,9 @@ test('a normal 200-answer model attempt fits exactly 25 daily dispatch reservati
   const counters = await gradingCounters(fixture)
   expect(counters.find(row => row.route === 'quiz-grading/dispatch-user')!.count).toBe(25)
   expect(counters.find(row => row.route === 'quiz-grading/dispatch-shared')!.count).toBe(25)
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

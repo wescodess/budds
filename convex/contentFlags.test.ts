@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -80,7 +81,7 @@ async function seedFlashcard(t: any) {
 
 describe('contentFlags - quiz question flagging', () => {
   test('flags a quiz question with corrected answer', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { questionId } = await seedQuiz(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -98,7 +99,7 @@ describe('contentFlags - quiz question flagging', () => {
   })
 
   test('rejects empty corrected answer', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { questionId } = await seedQuiz(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -111,7 +112,7 @@ describe('contentFlags - quiz question flagging', () => {
   })
 
   test('rejects flagging another user\'s question', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { questionId } = await seedQuiz(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -124,7 +125,7 @@ describe('contentFlags - quiz question flagging', () => {
   })
 
   test('unflags a quiz question', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { questionId } = await seedQuiz(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -143,7 +144,7 @@ describe('contentFlags - quiz question flagging', () => {
 
 describe('contentFlags - flashcard flagging', () => {
   test('flags a flashcard with corrected definition', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { cardId } = await seedFlashcard(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -159,7 +160,7 @@ describe('contentFlags - flashcard flagging', () => {
   })
 
   test('rejects empty corrected definition', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { cardId } = await seedFlashcard(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -172,7 +173,7 @@ describe('contentFlags - flashcard flagging', () => {
   })
 
   test('rejects flagging another user\'s card', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { cardId } = await seedFlashcard(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -185,7 +186,7 @@ describe('contentFlags - flashcard flagging', () => {
   })
 
   test('unflags a flashcard', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { cardId } = await seedFlashcard(t)
     const asUser = t.withIdentity(USER_A)
 
@@ -204,7 +205,7 @@ describe('contentFlags - flashcard flagging', () => {
 
 describe('contentFlags - flag rate query', () => {
   test('returns null for unauthenticated user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const courseId = await t.run(async (ctx: any) => {
       const folderId = await ctx.db.insert('folders', {
         userId: USER_A.tokenIdentifier,
@@ -233,7 +234,7 @@ describe('contentFlags - flag rate query', () => {
   })
 
   test('returns correct non-zero flag rate when items are flagged', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
 
     const folderId = await t.run(async (ctx: any) => {
       return await ctx.db.insert('folders', {
@@ -312,7 +313,7 @@ describe('contentFlags - flag rate query', () => {
   })
 
   test('returns zero flag rate for course with no flagged items', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
 
     const folderId = await t.run(async (ctx: any) => {
       return await ctx.db.insert('folders', {

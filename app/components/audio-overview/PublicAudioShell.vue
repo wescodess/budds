@@ -1,8 +1,10 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
 import { toast } from 'vue-sonner'
 import { getErrorMessage } from '~~/shared/errors'
 import { ref, computed, watch } from 'vue'
-import { Pause, Play, Rewind, FastForward, Download } from '@lucide/vue'
+import { Pause, Play, Rewind, FastForward, Download, CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { buildContinuousPlaybackTurns, createAudioOverviewPlayback, type AudioOverviewTurn } from '~/composables/useAudioOverviewStore'
 
@@ -12,18 +14,27 @@ const props = defineProps<{
 
 const tokenRef = computed(() => props.token)
 
-const { data: overviewData } = useConvexQuery(
+const overviewQuery = useTeachingQuery(
   api.audioOverviews.getByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: turnUrlData } = useConvexQuery(
+const turnUrlQuery = useTeachingQuery(
   api.audioOverviews.getTurnUrlsByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
-const { data: v2PlaybackData } = useConvexQuery(
+const v2PlaybackQuery = useTeachingQuery(
   api.audioOverviewV2.getPlaybackByShareToken,
   computed(() => ({ token: tokenRef.value })),
 )
+const { data: overviewData } = overviewQuery
+const { data: turnUrlData } = turnUrlQuery
+const { data: v2PlaybackData } = v2PlaybackQuery
+const readQueries = [overviewQuery, turnUrlQuery, v2PlaybackQuery]
+const readFailure = computed(() => readQueries.map(query => query.failure.value).find(Boolean) ?? null)
+const readBlocked = computed(() => Boolean(readFailure.value))
+function retryRead() {
+  for (const query of readQueries) if (query.failure.value) void query.refresh?.()
+}
 
 type PublicOverview = {
   title: string
@@ -58,7 +69,7 @@ type V2PublicPlayback = {
   }>
 }
 
-const v2Playback = computed<V2PublicPlayback | null>(() => (v2PlaybackData.value as V2PublicPlayback | null | undefined) ?? null)
+const v2Playback = computed<V2PublicPlayback | null>(() => readBlocked.value ? null : (v2PlaybackData.value as V2PublicPlayback | null | undefined) ?? null)
 const overview = computed<PublicOverview | null>(() => {
   if (v2Playback.value) {
     return {
@@ -76,7 +87,7 @@ const overview = computed<PublicOverview | null>(() => {
       publishedAt: v2Playback.value.publishedAt,
     }
   }
-  return (overviewData.value as PublicOverview | null | undefined) ?? null
+  return readBlocked.value ? null : (overviewData.value as PublicOverview | null | undefined) ?? null
 })
 const isContinuousPlayback = computed(() => v2Playback.value?.schemaVersion === 2)
 const continuousMediaUrl = computed(() => v2Playback.value
@@ -84,7 +95,7 @@ const continuousMediaUrl = computed(() => v2Playback.value
   : null)
 const turns = computed<AudioOverviewTurn[]>(() => overview.value?.turns ?? [])
 const hostNames = computed(() => overview.value?.hostNames ?? { hostA: 'Host A', hostB: 'Host B' })
-const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value
+const turnUrls = computed<(string | null)[]>(() => isContinuousPlayback.value || readBlocked.value
   ? []
   : (turnUrlData.value as (string | null)[] | null | undefined) ?? [])
 const sourceFilenames = computed<string[]>(() => overview.value?.sourceFilenames ?? [])
@@ -104,16 +115,20 @@ watch([audioEl, preloadEl], ([el, pre]) => {
   if (el) attachAudio(el, pre)
 }, { immediate: true })
 
+watch(readBlocked, (blocked) => {
+  if (blocked && import.meta.client) playback.dismiss()
+}, { immediate: true, flush: 'sync' })
+
 const loading = computed(() => overviewData.value === undefined || v2PlaybackData.value === undefined)
 const notFound = computed(() => overviewData.value === null && v2PlaybackData.value === null)
 
 const PUBLIC_SENTINEL_ID = 'public-playback' as unknown as import('../../../convex/_generated/dataModel').Id<'audioOverviews'>
 
 watch(
-  [() => turns.value, () => turnUrls.value, () => overview.value, () => continuousMediaUrl.value],
-  ([nextTurns, nextUrls, ov, nextContinuousUrl]) => {
+  [() => turns.value, () => turnUrls.value, () => overview.value, () => continuousMediaUrl.value, () => readBlocked.value],
+  ([nextTurns, nextUrls, ov, nextContinuousUrl, blocked]) => {
     if (!import.meta.client) return
-    if (!ov) return
+    if (blocked || !ov) return
     if (nextTurns.length === 0) return
     if (isContinuousPlayback.value && !nextContinuousUrl) return
     if (!isContinuousPlayback.value && nextTurns.length !== nextUrls.length) return
@@ -177,7 +192,7 @@ const hasMissingTurnUrl = computed(() => {
 
 const downloading = ref(false)
 async function handleDownload() {
-  if (downloading.value) return
+  if (downloading.value || readBlocked.value) return
   downloading.value = true
   try {
     const { downloadOverview } = useAudioOverviewDownload()
@@ -222,7 +237,15 @@ const ringMiddleStyle = computed(() => ({
 
 <template>
   <div
-    v-if="loading"
+    v-if="readFailure"
+    class="flex min-h-[60vh] flex-1 items-center justify-center p-6"
+  >
+    <p v-if="!readFailure.retryable" role="status" data-testid="audio-read-paused" class="flex max-w-md items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+    <div v-else role="alert" data-testid="audio-read-error" class="max-w-md rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load this audio overview.</p><button type="button" data-testid="audio-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="retryRead">Try again</button></div>
+  </div>
+
+  <div
+    v-else-if="loading"
     data-testid="public-audio-loading"
     class="flex min-h-[60vh] flex-1 items-center justify-center text-muted-foreground"
   >

@@ -3,6 +3,10 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
+import { enrollProducer, protectProducerArtifact } from '../tests/fixtures/learn-v2-producer-lineage'
+import { prepareAndRegisterInstructionalArtifacts, normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
+import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION } from '../shared/learn-v2-artifact-lineage'
 import type { Id } from './_generated/dataModel'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -113,7 +117,7 @@ async function reserveInterjectionTask(
 
 describe('audioOverviewInterjections.create', () => {
   test('[P0] rejects unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser: _asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -129,7 +133,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects callers who do not own the overview', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser: _asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -146,7 +150,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects when overview is not status=ready', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -163,7 +167,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects empty answerTurns', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     await expect(
@@ -178,7 +182,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] rejects empty/whitespace question', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -194,7 +198,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] clamps insertedAfterTurnIndex into valid range', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const answerTurns = await sampleAnswerTurns(t)
     const highTaskId = await reserveInterjectionTask(t, folderId)
@@ -225,7 +229,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] persists question truncated to 500 chars', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -243,7 +247,7 @@ describe('audioOverviewInterjections.create', () => {
   })
 
   test('[P0] stores answerTurns with full shape', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -264,14 +268,14 @@ describe('audioOverviewInterjections.create', () => {
 
 describe('audioOverviewInterjections.listByOverview', () => {
   test('[P0] returns [] for unauthenticated callers', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     const result = await t.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: overviewId })
     expect(result).toEqual([])
   })
 
   test('[P0] returns [] for non-owners', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { overviewId } = await createReadyOverview(t, USER_A)
     const asB = t.withIdentity(USER_B)
     const result = await asB.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: overviewId })
@@ -279,7 +283,7 @@ describe('audioOverviewInterjections.listByOverview', () => {
   })
 
   test('[P0] returns interjections in ascending insertion order', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const answerTurns = await sampleAnswerTurns(t)
 
@@ -312,7 +316,7 @@ describe('audioOverviewInterjections.listByOverview', () => {
 
 describe('audioOverviewInterjections.deleteInterjection', () => {
   test('[P0] rejects non-owners', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -329,7 +333,7 @@ describe('audioOverviewInterjections.deleteInterjection', () => {
   })
 
   test('[P0] schedules bounded deletion and releases upload ownership', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, folderId, overviewId } = await createReadyOverview(t, USER_A)
     const taskId = await reserveInterjectionTask(t, folderId)
     const answerTurns = await sampleAnswerTurns(t)
@@ -352,4 +356,76 @@ describe('audioOverviewInterjections.deleteInterjection', () => {
     }
     vi.useRealTimers()
   })
+})
+
+
+async function enrolledInterjection() {
+  const t = withOrdinaryTeachingSources(convexTest(schema, modules))
+  const f = await createReadyOverview(t, USER_A)
+  await enrollProducer(t, USER_A.tokenIdentifier, [])
+  await f.asUser.run(ctx => prepareAndRegisterInstructionalArtifacts(ctx, { artifacts: [{ artifact: { kind: 'audio_overview', id: f.overviewId }, key: 'whole', sources: [], origins: [] }] }))
+  const taskId = await reserveInterjectionTask(t, f.folderId)
+  const answerTurns = await sampleAnswerTurns(t)
+  await bindClaimsToTask(t, answerTurns, taskId)
+  const args = { audioOverviewId: f.overviewId, taskId, insertedAfterTurnIndex: 0, question: 'My independent question', answerTurns }
+  return { t, ...f, args }
+}
+
+describe('legacy Interjection producer and replay admission', () => {
+  test('unenrolled publication rejects a changed frozen object before consuming claims', async () => {
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
+    const f = await createReadyOverview(t, USER_A)
+    const taskId = await reserveInterjectionTask(t, f.folderId)
+    const answerTurns = await sampleAnswerTurns(t)
+    await bindClaimsToTask(t, answerTurns, taskId)
+    const documentId = await t.run(async ctx => {
+      const id = await ctx.db.insert('documents', { userId: USER_A.tokenIdentifier, folderId: f.folderId, filename: 'owned.txt', status: 'success', fileSize: 1, r2Key: 'owned/replacement', contentHash: 'a'.repeat(64), sourceRevision: 'source.r1' })
+      await ctx.db.patch(f.overviewId, { scopeDocIds: [id], sourceDocumentIds: [id] })
+      const task = (await ctx.db.get(taskId))!
+      await ctx.db.patch(taskId, { audioOverviewRequest: { ...task.audioOverviewRequest!, scope: { mode: 'explicit', documentIds: [id] }, documents: [{ documentId: id, folderId: f.folderId, filename: 'owned.txt', r2Key: 'owned/original', contentHash: 'a'.repeat(64), sourceRevision: 'source.r1' }] } })
+      return id
+    })
+    const args = { audioOverviewId: f.overviewId, taskId, insertedAfterTurnIndex: 0, question: 'Own question', answerTurns }
+    await expect(f.asUser.mutation(api.audioOverviewInterjections.create, args)).rejects.toThrow('Teaching input is unavailable')
+    expect(await t.run(ctx => ctx.db.query('audioOverviewInterjections').withIndex('by_audioOverview', q => q.eq('audioOverviewId', f.overviewId)).take(1))).toEqual([])
+    expect((await t.run(ctx => ctx.db.get(answerTurns[0]!.uploadClaimId)))?.consumedAt).toBeUndefined()
+    await t.run(ctx => ctx.db.patch(documentId, { r2Key: 'owned/original' }))
+    expect(await f.asUser.mutation(api.audioOverviewInterjections.create, args)).toHaveProperty('interjectionId')
+    expect(await t.run(ctx => ctx.db.query('learnArtifactLineages').take(1))).toEqual([])
+  })
+  test('ordinary publication registers atomically and exact task replay writes no second receipt', async () => {
+    const f = await enrolledInterjection()
+    const result = await f.asUser.mutation(api.audioOverviewInterjections.create, f.args)
+    const catalog = await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', USER_A.tokenIdentifier)).unique())
+    expect(await f.asUser.mutation(api.audioOverviewInterjections.create, f.args)).toEqual(result)
+    expect(await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', USER_A.tokenIdentifier)).unique())).toEqual(catalog)
+    expect((await f.asUser.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: f.overviewId }))[0]).toMatchObject({ question: f.args.question, answerAvailability: 'available' })
+    expect(await f.asUser.query(api.audioOverviewInterjections.getTurnUrls, { id: result.interjectionId })).toHaveLength(3)
+  })
+  test.each(['measurement', 'private_scoring', 'unknown'] as const)('%s parent or answer cannot pass through publication, text or media replay', async classification => {
+    for (const parent of [false, true]) {
+      const f = await enrolledInterjection()
+      const result = await f.asUser.mutation(api.audioOverviewInterjections.create, f.args)
+      await protectProducerArtifact(f.t, USER_A.tokenIdentifier, parent ? { kind: 'audio_overview', id: f.overviewId } : { kind: 'audio_interjection', id: result.interjectionId }, classification)
+      const catalog = (await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', USER_A.tokenIdentifier)).unique()))!
+      await f.t.run(ctx => ctx.db.patch(catalog._id, { measurementCapability: { enabled: false } }))
+      await expect(f.asUser.mutation(api.audioOverviewInterjections.create, f.args)).rejects.toThrow(/unavailable/)
+      const rows = await f.asUser.query(api.audioOverviewInterjections.listByOverview, { audioOverviewId: f.overviewId })
+      expect(rows[0]).toMatchObject({ question: f.args.question, answerTurns: [], answerAvailability: 'unavailable' })
+      await expect(f.asUser.query(api.audioOverviewInterjections.getTurnUrls, { id: result.interjectionId })).rejects.toThrow(/unavailable/)
+    }
+  })
+  test('a late reserved case rolls back answer publication and upload-claim consumption', async () => {
+    const f = await enrolledInterjection()
+    await f.t.run(async ctx => ctx.db.insert('learnAssessmentCases', { userId: USER_A.tokenIdentifier, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: 1, caseKey: 'retired-interjection', usageClass: 'unknown', reservedAt: 0, identityPolicyVersion: LEARN_ARTIFACT_CASE_IDENTITY_VERSION, ...await normalizedInstructionalCaseFingerprints('Retired task', 'Retired answer') }))
+    await expect(f.asUser.mutation(api.audioOverviewInterjections.create, f.args)).rejects.toThrow(/reservation check/)
+    expect(await f.t.run(ctx => ctx.db.query('audioOverviewInterjections').withIndex('by_audioOverview', q => q.eq('audioOverviewId', f.overviewId)).take(1))).toEqual([])
+    expect((await f.t.run(ctx => ctx.db.get(f.args.taskId)))?.status).toBe('running')
+    expect((await f.t.run(ctx => ctx.db.get(f.args.answerTurns[0]!.uploadClaimId)))?.consumedAt).toBeUndefined()
+  })
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

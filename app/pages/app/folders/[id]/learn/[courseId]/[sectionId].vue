@@ -1,6 +1,10 @@
 <script setup lang="ts">
+import { teachingReadFailure, useTeachingQuery, type TeachingReadFailure } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
+
 import { getErrorMessage } from '~~/shared/errors'
 import type { Doc, Id } from '~~/convex/_generated/dataModel'
+import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { toast } from 'vue-sonner'
 import { injectFolderContext } from '~/composables/useFolderPageContext'
@@ -16,27 +20,50 @@ const courseId = computed(() => route.params.courseId as Id<'courses'>)
 const sectionId = computed(() => route.params.sectionId as Id<'courseSections'>)
 
 const { isOnline } = useOnlineStatus()
-const { cacheSectionContent, getCachedSection } = useOfflineCache()
+const { cacheSectionContent, getCachedSection, forgetCachedCourse } = useOfflineCache()
 const { isSyncing, pendingCount } = useOfflineSync()
 
 const offlineData = ref<CachedSection | null>(null)
 const usingOfflineData = ref(false)
+const offlineRevoked = ref(false)
+const cacheFailure = shallowRef<TeachingReadFailure | null>(null)
+watch([courseId, sectionId], () => { cacheFailure.value = null }, { flush: 'sync' })
 
 const courseQuery = import.meta.client
-  ? useConvexQuery(api.courses.get, computed(() => ({ id: courseId.value })))
-  : { data: ref(null) }
+  ? useTeachingQuery(api.courses.get, computed(() => ({ id: courseId.value })))
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
 const sectionQuery = import.meta.client
-  ? useConvexQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
-  : { data: ref(null) }
+  ? useTeachingQuery(api.courseSections.get, computed(() => ({ id: sectionId.value })))
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
 
+const sectionsQuery = import.meta.client
+  ? useTeachingQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
+  : { data: ref(null), failure: computed(() => null), refresh: async () => {} }
+
+const revokedFailure = computed(() => cacheFailure.value ?? [courseQuery, sectionQuery, sectionsQuery].map(query => query.failure.value).find(failure => failure?.revoked) ?? null)
+const enforceTeachingAuthority = LEARN_MEASUREMENT_CAPABILITIES.responses
+const authorityCourseId = computed(() => enforceTeachingAuthority ? courseId.value : null)
+const authoritySectionId = computed(() => enforceTeachingAuthority ? sectionId.value : null)
+let contentGeneration = 0
+onScopeDispose(() => { if (enforceTeachingAuthority) contentGeneration++ })
+watch([revokedFailure, authorityCourseId, authoritySectionId], ([revoked], previous) => {
+  if (!revoked && previous && authorityCourseId.value === previous[1] && authoritySectionId.value === previous[2]) return
+  contentGeneration++
+  offlineRevoked.value = !!revoked
+  offlineData.value = null
+  usingOfflineData.value = false
+  if (revoked) void forgetCachedCourse(courseId.value).catch(() => {})
+}, { immediate: true, flush: 'sync' })
 const course = computed(() => courseQuery.data?.value ?? null)
 const section = computed(() => sectionQuery.data?.value ?? null)
 
-watch([() => isOnline.value, () => section.value], async ([online, sec]) => {
-  if (!online && !sec && import.meta.client) {
+watch([isOnline, section, authorityCourseId, authoritySectionId, revokedFailure, offlineRevoked], async ([online, sec], _previous, onCleanup) => {
+  let cancelled = false
+  onCleanup(() => { cancelled = true })
+  if (!online && !sec && import.meta.client && !revokedFailure.value && !offlineRevoked.value) {
     const cached = await getCachedSection(sectionId.value)
-    if (cached) {
+    if (cached && !revokedFailure.value && (!enforceTeachingAuthority || (!cancelled && cached.sectionId === sectionId.value && cached.courseId === courseId.value))) {
       offlineData.value = cached
       usingOfflineData.value = true
     }
@@ -72,10 +99,6 @@ const sectionOrder = computed(() => section.value?.order ?? null)
 
 usePreFetchSection(courseId, sectionOrder)
 
-const sectionsQuery = import.meta.client
-  ? useConvexQuery(api.courseSections.listByCourse, computed(() => ({ courseId: courseId.value })))
-  : { data: ref(null) }
-
 const sections = computed(() => (sectionsQuery.data?.value as Doc<'courseSections'>[] | null) ?? [])
 
 const nextSection = computed(() => {
@@ -102,6 +125,14 @@ const completionData = ref<{
   feedbackText: string
 } | null>(null)
 
+watch([revokedFailure, authorityCourseId, authoritySectionId], ([revoked], previous) => {
+  if (!revoked && previous && authorityCourseId.value === previous[1] && authoritySectionId.value === previous[2]) return
+  currentBlockIndex.value = 0
+  quizResults.value = null
+  showCompletionCard.value = false
+  completionData.value = null
+}, { flush: 'sync' })
+
 const completeSectionMutation = import.meta.client
   ? useConvexMutation(api.courseSections.completeSection)
   : createSsrMutationStub<typeof api.courseSections.completeSection>()
@@ -113,10 +144,14 @@ const setOfflineMutation = import.meta.client
 const isCompleting = ref(false)
 
 async function cacheForOffline() {
-  if (!import.meta.client) return
+  if (!import.meta.client || revokedFailure.value) return
+  const generation = contentGeneration
+  const requestedSectionId = sectionId.value
+  const requestedCourseId = courseId.value
+  const superseded = () => generation !== contentGeneration || !!revokedFailure.value
   try {
-    const payload = await $fetch<Omit<CachedSection, 'cachedAt'>>(`/api/learn/section-cache-payload?sectionId=${sectionId.value}`)
-    if (!payload) return
+    const payload = await $fetch<Omit<CachedSection, 'cachedAt'>>(`/api/learn/section-cache-payload?sectionId=${requestedSectionId}`)
+    if (!payload || superseded() || (enforceTeachingAuthority && (payload.sectionId !== requestedSectionId || payload.courseId !== requestedCourseId))) return
 
     const audioUrls: string[] = []
     for (const block of payload.contentBlocks) {
@@ -131,18 +166,23 @@ async function cacheForOffline() {
       audioUrls,
     )
 
+    if (superseded()) return
+    offlineRevoked.value = false
     await setOfflineMutation.mutate({
-      sectionId: sectionId.value,
+      sectionId: enforceTeachingAuthority ? requestedSectionId : sectionId.value,
       offlineAvailable: true,
     })
-  } catch {
-    // Non-critical: offline caching failure should not block the user
+  } catch (cause) {
+    const failure = enforceTeachingAuthority && !superseded() ? teachingReadFailure(cause) : null
+    if (failure?.revoked) cacheFailure.value = failure
+    // Transport errors leave an otherwise authorized offline copy available.
   }
 }
 
 async function handleCompleteSection() {
-  if (isCompleting.value || showCompletionCard.value) return
+  if (isCompleting.value || showCompletionCard.value || revokedFailure.value) return
   isCompleting.value = true
+  const generation = contentGeneration
 
   const quiz = quizResults.value
   const score = quiz && quiz.total > 0
@@ -157,6 +197,7 @@ async function handleCompleteSection() {
       quizTotal: quiz?.total ?? 0,
     })
 
+    if (generation !== contentGeneration || revokedFailure.value) return
     if (result) {
       completionData.value = {
         practiceScore: result.practiceScore,
@@ -169,6 +210,7 @@ async function handleCompleteSection() {
 
     cacheForOffline()
   } catch (e) {
+    if (generation !== contentGeneration || revokedFailure.value) return
     toast.error(getErrorMessage(e, 'Failed to complete section'))
     showCompletionCard.value = true
     completionData.value = {
@@ -209,6 +251,16 @@ const isReady = computed(() => {
   return section.value && (section.value.status === 'ready' || section.value.status === 'completed')
 })
 
+const readFailure = computed(() => revokedFailure.value ?? (usingOfflineData.value ? null : courseQuery.failure.value ?? sectionQuery.failure.value ?? sectionsQuery.failure.value))
+
+function retryRead() {
+  const retryCacheDenial = !!cacheFailure.value
+  cacheFailure.value = null
+  for (const query of [courseQuery, sectionQuery, sectionsQuery]) {
+    if (query.failure.value || retryCacheDenial) void query.refresh?.()
+  }
+}
+
 const isLoading = computed(() => {
   if (usingOfflineData.value) return false
   return !section.value || !course.value
@@ -223,7 +275,12 @@ const isNotReady = computed(() => {
 
 <template>
   <div class="flex min-h-0 w-full flex-1 flex-col overflow-y-auto bg-background">
-    <div v-if="isLoading" class="flex flex-1 items-center justify-center">
+    <div v-if="readFailure" class="mx-auto w-full max-w-3xl px-4 py-8">
+      <p v-if="!readFailure.retryable" role="status" data-testid="section-page-read-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ readFailure.message }}</span></p>
+      <div v-else role="alert" data-testid="section-page-read-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive"><p>Could not load this section.</p><button type="button" data-testid="section-page-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="retryRead">Try again</button></div>
+    </div>
+
+    <div v-else-if="isLoading" class="flex flex-1 items-center justify-center">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
         <p class="text-sm text-muted-foreground">Loading section...</p>

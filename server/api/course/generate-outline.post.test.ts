@@ -1,6 +1,10 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
+import { getFunctionName, type FunctionReference } from 'convex/server'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { buildOutlinePrompt, parseOutlineResponse } from '../../utils/outline-prompt'
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
+const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const mockMutation = vi.fn()
 const mockQuery = vi.fn()
 const mockSetAuth = vi.fn()
@@ -23,7 +27,9 @@ vi.mock('convex/browser', () => {
   return {
     ConvexHttpClient: class MockConvexHttpClient {
       setAuth = mockSetAuth
-      query = mockQuery
+      query(reference: FunctionReference<'query'>, args: unknown) {
+        return getFunctionName(reference) === 'documents:getTeachingScope' ? mockTeachingScope() : mockQuery(reference, args)
+      }
       mutation = mockMutation
     },
   }
@@ -67,6 +73,7 @@ function goodOutlineResponse() {
 
 describe('POST /api/course/generate-outline', () => {
   beforeEach(() => {
+    mockTeachingScope.mockReset().mockResolvedValue([])
     vi.mocked(globalThis.readBody).mockReset()
     vi.mocked(globalThis.searchDocuments).mockReset()
     vi.mocked(globalThis.generateCompletion).mockReset()
@@ -75,6 +82,15 @@ describe('POST /api/course/generate-outline', () => {
     mockQuery.mockReset()
   })
 
+
+  test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ courseId: 'course_123', taskId: 'task_456' })
+    mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(mockMutation).not.toHaveBeenCalled()
+  })
   test('rejects missing courseId', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({})
     const err = await (handler(makeEvent()) as Promise<any>).catch((e: any) => e)
@@ -172,6 +188,7 @@ describe('POST /api/course/generate-outline', () => {
     await handler(makeEvent())
 
     expect(globalThis.searchDocuments).toHaveBeenNthCalledWith(1, {
+      teachingScope: [],
       query: 'Fallback Retrieval',
       userId: 'https://auth.example.com|user_outline_123',
       folderId: 'folder_selected',
@@ -182,6 +199,7 @@ describe('POST /api/course/generate-outline', () => {
     // Frozen V1 defect: the second call drops both scope constraints. V2 must
     // fail closed on an evidence gap instead of copying this fallback.
     expect(globalThis.searchDocuments).toHaveBeenNthCalledWith(2, {
+      teachingScope: [],
       query: 'Fallback Retrieval',
       userId: 'https://auth.example.com|user_outline_123',
       max_num_results: 40,
@@ -379,4 +397,9 @@ describe('parseOutlineResponse', () => {
     expect(result).toHaveLength(1)
     expect(result[0]!.knowledgeType).toBe('factual')
   })
+})
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

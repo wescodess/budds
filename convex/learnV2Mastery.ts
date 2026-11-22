@@ -1,3 +1,5 @@
+import { defineTeachingMutation } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
@@ -536,7 +538,7 @@ async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: 
   return { sessionId, scheduledStartAt }
 }
 
-export const recordAssistanceUse = mutation({
+const recordAssistanceUseTeaching = defineTeachingMutation({name:'learnV2Mastery.recordAssistanceUse',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'session',id:args.studySessionId}]),
   args: { studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), kind: v.union(v.literal('substantive_hint'), v.literal('answer_reveal')) },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx)
@@ -574,6 +576,7 @@ export const recordAssistanceUse = mutation({
     return { status: 'recorded' as const, revision: scope.session.revision + 1, replayed: false, assistance }
   },
 })
+export const recordAssistanceUse = mutation(recordAssistanceUseTeaching)
 
 export const beginMasteryScoring = internalMutation({
   args: {

@@ -70,6 +70,19 @@ describe('POST /api/quiz/assess-attempt', () => {
     }))
   })
 
+  test.each(['advisory', 'shadow'])('%s stops before claiming or evaluating a protected pending snapshot', async mode => {
+    vi.mocked(useRuntimeConfig).mockReturnValue({
+      learningDecisionMode: mode,
+      quizSemanticApplicationEnvironment: 'development',
+      quizAssessmentWriteSecret: 'test-assessment-write-secret-long-enough',
+      public: { convex: { url: 'https://convex.test' } },
+    } as ReturnType<typeof useRuntimeConfig>)
+    query.mockRejectedValue(new Error('Teaching input is unavailable'))
+    await expect(handler(event())).rejects.toThrow('Teaching input is unavailable')
+    expect(mutation).not.toHaveBeenCalled()
+    expect(evaluateTypedDecision).not.toHaveBeenCalled()
+  })
+
   test('persists a sanitized unavailable result and leaves scoring outside the route', async () => {
     evaluateTypedDecision.mockResolvedValue({ status: 'unavailable', reason: 'timeout', retryable: true, retryAfterMs: 12_345 })
     await handler(event())

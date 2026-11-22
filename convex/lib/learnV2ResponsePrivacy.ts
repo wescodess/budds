@@ -1,5 +1,5 @@
 import { learnResponsePayloadSchema } from '../../shared/learn-v2-responses'
-import { z } from 'zod'
+import { projectSchedulingSnapshot } from './learnV2SchedulingProjection'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { documentHasCurrentRevision, documentMatchesSnapshot } from './learnV2BackingSource'
@@ -109,31 +109,8 @@ export async function retainedSourceExcerpt(ctx: QueryCtx | MutationCtx, userId:
   })
 }
 
-// Re-serialize only scheduling preferences and closed result metadata. Stored
-// plan JSON is a cache, never authority to disclose arbitrary extra fields.
-const planDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
-const planTime = z.string().regex(/^\d{2}:\d{2}$/)
-const publicPlanInput = z.object({
-  version: z.literal('learn-v2.schedule-input.v1'),
-  timezone: z.string().max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true } catch { return false } }),
-  startLocalDate: planDate, targetLocalDate: planDate.nullable(), sessionMinutes: z.number().int().min(15).max(60),
-  minRestMinutes: z.number().int().nonnegative(),
-  availability: z.array(z.object({ weekday: z.number().int().min(0).max(6), start: planTime, end: planTime })).max(28),
-  blackoutDates: z.array(planDate).max(90), reviewIntervalsDays: z.array(z.number().int().positive()).max(4),
-})
-const publicPlanResult = z.object({
-  version: z.literal('learn-v2.scheduler.v1'), status: z.enum(['feasible', 'infeasible']),
-  reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8),
-  alternatives: z.array(z.object({ code: z.enum(['extend_deadline', 'add_availability', 'shorten_sessions_increase_cadence', 'reduce_depth', 'remove_lower_priority_objectives']) })).max(8),
-})
-
 export function retainedPlanCache(value: string | undefined, kind: 'input' | 'result') {
-  if (!value || value.length > 256 * 1024) return undefined
-  try {
-    const parsed = (kind === 'input' ? publicPlanInput : publicPlanResult).safeParse(JSON.parse(value))
-    return parsed.success ? JSON.stringify(parsed.data) : undefined
-  }
-  catch { return undefined }
+  return projectSchedulingSnapshot(value, kind, true)
 }
 
 export function privateFields<T extends Record<string, unknown>>(row: T & { _id: string, _creationTime: number }, names: readonly string[]) {

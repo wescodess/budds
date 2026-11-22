@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { Flag, ArrowLeft, CheckCircle, Zap, Flame } from '@lucide/vue'
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
+
+import { Flag, ArrowLeft, CheckCircle, CircleAlert, Zap, Flame } from '@lucide/vue'
 import { api } from '#convex/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import { toast } from 'vue-sonner'
@@ -51,8 +54,11 @@ const dailyReviewCap = computed(() => {
 })
 
 const dueQuery = import.meta.client
-  ? useConvexQuery(api.reviewItems.listDueWithContext, queryArgs)
-  : { data: ref([]) }
+  ? useTeachingQuery(api.reviewItems.listDueWithContext, queryArgs)
+  : { data: ref([]), failure: computed(() => null), refresh: async () => {} }
+const dueFailure = computed(() => dueQuery.failure.value)
+let contentGeneration = 0
+onScopeDispose(() => { if (LEARN_MEASUREMENT_CAPABILITIES.responses) contentGeneration++ })
 
 const sessionItems = ref<ReviewItem[]>([])
 const sessionStarted = ref(false)
@@ -118,28 +124,24 @@ function revealAnswer() {
 }
 
 async function finishSession(): Promise<boolean> {
-  const durationMs = Date.now() - sessionStartTime.value
-  const correct = ratings.value.filter((r) => r.quality >= 3).length
+  const generation = contentGeneration
+  const request = {
+    itemsReviewed: ratings.value.length,
+    itemsCorrect: ratings.value.filter((r) => r.quality >= 3).length,
+    durationMs: Date.now() - sessionStartTime.value,
+    mode: reviewMode.value,
+    idempotencyKey: sessionIdempotencyKey.value,
+  }
 
   try {
-    const result = await completeSessionMutation.mutate({
-      itemsReviewed: ratings.value.length,
-      itemsCorrect: correct,
-      durationMs,
-      mode: reviewMode.value,
-      idempotencyKey: sessionIdempotencyKey.value,
-    })
+    const result = await completeSessionMutation.mutate(request)
+    if (generation !== contentGeneration) return false
     completionStreak.value = (result as { streakCurrent: number }).streakCurrent
     return true
   } catch {
+    if (generation !== contentGeneration) return false
     try {
-      await queueReviewSessionCompletion({
-        itemsReviewed: ratings.value.length,
-        itemsCorrect: correct,
-        durationMs,
-        mode: reviewMode.value,
-        idempotencyKey: sessionIdempotencyKey.value,
-      })
+      await queueReviewSessionCompletion(request)
       toast.info('Session saved on this device and will sync automatically.')
       return true
     }
@@ -154,6 +156,7 @@ async function rateItem(quality: number) {
   if (!revealed.value || !currentItem.value || submitting.value) return
 
   submitting.value = true
+  const generation = contentGeneration
   const itemId = currentItem.value._id
   const idempotencyKey = ratingIdempotencyKeys.get(itemId)
     ?? createIdempotencyKey(`review-item:${itemId}`)
@@ -173,10 +176,12 @@ async function rateItem(quality: number) {
     }
 
     ratingIdempotencyKeys.delete(itemId)
+    if (generation !== contentGeneration || dueRevoked.value) return
     ratings.value.push({ itemId, quality })
 
     if (currentIndex.value >= totalItems.value - 1) {
-      sessionComplete.value = await finishSession()
+      const completed = await finishSession()
+      if (generation === contentGeneration && !dueRevoked.value) sessionComplete.value = completed
     }
     else {
       currentIndex.value++
@@ -203,6 +208,19 @@ const flaggingOpen = ref(false)
 const flagCorrectedDef = ref('')
 const flagSaving = ref(false)
 const flagError = ref('')
+
+const dueRevoked = computed(() => dueFailure.value?.revoked === true)
+watch(dueRevoked, (revoked) => {
+  if (!revoked) return
+  contentGeneration++
+  sessionStarted.value = false
+  sessionItems.value = []
+  currentIndex.value = 0
+  revealed.value = false
+  flaggingOpen.value = false
+  flagCorrectedDef.value = ''
+  flagError.value = ''
+}, { immediate: true, flush: 'sync' })
 
 const flagMutation = import.meta.client
   ? useConvexMutation(api.contentFlags.flagFlashcard)
@@ -329,7 +347,12 @@ function navigateBack() {
       {{ isSyncing ? 'Syncing saved review progress…' : `${pendingCount} review update${pendingCount === 1 ? '' : 's'} waiting to sync` }}
     </div>
 
-    <div v-if="!sessionStarted && !sessionComplete" class="flex flex-1 items-center justify-center px-4">
+    <div v-if="!sessionStarted && !sessionComplete && dueFailure" class="flex flex-1 items-center justify-center px-4">
+      <p v-if="!dueFailure.retryable" role="status" data-testid="review-read-paused" class="flex max-w-md items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ dueFailure.message }}</span></p>
+      <div v-else role="alert" data-testid="review-read-error" class="max-w-md rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current"><p>Could not load your review items.</p><button type="button" data-testid="review-read-retry" class="mt-2 font-medium text-primary underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" @click="dueQuery.refresh?.()">Try again</button></div>
+    </div>
+
+    <div v-else-if="!sessionStarted && !sessionComplete" class="flex flex-1 items-center justify-center px-4">
       <div class="space-y-3 text-center">
         <div class="mx-auto h-6 w-6 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
         <p class="text-sm text-stone-400">Loading review items...</p>

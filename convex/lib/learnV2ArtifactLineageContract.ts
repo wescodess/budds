@@ -16,6 +16,8 @@ export const artifactReferenceFields = {
     v.object({ kind: v.literal('learner_artifact'), id: v.id('learningThreadArtifacts') }),
     v.object({ kind: v.literal('measurement_item'), id: v.id('learnMeasurementItems') }),
     v.object({ kind: v.literal('scoring_spec'), id: v.id('learnMeasurementScoringSpecs') }),
+    v.object({ kind: v.literal('audio_interjection'), id: v.id('audioOverviewInterjections') }),
+    v.object({ kind: v.literal('audio_interjection_v2'), id: v.id('audioOverviewInterjectionsV2') }),
   ),
   key: v.string(), revision: v.string(), payloadDigest: v.string(),
 }

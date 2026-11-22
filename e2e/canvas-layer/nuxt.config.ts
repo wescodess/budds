@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 
 // Selected only by the disposable E2E runner's build overrides.
-// Normal Nuxt builds never load this layer or its fixture route.
+// Normal Nuxt builds never load this layer or its fixture routes.
 const baseUrl = new URL(process.env.BUDDS_E2E_BASE_URL ?? 'http://127.0.0.1:3102')
 const convexUrl = new URL(process.env.NUXT_PUBLIC_CONVEX_URL ?? 'http://127.0.0.1:3210')
 if (process.env.NODE_ENV === 'production' || process.env.BUDDS_E2E_MODE !== 'true'
@@ -23,6 +23,11 @@ export default defineNuxtConfig({
         name: 'canvas-browser-harness',
         path: '/__e2e/canvas-browser-harness',
         file: fileURLToPath(new URL('../canvas-harness.vue', import.meta.url)),
+      })
+      pages.push({
+        name: 'map-editor-harness',
+        path: '/__e2e/map-editor-harness',
+        file: fileURLToPath(new URL('../map-editor-harness.vue', import.meta.url)),
       })
     },
     'vite:extendConfig'(config) {
