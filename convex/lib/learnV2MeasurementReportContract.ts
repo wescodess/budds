@@ -2,7 +2,8 @@ import { v, type Validator } from 'convex/values'
 import type { z } from 'zod'
 import {
   LEARN_V2_REPORT_RESPONSE_KINDS, LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION, LEARN_V2_REPORT_STARTING_BANDS,
-  LEARN_V2_REPORT_STATUSES, LEARN_V2_REPORT_DISPOSITIONS, type learnReportMetricSchema,
+  LEARN_V2_REPORT_STATUSES, LEARN_V2_REPORT_DISPOSITIONS, type learnReportMetricSchema, type learnPublishedReportMetricSchema,
+  LEARN_REPORT_PUBLICATION_POLICY_VERSION,
   LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
   type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema, type learnReportInputSnapshotSchema,
 } from '../../shared/learn-v2-measurement-report'
@@ -34,8 +35,7 @@ const formCounts = v.object({ A: v.number(), B: v.number(), C: v.number(), D: v.
 const sourceReason = v.object({ covered: v.number(), affected: v.number(), unknown: v.number() })
 const bandCounts = v.object({ population: v.number(), accepted: v.number(), validScored: v.number(), paired: v.number() })
 
-// Reused verbatim by stored cells, public pages and aggregate export pages.
-export const learnReportMetricValidator = v.object({
+export const learnReportComputationMetricValidator = v.object({
   metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30), v.null()),
   weighting: literals(['capability_episode', 'learner_sensitivity']), stratum: v.object({
     flow: literals(['v2_today', 'v2_canvas']), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
@@ -65,6 +65,16 @@ export const learnReportMetricValidator = v.object({
     purgedEvidence: sourceReason, replacement: sourceReason, treatmentChange: sourceReason, outsideHelpUncertainty: sourceReason }),
   attritionByStartingBand: v.object({ below40: bandCounts, from40To80: bandCounts, from80To100: bandCounts, unknown: bandCounts }),
 }) satisfies Validator<z.infer<typeof learnReportMetricSchema>, 'required', string>
+
+const rawMetric = learnReportComputationMetricValidator.fields
+// Stored cells, public pages and aggregate export pages carry only the published, small-cell-suppressed shape.
+export const learnReportMetricValidator = v.object({ ...rawMetric,
+  publicationPolicyVersion: v.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION),
+  counts: v.union(rawMetric.counts, v.null()), legacyIndependentAudit: v.union(rawMetric.legacyIndependentAudit, v.null()),
+  replacements: v.union(rawMetric.replacements, v.null()), instrumentation: v.union(rawMetric.instrumentation, v.null()),
+  sensitivity: v.union(rawMetric.sensitivity, v.null()), allocations: v.union(rawMetric.allocations, v.null()),
+  sourceAccounting: v.union(rawMetric.sourceAccounting, v.null()), attritionByStartingBand: v.union(rawMetric.attritionByStartingBand, v.null()),
+}) satisfies Validator<z.infer<typeof learnPublishedReportMetricSchema>, 'required', string>
 
 const scorerConfiguration = v.object({ scoringKind: literals(['deterministic', 'model']), configurationDigest: v.string(), scorerVersion: v.string() })
 const acceptance = v.object({ submissionId: v.id('learnResponses'), acceptedAt: v.number() })
@@ -121,7 +131,7 @@ const coldReplacement = v.object({
 export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('owner_watermark'), learnerKey: v.string(),
     sequence: v.number(), dueWorkThrough: nullableNumber, historyCoverage: sourceCoverage,
-    legacyIndependentAudit: learnReportMetricValidator.fields.legacyIndependentAudit }),
+    legacyIndependentAudit: rawMetric.legacyIndependentAudit }),
   v.object({ kind: v.literal('episode'), ...computationKeys, assignmentId: v.id('learnMeasurementAssignments'),
     learningVoidId: v.id('learningVoids'), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'),
     horizonDays: v.union(v.literal(7), v.literal(30)), assignment: learnReportAssignmentSnapshotValidator, clock: v.union(reportClock, v.null()),

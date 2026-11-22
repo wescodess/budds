@@ -31,6 +31,45 @@ async function v2Claim(index: number, mode: 'linked' | 'unresolved' | 'late' | '
 }
 
 describe('versioned report computation', () => {
+  it('excludes a delayed result that conflicts with its assigned form and counts the actual pin', async () => {
+    const source = await computationEpisode(1)
+    source.episode.delayed!.formLabel = 'C'
+    const report = cell(await buildLearningMeasurementReport(await computationInput([source.watermark, source.episode])))
+    expect(report.counts).toMatchObject({ acceptedSubmissions: 1, validDelayedScores: 0, comparablePairs: 0 })
+    expect(report.counts.dispositions).toMatchObject({ pin_flow_treatment_mismatch: 1, missing_delayed: 0 })
+    expect(report.reasonCodes).toContain('form_assignment_mismatch')
+    expect(report.reasonCodes).not.toContain('missing_delayed')
+    expect(report.allocations).toMatchObject({ assignedDelayedForms: { B: 1, C: 0 }, observedDelayedForms: { B: 0, C: 1 },
+      assignedOrders: { AB: 1 }, observedOrders: { AB: 0, unknown: 1 } })
+  })
+
+  it('excludes a cold result from another family revision instead of calling it missing', async () => {
+    const source = await computationEpisode(1)
+    source.episode.cold!.familyRevision = source.episode.assignment.familyRevision! + 1
+    const report = cell(await buildLearningMeasurementReport(await computationInput([source.watermark, source.episode])))
+    expect(report.counts).toMatchObject({ acceptedColdSubmissions: 1, validColdScores: 0, comparablePairs: 0 })
+    expect(report.counts.dispositions.pin_flow_treatment_mismatch).toBe(1)
+    expect(report.reasonCodes).toEqual(expect.arrayContaining(['family_revision_mismatch']))
+    expect(report.reasonCodes).not.toContain('missing_cold')
+    expect(report.allocations.observedColdForms).toMatchObject({ A: 1 })
+  })
+
+  it('labels observed scorer identity only from results scored under the frozen configuration', async () => {
+    const source = await computationEpisode(1)
+    Object.assign(source.episode.delayed!, { scoringKind: 'model', configurationDigest: `sha256:${'b'.repeat(64)}`, identityStatus: 'verified',
+      observedModel: 'model-outside-configuration', observedUpstream: 'upstream-outside-configuration' })
+    const report = cell(await buildLearningMeasurementReport(await computationInput([source.watermark, source.episode])))
+    expect(report.stratum).toMatchObject({ scoringKind: 'deterministic', observedModel: null, observedUpstream: null })
+    expect(report.reasonCodes).toEqual(expect.arrayContaining(['scorer_configuration_mismatch']))
+    expect(report.counts.dispositions.pin_flow_treatment_mismatch).toBe(1)
+  })
+
+  it('keeps first-claim form assignments unknown instead of copying the observed form', async () => {
+    const f = await computationClaim(1)
+    const report = cell(await buildLearningMeasurementReport(await computationInput([f.watermark, f.claim])), 'false_mastery_next_delayed.v1')
+    expect(report.allocations).toMatchObject({ assignedDelayedForms: { unknown: 1, B: 0 }, observedDelayedForms: { B: 1, unknown: 0 } })
+  })
+
   it('counts legacy, v2 linked, unresolved and late-linked claims exactly once', async () => {
     const legacy = await computationClaim(1)
     const linked = await v2Claim(2)

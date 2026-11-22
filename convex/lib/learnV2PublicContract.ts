@@ -21,7 +21,9 @@ import {
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION,
   LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
-  type learnMeasurementReportSchema, type learnMeasurementReportCellsSchema,
+  LEARN_REPORT_PUBLICATION_POLICY_VERSION,
+  type learnPublishedMeasurementReportSchema as learnMeasurementReportSchema,
+  type learnPublishedMeasurementReportCellsSchema as learnMeasurementReportCellsSchema,
 } from '../../shared/learn-v2-measurement-report'
 
 export const LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-api.v1' as const
@@ -236,7 +238,8 @@ const provenance = v.object({
   kind: v.literal('aggregate_snapshot'), sourceVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION),
   queryVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION), adapterVersion: v.string(), codeVersion: v.string(),
   rosterDigest: v.string(), inputDigest: v.string(), cutoff: v.number(), extractionStartedAt: v.number(), extractionEndedAt: v.number(), sourceCoverage,
-  episodeCount: v.number(), inputBytes: v.number(), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000),
+  episodeCount: v.null(), inputBytes: v.null(), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000),
+  publicationPolicyVersion: v.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION),
 })
 export const reportValidator = v.union(reportUnavailableValidator, v.object({
   version: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), status: v.literal('sealed'), reportRunId: v.id('learnMeasurementReportRuns'), query: reportQuery, provenance,

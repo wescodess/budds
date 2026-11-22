@@ -11,8 +11,8 @@ import {
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION as version, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION as sourceVersion,
   LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION as queryVersion, deriveLearnReportLearnerKey,
-  buildLearningMeasurementReport, fingerprintLearnReportInput, reconcileLearnReportSourceRows,
-  learnReportInputSnapshotSchema, learnReportMetricSchema, validateLearnMeasurementReportCells, type LearnReportInputSnapshot,
+  buildPublishedLearningMeasurementReport, fingerprintLearnReportInput, reconcileLearnReportSourceRows,
+  learnReportInputSnapshotSchema, learnPublishedReportMetricSchema, validateLearnPublishedMeasurementReportCells, publishLearnReportProvenance, type LearnReportInputSnapshot,
 } from '../shared/learn-v2-measurement-report'
 import { learnSerializedBytes } from '../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS as limits, LEARN_MEASUREMENT_STORAGE_VERSION as storageVersion } from '../shared/learn-v2-measurement-storage-manifest'
@@ -84,7 +84,7 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
   if (candidates.length === 8) return unavailable('unavailable', 'refresh_inventory_overflow')
   for (const candidate of candidates) {
     const control = reportControl(candidate)
-    if (control.scopeDigest !== await approvalDigest(approval)) continue
+    if (candidate.codeVersion !== REPORT_CODE_VERSION || control.scopeDigest !== await approvalDigest(approval)) continue
     if (control.requestKeys.includes(requestKey) && control.requestDigest !== requestDigest) return unavailable('unavailable', 'idempotency_conflict')
     if (control.requestDigest === requestDigest && (control.requestKeys.includes(requestKey) || candidate.status === 'building')) {
       if (!control.requestKeys.includes(requestKey)) {
@@ -323,7 +323,7 @@ export const saveCellPage = internalMutation({
   args: { ...runArgs, sequence: v.number(), cells: v.array(learnReportMetricValidator) }, returns: v.null(), handler: async (ctx, args) => {
     const { run } = await internalRun(ctx, args.reportRunId)
     if (run.status !== 'building' || reportControl(run).phase !== 'computing') return null
-    validateLearnMeasurementReportCells({ version, reportRunId: run._id, cells: args.cells, cursor: null, isDone: true })
+    validateLearnPublishedMeasurementReportCells({ version, reportRunId: run._id, cells: args.cells, cursor: null, isDone: true })
     if (!args.cells.length) throw new Error('empty_cell_page')
     const control = reportControl(run)
     const digest = await privacyDigest(args.cells)
@@ -389,7 +389,7 @@ export const finalizeReport = internalAction({
         && row.dueWorkThrough !== null && row.dueWorkThrough >= run.cutoff)
       await ctx.runMutation(internal.learnV2MeasurementReports.prepareComputedReport, { ...args, ...fingerprint, sourceCoverage: covered ? 'complete' : 'unknown' })
       run = await ctx.runQuery(internal.learnV2MeasurementReports.readBuildState, args)
-      const result = await buildLearningMeasurementReport({ reportRunId: run._id, query: runQueryValue(run), provenance: provenance(run), roster, rows })
+      const result = await buildPublishedLearningMeasurementReport({ reportRunId: run._id, query: runQueryValue(run), provenance: provenance(run), roster, rows })
       if (result.report.status !== 'sealed') throw new Error(result.report.reasonCodes[0] ?? 'computation_incomplete')
       let sequence = 1
       for (const page of result.pages) {
@@ -423,7 +423,8 @@ async function manifestFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementRepor
   const { run, reason } = await visibleRun(ctx, reportRunId)
   if (reason) return unavailable(reason === 'disabled' ? 'disabled' : 'stale', reason)
   if (run.status !== 'sealed') return unavailable(run.status, run.reasonCode ?? 'report_building')
-  return { version, status: 'sealed', reportRunId: run._id, query: runQueryValue(run), provenance: provenance(run) }
+  if (run.codeVersion !== REPORT_CODE_VERSION) return unavailable('stale', 'report_policy_changed')
+  return { version, status: 'sealed', reportRunId: run._id, query: runQueryValue(run), provenance: publishLearnReportProvenance(provenance(run)) }
 }
 async function cellsFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementReportRuns'>, cursor: string | null, resolved?: Extract<LearnV2Report, { status: 'sealed' }>): Promise<LearnV2ReportCells> {
   const manifest = resolved ?? await manifestFor(ctx, reportRunId)
@@ -438,10 +439,10 @@ async function cellsFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementReportRu
   if (!next) return { version, reportRunId: run._id, cells: [], cursor: null, isDone: true }
   const stored = await ctx.db.query('learnMeasurementReportCells')
     .withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', run._id).gt('sequence', after)).take(next.count)
-  const cells = stored.map(row => learnReportMetricSchema.parse(Object.fromEntries(Object.keys(learnReportMetricSchema.shape).map(key => [key, row[key as keyof typeof row]]))))
+  const cells = stored.map(row => learnPublishedReportMetricSchema.parse(Object.fromEntries(Object.keys(learnPublishedReportMetricSchema.shape).map(key => [key, row[key as keyof typeof row]]))))
   if (stored.length !== next.count || stored.some((row, index) => row.sequence !== after + index + 1)
     || await privacyDigest(cells) !== next.digest) return unavailable('failed', 'cell_manifest_mismatch')
-  return validateLearnMeasurementReportCells({ version, reportRunId: run._id, cells, cursor: after + cells.length < total ? String(after + cells.length) : null, isDone: after + cells.length === total })
+  return validateLearnPublishedMeasurementReportCells({ version, reportRunId: run._id, cells, cursor: after + cells.length < total ? String(after + cells.length) : null, isDone: after + cells.length === total })
 }
 export const getReport = query({
   args: reportReferenceArgs, returns: reportValidator, handler: async (ctx, args): Promise<LearnV2Report> => manifestFor(ctx, parsePublicLearnRequest(reportReferenceSchema, args).reportRunId),
