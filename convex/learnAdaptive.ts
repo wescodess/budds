@@ -3,7 +3,7 @@ import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
 import { paginationOptsValidator } from 'convex/server'
-import { api } from './_generated/api'
+import { api, internal } from './_generated/api'
 import { action, mutation, query, type MutationCtx, type QueryCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { AdaptiveCommandRejection, executeAdaptiveThreadCommand, initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
@@ -12,7 +12,10 @@ import { isOperableDiagnosticActivity, liveEvidenceState, storedPlan } from './l
 import { composeAdaptiveActivityPlan, replayAdaptiveActivityPlan } from '../shared/learn-adaptive-activity-plan'
 import { loadReadyCanvas } from './learnAdaptiveCanvas'
 import { requireAuth } from './lib/auth'
-import { masteryAttemptArgs, masteryAttemptReturnValidator, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
+import { masteryAttemptArgs, masteryAttemptReturnValidator, scoreMasterySubmissionForOwner, submitMasteryAttemptForOwner, type MasteryAttemptActionResult } from './learnV2Mastery'
+import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+import { assertAudioTeaching, assertQuizTeaching, assertTeachingInputs } from './lib/learnV2AssessmentLineage'
+import { messageReplayAccess } from './lib/learnV2ReplayAccess'
 import { needFirstDraftArgsValidator } from '../shared/learn-adaptive-draft'
 import { ADAPTIVE_OVERRIDE_VERSION, adaptiveOverrideOptionValidator, fixedNextPlanForOverride, projectAdaptiveControls, reasonTextForActivity } from '../shared/learn-adaptive-controls'
 import { ADAPTIVE_REPRESENTATIVE_COMPLETION_VERSION, presentNextAction, representativeNextAction } from '../shared/learn-adaptive-completion'
@@ -85,6 +88,10 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
     if (!row || row.userId !== userId) return null
     const conversation = await ctx.db.get(row.conversationId)
     if (!conversation || conversation.userId !== userId || (await ctx.db.get(conversation.folderId))?.userId !== userId) return null
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const access = await messageReplayAccess(ctx, userId, row)
+      if (!access.ownText || row.role !== 'user') return null
+    }
     return { revision: await contributionDigest(JSON.stringify(row)) }
   }
   if (source.feature === 'flashcards') {
@@ -92,6 +99,7 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
     if (!row || row.userId !== userId) return null
     const room = await ctx.db.get(row.roomId)
     if (!room || room.userId !== userId || (await ctx.db.get(room.folderId))?.userId !== userId) return null
+    await assertTeachingInputs(ctx, userId, [{ kind: 'flashcard_version', id: row._id }])
     return { revision: await contributionDigest(JSON.stringify(row)) }
   }
   if (source.feature === 'quiz') {
@@ -101,15 +109,21 @@ export async function loadContributionSource(ctx: QueryCtx | MutationCtx, userId
     const questions = await ctx.db.query('quizQuestions')
       .withIndex('by_quizId', q => q.eq('quizId', row._id)).take(201)
     if (questions.length > 200 || questions.some(question => question.userId !== userId)) return null
+    await assertQuizTeaching(ctx, userId, row._id)
     const sourceRecord = JSON.stringify([row, questions])
     if (new TextEncoder().encode(sourceRecord).length > 500_000) return null
     return { revision: await contributionDigest(sourceRecord) }
   }
-  const row = source.feature === 'podcast' ? await ctx.db.get(source.id)
-      : await ctx.db.get(source.id)
+  if (source.feature === 'podcast') {
+    const row = await ctx.db.get(source.id)
+    if (!row || row.userId !== userId || row.status !== 'ready' || (await ctx.db.get(row.folderId))?.userId !== userId) return null
+    await assertAudioTeaching(ctx, row)
+    return { revision: await contributionDigest(JSON.stringify(row)) }
+  }
+  const row = await ctx.db.get(source.id)
   if (!row || row.userId !== userId || (await ctx.db.get(row.folderId))?.userId !== userId) return null
-  if (source.feature === 'podcast' && row.status !== 'ready') return null
-  if (source.feature === 'documents' && row.status !== 'success') return null
+  if (row.status !== 'success') return null
+  await assertTeachingInputs(ctx, userId, [{ kind: 'document', id: row._id }])
   return { revision: await contributionDigest(JSON.stringify(row)) }
 }
 
@@ -1438,7 +1452,8 @@ export function toAdaptiveSubmissionAdmission(result: MasteryAttemptActionResult
 // adaptive command receipt/revision and feedback projection; Slice 1.6 returns
 // only bounded admission status and an opaque completed-attempt reference.
 export const submitResponse = action({
-  args: { threadId: v.id('learningThreads'), activityId: v.string(), ...masteryAttemptArgs },
+  args: v.union(v.object({ threadId: v.id('learningThreads'), activityId: v.string(), ...masteryAttemptArgs }),
+    v.object({ threadId: v.id('learningThreads'), activityId: v.string(), submissionId: v.id('learnResponses'), idempotencyKey: v.string() })),
   returns: v.union(v.object({ kind: v.literal('accepted'), status: v.literal('completed'), attemptReference: v.string(), replayed: v.boolean() }),
     v.object({ kind: v.literal('accepted'), status: v.literal('in_progress'), replayed: v.literal(false) }),
     v.object({ kind: disclosureLiterals(['denied', 'blocked', 'invalid']), code: v.string(), message: v.string(), retryable: v.boolean(),
@@ -1448,6 +1463,23 @@ export const submitResponse = action({
   }> => {
     const identity = await ctx.auth.getUserIdentity()
     if (!identity) return { kind: 'denied' as const, code: 'adaptive_gate_unavailable', message: 'Adaptive Learn is unavailable.', retryable: false, fallbackRoute: CLASSIC_LEARN_FALLBACK_ROUTE }
+    if ('submissionId' in args) {
+      if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'blocked', code: 'disabled', message: 'Canvas submissions are unavailable.', retryable: false }
+      const { threadId, activityId, submissionId } = args
+      try {
+        const authority = await ctx.runQuery(internal.learnAdaptiveCanvas.getCanvasSubmissionAuthority, { threadId, activityId, submissionId })
+        const score = await scoreMasterySubmissionForOwner(ctx, identity.tokenIdentifier, {
+          version: LEARN_V2_PUBLIC_API_VERSION, submissionId, idempotencyKey: args.idempotencyKey,
+        })
+        await ctx.runMutation(internal.learnAdaptiveCanvas.recordCanvasSubmissionOutcome, { threadId, activityId, submissionId })
+        if (score.status === 'scored') return { kind: 'accepted', status: 'completed', attemptReference: String(score.result.attemptId), replayed: authority.replayed }
+        if (score.status === 'scoring_pending') return { kind: 'accepted', status: 'in_progress', replayed: false }
+        return { kind: 'blocked', code: score.status, message: 'The saved response is awaiting a scoring result.', retryable: score.status === 'retryable_failure' }
+      } catch {
+        return { kind: 'denied', code: 'adaptive_submission_unavailable', message: 'Canvas scoring is unavailable.', retryable: false }
+      }
+    }
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'invalid', code: 'saved_submission_required', message: 'A saved Canvas submission is required.', retryable: false }
     const { threadId, activityId, ...attempt } = args
     const result = await submitMasteryAttemptForOwner(ctx, identity.tokenIdentifier, attempt, {
       threadId,

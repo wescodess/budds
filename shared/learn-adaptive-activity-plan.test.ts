@@ -2,9 +2,12 @@ import { describe, expect, test } from 'vitest'
 import {
   ADAPTIVE_ACTIVITY_PLAN_VERSION,
   ADAPTIVE_ACTIVITY_REPLAY_VERSION,
+  ADAPTIVE_ASSESSMENT_PLAN_VERSION,
+  adaptiveAssessmentReferenceSchema,
   type AdaptiveActivityPlanInput,
   composeAdaptiveActivityPlan,
   replayAdaptiveActivityPlan,
+  readAdaptiveAssessmentReference,
 } from './learn-adaptive-activity-plan'
 
 const input = () => ({
@@ -122,5 +125,28 @@ describe('Adaptive activity plan replay contract', () => {
       ...input(),
       evidenceReferences: [{ ...input().evidenceReferences[0]!, integrityState: 'conflict' as const }],
     } as unknown as AdaptiveActivityPlanInput)).rejects.toThrow('Factual activity requires accepted evidence')
+  })
+
+  test('assessment plans retain only versioned measurement references in the existing envelope', async () => {
+    const reference = adaptiveAssessmentReferenceSchema.parse({ version: ADAPTIVE_ASSESSMENT_PLAN_VERSION, assessmentOpportunityId: 'opportunity-001', deliveryGrantId: 'grant-001',
+      item: { itemId: 'item-001', itemRevision: 1, promptDigest: `sha256:${'a'.repeat(64)}` },
+      responseSpec: { kind: 'bounded_rubric' as const, version: 'response.v1', maxCodeUnits: 12000 as const },
+      claims: [{ claimId: 'measurement-claim-001', revision: 1, claimDigest: `sha256:${'b'.repeat(64)}` }] })
+    const assessment = { ...input(), assessmentReference: reference, primitiveSequence: [], evidenceReferences: [],
+      purpose: 'PRIVATE TEACHING PURPOSE', evaluationContract: { version: 'learn-adaptive.evaluation.v1', kind: 'server_scored' as const,
+        responseFormat: 'short_text' as const, passingScorePercent: 80 }, decisionInputs: { ...input().decisionInputs, sourceInputs: [] } }
+    const plan = await composeAdaptiveActivityPlan(assessment)
+    expect(plan.planVersion).toBe(ADAPTIVE_ACTIVITY_PLAN_VERSION)
+    expect(plan.primitivePlan).toEqual([])
+    expect(plan.evidenceReferences).toEqual([])
+    expect(readAdaptiveAssessmentReference(plan)).toEqual(reference)
+    expect(JSON.stringify(plan)).not.toContain('PRIVATE TEACHING PURPOSE')
+    expect(JSON.stringify(plan)).not.toContain(input().primitiveSequence[0]!.props.explanation)
+    expect(await replayAdaptiveActivityPlan(plan)).toEqual({ ok: true, value: plan })
+    await expect(composeAdaptiveActivityPlan({ ...assessment, primitiveSequence: input().primitiveSequence })).rejects.toThrow('cannot contain teaching')
+    await expect(composeAdaptiveActivityPlan({ ...assessment, assessmentReference: { ...reference, key: 'PRIVATE KEY' } } as unknown as AdaptiveActivityPlanInput)).rejects.toThrow()
+    await expect(composeAdaptiveActivityPlan({ ...assessment, assessmentReference: { ...reference, claims: [...reference.claims, ...reference.claims] } })).rejects.toThrow()
+    expect(await replayAdaptiveActivityPlan({ ...plan, canonicalInputSnapshot: plan.canonicalInputSnapshot.replace('grant-001', 'grant-other') })).toEqual({ ok: false, reason: 'replay_integrity_failed' })
+    expect(await composeAdaptiveActivityPlan(input())).toEqual(await composeAdaptiveActivityPlan({ ...input(), assessmentReference: undefined }))
   })
 })

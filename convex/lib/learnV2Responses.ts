@@ -191,7 +191,7 @@ async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awa
       }
     }
   }
-  if (content) {
+  if (content && !item) {
     const claims = await ctx.db.query('sessionContentClaims')
       .withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33)
     if (!claims.length || claims.length > 32) reject('evidence_unavailable')

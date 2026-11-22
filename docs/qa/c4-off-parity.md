@@ -38,6 +38,18 @@ Run the current differential with `pnpm exec vitest run convex/learnV2Disclosure
 | Proven-same | `shared/learn-v2-measurement-storage-manifest.ts`; `convex/schema.ts` | Both the C4 owner/phase index and C5 owner/objective/epoch/open-time index remain. Storage stays at `learn-v2.measurement-storage.v1`; no migration or backfill. |
 | C4.1 always-on | Explicit assessment sessions, map/read/export DTOs | Private held-out prompts, keys, rubrics and scoring payloads do not become teaching. C4.1 omissions and the #515 map contract remain unchanged. |
 
+C5.5 adds eight complete Canvas golden results from the same actual dev pin: attachment and replay, ready query and delivery, staging and replay, submitted-work recovery, and denied scoring. They use Phase A URL-safe attachment/submission keys. The pinned-handler runner executes these cases alongside the existing differential; expectations do not come from the Canvas adapter.
+
+| Disposition | Entry point / path | Off behavior / classification |
+| --- | --- | --- |
+| Gated | `learnAdaptiveCanvas.attachReadySession`, `submitCanvasResponse`; `learnAdaptive.submitResponse` | Original attachment, staging/body recovery, command replay and scoring admission remain identical to the pinned dev results. New saved-ID scoring returns disabled without dispatch. |
+| Gated | `learnAdaptiveCanvas.getCanvas`, `getCanvasDelivery`, internal `loadReadyCanvas` | Ordinary teaching retains C4's existing wrapper and exact dev value. New assessment reads return only grant-authorized assessment/own-work projections when enabled. |
+| Gated | Internal `learnAdaptiveCanvas.getCanvasSubmissionAuthority`, `recordCanvasSubmissionOutcome` | New internal phase/attempt adapters; no public content endpoint and no off-state scoring dispatch. |
+| Gated | `learnAdaptive.loadContributionSource`, contribution recording/conversion | New source-lineage and learner-message proof checks run only with responses enabled; off contribution results retain dev behavior. |
+| Additive assessment contract | `shared/learn-adaptive-activity-plan.ts`: `learn-adaptive.assessment-plan.v1` | New strict reference variant is stored in the canonical snapshot under its own version. Existing activity/replay envelope versions, legacy canonical bytes, teaching variants and standalone diagnostic variants remain unchanged. No schema migration. |
+| Gated | `convex/lib/learnV2Responses.ts` measurement claim branch | A measurement envelope uses its own claims; ordinary content still requires session-content claims. Disabled acceptance returns before dependency reads. |
+| C4.1 always-on | New assessment-reference variant and every Canvas fallback/replay | No private scoring payload, teaching explanation, ungranted prompt or sibling form is made visible, including while disabled. |
+
 ### C4 sweep
 
 | Disposition | Path | Sweep item | Off behavior / evidence |

@@ -1,4 +1,548 @@
 {
+  "canvas.attach": {
+    "activityId": "ready-session:0000000000000010008studySessions",
+    "kind": "attached",
+    "receiptId": "10025learnActivityCommandReceipts",
+    "replayed": false,
+    "threadId": "00000000000010021learningThreads"
+  },
+  "canvas.attach.replay": {
+    "activityId": "ready-session:0000000000000010008studySessions",
+    "kind": "attached",
+    "replayed": true,
+    "threadId": "00000000000010021learningThreads"
+  },
+  "canvas.ready": {
+    "activity": {
+      "controls": {
+        "fixedNextPlan": null,
+        "options": [
+          {
+            "available": true,
+            "key": "explain_differently",
+            "label": "Explain differently",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "example",
+            "label": "Show an example",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "try",
+            "label": "Let me try",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "quiz",
+            "label": "Quiz me",
+            "unavailableReason": null
+          },
+          {
+            "available": false,
+            "key": "compare_sources",
+            "label": "Compare sources",
+            "unavailableReason": "evidence"
+          },
+          {
+            "available": true,
+            "key": "practical",
+            "label": "Make it practical",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "easier",
+            "label": "Make it easier",
+            "unavailableReason": null
+          },
+          {
+            "available": false,
+            "key": "harder",
+            "label": "Make it harder",
+            "unavailableReason": "policy"
+          },
+          {
+            "available": false,
+            "key": "answer_now",
+            "label": "Answer now",
+            "unavailableReason": "state"
+          },
+          {
+            "available": true,
+            "key": "time_15",
+            "label": "15 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_25",
+            "label": "25 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_45",
+            "label": "45 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_60",
+            "label": "60 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_no_limit",
+            "label": "No time limit",
+            "unavailableReason": null
+          }
+        ],
+        "reasonText": {
+          "purpose": "Study the supported explanation, then apply it independently.",
+          "text": "This activity uses accepted sources for the current learning objective.",
+          "version": "learn-adaptive.reason-text.v1"
+        },
+        "selected": null
+      },
+      "draftKind": null,
+      "evidenceScope": {
+        "integrityState": "accepted",
+        "sourceRefs": [
+          "000000010014learnSourceSnapshots"
+        ],
+        "version": "learn-adaptive.canvas-evidence-scope.v1"
+      },
+      "fallback": {
+        "body": "This activity could not be replayed safely.",
+        "kind": "text_card",
+        "primaryAction": {
+          "label": "Continue safely",
+          "type": "continue_safe"
+        },
+        "testId": "learn-activity-fallback",
+        "title": "Activity unavailable",
+        "version": "learn-adaptive.text-card-fallback.v1"
+      },
+      "id": "ready-session:0000000000000010008studySessions",
+      "planRevision": 1,
+      "primitive": {
+        "action": "continue",
+        "contractVersion": "learn-adaptive.activity-contract.v1",
+        "props": {
+          "explanation": "Study the supported explanation.",
+          "heading": "Apply a rule",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ]
+        },
+        "rendererVersion": "learn-adaptive.renderer.v1",
+        "testId": "learn-primitive-cited-explanation",
+        "type": "cited_explanation"
+      },
+      "purpose": "Study the supported explanation, then apply it independently.",
+      "reasonCode": "ready_v2_session",
+      "requiredAction": {
+        "kind": "continue",
+        "label": "Continue"
+      },
+      "status": "eligible"
+    },
+    "ownerId": "000000000000000000000010000users",
+    "recovery": null,
+    "recoveryEvidenceIssue": null,
+    "recoveryState": null,
+    "responsePrompt": "Apply the rule independently.",
+    "savedResponse": null,
+    "session": {
+      "blueprintRecordRevision": 1,
+      "contentRevision": 1,
+      "planRecordRevision": 1,
+      "revision": 1,
+      "scheduledEndAt": null,
+      "scheduledStartAt": 1800000000001,
+      "studySessionId": "0000000000000010008studySessions",
+      "timezone": "UTC"
+    },
+    "status": "ready",
+    "thread": {
+      "id": "00000000000010021learningThreads",
+      "intent": "understand",
+      "outcome": "Apply a rule",
+      "revision": 2
+    }
+  },
+  "canvas.ready.delivery": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "activity": {
+        "controls": {
+          "fixedNextPlan": null,
+          "options": [
+            {
+              "available": true,
+              "key": "explain_differently",
+              "label": "Explain differently",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "example",
+              "label": "Show an example",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "try",
+              "label": "Let me try",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "quiz",
+              "label": "Quiz me",
+              "unavailableReason": null
+            },
+            {
+              "available": false,
+              "key": "compare_sources",
+              "label": "Compare sources",
+              "unavailableReason": "evidence"
+            },
+            {
+              "available": true,
+              "key": "practical",
+              "label": "Make it practical",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "easier",
+              "label": "Make it easier",
+              "unavailableReason": null
+            },
+            {
+              "available": false,
+              "key": "harder",
+              "label": "Make it harder",
+              "unavailableReason": "policy"
+            },
+            {
+              "available": false,
+              "key": "answer_now",
+              "label": "Answer now",
+              "unavailableReason": "state"
+            },
+            {
+              "available": true,
+              "key": "time_15",
+              "label": "15 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_25",
+              "label": "25 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_45",
+              "label": "45 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_60",
+              "label": "60 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_no_limit",
+              "label": "No time limit",
+              "unavailableReason": null
+            }
+          ],
+          "reasonText": {
+            "purpose": "Study the supported explanation, then apply it independently.",
+            "text": "This activity uses accepted sources for the current learning objective.",
+            "version": "learn-adaptive.reason-text.v1"
+          },
+          "selected": null
+        },
+        "draftKind": null,
+        "evidenceScope": {
+          "integrityState": "accepted",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ],
+          "version": "learn-adaptive.canvas-evidence-scope.v1"
+        },
+        "fallback": {
+          "body": "This activity could not be replayed safely.",
+          "kind": "text_card",
+          "primaryAction": {
+            "label": "Continue safely",
+            "type": "continue_safe"
+          },
+          "testId": "learn-activity-fallback",
+          "title": "Activity unavailable",
+          "version": "learn-adaptive.text-card-fallback.v1"
+        },
+        "id": "ready-session:0000000000000010008studySessions",
+        "planRevision": 1,
+        "primitive": {
+          "action": "continue",
+          "contractVersion": "learn-adaptive.activity-contract.v1",
+          "props": {
+            "explanation": "Study the supported explanation.",
+            "heading": "Apply a rule",
+            "sourceRefs": [
+              "000000010014learnSourceSnapshots"
+            ]
+          },
+          "rendererVersion": "learn-adaptive.renderer.v1",
+          "testId": "learn-primitive-cited-explanation",
+          "type": "cited_explanation"
+        },
+        "purpose": "Study the supported explanation, then apply it independently.",
+        "reasonCode": "ready_v2_session",
+        "requiredAction": {
+          "kind": "continue",
+          "label": "Continue"
+        },
+        "status": "eligible"
+      },
+      "ownerId": "000000000000000000000010000users",
+      "recovery": null,
+      "recoveryEvidenceIssue": null,
+      "recoveryState": null,
+      "responsePrompt": "Apply the rule independently.",
+      "savedResponse": null,
+      "session": {
+        "blueprintRecordRevision": 1,
+        "contentRevision": 1,
+        "planRecordRevision": 1,
+        "revision": 1,
+        "scheduledEndAt": null,
+        "scheduledStartAt": 1800000000001,
+        "studySessionId": "0000000000000010008studySessions",
+        "timezone": "UTC"
+      },
+      "status": "ready",
+      "thread": {
+        "id": "00000000000010021learningThreads",
+        "intent": "understand",
+        "outcome": "Apply a rule",
+        "revision": 2
+      }
+    }
+  },
+  "canvas.score.denied": {
+    "admission": {
+      "productPolicyVersion": "adaptive-v2-product-budget.utc-hour-day.v1",
+      "rollbackPolicyVersion": "adaptive-v2-provider-rollback.v1",
+      "stage": "reservation",
+      "version": "adaptive-v2-provider-admission.v1"
+    },
+    "code": "pilot_manifest_missing",
+    "kind": "blocked",
+    "message": "Adaptive pilot dispatch is not approved.",
+    "retryable": false
+  },
+  "canvas.stage": {
+    "kind": "ok",
+    "receiptId": "10029learnActivityCommandReceipts",
+    "revision": 3,
+    "value": {
+      "activityId": "ready-session:0000000000000010008studySessions",
+      "status": "submitted"
+    }
+  },
+  "canvas.stage.replay": {
+    "kind": "ok",
+    "receiptId": "10029learnActivityCommandReceipts",
+    "revision": 3,
+    "value": {
+      "activityId": "ready-session:0000000000000010008studySessions",
+      "status": "submitted"
+    }
+  },
+  "canvas.submitted": {
+    "activity": {
+      "controls": {
+        "fixedNextPlan": null,
+        "options": [
+          {
+            "available": false,
+            "key": "explain_differently",
+            "label": "Explain differently",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "example",
+            "label": "Show an example",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "try",
+            "label": "Let me try",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "quiz",
+            "label": "Quiz me",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "compare_sources",
+            "label": "Compare sources",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "practical",
+            "label": "Make it practical",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "easier",
+            "label": "Make it easier",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "harder",
+            "label": "Make it harder",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "answer_now",
+            "label": "Answer now",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_15",
+            "label": "15 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_25",
+            "label": "25 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_45",
+            "label": "45 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_60",
+            "label": "60 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_no_limit",
+            "label": "No time limit",
+            "unavailableReason": "state"
+          }
+        ],
+        "reasonText": {
+          "purpose": "Study the supported explanation, then apply it independently.",
+          "text": "This activity uses accepted sources for the current learning objective.",
+          "version": "learn-adaptive.reason-text.v1"
+        },
+        "selected": null
+      },
+      "draftKind": null,
+      "evidenceScope": {
+        "integrityState": "accepted",
+        "sourceRefs": [
+          "000000010014learnSourceSnapshots"
+        ],
+        "version": "learn-adaptive.canvas-evidence-scope.v1"
+      },
+      "fallback": {
+        "body": "This activity could not be replayed safely.",
+        "kind": "text_card",
+        "primaryAction": {
+          "label": "Continue safely",
+          "type": "continue_safe"
+        },
+        "testId": "learn-activity-fallback",
+        "title": "Activity unavailable",
+        "version": "learn-adaptive.text-card-fallback.v1"
+      },
+      "id": "ready-session:0000000000000010008studySessions",
+      "planRevision": 1,
+      "primitive": {
+        "action": "continue",
+        "contractVersion": "learn-adaptive.activity-contract.v1",
+        "props": {
+          "explanation": "Study the supported explanation.",
+          "heading": "Apply a rule",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ]
+        },
+        "rendererVersion": "learn-adaptive.renderer.v1",
+        "testId": "learn-primitive-cited-explanation",
+        "type": "cited_explanation"
+      },
+      "purpose": "Study the supported explanation, then apply it independently.",
+      "reasonCode": "ready_v2_session",
+      "requiredAction": {
+        "kind": "continue",
+        "label": "Continue"
+      },
+      "status": "submitted"
+    },
+    "ownerId": "000000000000000000000010000users",
+    "recovery": null,
+    "recoveryEvidenceIssue": null,
+    "recoveryState": null,
+    "responsePrompt": "Apply the rule independently.",
+    "savedResponse": {
+      "confidence": 3,
+      "response": "My committed response."
+    },
+    "session": {
+      "blueprintRecordRevision": 1,
+      "contentRevision": 1,
+      "planRecordRevision": 1,
+      "revision": 2,
+      "scheduledEndAt": null,
+      "scheduledStartAt": 1800000000001,
+      "studySessionId": "0000000000000010008studySessions",
+      "timezone": "UTC"
+    },
+    "status": "submitted",
+    "thread": {
+      "id": "00000000000010021learningThreads",
+      "intent": "understand",
+      "outcome": "Apply a rule",
+      "revision": 3
+    }
+  },
   "feedback.invalid": {
     "error": "Committed feedback projection is invalid"
   },

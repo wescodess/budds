@@ -94,3 +94,45 @@ test.each(['legacy', 'persisted', 'invalid'] as const)('off-state %s mastery fee
     expectPinned(`feedback.${kind}`, { error: (error as Error).message })
   }
 })
+
+test('off-state Canvas attach, read, stage, replay and scoring match pinned dev with Phase A keys', async () => {
+  const f = await fixture('learning', false)
+  await f.t.run(async ctx => {
+    const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
+    await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: Date.now() } })
+    await ctx.db.patch(f.ids.sessionContentId, { inputDigest: `sha256:${'a'.repeat(64)}`, generatorVersion: 'learn-v2.session-content.v1', providerModel: 'test/model' })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId: f.ids.learningVoidId, origin: 'user_url', externalKey: 'off_canvas_source' })
+    const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId: f.ids.learningVoidId, sourceIdentityId,
+      blueprintRevisionId: f.ids.blueprintRevisionId, revision: 1, recordRevision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted',
+      rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: Date.now() })
+    await ctx.db.insert('learnObjectiveSources', { userId, objectiveId: f.ids.objectiveId, sourceSnapshotId, coverage: 'strong' })
+    const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId, locator: 'rule', excerpt: 'The source supports this rule.', rightsStatus: 'permitted' })
+    const claimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId: f.ids.sessionContentId, order: 0,
+      claim: 'The source supports this rule.', verifierVersion: 'verifier.v1', confidence: 0.95 })
+    await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId: claimId, sourceExcerptId, sourceSnapshotId,
+      entailment: 'entailed', conflictStatus: 'clear', evidenceStatus: 'evidence_available', verifierVersion: 'verifier.v1', confidence: 0.95 })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: f.ids.sessionContentId, order: 3, kind: 'explanation',
+      content: 'Study the supported explanation.', claimOrdersJson: '[0]' })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId: f.ids.sessionContentId, order: 4, kind: 'independent_application',
+      content: 'Apply the rule independently.', claimOrdersJson: '[0]' })
+  })
+  const attach = { studySessionId: f.ids.studySessionId, expectedSessionRevision: 1,
+    idempotencyKey: 'adaptive-ready-12345678-1234-1234-1234-123456789012' }
+  const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)
+  if (attached.kind !== 'attached') throw new Error('Expected Canvas attachment')
+  expectPinned('canvas.attach', attached)
+  expectPinned('canvas.attach.replay', await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach))
+  expectPinned('canvas.ready', await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))
+  expectPinned('canvas.ready.delivery', await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: attached.threadId, idempotencyKey: 'canvas_off_delivery_1234567890' }))
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.ids.studySessionId, expectedSessionRevision: 1,
+    expectedContentRevision: 1, idempotencyKey: 'canvas_start_1234567890' })
+  const stage = { threadId: attached.threadId, activityId: attached.activityId, studySessionId: f.ids.studySessionId,
+    expectedSessionRevision: 2, expectedRevision: 2, response: 'My committed response.', confidence: 3,
+    idempotencyKey: 'adaptive-canvas-submit-12345678-1234-1234-1234-123456789012' }
+  expectPinned('canvas.stage', await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, stage))
+  expectPinned('canvas.stage.replay', await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, stage))
+  expectPinned('canvas.submitted', await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))
+  expectPinned('canvas.score.denied', await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    studySessionId: f.ids.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, expectedPlanRecordRevision: 1,
+    expectedBlueprintRecordRevision: 1, response: stage.response, confidence: stage.confidence, idempotencyKey: 'canvas_score_1234567890' }))
+})

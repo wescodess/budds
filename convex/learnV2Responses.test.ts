@@ -175,6 +175,16 @@ function accepted(result: LearnResponseReceipt) {
   return result
 }
 
+test('ordinary assessment acceptance still requires its session-content claims', async () => {
+  const f = await fixture('ordinary')
+  await f.t.run(async ctx => {
+    const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q =>
+      q.eq('userId', OWNER.tokenIdentifier).eq('sessionContentId', f.context.sessionContentId)).take(33)
+    for (const claim of claims) await ctx.db.delete(claim._id)
+  })
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })).toMatchObject({ kind: 'rejected', reasonCode: 'evidence_unavailable' })
+})
+
 test.each([false, true])('slot delivery digest mismatch=%s controls acceptance', async mismatch => {
   const f = await fixture()
   const slot = (await f.t.run(ctx => ctx.db.get(f.target.responseSlotId)))!

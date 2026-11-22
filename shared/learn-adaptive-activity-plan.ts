@@ -7,9 +7,23 @@ import {
   type ValidatedAdaptiveActivityPrimitive,
   validateAdaptiveActivityPrimitiveSequence,
 } from './learn-adaptive-activity-registry'
+import { z } from 'zod'
+import { learnDigestSchema, learnIdSchema, learnRevisionSchema, learnVersionSchema } from './learn-v2-responses'
 
 export const ADAPTIVE_ACTIVITY_PLAN_VERSION = 'learn-adaptive.activity-plan.v1' as const
 export const ADAPTIVE_ACTIVITY_REPLAY_VERSION = 'learn-adaptive.activity-replay.v1' as const
+export const ADAPTIVE_ASSESSMENT_PLAN_VERSION = 'learn-adaptive.assessment-plan.v1' as const
+
+export const adaptiveAssessmentReferenceSchema = z.strictObject({
+  version: z.literal(ADAPTIVE_ASSESSMENT_PLAN_VERSION),
+  assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
+  deliveryGrantId: learnIdSchema<'learnAssessmentExposures'>().nullable(),
+  item: z.strictObject({ itemId: learnIdSchema<'learnMeasurementItems'>(), itemRevision: learnRevisionSchema, promptDigest: learnDigestSchema }),
+  responseSpec: z.strictObject({ kind: z.literal('bounded_rubric'), version: learnVersionSchema, maxCodeUnits: z.literal(12000) }),
+  claims: z.array(z.strictObject({ claimId: learnIdSchema<'learnMeasurementClaims'>(), revision: learnRevisionSchema, claimDigest: learnDigestSchema }))
+    .min(1).max(32).refine(rows => new Set(rows.map(row => row.claimId)).size === rows.length),
+})
+export type AdaptiveAssessmentReference = z.infer<typeof adaptiveAssessmentReferenceSchema>
 
 export type AdaptiveLearningIntent = 'understand' | 'prepare' | 'build' | 'master' | 'refresh' | 'explore'
 export type AdaptiveAvailableTime = '15' | '25' | '45' | '60' | 'no_limit'
@@ -28,6 +42,7 @@ export type AdaptiveActivityEvidenceReference = {
 }
 
 export type AdaptiveActivityPlanInput = {
+  assessmentReference?: AdaptiveAssessmentReference
   attribution?: {
     contributionId: string
     sourceFeature: 'chat' | 'quiz' | 'flashcards' | 'podcast' | 'documents'
@@ -88,7 +103,7 @@ export type AdaptiveActivityPlanInput = {
   replacesActivityId?: string
 }
 
-export type ComposedAdaptiveActivityPlan = Omit<AdaptiveActivityPlanInput, 'primitiveSequence' | 'replacesActivityId'> & {
+export type ComposedAdaptiveActivityPlan = Omit<AdaptiveActivityPlanInput, 'primitiveSequence' | 'replacesActivityId' | 'assessmentReference'> & {
   planVersion: typeof ADAPTIVE_ACTIVITY_PLAN_VERSION
   replayVersion: typeof ADAPTIVE_ACTIVITY_REPLAY_VERSION
   contractVersion: typeof ADAPTIVE_ACTIVITY_CONTRACT_VERSION
@@ -141,7 +156,7 @@ async function sha256(value: string) {
   return `sha256:${[...digest].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
-function validateEvidence(input: AdaptiveActivityPlanInput) {
+function validateEvidence(input: AdaptiveActivityPlanInput, assessment = false) {
   if (input.evidenceReferences.length > 16) throw new Error('Activity evidence exceeds the maximum of 16 references')
   const keys = new Set<string>()
   const evidenceReferences = input.evidenceReferences.map((reference) => {
@@ -162,13 +177,25 @@ function validateEvidence(input: AdaptiveActivityPlanInput) {
     keys.add(key)
     return validated
   })
-  if (input.activityClass === 'factual' && evidenceReferences.length === 0) throw new Error('Factual activity requires accepted evidence')
+  if (input.activityClass === 'factual' && evidenceReferences.length === 0 && !assessment) throw new Error('Factual activity requires accepted evidence')
   if (input.activityClass === 'non_factual' && evidenceReferences.length > 0) throw new Error('Non-factual activity cannot cite evidence')
   return evidenceReferences
 }
 
 export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInput): Promise<ComposedAdaptiveActivityPlan> {
-  const evidenceReferences = validateEvidence(input)
+  const assessment = input.assessmentReference === undefined ? null : adaptiveAssessmentReferenceSchema.parse(input.assessmentReference)
+  if (assessment) {
+    if (input.activityClass !== 'factual' || input.attribution || input.evidenceReferences.length || input.decisionInputs.sourceInputs.length
+      || !Array.isArray(input.primitiveSequence) || input.primitiveSequence.length
+      || input.evaluationContract.kind !== 'server_scored' || input.evaluationContract.responseFormat !== 'short_text'
+      || input.evaluationContract.passingScorePercent !== 80) throw new Error('Assessment activity cannot contain teaching content')
+    input = { ...input, purpose: 'Complete the assigned check.', reasonCode: 'assessment_check',
+      requiredAction: { kind: 'submit_response', label: 'Submit response' },
+      accessibilityMetadata: { heading: 'Assigned check', instructions: 'Submit your response.', focusTargetTestId: 'learn-primitive-independent-application', liveRegionMode: 'polite' },
+      decisionInputs: { ...input.decisionInputs, routerVersion: ADAPTIVE_ASSESSMENT_PLAN_VERSION, priorActivityId: null, priorAttemptId: null,
+        priorOutcome: null, assistance: 'none', confidence: null } }
+  }
+  const evidenceReferences = validateEvidence(input, assessment !== null)
   const factualPins = Object.values(input.pins).every(value => typeof value === 'string' && value.length > 0)
   if (input.activityClass === 'factual' && (!factualPins || input.objectiveId !== input.pins.objectiveId)) {
     throw new Error('Factual activity requires complete matching V2 pins')
@@ -179,8 +206,12 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
   if (input.activityClass === 'non_factual' && input.objectiveId !== null) throw new Error('Non-factual activity cannot target an objective')
 
   const evidenceContext = Object.fromEntries(evidenceReferences.map(reference => [reference.sourceSnapshotId, { integrityState: reference.integrityState }]))
-  const primitiveResult = validateAdaptiveActivityPrimitiveSequence(input.primitiveSequence, evidenceContext)
-  if (!primitiveResult.ok) throw new Error(`Primitive sequence is invalid: ${primitiveResult.error.code}`)
+  const primitivePlan = (() => {
+    if (assessment) return []
+    const primitiveResult = validateAdaptiveActivityPrimitiveSequence(input.primitiveSequence, evidenceContext)
+    if (!primitiveResult.ok) throw new Error(`Primitive sequence is invalid: ${primitiveResult.error.code}`)
+    return primitiveResult.value.primitives
+  })()
 
   const passingScorePercent = input.evaluationContract.passingScorePercent
   if (passingScorePercent !== null && (!Number.isSafeInteger(passingScorePercent) || passingScorePercent < 0 || passingScorePercent > 100)) {
@@ -222,7 +253,7 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
     objectiveId: input.objectiveId === null ? null : boundedText(input.objectiveId, 'Objective identity', 200),
     purpose: boundedText(input.purpose, 'Activity purpose', 1_000),
     reasonCode: boundedText(input.reasonCode, 'Activity reason code', 120),
-    primitivePlan: primitiveResult.value.primitives,
+    primitivePlan,
     requiredAction: {
       kind: boundedText(input.requiredAction.kind, 'Required action kind', 80),
       label: boundedText(input.requiredAction.label, 'Required action label', 160),
@@ -273,7 +304,7 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
     },
     replacesActivityId: input.replacesActivityId ? boundedText(input.replacesActivityId, 'Replacement activity identity', 160) : null,
   }
-  const canonicalInputSnapshot = canonicalAdaptiveActivityJson(core)
+  const canonicalInputSnapshot = canonicalAdaptiveActivityJson({ ...core, ...(assessment ? { assessmentReference: assessment } : {}) })
   if (canonicalInputSnapshot.length > 32_000) throw new Error('Canonical activity input exceeds 32000 characters')
   return { ...core, canonicalInputSnapshot, inputDigest: await sha256(canonicalInputSnapshot) }
 }
@@ -281,11 +312,27 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
 export async function replayAdaptiveActivityPlan(candidate: ComposedAdaptiveActivityPlan) {
   try {
     const { canonicalInputSnapshot, inputDigest, ...core } = candidate
-    if (canonicalAdaptiveActivityJson(core) !== canonicalInputSnapshot) return { ok: false as const, reason: 'replay_integrity_failed' as const }
+    const stored: unknown = JSON.parse(canonicalInputSnapshot)
+    const assessment = stored && typeof stored === 'object' && 'assessmentReference' in stored
+      ? adaptiveAssessmentReferenceSchema.parse(stored.assessmentReference) : null
+    if (canonicalAdaptiveActivityJson({ ...core, ...(assessment ? { assessmentReference: assessment } : {}) }) !== canonicalInputSnapshot) return { ok: false as const, reason: 'replay_integrity_failed' as const }
     if (await sha256(canonicalInputSnapshot) !== inputDigest) return { ok: false as const, reason: 'replay_integrity_failed' as const }
+    if (assessment) {
+      const rebuilt = await composeAdaptiveActivityPlan({ ...candidate, primitiveSequence: candidate.primitivePlan, assessmentReference: assessment,
+        replacesActivityId: candidate.replacesActivityId ?? undefined })
+      if (rebuilt.canonicalInputSnapshot !== canonicalInputSnapshot) return { ok: false as const, reason: 'replay_integrity_failed' as const }
+    }
     return { ok: true as const, value: candidate }
   }
   catch {
     return { ok: false as const, reason: 'replay_integrity_failed' as const }
   }
+}
+
+export function readAdaptiveAssessmentReference(plan: Pick<ComposedAdaptiveActivityPlan, 'canonicalInputSnapshot'>): AdaptiveAssessmentReference | null {
+  try {
+    const stored: unknown = JSON.parse(plan.canonicalInputSnapshot)
+    if (!stored || typeof stored !== 'object' || !('assessmentReference' in stored)) return null
+    return adaptiveAssessmentReferenceSchema.parse(stored.assessmentReference)
+  } catch { return null }
 }
