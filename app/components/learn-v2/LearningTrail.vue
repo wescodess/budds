@@ -3,7 +3,7 @@ import { computed, nextTick, ref, shallowRef, useId, watch } from 'vue'
 import { useElementBounding, useEventListener, useIntersectionObserver } from '@vueuse/core'
 import { ArrowRight, Check, ChevronDown, ChevronUp, CircleAlert, CircleDot, ListOrdered, LoaderCircle, Pencil, Plus, Scissors, Trash2 } from '@lucide/vue'
 import type { LearnCoverage, LearnMapEdit, LearnMapSaveResult, LearnObjectiveDraft, LearnObjectiveSnapshot, LearnSourceOrigin, LearnSourceSnapshot } from '~/types/learn-v2-journey'
-import { isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MINIMUM_MINUTES, splitLearnMapMinutes } from '~/utils/learn-v2-map-editor'
+import { isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES, LEARN_MAP_MAXIMUM_SOURCE_LINKS, LEARN_MAP_MINIMUM_MINUTES, splitLearnMapMinutes } from '~/utils/learn-v2-map-editor'
 
 type Depth = LearnObjectiveDraft['depth']
 type Panel = 'time' | 'depth' | 'first' | 'sources'
@@ -38,7 +38,8 @@ const draft = ref<LearnObjectiveDraft | null>(null)
 const baseline = ref<LearnObjectiveDraft | null>(null)
 const heldOrder = ref<string[] | null>(null)
 const removing = ref(false)
-const splitting = ref(false)
+const splitMinutes = ref<[number, number] | null>(null)
+const splitting = computed(() => splitMinutes.value !== null)
 const saving = ref(false)
 const failure = ref<{ number: number; reason: 'changed' | 'failed' } | null>(null)
 const panel = ref<Panel | null>(null)
@@ -112,8 +113,8 @@ const rows = computed(() => {
 const placed = computed(() => rows.value.filter(row => row.key !== NEW))
 const numberOf = computed(() => new Map(rows.value.map(row => [row.key, row.number])))
 const groups = computed(() => milestones.value.map(milestone => ({ ...milestone, rows: rows.value.filter(row => row.milestoneKey === milestone.key) })))
-const splitParts = computed(() => splitting.value && draft.value && isLearnMapMinutes(draft.value.effortMinutes) ? splitLearnMapMinutes(draft.value.effortMinutes) : null)
-const splitAddedMinutes = computed(() => splitParts.value && draft.value ? splitParts.value[0] + splitParts.value[1] - draft.value.effortMinutes : 0)
+const splitAddedMinutes = computed(() => splitMinutes.value && draft.value ? (Number(splitMinutes.value[0]) || 0) + splitMinutes.value[1] - (Number(draft.value.effortMinutes) || 0) : 0)
+const splitFloorAdded = computed(() => splitAddedMinutes.value > 0 && splitMinutes.value?.every(minutes => minutes === LEARN_MAP_MINIMUM_MINUTES) ? splitAddedMinutes.value : 0)
 const totalMinutes = computed(() => placed.value.reduce((total, row) => total + (Number(row.view.effortMinutes) || 0), 0) + splitAddedMinutes.value)
 const baselineOrder = computed(() => milestones.value.flatMap(milestone => objectives.filter(item => item.milestoneKey === milestone.key)).map(item => item.stableKey).join())
 const selectedNumber = computed(() => selectedKey.value ? numberOf.value.get(selectedKey.value) ?? 0 : 0)
@@ -145,6 +146,22 @@ const changes = computed(() => {
   if (splitting.value) list.push('split')
   return list
 })
+const linkCount = (view: LearnObjectiveDraft) => {
+  const value = normalized(view)
+  return value.supportingSourceKeys.length + value.gapSourceKeys.length
+}
+const sourcesFull = computed(() => draft.value !== null && linkCount(draft.value) >= LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES)
+const mapLinks = computed(() => {
+  const others = objectives.filter(item => item.stableKey !== selectedKey.value).reduce((total, item) => total + item.sourceLinks.length, 0)
+  return draft.value && !removing.value ? others + linkCount(draft.value) * (splitting.value ? 2 : 1) : others
+})
+const linkLimit = computed(() => {
+  if (!draft.value || removing.value) return null
+  if (linkCount(draft.value) > LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES) return `An objective can use up to ${LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES} sources. Untick one to save.`
+  if (mapLinks.value > LEARN_MAP_MAXIMUM_SOURCE_LINKS) return `A map can use sources up to ${LEARN_MAP_MAXIMUM_SOURCE_LINKS} times across its objectives. Untick a source to save.`
+  return null
+})
+const sourceLocked = (key: string) => sourcesFull.value && !draft.value?.supportingSourceKeys.includes(key) && !draft.value?.gapSourceKeys.includes(key)
 const pending = computed(() => changes.value.length > 0 || failure.value !== null)
 const waitingAway = computed(() => Boolean(selectedKey.value) && pending.value && !editorInView.value)
 const mode = computed(() => saving.value ? 'saving' : failure.value ? 'failed' : changes.value.length ? 'dirty' : 'clean')
@@ -153,10 +170,11 @@ const valid = computed(() => {
   if (!value) return false
   if (removing.value) return true
   if (!value.title.trim() || !value.capability.trim() || !isLearnMapMinutes(value.effortMinutes)) return false
+  if (splitMinutes.value && !isLearnMapMinutes(splitMinutes.value[0])) return false
   if (value.coverage !== 'gap' && !value.supportingSourceKeys.length) return false
   return value.coverage === 'strong' || Boolean(value.gapReason?.trim())
 })
-const canSave = computed(() => changes.value.length > 0 && valid.value && !saving.value && !busy)
+const canSave = computed(() => changes.value.length > 0 && valid.value && !linkLimit.value && !saving.value && !busy)
 const statusText = computed(() => ({
   clean: 'Changes to this objective are saved together.',
   dirty: `Not saved yet: ${listJoin(changes.value)}.`,
@@ -223,7 +241,7 @@ function open(key: string, value: LearnObjectiveDraft) {
   baseline.value = copy(value)
   heldOrder.value = null
   removing.value = false
-  splitting.value = false
+  splitMinutes.value = null
   failure.value = null
   panel.value = null
 }
@@ -235,7 +253,7 @@ function close(restoreFocus = true) {
   baseline.value = null
   heldOrder.value = null
   removing.value = false
-  splitting.value = false
+  splitMinutes.value = null
   failure.value = null
   panel.value = null
   if (restoreFocus && key && key !== NEW && objectives.some(item => item.stableKey === key)) focusRow(key, '[data-objective-title]')
@@ -275,6 +293,11 @@ function togglePanel(name: Panel) {
   if (panel.value) {
     void nextTick(() => document.getElementById(`${uid}-panel`)?.querySelector<HTMLElement>('input:not(:disabled), textarea')?.focus())
   }
+}
+
+function toggleSplit() {
+  const minutes = Math.min(Math.max(Number(draft.value?.effortMinutes) || 0, LEARN_MAP_MINIMUM_MINUTES), LEARN_MAP_MAXIMUM_MINUTES)
+  splitMinutes.value = splitMinutes.value ? null : splitLearnMapMinutes(minutes)
 }
 
 function closePanel() {
@@ -324,7 +347,7 @@ async function submit() {
   const objective = normalized(value)
   if (key === NEW) return await commit({ kind: 'save_objective', objective }, 'close')
   const title = objective.title.trim()
-  await commit({ kind: 'save_objective', objective, order: placed.value.map(row => row.key), ...(splitting.value ? { split: { secondTitle: `${title.slice(0, 193)}: apply` } } : {}) }, 'keep')
+  await commit({ kind: 'save_objective', objective, order: placed.value.map(row => row.key), ...(splitMinutes.value ? { split: { secondTitle: `${title.slice(0, 193)}: apply`, minutes: [splitMinutes.value[0], splitMinutes.value[1]] } } : {}) }, 'keep')
 }
 
 function reload() {
@@ -449,7 +472,7 @@ function closeOrder() {
                       <div class="-mr-1 flex flex-wrap items-center gap-1">
                         <UiButton variant="ghost" size="icon-sm" aria-label="Move earlier" data-move="-1" :disabled="saving || !canMoveEarlier" :data-testid="`learn-v2-map-move-up-${row.key}`" @click="move(-1)"><ChevronUp /></UiButton>
                         <UiButton variant="ghost" size="icon-sm" aria-label="Move later" data-move="1" :disabled="saving || !canMoveLater" :data-testid="`learn-v2-map-move-down-${row.key}`" @click="move(1)"><ChevronDown /></UiButton>
-                        <UiButton variant="ghost" size="sm" :aria-pressed="splitting" :disabled="saving || removing || row.key === NEW || objectives.length >= 15" data-testid="learn-v2-map-split-objective" @click="splitting = !splitting"><Scissors />Split</UiButton>
+                        <UiButton variant="ghost" size="sm" :aria-pressed="splitting" :disabled="saving || removing || row.key === NEW || objectives.length >= 15" data-testid="learn-v2-map-split-objective" @click="toggleSplit"><Scissors />Split</UiButton>
                         <UiButton variant="ghost" size="sm" :class="destructiveGhost" :aria-pressed="removing" :disabled="saving || splitting || row.key === NEW || objectives.length <= 6" data-testid="learn-v2-map-remove-objective" @click="removing = !removing"><Trash2 />Remove</UiButton>
                       </div>
                     </div>
@@ -460,8 +483,8 @@ function closeOrder() {
                     <div v-if="draft.coverage !== 'strong' && draft.gapReason?.trim()" class="mt-2 flex items-start gap-2 text-sm text-foreground"><CircleAlert class="mt-0.5 size-4 shrink-0 text-[var(--learn-attention)]" /><span class="min-w-0">{{ draft.gapReason }}</span></div>
                     <div class="relative mt-3">
                       <div class="flex flex-wrap gap-1.5">
-                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('time')">{{ splitParts?.[0] ?? draft.effortMinutes }} min<span class="sr-only">{{ splitParts ? ', first part, change time' : ', change time' }}</span></button>
-                        <span v-if="splitParts" :class="[chipBaseClass, 'border-border']" data-testid="learn-v2-map-split-second-time">{{ splitParts[1] }} min<span class="sr-only">, second part</span></span>
+                        <button :id="`${uid}-chip-time`" type="button" :aria-expanded="panel === 'time'" :class="[chipClass, panel === 'time' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('time')">{{ splitMinutes?.[0] ?? draft.effortMinutes }} min<span class="sr-only">{{ splitMinutes ? ', first part, change time' : ', change time' }}</span></button>
+                        <span v-if="splitMinutes" :class="[chipBaseClass, 'border-border']" data-testid="learn-v2-map-split-second-time">{{ splitMinutes[1] }} min<span class="sr-only">, second part</span></span>
                         <button :id="`${uid}-chip-depth`" type="button" :aria-expanded="panel === 'depth'" :class="[chipClass, panel === 'depth' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('depth')">{{ depthLabel[draft.depth] }}<span class="sr-only">, change depth</span></button>
                         <button :id="`${uid}-chip-first`" type="button" :aria-expanded="panel === 'first'" :class="[chipClass, panel === 'first' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" @click="togglePanel('first')">{{ afterLabel(draft) }}<span class="sr-only">, change what to learn first</span></button>
                         <button :id="`${uid}-chip-sources`" type="button" :aria-expanded="panel === 'sources'" :class="[chipClass, panel === 'sources' ? 'border-primary bg-primary/5' : 'border-border']" :aria-disabled="saving || undefined" data-testid="learn-v2-objective-sources" @click="togglePanel('sources')">
@@ -469,11 +492,11 @@ function closeOrder() {
                           <template v-else><Plus class="size-3.5" />Add a source</template>
                         </button>
                       </div>
-                      <p v-if="splitAddedMinutes > 0" class="mt-1.5 text-xs text-muted-foreground" data-testid="learn-v2-map-split-added">Splitting adds {{ splitAddedMinutes }} min so each part has the {{ LEARN_MAP_MINIMUM_MINUTES }}-minute minimum.</p>
+                      <p v-if="splitFloorAdded" class="mt-1.5 text-xs text-muted-foreground" data-testid="learn-v2-map-split-added">Splitting adds {{ splitFloorAdded }} min so each part has the {{ LEARN_MAP_MINIMUM_MINUTES }}-minute minimum.</p>
                       <div v-if="panel" :id="`${uid}-panel`" role="dialog" :aria-labelledby="`${uid}-panel-title`" class="z-10 mt-2 flex w-full flex-col rounded-lg border bg-popover text-popover-foreground shadow-md sm:absolute sm:top-full sm:left-0" :class="panel === 'first' ? 'sm:w-[26rem]' : 'sm:w-96'" @keydown.esc.stop="closePanel">
-                        <p :id="`${uid}-panel-title`" class="border-b border-border px-3 py-2.5 text-sm font-medium text-foreground">{{ panel === 'time' ? `Time for objective ${row.number}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}` }}</p>
-                        <div role="region" tabindex="0" :aria-label="`${panel === 'time' ? `Time for objective ${row.number}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}`}, scrolls`" class="max-h-[min(22rem,calc(100dvh-14rem))] overflow-y-auto overscroll-contain px-3 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
-                          <label v-if="panel === 'time'" class="block text-sm font-medium text-foreground">Minutes<span class="mt-1.5 block font-normal"><UiInput v-model.number="draft.effortMinutes" type="number" :min="LEARN_MAP_MINIMUM_MINUTES" :max="LEARN_MAP_MAXIMUM_MINUTES" step="5" data-testid="learn-v2-objective-effort" /></span><span class="mt-1 block text-xs font-normal text-muted-foreground">{{ LEARN_MAP_MINIMUM_MINUTES }} to {{ LEARN_MAP_MAXIMUM_MINUTES }}</span></label>
+                        <p :id="`${uid}-panel-title`" class="border-b border-border px-3 py-2.5 text-sm font-medium text-foreground">{{ panel === 'time' ? `Time for objective ${row.number}${splitMinutes ? ', first part' : ''}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}` }}</p>
+                        <div role="region" tabindex="0" :aria-label="`${panel === 'time' ? `Time for objective ${row.number}${splitMinutes ? ', first part' : ''}` : panel === 'depth' ? `Depth of objective ${row.number}` : panel === 'first' ? `Learn first, before objective ${row.number}` : `Sources for objective ${row.number}`}, scrolls`" class="max-h-[min(22rem,calc(100dvh-14rem))] overflow-y-auto overscroll-contain px-3 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+                          <label v-if="panel === 'time'" class="block text-sm font-medium text-foreground">Minutes<span class="mt-1.5 block font-normal"><UiInput v-if="splitMinutes" v-model.number="splitMinutes[0]" type="number" :min="LEARN_MAP_MINIMUM_MINUTES" :max="LEARN_MAP_MAXIMUM_MINUTES" step="5" data-testid="learn-v2-objective-effort" /><UiInput v-else v-model.number="draft.effortMinutes" type="number" :min="LEARN_MAP_MINIMUM_MINUTES" :max="LEARN_MAP_MAXIMUM_MINUTES" step="5" data-testid="learn-v2-objective-effort" /></span><span class="mt-1 block text-xs font-normal text-muted-foreground">{{ LEARN_MAP_MINIMUM_MINUTES }} to {{ LEARN_MAP_MAXIMUM_MINUTES }}</span></label>
                           <div v-else-if="panel === 'depth'" role="radiogroup" aria-label="Depth" class="flex flex-wrap gap-1 rounded-xl border border-input p-1">
                             <label v-for="(label, value) in depthLabel" :key="value" :class="segmentClass"><input v-model="draft.depth" type="radio" class="sr-only" :name="`${uid}-depth`" :value="value">{{ label }}</label>
                           </div>
@@ -485,6 +508,7 @@ function closeOrder() {
                             </label>
                           </div>
                           <template v-else>
+                            <p v-if="sourcesFull" class="mb-3 font-inter text-xs font-medium text-foreground" data-testid="learn-v2-map-sources-full">An objective can use up to {{ LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES }} sources. Untick one to add another.</p>
                             <p class="text-sm font-medium text-foreground">Do your sources cover this?</p>
                             <div class="mt-2"><div role="radiogroup" aria-label="Do your sources cover this?" class="flex flex-wrap gap-1 rounded-xl border border-input p-1">
                               <label v-for="(label, value) in coverageLabel" :key="value" :class="coverageSegmentClass"><input v-model="draft.coverage" type="radio" class="sr-only" :name="`${uid}-coverage`" :value="value"><Check v-if="draft.coverage === value" class="size-3.5 shrink-0" />{{ label }}</label>
@@ -493,8 +517,8 @@ function closeOrder() {
                             <div v-if="draft.coverage !== 'gap'" class="mt-4">
                               <p class="text-sm font-medium text-foreground">Teach this from</p>
                               <div class="mt-1 divide-y divide-border">
-                                <label v-for="source in acceptedSources" :key="source.sourceKey" class="flex min-h-9 cursor-pointer items-start gap-2.5 py-2.5 text-sm">
-                                  <input v-model="draft.supportingSourceKeys" type="checkbox" class="peer sr-only" :value="source.sourceKey">
+                                <label v-for="source in acceptedSources" :key="source.sourceKey" class="flex min-h-9 items-start gap-2.5 py-2.5 text-sm" :class="sourceLocked(source.sourceKey) ? 'cursor-not-allowed' : 'cursor-pointer'">
+                                  <input v-model="draft.supportingSourceKeys" type="checkbox" class="peer sr-only" :value="source.sourceKey" :disabled="sourceLocked(source.sourceKey)">
                                   <span :class="checkBoxClass"><Check class="size-3" /></span>
                                   <span :class="citeClass" aria-hidden="true">{{ sourceNumber.get(source.sourceKey) }}</span>
                                   <span class="min-w-0"><span class="block text-foreground">{{ source.title }}</span><span class="block text-xs text-muted-foreground">{{ originLabel[source.origin] }}<template v-if="source.publisher"> · {{ source.publisher }}</template></span></span>
@@ -505,8 +529,8 @@ function closeOrder() {
                               <p class="text-sm font-medium text-foreground">Looked at, but not enough</p>
                               <p class="mt-0.5 text-xs text-muted-foreground">Optional. Budds won’t teach this objective from these.</p>
                               <div class="mt-1 divide-y divide-border">
-                                <label v-for="source in lookedChoices" :key="source.sourceKey" class="flex min-h-9 cursor-pointer items-start gap-2.5 py-2.5 text-sm">
-                                  <input v-model="draft.gapSourceKeys" type="checkbox" class="peer sr-only" :value="source.sourceKey">
+                                <label v-for="source in lookedChoices" :key="source.sourceKey" class="flex min-h-9 items-start gap-2.5 py-2.5 text-sm" :class="sourceLocked(source.sourceKey) ? 'cursor-not-allowed' : 'cursor-pointer'">
+                                  <input v-model="draft.gapSourceKeys" type="checkbox" class="peer sr-only" :value="source.sourceKey" :disabled="sourceLocked(source.sourceKey)">
                                   <span :class="checkBoxClass"><Check class="size-3" /></span>
                                   <span v-if="sourceNumber.get(source.sourceKey)" :class="citeClass" aria-hidden="true">{{ sourceNumber.get(source.sourceKey) }}</span>
                                   <span class="min-w-0"><span class="block text-foreground">{{ source.title }}</span><span class="block text-xs text-muted-foreground">{{ originLabel[source.origin] }}<template v-if="source.publisher"> · {{ source.publisher }}</template></span></span>
@@ -527,8 +551,9 @@ function closeOrder() {
                       </p>
                       <div class="ml-auto flex min-w-0 flex-wrap justify-end gap-2">
                         <UiButton variant="ghost" class="max-sm:px-4" :disabled="saving" data-testid="learn-v2-objective-close" @click="close()">{{ mode === 'clean' ? 'Close' : 'Cancel' }}</UiButton>
-                        <UiButton :variant="mode === 'clean' ? 'secondary' : 'default'" class="max-sm:px-4" :disabled="!canSave" data-testid="learn-v2-save-objective" @click="submit"><LoaderCircle v-if="saving" class="size-4 animate-spin motion-reduce:animate-none" />{{ saving ? 'Saving' : 'Save changes' }}</UiButton>
+                        <UiButton :variant="mode === 'clean' ? 'secondary' : 'default'" class="max-sm:px-4" :disabled="!canSave" :aria-describedby="linkLimit ? `${uid}-links` : undefined" data-testid="learn-v2-save-objective" @click="submit"><LoaderCircle v-if="saving" class="size-4 animate-spin motion-reduce:animate-none" />{{ saving ? 'Saving' : 'Save changes' }}</UiButton>
                       </div>
+                      <p v-if="linkLimit" :id="`${uid}-links`" class="basis-full font-inter text-xs font-medium text-foreground" data-testid="learn-v2-map-links-full">{{ linkLimit }}</p>
                     </div>
                   </div>
                 </li>

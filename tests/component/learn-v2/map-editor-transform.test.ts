@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { reactive } from 'vue'
 import { ConvexError } from 'convex/values'
-import { applyLearnMapEdit, isLearnMapChangedError, isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MINIMUM_MINUTES, LearnMapChangedError, splitLearnMapMinutes, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
+import { applyLearnMapEdit, isLearnMapChangedError, isLearnMapMinutes, LEARN_MAP_MAXIMUM_MINUTES, LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES, LEARN_MAP_MAXIMUM_SOURCE_LINKS, LEARN_MAP_MINIMUM_MINUTES, LearnMapChangedError, splitLearnMapMinutes, type LearnMapCandidate } from '../../../app/utils/learn-v2-map-editor'
 import { LEARN_V2_BLUEPRINT_LIMITS } from '../../../shared/learn-v2-blueprint'
 
 function candidate(): LearnMapCandidate {
@@ -73,6 +73,17 @@ describe('Learning map revision transform', () => {
   it('accepts only whole minutes from 15 to 480, the range the server saves', () => {
     expect([LEARN_MAP_MINIMUM_MINUTES, LEARN_MAP_MAXIMUM_MINUTES]).toEqual([LEARN_V2_BLUEPRINT_LIMITS.minimumObjectiveMinutes, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveMinutes])
     expect([5, 14, 14.5, 15, 25, 480, 481, Number.NaN].map(isLearnMapMinutes)).toEqual([false, false, false, true, true, true, false, false])
+  })
+
+  it('limits sources to the 10 per objective and 60 per map the server saves', () => {
+    expect([LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES, LEARN_MAP_MAXIMUM_SOURCE_LINKS]).toEqual([LEARN_V2_BLUEPRINT_LIMITS.maximumSourcesPerObjective, LEARN_V2_BLUEPRINT_LIMITS.maximumObjectiveSourceLinks])
+  })
+
+  it('saves the part minutes the learner set on a held split', () => {
+    const objective = { objectiveKey: 'objective-2', title: 'Recognise cancellation', capability: 'Capability 2', milestoneKey: 'milestone-1', effortMinutes: 25, depth: 'working' as const, coverage: 'strong' as const, supportingSourceKeys: ['source-a'], gapSourceKeys: [], prerequisiteKeys: ['objective-1'] }
+    const edited = applyLearnMapEdit(candidate(), { kind: 'save_objective', objective, split: { secondTitle: 'Recognise cancellation: apply', minutes: [20, 15] } }, { 'source-a': 'snapshot-a' }, () => 'learner-split')
+    expect(edited.objectives.slice(1, 3).map(item => [item.key, item.estimatedMinutes])).toEqual([['objective-2', 20], ['learner-split', 15]])
+    expect(() => applyLearnMapEdit(candidate(), { kind: 'save_objective', objective, split: { secondTitle: 'Apply', minutes: [14, 15] } }, { 'source-a': 'snapshot-a' }, () => 'learner-split')).toThrow(/15 to 480/)
   })
 
   it('marks a map that changed under the edit as changed elsewhere', () => {

@@ -229,7 +229,7 @@ export const forkBlueprintDraft = mutation({
       createdAt: now,
       updatedAt: now,
     })
-    const copyMap = ['map_review', 'accepted', 'active'].includes(source.status)
+    const copyMap = ['draft', 'map_review', 'accepted', 'active'].includes(source.status)
     const clonedSourceIds = copyMap ? await cloneBlueprintChildren(ctx, userId, source, id) : new Map<string, Id<'learnSourceSnapshots'>>()
     const generationSupportingSourceSnapshotIds = copyMap ? source.generationSupportingSourceSnapshotIds?.map(sourceId => {
       const cloneId = clonedSourceIds.get(String(sourceId))

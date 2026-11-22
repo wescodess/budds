@@ -3,6 +3,8 @@ import type { LearnMapEdit } from '../types/learn-v2-journey'
 
 export const LEARN_MAP_MINIMUM_MINUTES = 15
 export const LEARN_MAP_MAXIMUM_MINUTES = 480
+export const LEARN_MAP_MAXIMUM_OBJECTIVE_SOURCES = 10
+export const LEARN_MAP_MAXIMUM_SOURCE_LINKS = 60
 
 export function isLearnMapMinutes(minutes: number) {
   return Number.isInteger(minutes) && minutes >= LEARN_MAP_MINIMUM_MINUTES && minutes <= LEARN_MAP_MAXIMUM_MINUTES
@@ -102,14 +104,15 @@ function createObjectiveKey(existing: Set<string>, supplied?: () => string) {
   throw new Error('Could not create a stable objective identity')
 }
 
-function splitObjective(candidate: LearnMapCandidate, objectiveKey: string, firstTitle: string, secondTitle: string, existingKeys: Set<string>, nextKey?: () => string) {
+function splitObjective(candidate: LearnMapCandidate, objectiveKey: string, firstTitle: string, secondTitle: string, existingKeys: Set<string>, nextKey?: () => string, minutes?: [number, number]) {
   if (candidate.objectives.length >= 15) throw new Error('This map already has the maximum of 15 objectives')
   const index = candidate.objectives.findIndex(objective => objective.key === objectiveKey)
   if (index < 0) throw new LearnMapChangedError('Objective is no longer in this map')
   const original = candidate.objectives[index]!
   const secondKey = createObjectiveKey(existingKeys, nextKey)
   const second = structuredClone(original)
-  const [firstMinutes, secondMinutes] = splitLearnMapMinutes(original.estimatedMinutes)
+  if (minutes && !minutes.every(isLearnMapMinutes)) throw new Error(`Each part needs ${LEARN_MAP_MINIMUM_MINUTES} to ${LEARN_MAP_MAXIMUM_MINUTES} minutes`)
+  const [firstMinutes, secondMinutes] = minutes ?? splitLearnMapMinutes(original.estimatedMinutes)
   original.title = firstTitle
   original.estimatedMinutes = firstMinutes
   second.key = secondKey
@@ -181,7 +184,7 @@ export function applyLearnMapEdit(
       if (position.size !== candidate.objectives.length || candidate.objectives.some(objective => !position.has(objective.key))) throw new LearnMapChangedError('Objective is no longer in this map')
       candidate.objectives.sort((a, b) => position.get(a.key)! - position.get(b.key)!)
     }
-    if (edit.split) splitObjective(candidate, updated.key, updated.title, edit.split.secondTitle, existingKeys, nextKey)
+    if (edit.split) splitObjective(candidate, updated.key, updated.title, edit.split.secondTitle, existingKeys, nextKey, edit.split.minutes)
   }
 
   normalizeOrders(candidate)

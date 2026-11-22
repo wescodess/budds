@@ -439,6 +439,68 @@ describe('Learn V2 revision-safe map editing and calibration', () => {
     }
   })
 
+  test('a retry after a failed save reuses the draft fork and saves the whole map', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const mission = () => setup.owner.query(api.learnV2Journey.getMission, { learningVoidId: setup.learningVoid._id })
+      const before = (await mission())!
+      expect(before.map!.objectives).toHaveLength(6)
+      const fork = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: before.currentBlueprint!._id, expectedRecordRevision: before.currentBlueprint!.recordRevision, expectedVoidRevision: before.learningVoid.revision, idempotencyKey: 'retry-fork' })
+      const clonedSource = await setup.t.run(ctx => ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', identity.tokenIdentifier).eq('blueprintRevisionId', fork!._id)).first())
+      const rejected = editedCandidate(clonedSource!._id)
+      rejected.objectives = rejected.objectives.slice(0, 5)
+      const afterFork = (await mission())!
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { blueprintRevisionId: fork!._id, expectedRecordRevision: 1, expectedVoidRevision: afterFork.learningVoid.revision, idempotencyKey: 'retry-rejected', candidate: rejected })).rejects.toThrow()
+
+      const afterFailure = (await mission())!
+      expect(afterFailure.currentBlueprint).toMatchObject({ _id: fork!._id, status: 'draft' })
+      expect(afterFailure.map!.objectives).toHaveLength(6)
+      expect(afterFailure.sources.items).toHaveLength(before.sources.items.length)
+
+      const retry = { blueprintRevisionId: afterFailure.currentBlueprint!._id, expectedRecordRevision: afterFailure.currentBlueprint!.recordRevision, expectedVoidRevision: afterFailure.learningVoid.revision, idempotencyKey: 'retry-save', candidate: editedCandidate(clonedSource!._id) }
+      const saved = await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, retry)
+      expect(await setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, retry)).toEqual(saved)
+      await expect(setup.owner.mutation(api.learnV2MapCalibration.replaceDraftMap, { ...retry, idempotencyKey: 'retry-save-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
+
+      const after = (await mission())!
+      expect(after.currentBlueprint).toMatchObject({ _id: fork!._id, status: 'map_review' })
+      expect(after.map!.objectives.map(row => row.title)).toEqual(Array.from({ length: 6 }, (_, index) => `Edited objective ${index + 1}`))
+      expect(after.sources.items).toHaveLength(before.sources.items.length)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
+  test('a fork of a draft fork carries its map instead of an empty one', async () => {
+    const previous = process.env.LEARN_V2_ENABLED
+    try {
+      const setup = await setupMap()
+      const mission = () => setup.owner.query(api.learnV2Journey.getMission, { learningVoidId: setup.learningVoid._id })
+      const before = (await mission())!
+      const first = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { blueprintRevisionId: setup.blueprint._id, expectedRecordRevision: 1, expectedVoidRevision: before.learningVoid.revision, idempotencyKey: 'draft-fork-first' })
+      const draft = (await mission())!
+      const secondArgs = { blueprintRevisionId: first!._id, expectedRecordRevision: 1, expectedVoidRevision: draft.learningVoid.revision, idempotencyKey: 'draft-fork-second' }
+      const second = await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, secondArgs)
+      expect(await setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, secondArgs)).toEqual(second)
+      await expect(setup.owner.mutation(api.learnV2Lifecycle.forkBlueprintDraft, { ...secondArgs, idempotencyKey: 'draft-fork-stale' })).rejects.toMatchObject({ data: { reasonCode: 'revision_conflict' } })
+
+      const after = (await mission())!
+      expect(after.currentBlueprint).toMatchObject({ _id: second!._id, status: 'draft' })
+      expect(after.map!.objectives.map(row => row.title)).toEqual(before.map!.objectives.map(row => row.title))
+      expect(after.sources.items).toHaveLength(before.sources.items.length)
+      const parent = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: first!._id })
+      const child = await setup.owner.query(api.learnV2Blueprints.getBlueprintMap, { blueprintRevisionId: second!._id })
+      expect(child?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId).not.toBe(parent?.objectives[0]?.sourceLinks[0]?.sourceSnapshotId)
+    }
+    finally {
+      if (previous === undefined) delete process.env.LEARN_V2_ENABLED
+      else process.env.LEARN_V2_ENABLED = previous
+    }
+  })
+
   test('replaces only the forked draft, accepts it, and completes a bounded server-scored calibration', async () => {
     const previous = process.env.LEARN_V2_ENABLED
     try {

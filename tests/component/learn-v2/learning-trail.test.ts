@@ -39,11 +39,11 @@ async function scrollEditor(inView: boolean) {
 
 const rect = (top: number, bottom: number) => ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top, x: 0, y: top, toJSON: () => ({}) }) as DOMRect
 
-async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean; loading?: boolean } = {}) {
+async function mountTrail(options: { objectives?: LearnObjectiveSnapshot[]; sources?: LearnSourceSnapshot[]; save?: (edit: LearnMapEdit) => Promise<LearnMapSaveResult>; canAccept?: boolean; loading?: boolean } = {}) {
   const Comp = await import(`${path}/LearningTrail.vue`)
   const save = vi.fn(options.save ?? (async () => ({ ok: true }) as LearnMapSaveResult))
   const wrapper = await mountSuspended(Comp.default, {
-    props: { objectives: options.objectives ?? Array.from({ length: 7 }, (_, index) => objective(index)), sources, canAccept: options.canAccept ?? true, loading: options.loading ?? false, save },
+    props: { objectives: options.objectives ?? Array.from({ length: 7 }, (_, index) => objective(index)), sources: options.sources ?? sources, canAccept: options.canAccept ?? true, loading: options.loading ?? false, save },
     attachTo: document.body,
   })
   return { wrapper, save }
@@ -205,14 +205,78 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[data-testid="learn-v2-map-split-added"]').text()).toBe('Splitting adds 5 min so each part has the 15-minute minimum.')
     expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr')
 
-    await wrapper.findAll('[aria-expanded]').find(chip => chip.text().includes('change time'))!.trigger('click')
-    await wrapper.get('[data-testid="learn-v2-objective-effort"]').setValue('31')
-    expect(wrapper.get(`[id$="-chip-time"]`).text()).toContain('16 min')
-    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toContain('15 min')
-    expect(wrapper.find('[data-testid="learn-v2-map-split-added"]').exists()).toBe(false)
-
     await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
     expect(wrapper.find('[data-testid="learn-v2-map-split-second-time"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('edits the first part’s minutes while a split is held', async () => {
+    const { wrapper, save } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    await wrapper.findAll('[aria-expanded]').find(chip => chip.text().includes('change time'))!.trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Time for objective 1, first part')
+    const input = wrapper.get('[data-testid="learn-v2-objective-effort"]')
+    expect((input.element as HTMLInputElement).value).toBe('15')
+
+    await input.setValue('20')
+    expect(wrapper.get(`[id$="-chip-time"]`).text()).toBe('20 min, first part, change time')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toBe('15 min, second part')
+    expect(wrapper.find('[data-testid="learn-v2-map-split-added"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr 5 min')
+
+    await input.setValue('14')
+    expect(wrapper.get('[data-testid="learn-v2-save-objective"]').attributes('disabled')).toBeDefined()
+    await input.setValue('40')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toBe('15 min, second part')
+    expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr 25 min')
+    await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
+    expect(save.mock.calls[0]![0]).toMatchObject({ kind: 'save_objective', objective: { effortMinutes: 25 }, split: { minutes: [40, 15] } })
+    wrapper.unmount()
+  })
+
+  it('stops ticking sources at the 10 an objective can use', async () => {
+    const many: LearnSourceSnapshot[] = Array.from({ length: 11 }, (_, index) => ({ id: `source-${index + 1}`, sourceKey: `identity-${index + 1}`, title: `Source ${index + 1}`, origin: 'folder_document', retrievedLabel: 'Accepted', coverage: 'strong', lifecycle: 'user_accepted', objectives: [] }))
+    const links = many.slice(0, 9).map(source => ({ sourceKey: source.sourceKey, title: source.title, origin: source.origin, coverage: 'strong' as const, evidenceStatus: 'evidence_available' as const }))
+    const { wrapper } = await mountTrail({ sources: many, objectives: Array.from({ length: 6 }, (_, index) => objective(index, index ? {} : { sourceLinks: links })) })
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-sources"]').trigger('click')
+    const box = (key: string) => wrapper.get(`input[type="checkbox"][value="${key}"]`)
+    expect(wrapper.find('[data-testid="learn-v2-map-sources-full"]').exists()).toBe(false)
+    await box('identity-10').setValue(true)
+    expect(wrapper.get('[data-testid="learn-v2-map-sources-full"]').text()).toBe('An objective can use up to 10 sources. Untick one to add another.')
+    expect(box('identity-11').attributes('disabled')).toBeDefined()
+    expect(box('identity-10').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="learn-v2-save-objective"]').attributes('disabled')).toBeUndefined()
+    await box('identity-1').setValue(false)
+    expect(wrapper.find('[data-testid="learn-v2-map-sources-full"]').exists()).toBe(false)
+    expect(box('identity-11').attributes('disabled')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('holds Save when the map would use sources more than 60 times, including from a split', async () => {
+    const many: LearnSourceSnapshot[] = Array.from({ length: 10 }, (_, index) => ({ id: `source-${index + 1}`, sourceKey: `identity-${index + 1}`, title: `Source ${index + 1}`, origin: 'folder_document', retrievedLabel: 'Accepted', coverage: 'strong', lifecycle: 'user_accepted', objectives: [] }))
+    const links = (count: number) => many.slice(0, count).map(source => ({ sourceKey: source.sourceKey, title: source.title, origin: source.origin, coverage: 'strong' as const, evidenceStatus: 'evidence_available' as const }))
+    const { wrapper } = await mountTrail({ sources: many, objectives: Array.from({ length: 6 }, (_, index) => objective(index, { sourceLinks: links(index === 5 ? 5 : 10) })) })
+    const saveButton = () => wrapper.get('[data-testid="learn-v2-save-objective"]')
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-6"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    expect(saveButton().attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="learn-v2-map-links-full"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="learn-v2-objective-sources"]').trigger('click')
+    await wrapper.get('input[type="checkbox"][value="identity-6"]').setValue(true)
+    const reason = wrapper.get('[data-testid="learn-v2-map-links-full"]')
+    expect(reason.text()).toBe('A map can use sources up to 60 times across its objectives. Untick a source to save.')
+    expect(saveButton().attributes('disabled')).toBeDefined()
+    expect(saveButton().attributes('aria-describedby')).toBe(reason.attributes('id'))
+
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    expect(wrapper.find('[data-testid="learn-v2-map-links-full"]').exists()).toBe(false)
+    expect(saveButton().attributes('disabled')).toBeUndefined()
     wrapper.unmount()
   })
 

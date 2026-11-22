@@ -24,7 +24,7 @@ export interface LearnPlanSnapshot { feasibility: 'feasible' | 'constrained' | '
 export interface LearnScheduleInput { version: 'learn-v2.schedule-input.v1'; timezone: string; startLocalDate: string; targetLocalDate: string | null; sessionMinutes: 15 | 20 | 25 | 30 | 45 | 60; availability: Array<{ weekday: number; start: string; end: string }>; blackoutDates: string[]; reviewIntervalsDays: number[]; minRestMinutes: number }
 export interface LearnObjectiveDraft { objectiveKey?: string; title: string; capability: string; milestoneKey: string; effortMinutes: number; depth: 'foundational' | 'working' | 'advanced'; coverage: LearnCoverage; gapReason?: string; supportingSourceKeys: string[]; gapSourceKeys: string[]; prerequisiteKeys: string[] }
 export type LearnMapEdit =
-  | { kind: 'save_objective'; objective: LearnObjectiveDraft; order?: string[]; split?: { secondTitle: string } }
+  | { kind: 'save_objective'; objective: LearnObjectiveDraft; order?: string[]; split?: { secondTitle: string; minutes?: [number, number] } }
   | { kind: 'move_objective'; objectiveKey: string; direction: 'up' | 'down' }
   | { kind: 'remove_objective'; objectiveKey: string }
   | { kind: 'split_objective'; objectiveKey: string; firstTitle: string; secondTitle: string }
