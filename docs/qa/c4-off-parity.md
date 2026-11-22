@@ -1,6 +1,6 @@
 # C4 capability-off parity sweep
 
-Baseline: `58d2ae62238a86b60ce467716c121e6829813fcd` (`origin/dev` when this sweep ran). Scope: the full production diff from `origin/dev` through PR #514 production head `e42bf6a78089f6d3428baf91c209f5e04709fabe` (later commits change only docs), including Convex, Nitro, actions, worker callers, shared modules and app callers. No worker implementation files differ from this baseline; their changed callers are listed below. Test-only changes are excluded from the behavior inventory.
+Baseline: `58d2ae62238a86b60ce467716c121e6829813fcd` (`origin/dev` when this sweep ran). Scope: the full production diff from `origin/dev` through PR #514 production head `e42bf6a78089f6d3428baf91c209f5e04709fabe` (later commits change only docs and tests), including Convex, Nitro, actions, worker callers, shared modules and app callers. No worker implementation files differ from this baseline; their changed callers are listed below. Test-only changes are excluded from the behavior inventory.
 
 The inventory groups a check and its associated result/error together; separate entry points and separate kinds of bounds are separate rows. Counts: **141 gated, 19 proven-same, 13 C4.1 always-on, 1 writer-compatible scheduling projection**, plus **8 #515 always-on** map-contract entries. These are code-review dispositions, not a claim of exhaustive state-space testing.
 
