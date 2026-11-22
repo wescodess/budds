@@ -12,10 +12,12 @@ const onOpenInKnowledge = inject<(i: number) => void>('chatCitationOpenInKnowled
 
 const indexNum = computed(() => Number(props.index))
 const source = computed(() => sources.value[indexNum.value - 1])
+const knownIndex = computed(() => Number.isSafeInteger(indexNum.value) && indexNum.value > 0 && Boolean(source.value))
 </script>
 
 <template>
   <ChatCitationBadge
+    v-if="knownIndex"
     :index="indexNum"
     :filename="source?.filename"
     :score="source?.score"
@@ -24,4 +26,5 @@ const source = computed(() => sources.value[indexNum.value - 1])
     @long-press="onLongPress(indexNum)"
     @open-in-knowledge="onOpenInKnowledge(indexNum)"
   />
+  <template v-else>[{{ indexNum }}]</template>
 </template>

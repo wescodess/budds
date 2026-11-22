@@ -10,7 +10,7 @@ defineProps({
 </script>
 
 <template>
-  <MermaidDiagram v-if="language === 'mermaid'" :code="code" />
+  <MermaidDiagram v-if="language === 'mermaid'" :code="code" policy="compatibility" />
   <pre v-else :class="$props.class"><slot /></pre>
 </template>
 
