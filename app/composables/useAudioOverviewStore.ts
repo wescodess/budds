@@ -179,6 +179,7 @@ export function createAudioOverviewPlayback() {
   let listenersElement: HTMLAudioElement | null = null
   let rafId: number | null = null
   let spliceApplied = false
+  let playbackGeneration = 0
   let interjectionSession: {
     canonicalUrl: string | null
     resumeAtMs: number
@@ -186,6 +187,18 @@ export function createAudioOverviewPlayback() {
     resolve: () => void
     reject: (error: unknown) => void
   } | null = null
+
+  function cancelInterjection(error: Error) {
+    const session = interjectionSession
+    if (!session) return
+    interjectionSession = null
+    state.isPlaying = false
+    state.isInterjectionActive = false
+    state.interjectionTurns = []
+    state.interjectionCurrentTurnIndex = 0
+    state.interjectionCurrentAudioTimeSec = 0
+    session.reject(error)
+  }
 
   function prefixDurationMs(index: number): number {
     let acc = 0
@@ -348,6 +361,13 @@ export function createAudioOverviewPlayback() {
 
   function attachAudio(el: HTMLAudioElement | null, preloadEl: HTMLAudioElement | null) {
     if (!import.meta.client) return
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && audioElRef.value !== el) {
+      playbackGeneration++
+      cancelInterjection(new Error('Audio Overview playback element was replaced'))
+      audioElRef.value?.pause()
+      audioElRef.value?.removeAttribute('src')
+      audioElRef.value?.load()
+    }
     audioElRef.value = el
     preloadElRef.value = preloadEl
     if (el && (listenersElement === null || (LEARN_MEASUREMENT_CAPABILITIES.responses && listenersElement !== el))) {
@@ -380,6 +400,10 @@ export function createAudioOverviewPlayback() {
       return
     }
     if (!isSameOverview || mediaChanged) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+        playbackGeneration++
+        cancelInterjection(new Error('Audio Overview playback was replaced'))
+      }
       const el = audioElRef.value
       el?.pause()
       state.overviewId = args.overviewId
@@ -572,8 +596,13 @@ export function createAudioOverviewPlayback() {
     el.playbackRate = state.playbackRate
     el.load()
     return new Promise<void>((resolve, reject) => {
-      interjectionSession = { canonicalUrl, resumeAtMs, resumeAfter: args.resumeAfter, resolve, reject }
+      const session = { canonicalUrl, resumeAtMs, resumeAfter: args.resumeAfter, resolve, reject }
+      const generation = playbackGeneration
+      const overviewId = state.overviewId
+      interjectionSession = session
       void el.play().catch(async (error) => {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && (session !== interjectionSession
+          || generation !== playbackGeneration || overviewId !== state.overviewId || el !== audioElRef.value)) return
         const failed = interjectionSession
         interjectionSession = null
         state.isInterjectionActive = false
@@ -588,6 +617,7 @@ export function createAudioOverviewPlayback() {
   }
 
   function dismiss() {
+    playbackGeneration++
     pause()
     stopVisualizer()
     const el = audioElRef.value

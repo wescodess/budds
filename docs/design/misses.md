@@ -32,6 +32,14 @@ A promotion is done when the new rule, check or surface entry fails or shows the
 
 ## Log
 
+### 2026-11-22 Audio Overview: stale interjection failure restored released media
+
+- Source: [#514](https://github.com/wescodess/budds/pull/514)
+- Words: "Pending interjection failures cannot restore revoked or replacement media."
+- Type: not captured
+- Judges: not run
+- Promotion: [interjection recovery regressions](../../tests/component/audio-overview/interjection-recovery.test.ts)
+
 ### 2026-11-22 teaching reads: revocation and late completion recovery
 
 - Source: [#514](https://github.com/wescodess/budds/pull/514)
