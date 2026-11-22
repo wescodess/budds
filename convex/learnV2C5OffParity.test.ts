@@ -94,3 +94,43 @@ test.each(['legacy', 'persisted', 'invalid'] as const)('off-state %s mastery fee
     expectPinned(`feedback.${kind}`, { error: (error as Error).message })
   }
 })
+
+test.each([false, true])('off-state Today learning list and content match pinned dev when started=%s', async started => {
+  const f = await fixture('learning', started)
+  expectPinned(`today.list.${started}`, await f.owner.query(api.learnV2Today.getToday, {}))
+  expectPinned(`today.read.${started}`, await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.ids.studySessionId }))
+  expectPinned(`today.delivery.${started}`, await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.ids.studySessionId, idempotencyKey: 'off_today_delivery' }))
+})
+
+test('off-state Today learning start and replay match pinned dev', async () => {
+  const f = await fixture('learning', false)
+  const request = { studySessionId: f.ids.studySessionId, expectedSessionRevision: 1, expectedContentRevision: 1, idempotencyKey: 'off_today_start' }
+  expectPinned('today.start', await f.owner.mutation(api.learnV2SessionContent.startStudySession, request))
+  expectPinned('today.start.replay', await f.owner.mutation(api.learnV2SessionContent.startStudySession, request))
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(1))).toEqual([])
+})
+
+test('off-state Today learning generation retry matches pinned dev', async () => {
+  const f = await fixture('learning', false)
+  await f.t.run(async ctx => {
+    await ctx.db.patch(f.ids.studySessionId, { status: 'blocked' })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId: f.ids.learningVoidId, origin: 'user_url', externalKey: 'off_today_source' })
+    const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId: f.ids.learningVoidId, sourceIdentityId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: Date.now() })
+    await ctx.db.insert('learnJobs', { userId, learningVoidId: f.ids.learningVoidId, blueprintRevisionId: f.ids.blueprintRevisionId, studyPlanRevisionId: f.ids.studyPlanRevisionId,
+      studySessionId: f.ids.studySessionId, type: 'session_content_generation', status: 'blocked', revision: 1, idempotencyKey: 'off_today_prior', dispatchSupportingSourceSnapshotIds: [sourceSnapshotId] })
+  })
+  expectPinned('today.retry', await f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: f.ids.studySessionId, expectedSessionRevision: 1, idempotencyKey: 'off_today_retry' }))
+})
+
+test.each([false, true])('off-state Today ready row with supported evidence matches pinned dev when started=%s', async started => {
+  const f = await fixture('learning', started)
+  await f.t.run(async ctx => {
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId: f.ids.learningVoidId, origin: 'user_url', externalKey: 'off_today_evidence' })
+    const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId: f.ids.learningVoidId, sourceIdentityId, revision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear', createdAt: Date.now() })
+    const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId, locator: 'rule:1', excerpt: 'The rule applies.', rightsStatus: 'permitted' })
+    const sessionContentClaimId = await ctx.db.insert('sessionContentClaims', { userId, sessionContentId: f.ids.sessionContentId, order: 0, claim: 'The rule applies.' })
+    await ctx.db.insert('learnClaimSupports', { userId, sessionContentClaimId, sourceSnapshotId, sourceExcerptId, entailment: 'entailed', conflictStatus: 'clear', evidenceStatus: 'evidence_available', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.95 })
+  })
+  expectPinned(`today.list.ready.${started}`, await f.owner.query(api.learnV2Today.getToday, {}))
+  expectPinned(`today.read.ready.${started}`, await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.ids.studySessionId }))
+})
