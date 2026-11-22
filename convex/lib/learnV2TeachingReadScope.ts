@@ -1,15 +1,16 @@
-import type { Id } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import type { LearnArtifactReference } from '../../shared/learn-v2-artifact-lineage'
 import type { LearnHelpReference, LearnHelpRequest } from './learnV2HelpContract'
 import { responsePrivacyReadContext } from './learnV2PrivacyReadContext'
 import { messageReplayAccess, currentMessageSourceAccess } from './learnV2ReplayAccess'
 import { sourceBodyAvailable } from './learnV2ResponsePrivacy'
-import { admitArtifactInputsForOwner, admitArtifactInputsForRecord } from './learnV2ArtifactLineage'
+import { admitArtifactInputsForOwner, admitArtifactInputsForRecord, admitArtifactInputsByIdentityForOwner, admitArtifactInputsByIdentityForRecord } from './learnV2ArtifactLineage'
 import { getQuizAttemptAnswers, getQuizAttemptAssessments } from './quizGrading'
 import { getOptionalAuthUserId } from './auth'
 import { replayAdaptiveActivityPlan } from '../../shared/learn-adaptive-activity-plan'
 import { storedPlan } from '../learnAdaptiveRecovery'
+import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
 
 const currentScopes = new WeakSet<object>()
 export const isCurrentTeachingReadScope = (scope: LearnHelpRequest['scope']) => scope !== null && currentScopes.has(scope)
@@ -47,6 +48,8 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
   let proofs = 0
   let record: { kind: 'document', id: Id<'documents'> } | { kind: 'audio_job', id: Id<'audioOverviewJobs'> } | null = null
   const references = new Map<string, LearnHelpReference>()
+  const snapshotDocuments = new Set<Id<'documents'>>()
+  const directDocuments = new Set<Id<'documents'>>()
   const seen = new Set<string>()
   const active = new Set<string>()
   const lineages = new Set<string>()
@@ -87,7 +90,8 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
     }
     return rows.length > 0
   }
-  async function target(value: TeachingReadTarget, depth = 0): Promise<void> {
+  async function target(value: TeachingReadTarget, depth = 0, snapshotDocument = false): Promise<void> {
+    if (value.kind === 'document' && !snapshotDocument) directDocuments.add(value.id)
     const key = value.kind === 'share' ? `share:${value.token}` : `${value.kind}:${value.id}`
     if (active.has(key)) unavailable()
     if (seen.has(key)) { proofs++; return }
@@ -98,6 +102,36 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
     if (proofs === before) unavailable()
     active.delete(key)
     seen.add(key)
+  }
+  async function blueprintSources(blueprint: Doc<'learnBlueprintRevisions'>, depth: number, allowUnaccepted: boolean) {
+    const learningVoid = await ctx.db.get(blueprint.learningVoidId)
+    const folder = learningVoid && await ctx.db.get(learningVoid.folderId)
+    if (!learningVoid || learningVoid.userId !== userId || learningVoid.status === 'archived' || !folder || folder.userId !== userId) unavailable()
+    // These references still establish check relevance when a source row is
+    // metadata only. Body authority belongs to the selected projection below.
+    add({ kind: 'learning_void', id: learningVoid._id })
+    add({ kind: 'folder', id: folder._id })
+    const sources = bounded(await ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_blueprintRevisionId', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id)).take(65))
+    const objectives = bounded(await ctx.db.query('learnObjectives').withIndex('by_userId_and_blueprintRevisionId_and_order', q => q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id)).take(17))
+    if (sources.length > 64 || objectives.length > 16) unavailable()
+    const dependencies = new Set<Id<'learnSourceSnapshots'>>()
+    for (const objective of objectives) {
+      const links = bounded(await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(65))
+      if (links.length > 64) unavailable()
+      for (const link of links) if (link.coverage !== 'gap') dependencies.add(link.sourceSnapshotId)
+    }
+    for (const source of sources) {
+      if (source.learningVoidId !== learningVoid._id) unavailable()
+      // Source review can return fetched/evaluated evidence; the mission only
+      // returns accepted evidence. Unavailable, unused rows retain metadata.
+      if (await sourceBodyAvailable(ctx, userId, source._id, { allowUnaccepted })) dependencies.add(source._id)
+    }
+    if (dependencies.size > 64) unavailable()
+    for (const id of dependencies) {
+      const source = await ctx.db.get(id)
+      if (!source || source.userId !== userId || source.learningVoidId !== learningVoid._id) unavailable()
+      await target({ kind: 'source_snapshot', id }, depth + 1)
+    }
   }
   async function resolve(value: TeachingReadTarget, depth: number): Promise<void> {
     switch (value.kind) {
@@ -212,7 +246,7 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
       case 'blueprint': {
         const row = await ctx.db.get(value.id)
         if (!row || row.userId !== userId) return unavailable()
-        return await target({ kind: 'learning_void', id: row.learningVoidId }, depth + 1)
+        return await blueprintSources(row, depth, true)
       }
       case 'share': {
         const row = await ctx.db.query('audioOverviews').withIndex('by_shareToken', q => q.eq('shareToken', value.token)).unique()
@@ -306,7 +340,10 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
         const row = (await ctx.db.get(value.id))!
         const identity = await ctx.db.get(row.sourceIdentityId)
         if (!identity || identity.userId !== userId) unavailable()
-        if (identity.folderDocumentId) await target({ kind: 'document', id: identity.folderDocumentId }, depth + 1)
+        if (identity.folderDocumentId) {
+          snapshotDocuments.add(identity.folderDocumentId)
+          await target({ kind: 'document', id: identity.folderDocumentId }, depth + 1, true)
+        }
         add(value); proofs++
         return
       }
@@ -314,10 +351,17 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
         const row = await ctx.db.get(value.id)
         const folder = row && await ctx.db.get(row.folderId)
         if (!row || row.userId !== userId || row.status === 'archived' || !folder || folder.userId !== userId) unavailable()
-        const sources = bounded(await ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_learningVoidId_and_status', q => q.eq('userId', userId).eq('learningVoidId', row._id)).take(65))
-        if (!sources.length || sources.length > 64) unavailable()
-        for (const source of sources) await target({ kind: 'source_snapshot', id: source._id }, depth + 1)
-        add(value)
+        let blueprint: Doc<'learnBlueprintRevisions'> | null
+        if (row.activeBlueprintRevisionId) blueprint = await requireActiveBlueprint(ctx, userId, row)
+        else {
+          if (!['draft', 'sourcing', 'source_review', 'map_review'].includes(row.status)) unavailable()
+          const revisions = bounded(await ctx.db.query('learnBlueprintRevisions').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', row._id)).order('desc').take(33))
+          if (revisions.length > 32) unavailable()
+          revisions.sort((left, right) => right.revision - left.revision)
+          blueprint = revisions.length === 1 || revisions[0]?.revision !== revisions[1]?.revision ? revisions[0] ?? null : null
+        }
+        if (!blueprint) unavailable()
+        await blueprintSources(blueprint, depth, false)
         return
       }
       case 'thread': {
@@ -382,7 +426,31 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
   try {
     for (const value of targets) await target(value)
     const docs = [...references.values()].filter((reference): reference is Extract<LearnHelpReference, { kind: 'document' }> => reference.kind === 'document')
-    if (docs.length && !await currentMessageSourceAccess(ctx, userId, docs)) unavailable()
+    const direct = docs.filter(reference => !snapshotDocuments.has(reference.id) || directDocuments.has(reference.id))
+    if (direct.length && !await currentMessageSourceAccess(ctx, userId, direct)) unavailable()
+    if (snapshotDocuments.size) {
+      // Explicit snapshot dependencies already checked their exact current
+      // document pins. Unrelated historical snapshots are not body authority;
+      // the backing document still needs its current producer-lineage check.
+      for (const id of snapshotDocuments) {
+        const document = await ctx.db.get(id)
+        if (!document || document.userId !== userId || document.status !== 'success') unavailable()
+        let folderId: Id<'folders'> | undefined = document.folderId
+        const ancestors = new Set<string>()
+        while (folderId) {
+          if (ancestors.has(folderId) || ancestors.size >= 8) unavailable()
+          ancestors.add(folderId)
+          const folder: Doc<'folders'> | null = await ctx.db.get(folderId)
+          if (!folder || folder.userId !== userId) unavailable()
+          folderId = folder.parentId
+        }
+      }
+      const input = { artifacts: [...snapshotDocuments].map(id => ({ kind: 'document' as const, id })) }
+      const admission = authenticated === userId
+        ? await admitArtifactInputsByIdentityForOwner(ctx, userId, input)
+        : record ? await admitArtifactInputsByIdentityForRecord(ctx, record, input) : null
+      if (!admission || admission.status === 'rejected') unavailable()
+    }
     for (const reference of references.values()) if (reference.kind === 'source_snapshot' && !await sourceBodyAvailable(ctx, userId, reference.id, { allowUnaccepted: true })) unavailable()
     if (artifacts.size) {
       if (artifacts.size > 64) unavailable()
