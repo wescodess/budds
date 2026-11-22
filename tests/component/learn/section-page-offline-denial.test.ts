@@ -43,7 +43,7 @@ const pagePath = ['~', 'pages', 'app', 'folders', '[id]', 'learn', '[courseId]',
 
 async function mountPage() {
   const Page = await import(pagePath)
-  const wrapper = await mountSuspended(Page.default)
+  const wrapper = await mountSuspended(Page.default, { route: '/login' })
   mounted.push(wrapper)
   return wrapper
 }
