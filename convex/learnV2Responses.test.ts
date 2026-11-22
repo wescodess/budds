@@ -16,15 +16,17 @@ import {
 } from './lib/learnV2PublicContract'
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION,
+  LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION,
   type LearnResponseReceipt,
 } from '../shared/learn-v2-responses'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, deriveLearnReportLearnerKey,
+import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, deriveLearnReportLearnerKey,
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema } from '../shared/learn-v2-measurement-report'
 import { measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
 import { LEARN_HELP_ADMISSION_VERSION } from './lib/learnV2HelpContract'
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -694,16 +696,35 @@ async function firstCheckFixture(captured = true) {
   await f.t.run(async ctx => {
     const basisAttemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier,
       blueprintRevisionId: f.capability.blueprintRevisionId, objectiveId: f.capability.objectiveId,
-      attemptedAt: source.claim.claim.firstIndependentAt, idempotencyKey: 'seeded-basis', kind: 'independent_application' })
-    const claim = { ...source.claim.claim, basisAttemptId }
-    await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, { firstCheckClaim: claim, originalSlot: true, checkSequence: 1 })
+      attemptedAt: source.claim.claim.firstIndependentAt, acceptedAt: source.claim.claim.firstIndependentAt,
+      attemptLocalDate: source.claim.claim.firstIndependentLocalDate, attemptTimezone: source.claim.claim.firstIndependentTimezone,
+      idempotencyKey: 'seeded-basis', kind: 'independent_application', serverScorePercent: 80,
+      masteryStateBefore: 'guided', masteryStateAfter: 'independent', masteryRecordRevision: source.claim.claim.masteryRecordRevision,
+      masteryTransitionVersion: source.claim.claim.transitionVersion,
+      assistanceSnapshot: { ...f.f.assistanceSnapshot, policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION },
+      validitySnapshot: { ...f.f.validitySnapshot, policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION, masteryEligible: true } })
+    const claimKey = await privacyDigest(['learn-v2.first-independent.v1', await masteryScopeKey(OWNER.tokenIdentifier,
+      f.capability.blueprintRevisionId, f.capability.objectiveId), 'first-check.epoch'])
+    const claim = { ...source.claim.claim, claimKey, basisAttemptId, claimSequence: 1 as const, claimFactSequence: (await facts.nextLearnMeasurementSourceSequence(ctx, OWNER.tokenIdentifier)).sequence }
+    const opportunity = (await ctx.db.get(f.assessmentTarget.assessmentOpportunityId))!
+    const flow = opportunity.contextPins.kind === 'session' && opportunity.contextPins.canvas ? 'v2_canvas' : 'v2_today'
+    const clock = { ...source.claim.clock, openAt: opportunity.openAt, closeAt: opportunity.closeAt, dueAt: NOW,
+      dueLocalDate: new Date(NOW).toISOString().slice(0, 10) }
+    await ctx.db.patch(opportunity._id, { firstCheckClaim: claim, originalSlot: true, checkSequence: 1, dueAt: NOW,
+      purpose: { kind: 'retained_transfer', basisAttemptId, clock } })
     await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: f.capability.blueprintRevisionId,
       objectiveId: f.capability.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, f.capability.blueprintRevisionId, f.capability.objectiveId),
       state: 'independent', recordRevision: 2 })
     await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: 'first-check.epoch', learningVoidId: f.f.learningVoidId,
-      occurredAt: source.claim.claim.firstIndependentAt, fact: { kind: 'independent_claim', ...claim,
-        firstCheckOpportunityId: f.assessmentTarget.assessmentOpportunityId, checkSequence: 1,
-        stratum: { ...source.claim.stratum, epoch: 'first-check.epoch', familyId: null, familyRevision: null, equivalenceVersion: null } } })
+      occurredAt: NOW, fact: { kind: 'independent_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, ...claim,
+        blueprintRevisionId: f.capability.blueprintRevisionId, objectiveId: f.capability.objectiveId,
+        stratum: { epoch: 'first-check.epoch', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1', flow, entryPoint: 'retained_check', depth: opportunity.depth },
+        policyPins: { assistancePolicyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, validityPolicyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
+          thresholdVersion: 'learn-v2.mastery-threshold.v1', thresholdPercent: 80 },
+        firstSlot: { kind: 'linked', firstCheckOpportunityId: opportunity._id, checkSequence: 1, linkedAt: NOW, clock,
+          stratum: { ...source.claim.stratum, epoch: 'first-check.epoch', flow, entryPoint: 'retained_check', depth: opportunity.depth,
+            familyId: null, familyRevision: null, equivalenceVersion: null, familyValidationStatus: 'unknown', responseKind: 'bounded_rubric',
+            scorerConfiguration: await deriveLearnScorerConfiguration(opportunity.scoringBinding) } } } })
     await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: 'first-check.epoch', learningVoidId: f.f.learningVoidId,
       occurredAt: NOW - 1, fact: { kind: 'opportunity', assessmentOpportunityId: f.assessmentTarget.assessmentOpportunityId,
         recordRevision: 1, status: 'eligible', dueAt: NOW - 1000, closeAt: NOW + 100000, clock: null, originalSlot: true,
@@ -724,7 +745,7 @@ describe('ordinary first-check facts (#538)', () => {
     expect(events[0]).toBe(events[1])
     const state = await ledger(f.t)
     expect(state.facts.map(row => [row.sequence, row.epoch, row.fact.kind])).toEqual([
-      [1, 'first-check.epoch', 'independent_claim'], [2, 'first-check.epoch', 'opportunity'],
+      [1, 'first-check.epoch', 'independent_claim_v2'], [2, 'first-check.epoch', 'opportunity'],
       [3, 'first-check.epoch', 'response'], [4, 'first-check.epoch', 'integrity'],
     ])
     expect(state.facts[2]?.fact).toMatchObject({ stateAtAcceptance: 'independent', submissionId: response.submissionId })

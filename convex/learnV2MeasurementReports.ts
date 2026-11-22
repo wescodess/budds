@@ -136,17 +136,27 @@ async function writeSources(ctx: MutationCtx, run: Doc<'learnMeasurementReportRu
   if (sequence !== run.rowCount + 1 || sequence + rows.length - 1 > 40_000) throw new Error('missing_source_page')
   for (const [index, row] of rows.entries()) {
     const snapshot = snapshots[index]!
-    const claimSlot = snapshot.kind === 'first_check_claim' ? await ctx.db.get(snapshot.firstCheckOpportunityId) : null
-    if (snapshot.kind === 'first_check_claim' && (!claimSlot || claimSlot.userId !== row.userId)) throw new Error('source_invalidated')
+    const claim = snapshot.kind === 'first_check_claim' || snapshot.kind === 'first_check_claim_v2' ? snapshot : null
+    const slotId = claim?.kind === 'first_check_claim' ? claim.firstCheckOpportunityId
+      : claim?.firstSlot.kind === 'linked' ? claim.firstSlot.firstCheckOpportunityId : null
+    const claimSlot = slotId ? await ctx.db.get(slotId) : null
+    if (slotId && (!claimSlot || claimSlot.userId !== row.userId)) throw new Error('source_invalidated')
+    let learningVoidId = claimSlot?.learningVoidId
+    if (claim && !slotId) {
+      const basis = await ctx.db.get(claim.claim.basisAttemptId)
+      const blueprint = basis?.blueprintRevisionId ? await ctx.db.get(basis.blueprintRevisionId) : null
+      if (!basis || !blueprint || basis.userId !== row.userId || blueprint.userId !== row.userId) throw new Error('source_invalidated')
+      learningVoidId = blueprint.learningVoidId
+    }
     await ctx.db.insert('learnMeasurementReportRows', { userId: row.userId, storageVersion, createdAt: Date.now(),
       reportRunId: run._id, sequence: sequence + index, sourceWatermark: row.sourceWatermark, sourceVersion, rowKind: snapshot.kind, snapshot,
       ...(snapshot.kind === 'episode' ? { learningVoidId: snapshot.learningVoidId, assignmentId: snapshot.assignmentId, horizonDays: snapshot.horizonDays }
-        : claimSlot ? { learningVoidId: claimSlot.learningVoidId } : {}),
+        : learningVoidId ? { learningVoidId } : {}),
       facts: { disposition: snapshot.kind === 'episode' ? snapshot.disposition : snapshot.kind, coldScorePercent: snapshot.kind === 'episode' ? snapshot.cold?.scorePercent ?? null : null,
         delayedScorePercent: snapshot.kind === 'episode' ? snapshot.delayed?.scorePercent ?? null : null,
-        claimKey: snapshot.kind === 'first_check_claim' ? snapshot.claim.claimKey : null,
-        claimSequence: snapshot.kind === 'first_check_claim' ? snapshot.claim.claimSequence : null,
-        checkSequence: snapshot.kind === 'first_check_claim' ? snapshot.checkSequence : null,
+        claimKey: claim?.claim.claimKey ?? null,
+        claimSequence: claim?.claim.claimSequence ?? null,
+        checkSequence: claim?.kind === 'first_check_claim' ? claim.checkSequence : claim?.firstSlot.kind === 'linked' ? claim.firstSlot.checkSequence : null,
         admitted: snapshot.kind === 'episode' && snapshot.assignment.status === 'admitted', matured: false, valid: false } })
   }
   control.sourcePages.push({ sequence, count: rows.length, digest })
@@ -259,7 +269,7 @@ export const commitBuildBatch = internalMutation({
     control.scannedBytes += args.bytes
     control.emittedBytes += args.rows.reduce((sum, row) => sum + learnSerializedBytes(row.snapshot, limits.maxReportPageBytes), 0)
     control.episodeCount += new Set(args.rows.flatMap(row => row.snapshot.kind === 'episode' ? [row.snapshot.assignmentId] : [])).size
-    control.claimCount += args.rows.filter(row => row.snapshot.kind === 'first_check_claim').length
+    control.claimCount += args.rows.filter(row => row.snapshot.kind === 'first_check_claim' || row.snapshot.kind === 'first_check_claim_v2').length
     if (control.scannedBytes > limits.maxReportInputBytes || control.emittedBytes > limits.maxReportInputBytes
       || control.episodeCount > limits.maxReportEpisodes || control.claimCount > limits.maxReportEpisodes) throw new Error('source_input_overflow')
     if (args.rows.length) await writeSources(ctx, run, args.sequence, args.rows)

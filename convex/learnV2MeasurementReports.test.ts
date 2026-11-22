@@ -7,7 +7,7 @@ import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementR
 import * as source from './lib/learnV2MeasurementReportSource'
 import { appendLearnMeasurementFact, writeLearnMeasurementEnrollmentFact } from './lib/learnV2MeasurementFacts'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION as version, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION as queryVersion } from '../shared/learn-v2-measurement-report'
-import { REPORT_NOW, REPORT_START, REPORT_END, seedReportSource, seedOrdinaryReportClaim } from '../tests/fixtures/learn-v2-measurement-report-source'
+import { REPORT_NOW, REPORT_START, REPORT_END, seedReportSource, seedOrdinaryReportClaim, seedReportClaimLink } from '../tests/fixtures/learn-v2-measurement-report-source'
 import { STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import type { LearnV2ReportCells } from './lib/learnV2PublicContract'
 import type { LearnReportMetric } from '../shared/learn-v2-measurement-report'
@@ -116,7 +116,41 @@ describe('bounded real-table report snapshots', () => {
     expect(cells.length).toBeGreaterThan(0)
     expect(cells[0]).toMatchObject({ populationState: 'unknown', allEligibleValue: null, counts: { maturedClaims: 1, checkedClaims: 0 } })
     const rows = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).take(8))
-    expect(rows.find(row => row.rowKind === 'first_check_claim')?.snapshot).toMatchObject({ stateAtEligibility: 'unknown', acceptance: null, stateAtAcceptance: null })
+    expect(rows.find(row => row.rowKind === 'first_check_claim_v2')?.snapshot).toMatchObject({ firstSlot: { stateAtEligibility: 'unknown', acceptance: null, stateAtAcceptance: null } })
+  })
+
+  test.each(['unresolved', 'late'] as const)('seals one %s v2 claim, retaining its reason and deletion scope', async slotState => {
+    const f = await fixture()
+    const claim = await f.t.run(ctx => seedOrdinaryReportClaim(ctx, f.sources[0]!, true, slotState))
+    const runId = await f.begin()
+    expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
+    const cells = (await allCells(f, runId)).filter(value => value.metric === 'false_mastery_next_delayed.v1'
+      && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')
+    expect(cells).toHaveLength(1)
+    expect(cells[0]).toMatchObject({ counts: { maturedClaims: 1, checkedClaims: 0 }, allEligibleValue: null })
+    expect(cells[0]!.reasonCodes).toContain(slotState === 'unresolved' ? 'no_qualifying_delayed_slot' : 'abandoned')
+    expect(cells[0]!.horizonDays).toBe(slotState === 'unresolved' ? null : 7)
+    const run = (await f.t.run(ctx => ctx.db.get(runId)))!
+    expect(reportControl(run).claimCount).toBe(1)
+    const rows = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).take(8))
+    const saved = rows.filter(row => row.rowKind === 'first_check_claim_v2')
+    expect(saved).toHaveLength(1)
+    expect(saved[0]).toMatchObject({ learningVoidId: f.sources[0]!.learningVoidId, facts: { claimKey: claim.claim.claimKey, claimSequence: 1 } })
+    const serialized = JSON.stringify(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null }))
+    for (const secret of [...Object.values(STORAGE_CANARIES), OWNER, claim.claim.claimKey, claim.claim.basisAttemptId, claim.firstCheckOpportunityId]) expect(serialized).not.toContain(secret)
+  })
+
+  test.each(['watermark', 'cutoff'] as const)('a post-%s link cannot replace the pinned unresolved claim', async boundary => {
+    const f = await fixture()
+    const claim = await f.t.run(ctx => seedOrdinaryReportClaim(ctx, f.sources[0]!, true, 'unresolved'))
+    const runId = await f.begin()
+    if (boundary === 'watermark') await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
+    await f.t.run(ctx => seedReportClaimLink(ctx, f.sources[0]!, claim, REPORT_NOW + (boundary === 'cutoff' ? 1 : -1)))
+    expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
+    const cell = (await allCells(f, runId)).find(value => value.metric === 'false_mastery_next_delayed.v1'
+      && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
+    expect(cell).toMatchObject({ horizonDays: null, counts: { maturedClaims: 1, checkedClaims: 0 } })
+    expect(cell.reasonCodes).toContain('no_qualifying_delayed_slot')
   })
 
   test('coalesces request/build replay and excludes concurrent post-watermark changes', async () => {

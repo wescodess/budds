@@ -3,8 +3,8 @@ import { open } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
-export const REPLAY_VERSION = 'learn-v2.measurement-report-replay.v1'
-export const REDUCER_CODE_VERSION = '0305f427ace92222c2ea3e9ef000abdaae7e2542'
+export const REPLAY_VERSION = 'learn-v2.measurement-report-replay.v2'
+export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v2'
 const MAX_FILE_BYTES = 65 * 1024 * 1024
 
 // Node 24 strips types natively. Resolve only this worktree's shared module

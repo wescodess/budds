@@ -284,14 +284,18 @@ export async function readLearnFirstCheckFact(ctx: QueryCtx | MutationCtx, userI
   const claim = parseLearnContract(learnFirstCheckClaimSchema, opportunity.firstCheckClaim)
   const rows = await ctx.db.query('learnMeasurementReportFacts')
     .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId)
-      .eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', claim.claimSequence)).take(2)
+      .eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', claim.claimSequence)).take(3)
   const row = rows[0]
-  if (opportunity.userId !== userId || rows.length !== 1 || row?.fact.kind !== 'independent_claim'
-    || row.learningVoidId !== opportunity.learningVoidId || row.fact.firstCheckOpportunityId !== opportunity._id
-    || row.fact.checkSequence !== opportunity.checkSequence || row.epoch !== row.fact.stratum.epoch) {
+  if (opportunity.userId !== userId || !row || row.learningVoidId !== opportunity.learningVoidId || rows.length === 3) {
     throw new Error('Learn first-check fact unavailable')
   }
-  const { kind: _kind, firstCheckOpportunityId: _slot, checkSequence: _check, stratum: _stratum, ...savedClaim } = row.fact
+  const envelope = (value: Doc<'learnMeasurementReportFacts'>) => ({ factVersion: value.factVersion, sequence: value.sequence,
+    epoch: value.epoch, occurredAt: value.occurredAt, fact: value.fact })
+  const saved = row.fact.kind === 'independent_claim_v2' ? resolveLearnReportFirstSlotV2(envelope(row), rows[1] ? envelope(rows[1]) : null) : row.fact
+  const slot = saved.kind === 'independent_claim' ? saved : saved.kind === 'independent_claim_v2' && saved.firstSlot.kind === 'linked' ? saved.firstSlot : null
+  if (!slot || row.fact.kind === 'independent_claim' && rows.length !== 1 || row.epoch !== ('stratum' in saved ? saved.stratum.epoch : null)
+    || slot.firstCheckOpportunityId !== opportunity._id || slot.checkSequence !== opportunity.checkSequence) throw new Error('Learn first-check fact unavailable')
+  const savedClaim = learnFirstCheckClaimSchema.strip().parse(saved)
   if (JSON.stringify(parseLearnContract(learnFirstCheckClaimSchema, savedClaim)) !== JSON.stringify(claim)) throw new Error('Learn first-check fact unavailable')
   return row
 }

@@ -36,11 +36,11 @@ const bandCounts = v.object({ population: v.number(), accepted: v.number(), vali
 
 // Reused verbatim by stored cells, public pages and aggregate export pages.
 export const learnReportMetricValidator = v.object({
-  metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30)),
+  metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30), v.null()),
   weighting: literals(['capability_episode', 'learner_sensitivity']), stratum: v.object({
     flow: literals(['v2_today', 'v2_canvas']), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
-    startingBand: literals(LEARN_V2_REPORT_STARTING_BANDS), responseKind: literals(LEARN_V2_REPORT_RESPONSE_KINDS), scoringKind: literals(['deterministic', 'model']),
-    configurationDigest: v.string(), observedModel: nullableString, observedUpstream: nullableString,
+    startingBand: literals(LEARN_V2_REPORT_STARTING_BANDS), responseKind: v.union(responseKind, v.literal('unknown')), scoringKind: literals(['deterministic', 'model', 'unknown']),
+    configurationDigest: nullableString, observedModel: nullableString, observedUpstream: nullableString,
     familyValidationStatus: familyStatus,
   }), ...estimateFields,
   legacyIndependentAudit: v.object({ unknownCount: nullableNumber, sourceCoverage }),

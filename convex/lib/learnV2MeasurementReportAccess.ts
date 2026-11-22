@@ -22,7 +22,7 @@ export type LearnReportApproval = {
 // Server configuration only. No principal or collection scope is provisioned here.
 export const LEARN_REPORT_APPROVALS: LearnReportApproval[] = []
 export const REPORT_ADAPTER_VERSION = 'learn-v2.report-adapter.v1'
-export const REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v1'
+export { LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION as REPORT_CODE_VERSION } from '../../shared/learn-v2-measurement-report'
 const pageManifest = z.strictObject({ sequence: z.number().int().nonnegative(), count: z.number().int().min(1).max(8), digest: z.string() })
 export const reportControlSchema = z.strictObject({
   version: z.literal('learn-v2.report-build.v1'), scopeDigest: z.string(), requestDigest: z.string(), requestKeys: z.array(z.string()).min(1).max(64),

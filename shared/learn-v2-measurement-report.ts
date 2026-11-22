@@ -14,6 +14,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v2' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -340,7 +341,7 @@ export const learnReportLinkedFirstSlotSchema = z.strictObject({
   kind: z.literal('linked'), firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
   checkSequence: z.literal(1), linkedAt: learnTimestampSchema, clock: learnAssessmentClockSchema,
   stratum: learnReportFirstSlotStratumSchema,
-}).refine(value => value.linkedAt < value.clock.closeAt, 'First slot must be linked before its window closes')
+})
 const unresolvedFirstSlot = z.strictObject({ kind: z.literal('unresolved'), reason: learnCodeSchema })
 export const learnReportFirstSlotSchema = z.discriminatedUnion('kind', [unresolvedFirstSlot, learnReportLinkedFirstSlotSchema])
 export const learnReportIndependentClaimV2Schema = learnFirstCheckClaimSchema.safeExtend({
@@ -453,8 +454,8 @@ export const learnReportProvenanceSchema = z.strictObject({
 }).refine(value => value.extractionStartedAt <= value.extractionEndedAt, 'Invalid extraction range')
 export const learnReportStratumSchema = z.strictObject({
   flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
-  startingBand: z.enum(LEARN_V2_REPORT_STARTING_BANDS), responseKind: z.enum(LEARN_V2_REPORT_RESPONSE_KINDS),
-  scoringKind: z.enum(['deterministic', 'model']), configurationDigest: learnDigestSchema,
+  startingBand: z.enum(LEARN_V2_REPORT_STARTING_BANDS), responseKind: z.union([z.enum(LEARN_V2_REPORT_RESPONSE_KINDS), z.literal('unknown')]),
+  scoringKind: z.enum(['deterministic', 'model', 'unknown']), configurationDigest: learnDigestSchema.nullable(),
   observedModel: z.string().min(1).max(200).nullable(), observedUpstream: z.string().min(1).max(200).nullable(),
   familyValidationStatus: z.union([learnFamilyStatusSchema, z.literal('unknown')]),
 })
@@ -542,7 +543,7 @@ const bandCounts = z.strictObject({ population: count, accepted: count, validSco
 export const learnReportBandAttritionSchema = z.strictObject({ below40: bandCounts, from40To80: bandCounts, from80To100: bandCounts, unknown: bandCounts })
 
 export const learnReportMetricSchema = z.strictObject({
-  metric: z.enum([VERIFIED_LEARNING_GAIN_VERSION, FALSE_MASTERY_NEXT_DELAYED_VERSION]), horizonDays: learnMeasurementHorizonSchema,
+  metric: z.enum([VERIFIED_LEARNING_GAIN_VERSION, FALSE_MASTERY_NEXT_DELAYED_VERSION]), horizonDays: learnMeasurementHorizonSchema.nullable(),
   weighting: z.enum(['capability_episode', 'learner_sensitivity']), stratum: learnReportStratumSchema,
   ...estimateFields, counts: learnReportPopulationCountsSchema,
   legacyIndependentAudit: learnReportLegacyIndependentAuditSchema,
@@ -551,6 +552,13 @@ export const learnReportMetricSchema = z.strictObject({
   sourceAccounting: learnReportSourceAccountingSchema, attritionByStartingBand: learnReportBandAttritionSchema,
 }).superRefine((value, ctx) => {
   const gain = value.metric === VERIFIED_LEARNING_GAIN_VERSION
+  const unresolved = value.horizonDays === null
+  if ((unresolved && (gain || value.stratum.responseKind !== 'unknown' || value.stratum.scoringKind !== 'unknown'
+    || value.stratum.configurationDigest !== null || value.stratum.familyValidationStatus !== 'unknown'
+    || value.stratum.observedModel !== null || value.stratum.observedUpstream !== null || value.counts.checkedClaims !== 0))
+    || (!unresolved && (value.stratum.responseKind === 'unknown' || value.stratum.scoringKind === 'unknown' || value.stratum.configurationDigest === null))) {
+    ctx.addIssue({ code: 'custom', message: 'Unknown slot strata require unresolved first claims' })
+  }
   const population = gain ? value.counts.maturedEpisodes : value.counts.maturedClaims
   const observed = gain ? value.counts.comparablePairs : value.counts.checkedClaims
   const learners = gain ? value.counts.distinctLearners.comparablePairs : value.counts.distinctLearners.checkedClaims
@@ -630,6 +638,7 @@ export type LearnReportMetric = z.infer<typeof learnReportMetricSchema>
 
 type ReportEpisode = z.infer<typeof learnReportEpisodeSnapshotSchema>
 type ReportClaim = z.infer<typeof learnReportFirstClaimSnapshotSchema>
+type ReportFirstClaim = ReportClaim | LearnReportFirstClaimV2Snapshot
 type ReportResult = z.infer<typeof learnReportResultSnapshotSchema>
 type ReportAcceptance = z.infer<typeof learnReportAcceptanceSnapshotSchema>
 type ReportClock = z.infer<typeof learnAssessmentClockSchema>
@@ -644,8 +653,8 @@ type ComputedReportRow = {
   order: keyof z.infer<typeof learnReportOrderCountsSchema>, coldForm: string, delayedForm: string,
   observedColdForm: string | null, observedDelayedForm: string | null,
 }
-type ReportGroup = { metric: LearnReportMetric['metric'], horizon: 7 | 30, stratum: LearnReportMetric['stratum'],
-  policy: LearnReportMetric['replacements']['policy'], rows: ComputedReportRow[], sourceRows: ReportClaim[] }
+type ReportGroup = { metric: LearnReportMetric['metric'], horizon: LearnReportMetric['horizonDays'], stratum: LearnReportMetric['stratum'],
+  policy: LearnReportMetric['replacements']['policy'], rows: ComputedReportRow[], sourceRows: ReportFirstClaim[] }
 
 function validatedReportRows(rows: readonly unknown[]) {
   if (rows.length > 4 * LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes) throw new Error('Report source exceeds its row ceiling')
@@ -669,7 +678,7 @@ async function fingerprintValidatedReportInput(owners: string[], validated: Retu
   const inputBytes = validated.inputBytes + learnSerializedBytes(owners, LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportInputBytes) + '{"roster":,"rows":}'.length
   if (inputBytes > LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportInputBytes) throw new Error('Report source exceeds its byte ceiling')
   const assignments = new Set(validated.rows.flatMap(row => row.kind === 'episode' ? [row.assignmentId] : []))
-  const claims = validated.rows.filter(row => row.kind === 'first_check_claim')
+  const claims = validated.rows.filter(isReportFirstClaim)
   if (assignments.size > 10_000 || claims.length > 10_000) throw new Error('Report population exceeds its ceiling')
   const inputDigest = await reportKeyDigest([LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, JSON.stringify(owners), `[${canonical.join(',')}]`])
   return { inputDigest, rosterDigest: await reportKeyDigest(owners), bootstrapSeed: inputDigest,
@@ -841,6 +850,25 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
     observedDelayedForm: acceptedBy(selectedDelayedAcceptance, cutoff) ? (useDelayedReplacement ? selectedDelayed?.formLabel ?? 'unknown' : delayedForm) : null }
 }
 
+function isReportFirstClaim(row: LearnReportInputSnapshot): row is ReportFirstClaim {
+  return row.kind === 'first_check_claim' || row.kind === 'first_check_claim_v2'
+}
+function linkedReportClaim(row: ReportFirstClaim): ReportClaim | null {
+  if (row.kind === 'first_check_claim') return row
+  if (row.firstSlot.kind === 'unresolved') return null
+  const { kind: _kind, linkedAt: _linkedAt, ...slot } = row.firstSlot
+  return { kind: 'first_check_claim', learnerKey: row.learnerKey, capabilityKey: row.capabilityKey, claim: row.claim, ...slot }
+}
+function computeUnlinkedClaimRow(row: LearnReportFirstClaimV2Snapshot, cutoff: number): ComputedReportRow {
+  if (row.firstSlot.kind !== 'unresolved') throw new Error('Expected unresolved first slot')
+  const stage = cutoff < row.claim.firstIndependentAt ? 'anchor_not_started'
+    : localDateAt(cutoff, row.claim.firstIndependentTimezone) < addCalendarDays(row.claim.firstIndependentLocalDate, 7) ? 'not_yet_due' : 'matured'
+  return { learnerKey: row.learnerKey, band: 'unknown', stage, known: true, reasons: [row.firstSlot.reason],
+    observation: { learnerKey: row.learnerKey, value: null, lower: 0, upper: 1 }, secondary: null, disposition: 'reconciliation_required',
+    eligible: false, acceptedCold: false, accepted: false, validCold: false, validDelayed: false,
+    replacementAccepted: false, replacementValid: false, primaryIncluded: false, paste: 'unknown', focus: 'unknown',
+    order: 'unknown', coldForm: 'unknown', delayedForm: 'unknown', observedColdForm: null, observedDelayedForm: null }
+}
 function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | null): ComputedReportRow {
   const result = resultBy(row.result, cutoff)
   const timeEligible = localDateAt(row.clock.dueAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7)
@@ -855,8 +883,10 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
   const stateKnown = row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown'
   if (!stateKnown) reasons.push('unknown_prior_state')
   if (!timeEligible || !stateEligible) reasons.push('invalid_item_novelty')
-  if (row.unresolvedReason) reasons.push(LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)
-    ? row.unresolvedReason : 'reconciliation_required')
+  if (row.unresolvedReason) {
+    reasons.push(row.unresolvedReason)
+    if (!LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)) reasons.push('reconciliation_required')
+  }
   if (!valid && !row.acceptance) reasons.push('missing_delayed')
   const value = valid && result ? (result.scorePercent < result.thresholdPercent ? 1 : 0) : null
   return { learnerKey: row.learnerKey, band: reportBand(cold), stage: slotStage(row.clock, row.claim.firstIndependentAt, cutoff), known: stateKnown,
@@ -881,16 +911,18 @@ function emptyReportCounts(considered: number, notAdmitted: number): LearnReport
     distinctLearners: { maturedEpisodes: 0, operationallyEligible: 0, acceptedSubmissions: 0, validDelayedScores: 0, validColdScores: 0,
       comparablePairs: 0, maturedClaims: 0, checkedClaims: 0, failedClaims: 0 } }
 }
-function sourceReportAccounting(rows: readonly (ReportEpisode | ReportClaim)[]): LearnReportMetric['sourceAccounting'] {
+function sourceReportAccounting(rows: readonly (ReportEpisode | ReportFirstClaim)[]): LearnReportMetric['sourceAccounting'] {
   const accounting: LearnReportMetric['sourceAccounting'] = { population: rows.length,
     missingT0: { covered: 0, affected: 0, unknown: 0 }, unknownExposure: { covered: 0, affected: 0, unknown: 0 },
     exhaustedInventory: { covered: 0, affected: 0, unknown: 0 }, purgedEvidence: { covered: 0, affected: 0, unknown: 0 },
     replacement: { covered: 0, affected: 0, unknown: 0 }, treatmentChange: { covered: 0, affected: 0, unknown: 0 }, outsideHelpUncertainty: { covered: 0, affected: 0, unknown: 0 } }
   for (const row of rows) {
-    const results = row.kind === 'episode' ? [row.cold, row.delayed, row.replacement, row.coldReplacement?.result] : [row.result]
-    const reasons = new Set([...(row.kind === 'episode' ? row.reasonCodes : row.unresolvedReason ? [row.unresolvedReason] : []),
+    const slot = row.kind === 'episode' ? null : linkedReportClaim(row)
+    const unresolvedReason = row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'unresolved' ? row.firstSlot.reason : slot?.unresolvedReason
+    const results = row.kind === 'episode' ? [row.cold, row.delayed, row.replacement, row.coldReplacement?.result] : [slot?.result]
+    const reasons = new Set([...(row.kind === 'episode' ? row.reasonCodes : unresolvedReason ? [unresolvedReason] : []),
       ...results.flatMap(result => result?.exclusionReasons ?? [])])
-    const known = row.kind === 'first_check_claim' || row.assignment.sourceCoverage === 'complete'
+    const known = row.kind !== 'episode' || row.assignment.sourceCoverage === 'complete'
     const affected = { missingT0: reasons.has('unmeasurable_no_t0'),
       unknownExposure: reasons.has('unknown_exposure') || reasons.has('unknown_history') || (row.kind === 'episode' && row.assignment.historyStatus === 'unknown'),
       exhaustedInventory: reasons.has('novel_item_unavailable'), purgedEvidence: reasons.has('purged_evidence') || reasons.has('evidence_unavailable') || reasons.has('body_purged'),
@@ -906,8 +938,8 @@ function sourceReportAccounting(rows: readonly (ReportEpisode | ReportClaim)[]):
   return accounting
 }
 function reportCell(input: {
-  metric: LearnReportMetric['metric'], horizon: 7 | 30, weighting: LearnReportMetric['weighting'], stratum: LearnReportMetric['stratum'],
-  rows: readonly ComputedReportRow[], inventory: readonly ReportEpisode[], sourceRows: readonly ReportClaim[],
+  metric: LearnReportMetric['metric'], horizon: LearnReportMetric['horizonDays'], weighting: LearnReportMetric['weighting'], stratum: LearnReportMetric['stratum'],
+  rows: readonly ComputedReportRow[], inventory: readonly ReportEpisode[], sourceRows: readonly ReportFirstClaim[],
   audit: LearnReportMetric['legacyIndependentAudit'], policy: LearnReportMetric['replacements']['policy'], sourceKnown: boolean, seed: string,
 }): LearnReportMetric {
   const gain = input.metric === VERIFIED_LEARNING_GAIN_VERSION
@@ -987,7 +1019,7 @@ function reportCell(input: {
   const emptyStatus = rows.some(row => row.stage === 'anchor_not_started') ? 'anchor_not_started'
     : rows.some(row => row.stage === 'not_yet_due' || row.stage === 'window_open') ? 'not_yet_due' : 'no_eligible_population'
   const evidence: ReportEvidence = { populationState: known ? 'known' : 'unknown', sourceCoverage: known ? 'complete' : 'unknown', validity, emptyStatus,
-    reasonCodes: [...new Set(matured.flatMap(row => row.reasons))] }
+    reasonCodes: [...new Set(rows.flatMap(row => row.reasons))] }
   if (validity === 'provisional') evidence.reasonCodes.push('provisional_form_or_scorer')
   if (instrumentation.unknownInstrumentation) evidence.reasonCodes.push('unknown_instrumentation')
   const estimate = computeLearnReportEstimate(matured.map(row => row.observation), input.weighting, evidence, `${input.seed}:primary`)
@@ -1024,8 +1056,8 @@ export async function buildLearningMeasurementReport(input: {
   if (Object.entries(fingerprint).some(([key, value]) => metadata.provenance[key as keyof typeof fingerprint] !== value)
     || metadata.provenance.cutoff !== metadata.query.cutoff) return unavailable('failed', ['input_manifest_mismatch'])
   const episodes = source.rows.filter((row): row is ReportEpisode => row.kind === 'episode')
-  const claims = source.rows.filter((row): row is ReportClaim => row.kind === 'first_check_claim')
-  const strata = [...episodes.map(row => row.assignment), ...claims.map(row => row.stratum)]
+  const claims = source.rows.filter(isReportFirstClaim)
+  const strata = [...episodes.map(row => row.assignment), ...claims.flatMap(row => [row.stratum, ...(row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'linked' ? [row.firstSlot.stratum] : [])])]
   if (strata.some(stratum => stratum.epoch !== metadata.query.epoch || stratum.cohortVersion !== metadata.query.cohortVersion)
     || new Set(strata.map(stratum => stratum.baselineSha)).size > 1) return unavailable('failed', ['incompatible_epoch'])
   if (episodes.some(row => row.assignment.status === 'admitted' && (row.assignment.protocolVersion !== metadata.query.protocolVersion
@@ -1035,7 +1067,10 @@ export async function buildLearningMeasurementReport(input: {
     return unavailable('failed', ['conflicting_admission_pins'])
   }
   const configurations = new Map<string, string>()
-  for (const stratum of strata) {
+  for (const stratum of [...episodes.map(row => row.assignment), ...claims.flatMap(row => {
+    const slot = linkedReportClaim(row)
+    return slot ? [slot.stratum] : []
+  })]) {
     if (!stratum.scorerConfiguration) continue
     const configuration = stratum.scorerConfiguration
     const identity = JSON.stringify([configuration.scoringKind, configuration.scorerVersion])
@@ -1062,8 +1097,8 @@ export async function buildLearningMeasurementReport(input: {
   const sourceKnown = metadata.provenance.sourceCoverage === 'complete' && watermarks.every(row => row.historyCoverage === 'complete'
     && row.dueWorkThrough !== null && row.dueWorkThrough >= metadata.query.cutoff)
   const groups = new Map<string, ReportGroup>()
-  const add = (metric: LearnReportMetric['metric'], horizon: 7 | 30, stratum: LearnReportMetric['stratum'],
-    policy: LearnReportMetric['replacements']['policy'], row: ComputedReportRow, sourceRow?: ReportClaim) => {
+  const add = (metric: LearnReportMetric['metric'], horizon: LearnReportMetric['horizonDays'], stratum: LearnReportMetric['stratum'],
+    policy: LearnReportMetric['replacements']['policy'], row: ComputedReportRow, sourceRow?: ReportFirstClaim) => {
     const key = JSON.stringify([metric, horizon, stratum, policy])
     const group = groups.get(key) ?? { metric, horizon, stratum, policy, rows: [], sourceRows: [] }
     group.rows.push(row)
@@ -1090,9 +1125,16 @@ export async function buildLearningMeasurementReport(input: {
     add(VERIFIED_LEARNING_GAIN_VERSION, horizon, reportStratum(frozen, observed), row.replacementPolicy!, computed)
   }
   for (const claim of claims) {
-    const computed = computeClaimRow(claim, metadata.query.cutoff, sharedCold.get(claim.firstCheckOpportunityId) ?? null)
-    add(FALSE_MASTERY_NEXT_DELAYED_VERSION, claim.clock.horizonDays, reportStratum(claim.stratum, resultBy(claim.result, metadata.query.cutoff)),
-      { kind: 'secondary_only' }, computed, claim)
+    const slot = linkedReportClaim(claim)
+    if (slot) {
+      const computed = computeClaimRow(slot, metadata.query.cutoff, sharedCold.get(slot.firstCheckOpportunityId) ?? null)
+      add(FALSE_MASTERY_NEXT_DELAYED_VERSION, slot.clock.horizonDays, reportStratum(slot.stratum, resultBy(slot.result, metadata.query.cutoff)),
+        { kind: 'secondary_only' }, computed, claim)
+    } else if (claim.kind === 'first_check_claim_v2') {
+      add(FALSE_MASTERY_NEXT_DELAYED_VERSION, null, { flow: claim.stratum.flow, entryPoint: claim.stratum.entryPoint, depth: claim.stratum.depth,
+        startingBand: 'all', responseKind: 'unknown', scoringKind: 'unknown', configurationDigest: null, observedModel: null,
+        observedUpstream: null, familyValidationStatus: 'unknown' }, { kind: 'secondary_only' }, computeUnlinkedClaimRow(claim, metadata.query.cutoff), claim)
+    }
   }
   if (!groups.size) {
     const reasons = inventory.length ? ['not_admitted'] : ['no_eligible_population']

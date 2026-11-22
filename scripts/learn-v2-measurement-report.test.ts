@@ -5,13 +5,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { fingerprintLearnReportInput } from '../shared/learn-v2-measurement-report'
+import { fingerprintLearnReportInput, learnReportFirstClaimV2SnapshotSchema, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+  type LearnReportInputSnapshot, type LearnReportMetric } from '../shared/learn-v2-measurement-report'
 import { computationInput } from '../tests/fixtures/learn-v2-measurement-computation'
 import { measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const script = fileURLToPath(new URL('./learn-v2-measurement-report.mjs', import.meta.url))
 const fixturePath = fileURLToPath(new URL('./learn-v2-measurement-report.fixture.v1.json', import.meta.url))
 const fixture = () => JSON.parse(readFileSync(fixturePath, 'utf8'))
+const fixtureOutputDigest = '77823d93961399e3825ae3031713d083f1493ed6b246a3c7357f2374fef9ea84'
 let directory: string
 let guard: string
 let sequence = 0
@@ -72,10 +74,34 @@ function primary(output: ReturnType<typeof fixture>, metric = 'verified_learning
 }
 
 describe('Node 24 offline measurement report CLI', () => {
+  it('replays v2 late-linked and unresolved claims once without losing the unresolved reason', async () => {
+    const input = fixture()
+    input.rows = input.rows.map((row: LearnReportInputSnapshot) => {
+      if (row.kind !== 'first_check_claim') return row
+      const { kind: _kind, learnerKey, capabilityKey, claim, stratum, ...slot } = row
+      const { epoch, baselineSha, cohortVersion, flow, entryPoint, depth } = stratum
+      return learnReportFirstClaimV2SnapshotSchema.parse({ kind: 'first_check_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+        learnerKey, capabilityKey, claim, stratum: { epoch, baselineSha, cohortVersion, flow, entryPoint, depth },
+        policyPins: { assistancePolicyVersion: 'assistance.v1', validityPolicyVersion: 'validity.v1', thresholdVersion: 'threshold.v1', thresholdPercent: 80 },
+        firstSlot: slot.result ? { ...slot, kind: 'linked', checkSequence: 1, linkedAt: slot.clock.closeAt + 1000, stratum }
+          : { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' } })
+    })
+    const { code, output } = replay(await reseal(input), '--sealed-input')
+    expect(code).toBe(0)
+    expect(output.status).toBe('replayed')
+    const cells: { counts: { maturedClaims: number, checkedClaims: number } }[] = output.cells.filter((cell: LearnReportMetric) =>
+      cell.metric === 'false_mastery_next_delayed.v1' && cell.stratum.startingBand === 'all' && cell.weighting === 'capability_episode')
+    expect(cells.reduce((sum, cell) => sum + cell.counts.maturedClaims, 0)).toBe(2)
+    expect(cells.reduce((sum, cell) => sum + cell.counts.checkedClaims, 0)).toBe(1)
+    expect(output.cells.find((cell: LearnReportMetric) => cell.horizonDays === null)).toMatchObject({
+      reasonCodes: expect.arrayContaining(['no_qualifying_delayed_slot']), observedValue: null, allEligibleValue: null,
+    })
+  })
+
   it('replays fixture diagnostics to the exact full serialized output and independent arithmetic oracle', () => {
     const { code, output, serialized } = run(['--fixture', fixturePath])
     expect(code).toBe(0)
-    expect(createHash('sha256').update(serialized).digest('hex')).toBe('af2e8c6dc4ed9fe469cd3a91289b0345be34ebfff44cc5d2c367fb410948cf30')
+    expect(createHash('sha256').update(serialized).digest('hex')).toBe(fixtureOutputDigest)
     expect(output).toMatchObject({ inputClass: 'fixture_diagnostic', status: 'replayed', reasonCodes: ['fixture_only'],
       readiness: { sourceAdmission: 'pending', viewerGrant: 'unverified_offline', realObservations: 'unverified_offline', baselineCapture: 'unproven' },
       manifest: { cutoffDate: '2026-11-02T00:00:00.000Z', reportVersion: 'learn-v2.measurement-report.v3',
@@ -91,9 +117,8 @@ describe('Node 24 offline measurement report CLI', () => {
   it('exactly replays a sealed-input envelope without promoting the file to trusted live evidence', () => {
     const { code, output, serialized } = replay(fixture(), '--sealed-input')
     expect(code).toBe(0)
-    expect(createHash('sha256').update(serialized).digest('hex')).toBe('fca08e857680b597e4cbc52070987cd94982cdd2516f8c29cf1c75376647e79b')
-    const diagnostic = replay().output
-    expect(output).toEqual({ ...diagnostic, inputClass: 'sealed_input_replay', reasonCodes: ['offline_replay_only'] })
+    expect(createHash('sha256').update(serialized).digest('hex')).toBe('0a39313d64656dae0271f479ba0249c4d01b5fc8a3caa9e3ae03ba75041fec42')
+    expect(output).toMatchObject({ inputClass: 'sealed_input_replay', reasonCodes: ['offline_replay_only'] })
     expect(output.readiness.sourceAdmission).toBe('pending')
   })
 
@@ -101,7 +126,7 @@ describe('Node 24 offline measurement report CLI', () => {
     const input = fixture()
     input.rows.reverse()
     input.roster.reverse()
-    expect(replay(input).serialized).toBe(replay().serialized)
+    expect(createHash('sha256').update(replay(input).serialized).digest('hex')).toBe(fixtureOutputDigest)
   })
 
   it.each(['stale', 'building', 'disabled', 'unavailable', 'failed'])('withholds every number for a %s snapshot', (status) => {
@@ -230,23 +255,24 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(serialized).not.toContain('protected_response_canary')
   })
 
-  it('bounds input reads and rejects malformed JSON, directories and missing files privately', () => {
-    const malformed = join(directory, 'private_locator_canary.json')
-    writeFileSync(malformed, '{"responseText":"protected_response_canary"')
-    for (const path of [malformed, directory, join(directory, 'missing_private_locator_canary')]) {
-      const { serialized, output, code } = run(['--fixture', path])
-      expect(code).toBe(1)
-      expect(output).toMatchObject({ status: 'failed', reasonCodes: ['input_unreadable_or_malformed'], cells: [] })
-      expect(serialized).not.toContain('canary')
-    }
-    writeFileSync(malformed, ' '.repeat(65 * 1024 * 1024 + 1))
-    expect(run(['--fixture', malformed]).output.reasonCodes).toEqual(['input_unreadable_or_malformed'])
+  it.each(['malformed', 'directory', 'missing', 'oversize'] as const)('rejects %s input privately', kind => {
+    const path = kind === 'directory' ? directory : join(directory, `${sequence++}_private_locator_canary.json`)
+    if (kind === 'malformed') writeFileSync(path, '{"responseText":"protected_response_canary"')
+    if (kind === 'oversize') writeFileSync(path, ' '.repeat(65 * 1024 * 1024 + 1))
+    const { serialized, output, code } = run(['--fixture', path])
+    expect(code).toBe(1)
+    expect(output).toMatchObject({ status: 'failed', reasonCodes: ['input_unreadable_or_malformed'], cells: [] })
+    expect(serialized).not.toContain('canary')
   })
 
-  it('returns explicit diagnostics for no input and invalid commands without network or model dispatch', () => {
+  it('returns explicit diagnostics for no input without network or model dispatch', () => {
     expect(run([])).toMatchObject({ code: 2, output: { status: 'unavailable', cells: [], reasonCodes: ['input_required', 'protocol_not_frozen'] } })
-    for (const args of [['--live'], ['--fixture'], ['--sealed-input', fixturePath, '--trust'], ['--fixture', fixturePath, '--synthetic=false']]) {
-      expect(run(args)).toMatchObject({ code: 1, output: { status: 'failed', reasonCodes: ['invalid_arguments'], cells: [] } })
-    }
+  })
+
+  it.each([
+    { args: ['--live'] }, { args: ['--fixture'] }, { args: ['--sealed-input', fixturePath, '--trust'] },
+    { args: ['--fixture', fixturePath, '--synthetic=false'] },
+  ])('rejects invalid command $args without network or model dispatch', ({ args }) => {
+    expect(run(args)).toMatchObject({ code: 1, output: { status: 'failed', reasonCodes: ['invalid_arguments'], cells: [] } })
   })
 })

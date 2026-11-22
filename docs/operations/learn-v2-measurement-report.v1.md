@@ -36,8 +36,8 @@ shasum -a 256 /tmp/measurement-fixture.json /tmp/measurement-sealed-format.json
 Expected complete stdout SHA-256 values, including formatting and final newline:
 
 ```text
-af2e8c6dc4ed9fe469cd3a91289b0345be34ebfff44cc5d2c367fb410948cf30  fixture
-fca08e857680b597e4cbc52070987cd94982cdd2516f8c29cf1c75376647e79b  sealed-format
+77823d93961399e3825ae3031713d083f1493ed6b246a3c7357f2374fef9ea84  fixture
+0a39313d64656dae0271f479ba0249c4d01b5fc8a3caa9e3ae03ba75041fec42  sealed-format
 ```
 
 These two outputs differ only in the input-class and replay reason labels. Both
@@ -54,7 +54,7 @@ Both modes consume the same strict JSON envelope:
 
 ```text
 {
-  version: "learn-v2.measurement-report-replay.v1",
+  version: "learn-v2.measurement-report-replay.v2",
   report: <frozen report-v3 sealed manifest>,
   roster: <retained run-scoped learner keys>,
   rows: <retained normalized source-v4 rows>
@@ -66,9 +66,14 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`0305f427ace92222c2ea3e9ef000abdaae7e2542`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v2`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
-manifest's code pin to bypass rejection does not constitute exact replay.
+manifest's code pin to bypass rejection does not constitute exact replay. Replay
+v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null
+horizon and unknown scorer stratum; it keeps its reason and contributes once to
+N after seven local calendar days, with no fabricated opportunity or clock.
+Late links keep the original slot and outcome. Older replay envelopes and code
+pins are rejected; retain the earlier checkout to replay its saved inputs.
 
 The CLI uses Node's native type stripping with a temporary resolver limited to
 extensionless imports within this checkout's `shared` directory. It does not

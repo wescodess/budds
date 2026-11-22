@@ -2,6 +2,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   deriveLearnReportComputationKeys, learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema,
+  learnReportFirstClaimV2SnapshotSchema, resolveLearnReportFirstSlotV2,
   learnReportFactSchema, type LearnReportInputSnapshot, type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
@@ -9,7 +10,7 @@ import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 import { learnSerializedBytes } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS as limits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
-import { sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { documentHasCurrentRevision } from './learnV2BackingSource'
 import type { LearnReportApproval } from './learnV2MeasurementReportAccess'
 
@@ -27,7 +28,7 @@ export async function readLearnReportFactPage(ctx: QueryCtx, userId: string, epo
   if (rows.some((row, index) => row.sequence !== after + index + 1)) incomplete('missing_source_fact')
   const end = rows.at(-1)?.sequence ?? after
   if (rows.length < 4 && end !== through) incomplete('missing_source_page')
-  return { records: rows.map(row => ({ id: row._id, sequence: row.sequence, inScope: row.epoch === epoch && ['enrollment', 'independent_claim'].includes(row.fact.kind) })), isDone: end === through, bytes }
+  return { records: rows.map(row => ({ id: row._id, sequence: row.sequence, inScope: row.epoch === epoch && ['enrollment', 'independent_claim', 'independent_claim_v2'].includes(row.fact.kind) })), isDone: end === through, bytes }
 }
 async function opportunityFacts(ctx: QueryCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, through: number) {
   const rows = await ctx.db.query('learnMeasurementReportFacts')
@@ -202,24 +203,48 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
     }
     return rows
   }
-  if (fact.kind !== 'independent_claim') return []
-  if (fact.firstIndependentAt < run.enrollmentStartAt || fact.firstIndependentAt >= run.enrollmentEndAt) return []
-  const [basis, opportunity] = await Promise.all([ctx.db.get(fact.basisAttemptId), ctx.db.get(fact.firstCheckOpportunityId)])
-  if (!basis || !opportunity || basis.userId !== userId || opportunity.userId !== userId || basis.kind !== 'independent_application'
+  if (fact.kind !== 'independent_claim' && fact.kind !== 'independent_claim_v2') return []
+  if (fact.firstIndependentAt < run.enrollmentStartAt || fact.firstIndependentAt >= run.enrollmentEndAt || stored.occurredAt > run.cutoff) return []
+  const basis = await ctx.db.get(fact.basisAttemptId)
+  if (!basis || basis.userId !== userId || basis.kind !== 'independent_application'
     || basis.masteryStateAfter !== 'independent' || (!basis.masteryStateBefore || ['independent', 'retained'].includes(basis.masteryStateBefore))
     || basis.masteryRecordRevision !== fact.masteryRecordRevision || basis.masteryTransitionVersion !== fact.transitionVersion
     || (basis.serverScorePercent ?? 0) < 80 || basis.usedHint !== false || basis.usedReveal !== false
     || basis.masteryTransitionReason !== 'unassisted_pass_independent'
     || basis.assistanceSnapshot?.state !== 'unassisted' || basis.validitySnapshot?.masteryEligible !== true || basis.validitySnapshot.status !== 'valid'
-    || basis.objectiveId !== opportunity.objectiveId || basis.blueprintRevisionId !== opportunity.blueprintRevisionId
-    || !opportunity.originalSlot || opportunity.checkSequence !== fact.checkSequence || fact.claimFactSequence !== stored.sequence) incomplete('invalid_claim_basis')
+    || fact.claimFactSequence !== stored.sequence) incomplete('invalid_claim_basis')
   if (!basis.submissionId || !basis.scoringExecutionId) incomplete('invalid_claim_basis')
   const basisExecution = await ctx.db.get(basis.scoringExecutionId)
   if (!basisExecution || basisExecution.userId !== userId || basisExecution.authoritativeAttemptId !== basis._id
     || basisExecution.submissionId !== basis.submissionId || basisExecution.outcome !== 'validated'
-    || basisExecution.committedAt === undefined || basisExecution.committedAt > fact.firstIndependentAt) incomplete('invalid_claim_basis')
+    || basisExecution.committedAt === undefined || basisExecution.committedAt > run.cutoff
+    || (fact.kind === 'independent_claim' && basisExecution.committedAt > fact.firstIndependentAt)) incomplete('invalid_claim_basis')
+  let resolved = fact.kind === 'independent_claim_v2' ? resolveLearnReportFirstSlotV2(factValue(stored)) : null
+  if (resolved) {
+    if (!stored.learningVoidId || basis.blueprintRevisionId !== resolved.blueprintRevisionId || basis.objectiveId !== resolved.objectiveId) incomplete('invalid_claim_basis')
+    await scopeAvailable(ctx, userId, { learningVoidId: stored.learningVoidId, ...resolved })
+    const history = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
+    if (history.length === 3) incomplete('claim_history_overflow')
+    const links = history.filter(row => row.fact.kind === 'first_slot_link' && row.sequence <= through && row.occurredAt <= run.cutoff)
+    if (links.length > 1) incomplete('conflicting_first_slot')
+    resolved = resolveLearnReportFirstSlotV2(factValue(stored), links[0] ? factValue(links[0]) : null)
+    if (resolved.firstSlot.kind === 'linked' && resolved.firstSlot.linkedAt > run.cutoff) {
+      resolved = { ...resolved, firstSlot: { kind: 'unresolved', reason: 'first_slot_not_linked_at_cutoff' } }
+    }
+    if (resolved.firstSlot.kind === 'unresolved') return [learnReportFirstClaimV2SnapshotSchema.parse({
+      kind: 'first_check_claim_v2', version: resolved.version,
+      ...await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...resolved }),
+      claim: learnFirstCheckClaimSchema.strip().parse(resolved), stratum: resolved.stratum, policyPins: resolved.policyPins, firstSlot: resolved.firstSlot,
+    })]
+  }
+  const slot = resolved?.firstSlot.kind === 'linked' ? resolved.firstSlot : fact.kind === 'independent_claim' ? fact : null
+  if (!slot) incomplete('conflicting_first_slot')
+  const opportunity = await ctx.db.get(slot.firstCheckOpportunityId)
+  if (!opportunity || opportunity.userId !== userId || basis.objectiveId !== opportunity.objectiveId || basis.blueprintRevisionId !== opportunity.blueprintRevisionId
+    || !opportunity.originalSlot || opportunity.replacesOpportunityId !== undefined || opportunity.checkSequence !== slot.checkSequence) incomplete('conflicting_first_slot')
   await scopeAvailable(ctx, userId, opportunity)
-  const { kind: _kind, firstCheckOpportunityId: _id, checkSequence: _check, stratum, ...claim } = fact
+  const claim = learnFirstCheckClaimSchema.strip().parse(fact)
   if (JSON.stringify(learnFirstCheckClaimSchema.parse(opportunity.firstCheckClaim)) !== JSON.stringify(learnFirstCheckClaimSchema.parse(claim))) incomplete('conflicting_first_slot')
   const facts = await opportunityFacts(ctx, userId, opportunity._id, through)
   const clock = savedClock(facts)
@@ -227,10 +252,16 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
   const accepted = await outcome(ctx, userId, opportunity, through, run.cutoff, run.epoch)
   const eligibility = facts.find(row => row.fact.kind === 'opportunity' && row.fact.stateAtEligibility !== undefined)?.fact
   const disposition = slotDisposition(facts, accepted)
-  return [learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim',
-    ...await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...opportunity }),
-    stratum, claim, firstCheckOpportunityId: opportunity._id, checkSequence: fact.checkSequence, clock,
+  const snapshot = {
+    firstCheckOpportunityId: opportunity._id, checkSequence: slot.checkSequence, clock,
     stateAtEligibility: eligibility?.kind === 'opportunity' ? eligibility.stateAtEligibility ?? 'unknown' : 'unknown',
     stateAtAcceptance: accepted.stateAtAcceptance, acceptance: accepted.acceptance, result: accepted.result,
-    unresolvedReason: ['valid_scored', 'missing_delayed'].includes(disposition) ? null : disposition })]
+    unresolvedReason: ['valid_scored', 'missing_delayed'].includes(disposition) ? null : disposition }
+  const keys = await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...opportunity })
+  if (resolved?.firstSlot.kind === 'linked') {
+    if (await privacyDigest(clock) !== await privacyDigest(resolved.firstSlot.clock)) incomplete('conflicting_first_slot')
+    return [learnReportFirstClaimV2SnapshotSchema.parse({ kind: 'first_check_claim_v2', version: resolved.version, ...keys,
+      claim, stratum: resolved.stratum, policyPins: resolved.policyPins, firstSlot: { ...resolved.firstSlot, ...snapshot } })]
+  }
+  return [learnReportFirstClaimSnapshotSchema.parse({ kind: 'first_check_claim', ...keys, stratum: fact.stratum, claim, ...snapshot })]
 }

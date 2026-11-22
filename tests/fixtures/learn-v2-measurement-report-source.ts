@@ -1,9 +1,14 @@
 import type { MutationCtx } from '../../convex/_generated/server'
 import type { Id } from '../../convex/_generated/dataModel'
+import { vi } from 'vitest'
 import { seedMeasurementStorage } from './learn-v2-measurement-storage'
 import { measurementReportSourceFixture } from './learn-v2-measurement-report'
 import { appendLearnMeasurementFact, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact } from '../../convex/lib/learnV2MeasurementFacts'
 import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
+import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION } from '../../shared/learn-v2-responses'
+import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../../shared/learn-v2-measurement-report'
+import { masteryScopeKey } from '../../convex/lib/learnV2MasteryScope'
+import { privacyDigest } from '../../convex/lib/learnV2ResponsePrivacy'
 
 export const REPORT_NOW = Date.UTC(2026, 9, 10)
 export const REPORT_START = Date.UTC(2026, 8, 30)
@@ -84,7 +89,8 @@ export async function seedReportSource(ctx: MutationCtx, userId: string, mode: '
   return { ...f, outcomes, delayedId, clock, configuration, binding, watermarkId: watermark._id }
 }
 
-export async function seedOrdinaryReportClaim(ctx: MutationCtx, f: Awaited<ReturnType<typeof seedReportSource>>, captured = true) {
+export async function seedOrdinaryReportClaim(ctx: MutationCtx, f: Awaited<ReturnType<typeof seedReportSource>>, captured = true,
+  slotState: 'linked' | 'unresolved' | 'late' = 'linked') {
   const source = await measurementReportSourceFixture()
   const userId = f.base.userId
   const cold = (await ctx.db.get(f.rows.learnAssessmentOpportunities))!
@@ -92,7 +98,8 @@ export async function seedOrdinaryReportClaim(ctx: MutationCtx, f: Awaited<Retur
   const clock = { ...f.clock, anchorKind: 'first_independent' }
   const firstCheckOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, assignmentId: undefined,
     purpose: { kind: 'independent_application' }, delayedCheckId: 'ordinary-first',
-    submissionId: undefined, originalSlot: true, checkSequence: 1, openAt: clock.openAt, closeAt: clock.closeAt,
+    createdAt: source.claim.claim.firstIndependentAt, submissionId: undefined, originalSlot: true, checkSequence: 1,
+    openAt: clock.openAt, closeAt: clock.closeAt, dueAt: clock.dueAt, horizonDays: undefined,
     assessmentPins: { kind: 'session_application', caseId: f.itemPins.caseId, promptDigest: 'fixture-prompt', rubricVersion: 'rubric.v1', rubricDigest: 'fixture-rubric', supportManifestDigest: 'fixture-support' } })
   const response = (await ctx.db.get(f.outcomes[0]!.submissionId))!
   if (!('baselineEpoch' in response)) throw new Error('Expected legacy assessment fixture response')
@@ -105,24 +112,55 @@ export async function seedOrdinaryReportClaim(ctx: MutationCtx, f: Awaited<Retur
     assessmentOpportunityId: firstCheckOpportunityId, committedAt: source.claim.claim.firstIndependentAt })
   const basisAttemptId = await ctx.db.insert('masteryAttempts', { userId, blueprintRevisionId: f.scope.blueprintRevisionId,
     objectiveId: f.scope.objectiveId, kind: 'independent_application', idempotencyKey: 'ordinary-basis', attemptedAt: source.claim.claim.firstIndependentAt,
+    acceptedAt: source.claim.claim.firstIndependentAt, attemptLocalDate: source.claim.claim.firstIndependentLocalDate, attemptTimezone: source.claim.claim.firstIndependentTimezone,
     serverScorePercent: 80, usedHint: false, usedReveal: false, masteryStateBefore: 'guided', masteryStateAfter: 'independent', masteryRecordRevision: 1,
     masteryTransitionVersion: 'learn-v2.mastery-transition.v1', masteryTransitionReason: 'unassisted_pass_independent', submissionId: basisSubmissionId,
-    scoringExecutionId: executionId, assistanceSnapshot: f.assistanceSnapshot, validitySnapshot: { ...f.validitySnapshot, masteryEligible: true } })
+    scoringExecutionId: executionId, scoringBinding: f.binding,
+    assistanceSnapshot: { ...f.assistanceSnapshot, policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION },
+    validitySnapshot: { ...f.validitySnapshot, policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION, masteryEligible: true } })
   await ctx.db.patch(executionId, { authoritativeAttemptId: basisAttemptId, verdict: { ...execution.verdict!, scorePercent: 80 } })
   const watermark = (await ctx.db.get(f.watermarkId))!
-  const claim = { ...source.claim.claim, claimKey: 'ordinary-first', basisAttemptId, claimFactSequence: watermark.sequence + 1 }
+  const claimKey = await privacyDigest(['learn-v2.first-independent.v1', await masteryScopeKey(userId, f.scope.blueprintRevisionId, f.scope.objectiveId), 'fixture-epoch'])
+  const claim = { ...source.claim.claim, claimKey, basisAttemptId, claimSequence: 1 as const, claimFactSequence: watermark.sequence + 1 }
   // This is a distinct scheduled first check; its basis acceptance belongs to an earlier opportunity.
   const basisOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, assignmentId: undefined, delayedCheckId: 'ordinary-basis',
     purpose: { kind: 'independent_application' }, firstCheckClaim: undefined, submissionId: basisSubmissionId, originalSlot: false })
   await ctx.db.patch(basisSubmissionId, { assessmentOpportunityId: basisOpportunityId })
   await ctx.db.patch(executionId, { assessmentOpportunityId: basisOpportunityId })
   await ctx.db.patch(firstCheckOpportunityId, { firstCheckClaim: claim, purpose: { kind: 'retained_transfer', basisAttemptId, clock } })
-  await appendLearnMeasurementFact(ctx, userId, { epoch: 'fixture-epoch', learningVoidId: f.learningVoidId, occurredAt: claim.firstIndependentAt,
-    fact: { kind: 'independent_claim', ...claim, firstCheckOpportunityId, checkSequence: 1,
-      stratum: { ...source.claim.stratum, epoch: 'fixture-epoch', familyId: null, familyRevision: null,
-        equivalenceVersion: null, responseKind: 'bounded_rubric', scorerConfiguration: f.configuration } } })
+  const stratum = { epoch: 'fixture-epoch', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1',
+    flow: 'v2_today' as const, entryPoint: 'retained_check', depth: fields.depth }
+  const slot = { kind: 'linked' as const, firstCheckOpportunityId, checkSequence: 1 as const, linkedAt: claim.firstIndependentAt, clock,
+    stratum: { ...stratum, familyId: null, familyRevision: null, familyValidationStatus: 'unknown' as const,
+      equivalenceVersion: null, responseKind: 'bounded_rubric' as const, scorerConfiguration: f.configuration } }
+  const now = Date.now()
+  vi.setSystemTime(claim.firstIndependentAt)
+  try {
+    await appendLearnMeasurementFact(ctx, userId, { epoch: 'fixture-epoch', learningVoidId: f.learningVoidId, occurredAt: claim.firstIndependentAt,
+      fact: { kind: 'independent_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, ...claim,
+        blueprintRevisionId: f.scope.blueprintRevisionId, objectiveId: f.scope.objectiveId, stratum,
+        policyPins: { assistancePolicyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, validityPolicyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
+          thresholdVersion: f.binding.thresholdVersion, thresholdPercent: 80 },
+        firstSlot: slotState === 'linked' ? slot : { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' } } })
+  } finally { vi.setSystemTime(now) }
+  const linked = { firstCheckOpportunityId, claim, slot }
+  if (slotState === 'late') {
+    // C5.3 owns validation of persisted late links to the earliest original.
+    await seedReportClaimLink(ctx, f, linked, now - 1)
+    await ctx.db.patch(firstCheckOpportunityId, { phase: 'abandoned', reasonCode: 'missed_window' })
+  }
   await appendLearnMeasurementFact(ctx, userId, { epoch: 'fixture-epoch', learningVoidId: f.learningVoidId, occurredAt: clock.openAt,
-    fact: { kind: 'opportunity', assessmentOpportunityId: firstCheckOpportunityId, recordRevision: 1, status: 'blocked', dueAt: clock.dueAt,
+    fact: { kind: 'opportunity', assessmentOpportunityId: firstCheckOpportunityId, recordRevision: 1, status: slotState === 'late' ? 'abandoned' : 'blocked', dueAt: clock.dueAt,
       closeAt: clock.closeAt, clock, originalSlot: true, ...(captured ? { stateAtEligibility: 'independent' as const } : {}) } })
-  return { firstCheckOpportunityId, claim }
+  return linked
+}
+
+export async function seedReportClaimLink(ctx: MutationCtx, f: Awaited<ReturnType<typeof seedReportSource>>,
+  claim: Awaited<ReturnType<typeof seedOrdinaryReportClaim>>, linkedAt: number) {
+  const watermark = (await ctx.db.get(f.watermarkId))!
+  await ctx.db.insert('learnMeasurementReportFacts', { ...f.base, learningVoidId: f.learningVoidId, sequence: watermark.sequence + 1,
+    factVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, epoch: claim.slot.stratum.epoch, occurredAt: linkedAt,
+    fact: { kind: 'first_slot_link', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, claimKey: claim.claim.claimKey, claimSequence: 1,
+      claimFactSequence: claim.claim.claimFactSequence, slot: { ...claim.slot, linkedAt } } })
+  await ctx.db.patch(watermark._id, { sequence: watermark.sequence + 1, updatedAt: linkedAt })
 }

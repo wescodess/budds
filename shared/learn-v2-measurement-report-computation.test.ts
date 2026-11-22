@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildLearningMeasurementReport, reconcileLearnReportSourceRows, rollUpLearnReportLegacyAudit,
   learnReportEpisodeSnapshotSchema, learnReportFirstClaimSnapshotSchema, validateLearnMeasurementReportCells, type LearnReportMetric,
+  learnReportFirstClaimV2SnapshotSchema, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
 } from './learn-v2-measurement-report'
 import { computationClaim, computationEpisode, computationInput } from '../tests/fixtures/learn-v2-measurement-computation'
 import { emptyMeasurementReportCell, measurementReportColdReplacementFixture, measurementReportIdentityFixture, measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-measurement-report'
@@ -14,7 +15,73 @@ function cell(result: Awaited<ReturnType<typeof buildLearningMeasurementReport>>
   return found!
 }
 
+async function v2Claim(index: number, mode: 'linked' | 'unresolved' | 'late' | 'late_scored' = 'linked') {
+  const f = await computationClaim(index, { score: mode === 'late' ? null : 60 })
+  const { epoch, baselineSha, cohortVersion, flow, entryPoint, depth } = f.claim.stratum
+  return { ...f, claim: learnReportFirstClaimV2SnapshotSchema.parse({ kind: 'first_check_claim_v2',
+    version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, ...f.keys, claim: f.claim.claim,
+    stratum: { epoch, baselineSha, cohortVersion, flow, entryPoint, depth },
+    policyPins: { assistancePolicyVersion: 'assistance.v1', validityPolicyVersion: 'validity.v1', thresholdVersion: 'threshold.v1', thresholdPercent: 80 },
+    firstSlot: mode === 'unresolved' ? { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' }
+      : { kind: 'linked', firstCheckOpportunityId: f.claim.firstCheckOpportunityId, checkSequence: 1,
+          linkedAt: mode.startsWith('late') ? f.claim.clock.closeAt + 1000 : f.claim.claim.firstIndependentAt,
+          clock: f.claim.clock, stratum: f.claim.stratum, stateAtEligibility: f.claim.stateAtEligibility,
+          stateAtAcceptance: f.claim.stateAtAcceptance, acceptance: f.claim.acceptance, result: f.claim.result,
+          unresolvedReason: mode === 'late' ? 'missed_original_slot' : null } }) }
+}
+
 describe('versioned report computation', () => {
+  it('counts legacy, v2 linked, unresolved and late-linked claims exactly once', async () => {
+    const legacy = await computationClaim(1)
+    const linked = await v2Claim(2)
+    const unresolved = await v2Claim(3, 'unresolved')
+    const late = await v2Claim(4, 'late')
+    const result = await buildLearningMeasurementReport(await computationInput([legacy, linked, unresolved, late].flatMap(f => [f.watermark, f.claim])))
+    expect(result.report.status).toBe('sealed')
+    const cells = result.pages.flatMap(page => page.cells).filter(value => value.metric === 'false_mastery_next_delayed.v1'
+      && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')
+    expect(cells.reduce((sum, value) => sum + value.counts.maturedClaims, 0)).toBe(4)
+    expect(cells.reduce((sum, value) => sum + value.counts.checkedClaims, 0)).toBe(2)
+    expect(cells.reduce((sum, value) => sum + value.counts.failedClaims, 0)).toBe(2)
+    const unknown = cells.find(value => value.horizonDays === null)!
+    expect(unknown).toMatchObject({ observedValue: null, allEligibleValue: null, missingOutcomeBounds: { lower: 0, upper: 1 },
+      stratum: { responseKind: 'unknown', scoringKind: 'unknown', configurationDigest: null }, counts: { maturedClaims: 1, checkedClaims: 0 } })
+    expect(unknown.reasonCodes).toContain('no_qualifying_delayed_slot')
+    expect(cell(result, 'false_mastery_next_delayed.v1').reasonCodes).toContain('missed_original_slot')
+  })
+
+  it.each(['linked', 'unresolved'] as const)('retains a v2-only %s claim in the denominator', async mode => {
+    const f = await v2Claim(1, mode)
+    const result = await buildLearningMeasurementReport(await computationInput([f.watermark, f.claim]))
+    expect(result.report.status).toBe('sealed')
+    const report = result.pages.flatMap(page => page.cells).find(value => value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
+    expect(report.counts).toMatchObject({ maturedClaims: 1, checkedClaims: mode === 'linked' ? 1 : 0 })
+  })
+
+  it('rejects a repeated claim across legacy and v2 inputs before counting', async () => {
+    const legacy = await computationClaim(1)
+    const linked = await v2Claim(1)
+    const result = await buildLearningMeasurementReport(await computationInput([legacy.watermark, legacy.claim, linked.claim]))
+    expect(result.report.status).toBe('failed')
+    expect(result.pages).toEqual([])
+  })
+
+  it('uses a scored original linked after its outcome without creating a second claim', async () => {
+    const f = await v2Claim(1, 'late_scored')
+    const result = await buildLearningMeasurementReport(await computationInput([f.watermark, f.claim]))
+    expect(cell(result, 'false_mastery_next_delayed.v1')).toMatchObject({
+      counts: { maturedClaims: 1, checkedClaims: 1, failedClaims: 1 }, allEligibleValue: 1,
+    })
+  })
+
+  it('retains an unlinked reason before seven local days without inventing a matured slot', async () => {
+    const f = await v2Claim(1, 'unresolved')
+    const result = await buildLearningMeasurementReport(await computationInput([f.watermark, f.claim], f.claim.claim.firstIndependentAt + 1))
+    const report = result.pages.flatMap(page => page.cells).find(value => value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
+    expect(report).toMatchObject({ horizonDays: null, counts: { maturedClaims: 0, notYetDue: 1 }, allEligibleValue: null })
+    expect(report.reasonCodes).toContain('no_qualifying_delayed_slot')
+  })
+
   it('reproduces the independent −20 and missing-cold-40 oracle', async () => {
     const paired = await computationEpisode(1)
     const missing = await computationEpisode(2, { cold: 40, delayed: null })
