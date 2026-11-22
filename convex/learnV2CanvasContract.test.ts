@@ -526,3 +526,18 @@ test.each(['v2_canvas', 'v2_today'] as const)('merged Today start races Canvas a
   expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toEqual([])
   expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toEqual([])
 })
+
+test('source revocation rejects attachment and saved-receipt replay while retaining case consumption', async () => {
+  const s = await fixture()
+  const receipt = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (receipt.kind !== 'accepted') throw new Error(JSON.stringify(receipt))
+  await s.t.run(ctx => ctx.db.patch(s.family.graph.sourceSnapshotId, { evidencePurgedAt: NOW }))
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)).toMatchObject({ kind: 'not_admitted', observations: 'no_observations' })
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)).toMatchObject({ kind: 'rejected', reasonCode: 'evidence_unavailable' })
+  const value = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: s.stage.threadId })
+  expect(value).toMatchObject({ status: 'blocked', responsePrompt: null, savedResponse: null, assessment: { bodyAvailability: 'unavailable' } })
+  expectSafeCanvas(value, s)
+  expect(await s.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))).toHaveLength(1)
+  expect(await s.t.run(ctx => ctx.db.query('learnResponses').take(8))).toHaveLength(1)
+  expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toEqual([])
+})

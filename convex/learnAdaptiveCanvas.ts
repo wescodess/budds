@@ -67,6 +67,9 @@ async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRe
     if (!claims.length || claims.length > 32) return unavailable('evidence_unavailable')
   } else {
     if (!await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id)) return unavailable('evidence_unavailable')
+    const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
+    const prompts = blocks.filter(block => block.kind === 'transfer_challenge')
+    if (blocks.length > 16 || prompts.length !== 1 || !assessmentPrimitive(prompts[0]?.content).ok) return unavailable('response_format_unavailable')
     const teachingClaims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
     if (!teachingClaims.length || teachingClaims.length > 16) return unavailable('evidence_unavailable')
     for (const claim of teachingClaims) {
@@ -729,6 +732,12 @@ async function acceptCanvasSubmission(ctx: MutationCtx, args: CanvasSubmissionRe
     return { kind: 'rejected' as const, version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode: 'unavailable' as const }
   }
   const { opportunity, activity } = scope
+  const delivery = await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'canvas')
+  if (delivery.status !== 'delivered') return { kind: 'rejected' as const, version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode: 'evidence_unavailable' as const }
+  if (prior) {
+    const state = await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id })
+    if (state.status !== 'available' || state.work?.body.bodyAvailability !== 'available') return { kind: 'rejected' as const, version: LEARN_V2_RESPONSE_CONTRACT_VERSION, reasonCode: 'evidence_unavailable' as const }
+  }
   let payload: LearnResponsePayload = { kind: 'text', text: args.response }
   const primitive = activity.primitivePlan[0]
   if (primitive?.type === 'source_comparison') {
