@@ -10,13 +10,12 @@ const readFailure = ref<{ reason: string, retryable: boolean, message: string | 
 const retryRead = vi.fn()
 const dueItems = ref<unknown>(null)
 const dueError = ref<Error | null>(null)
-const refreshDue = vi.fn()
 
 mockNuxtImport('useLearnV2Journey', () => () => ({ allowed: ref(true), checkingAccess: ref(false), mission, readFailure, retryRead, snapshot: ref(null), busy: ref(false), error: ref(null) }))
 mockNuxtImport('useRoute', () => () => ({ params: { learningVoidId: 'void_1' }, query: {} }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never) => getFunctionName(reference) === 'reviewItems:listDueWithContext'
-  ? { data: dueItems, error: dueError, refresh: refreshDue }
+  ? { data: dueItems, error: dueError }
   : { data: ref(null) })
 mockNuxtImport('useOfflineAttempts', () => () => ({ queueReviewItemRating: vi.fn(), queueReviewSessionCompletion: vi.fn() }))
 mockNuxtImport('useOfflineSync', () => () => ({ pendingCount: ref(0), isSyncing: ref(false) }))
@@ -61,54 +60,31 @@ describe('Learn V2 workspace reads', () => {
   })
 })
 
-describe('Review reads', () => {
+describe('Review reads with responses off', () => {
   beforeEach(() => {
     dueItems.value = null
     dueError.value = null
-    refreshDue.mockReset()
   })
 
-  it('pauses review while a check is open', async () => {
-    dueError.value = denied('test_open')
+  it('matches dev: a stale SSR error never hides review items that arrive later', async () => {
+    dueError.value = new Error('SSR query failed')
     const Page = await import(page('review.vue'))
     const wrapper = await mountSuspended(Page.default)
-    expect(wrapper.get('[data-testid="review-read-paused"]').text()).toBe(pausedCopy)
-    expect(wrapper.find('[data-testid="review-read-retry"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Loading review items')
-  })
-
-  it('retries a failed review read and recovers to the empty state', async () => {
-    dueError.value = denied('unavailable')
-    refreshDue.mockImplementation(async () => { dueError.value = null; dueItems.value = [] })
-    const Page = await import(page('review.vue'))
-    const wrapper = await mountSuspended(Page.default)
-    expect(wrapper.get('[data-testid="review-read-error"]').attributes('role')).toBe('alert')
-    await wrapper.get('[data-testid="review-read-retry"]').trigger('click')
-    expect(refreshDue).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="empty-state"]').exists()).toBe(true))
+    expect(wrapper.text()).toContain('Loading review items')
+    dueItems.value = [{ _id: 'item_1', prompt: 'What is inertia?', answer: 'Resistance to change in motion', courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false }]
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-prompt"]').text()).toContain('What is inertia?'))
     expect(wrapper.find('[data-testid="review-read-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="review-read-paused"]').exists()).toBe(false)
   })
 
-  it('clears an active session when a check opens mid-review', async () => {
+  it('keeps an active session through a denial-shaped error, as on dev', async () => {
     dueItems.value = [{ _id: 'item_1', prompt: 'What is inertia?', answer: 'Resistance to change in motion', courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false }]
     const Page = await import(page('review.vue'))
     const wrapper = await mountSuspended(Page.default)
     await wrapper.get('[data-testid="reveal-button"]').trigger('click')
-    expect(wrapper.get('[data-testid="review-answer"]').text()).toContain('Resistance to change in motion')
-
-    dueItems.value = null
     dueError.value = denied('test_open')
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="review-read-paused"]').exists()).toBe(true))
-    expect(wrapper.text()).not.toContain('What is inertia?')
-    expect(wrapper.text()).not.toContain('Resistance to change in motion')
-    expect(wrapper.find('[data-testid="review-card"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="reveal-button"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="flag-button"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="mode-toggle"]').exists()).toBe(false)
-
-    dueError.value = null
-    dueItems.value = [{ _id: 'item_2', prompt: 'What is mass?', answer: 'Amount of matter', courseId: 'c1', sectionId: 's1', courseTitle: 'Physics', sectionTitle: 'Motion', sectionOrder: 0, flagged: false }]
-    await vi.waitFor(() => expect(wrapper.get('[data-testid="review-prompt"]').text()).toContain('What is mass?'))
-    expect(wrapper.find('[data-testid="review-answer"]').exists()).toBe(false)
+    await nextTick()
+    expect(wrapper.get('[data-testid="review-answer"]').text()).toContain('Resistance to change in motion')
+    expect(wrapper.find('[data-testid="review-read-paused"]').exists()).toBe(false)
   })
 })

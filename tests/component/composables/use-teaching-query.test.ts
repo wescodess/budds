@@ -88,6 +88,19 @@ describe('useTeachingQuery', () => {
     expect(read.failure.value).toBeNull()
   })
 
+  it('never lets a late delivery result override a newer server denial', async () => {
+    let resolveDelivery!: (value: unknown) => void
+    mutation.mockReturnValue(new Promise(resolve => { resolveDelivery = resolve }))
+    const read = await setup()
+    subscriptions[0]!.onError(deliveryRequired())
+    subscriptions[0]!.onError(deniedBy('test_open'))
+    await nextTick()
+    resolveDelivery({ admission: { version: 'v', status: 'delivered' }, value: { revision: 9, blocks: [] } })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(read.failure.value?.reason).toBe('test_open')
+    expect(read.data.value).toBeNull()
+  })
+
   it('clears a denial when the live query later succeeds', async () => {
     const read = await setup()
     subscriptions[0]!.onError(deniedBy('test_open'))

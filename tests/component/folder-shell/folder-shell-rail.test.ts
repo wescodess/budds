@@ -6,7 +6,6 @@ import { mockMatchMedia } from '../../support/match-media'
 
 const mockCourses = ref<any[]>([])
 const mockCoursesError = ref<Error | null>(null)
-const mockCoursesRefresh = vi.fn()
 
 mockNuxtImport('useUserSession', () => {
   return () => ({
@@ -16,7 +15,7 @@ mockNuxtImport('useUserSession', () => {
 
 mockNuxtImport('useConvexQuery', () => {
   return (apiRef: unknown) => getFunctionName(apiRef as any) === 'courses:listByFolder'
-    ? { data: mockCourses, error: mockCoursesError, refresh: mockCoursesRefresh }
+    ? { data: mockCourses, error: mockCoursesError }
     : { data: ref([]) }
 })
 
@@ -86,32 +85,29 @@ describe('FolderShellRail', () => {
     mockCourses.value = []
   })
 
-  it('[P2] shows a small paused row and a retryable course error under Learn', async () => {
+  it('[P2] matches dev while responses are off: course errors never replace the course list', async () => {
     mockMatchMedia({ mobile: false, touch: false })
     const Rail = (await import('~/components/folder-shell/FolderShellRail.vue')).default
-    const props = {
-      folderId: 'folder-1' as any,
-      folder: { _id: 'folder-1', name: 'Biology 101', color: null } as any,
-      activeTab: 'learn' as const,
-      activeConversationId: null,
-      activeVoidId: null,
-      compact: false,
-      hidden: false,
-      mobileExpanded: false,
-      drawerSection: null,
-    }
-
     mockCoursesError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
-    const wrapper = await mountSuspended(Rail, { props })
-    expect(wrapper.get('[data-testid="rail-courses-read-paused"]').text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
-    expect(wrapper.find('[data-testid="rail-courses-read-retry"]').exists()).toBe(false)
-
-    mockCoursesError.value = new Error('network down')
+    const wrapper = await mountSuspended(Rail, {
+      props: {
+        folderId: 'folder-1' as any,
+        folder: { _id: 'folder-1', name: 'Biology 101', color: null } as any,
+        activeTab: 'learn',
+        activeConversationId: null,
+        activeVoidId: null,
+        compact: false,
+        hidden: false,
+        mobileExpanded: false,
+        drawerSection: null,
+      },
+    })
+    expect(wrapper.find('[data-testid="rail-courses-read-paused"]').exists()).toBe(false)
+    mockCourses.value = [{ _id: 'course-2', title: 'Cells', createdAt: 1 }]
     await nextTick()
-    await wrapper.get('[data-testid="rail-courses-read-retry"]').trigger('click')
-    expect(mockCoursesRefresh).toHaveBeenCalledTimes(1)
-    mockCoursesError.value = null
-    await nextTick()
+    expect(wrapper.get('[data-testid="rail-void-course-course-2"]').text()).toBe('Cells')
     expect(wrapper.find('[data-testid="rail-courses-read-error"]').exists()).toBe(false)
+    mockCourses.value = []
+    mockCoursesError.value = null
   })
 })

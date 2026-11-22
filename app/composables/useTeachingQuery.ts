@@ -35,12 +35,12 @@ export function teachingReadFailure(cause: unknown): TeachingReadFailure | null 
   return { reason, retryable: message === null, message }
 }
 
-function withFailure<T extends { error?: Ref<unknown> }>(result: T) {
-  return Object.assign(result, { failure: computed(() => teachingReadFailure(result.error?.value)) })
+function withFailure<T extends { error: Ref<Error | null> }>(result: T) {
+  return Object.assign(result, { failure: computed(() => teachingReadFailure(result.error.value)) })
 }
 
 export function useTeachingQuery<Q extends Query>(query: Q, args: MaybeRefOrGetter<FunctionArgs<Q>>, options: Parameters<typeof useConvexQuery>[2] = {}) {
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || import.meta.server) return withFailure(useConvexQuery(query, args, options))
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || import.meta.server) return Object.assign(useConvexQuery(query, args, options), { failure: computed<TeachingReadFailure | null>(() => null) })
   const client = useConvex()
   const data = shallowRef<FunctionReturnType<Q> | null>(null)
   const error = shallowRef<Error | null>(null)

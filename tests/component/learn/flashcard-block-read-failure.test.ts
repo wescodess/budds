@@ -1,14 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import { resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
 
-const roomData = ref<any>(null)
-const roomError = ref<unknown>(null)
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+
+const roomRead = teachingRead('flashcardRooms:getRoom')
+const roomData = roomRead.data as Ref<any>
+const roomError = roomRead.error as Ref<any>
 const room = { room: { title: 'Test Room' }, cards: [{ _id: 'c1', term: 'Mitosis', definition: 'Cell division', displayOrder: 0 }] }
-const refresh = vi.fn(async () => { roomError.value = null; roomData.value = room })
 const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
 
-mockNuxtImport('useConvexQuery', () => () => ({ data: roomData, error: roomError, refresh }))
+mockNuxtImport('useConvex', () => () => teachingClient)
+mockNuxtImport('useConvexQuery', () => () => ({ data: ref(null), error: ref(null), refresh: vi.fn() }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn() }))
 
 const componentPath = ['~', 'components', 'learn', 'FlashcardBlock.vue'].join('/')
@@ -22,9 +29,8 @@ async function mount(props: Record<string, unknown> = { roomId: 'room_123' }) {
 
 describe('FlashcardBlock teaching read failures', () => {
   beforeEach(() => {
+    resetTeachingReads()
     roomData.value = null
-    roomError.value = null
-    refresh.mockClear()
   })
 
   it('pauses while a check is open instead of loading forever', async () => {
@@ -46,9 +52,12 @@ describe('FlashcardBlock teaching read failures', () => {
     roomError.value = new Error('Network down')
     const wrapper = await mount()
     expect(wrapper.get('[data-testid="flashcard-block-read-error"]').text()).toContain('Could not load these flashcards.')
+    const before = roomRead.subscriptions
     await wrapper.get('[data-testid="flashcard-block-read-retry"]').trigger('click')
+    expect(roomRead.subscriptions).toBe(before + 1)
+    roomError.value = null
+    roomData.value = room
     await flushPromises()
-    expect(refresh).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="flashcard-block-read-error"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('Mitosis')
   })

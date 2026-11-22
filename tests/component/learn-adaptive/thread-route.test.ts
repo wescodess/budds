@@ -22,7 +22,6 @@ const mutationCalls = vi.fn().mockResolvedValue({ kind: 'ok' })
 const memoryMutationCalls = vi.fn().mockResolvedValue({ kind: 'ok', revision: 4 })
 const isOnline = ref(true)
 const canvasError = ref<Error | null>(null)
-const refreshCanvas = vi.fn()
 
 mockNuxtImport('useLearnAdaptiveAccess', () => () => ({ allowed, checkingAccess: ref(false), fallbackRoute: ref({ name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }) }))
 mockNuxtImport('useRoute', () => () => requestedRoute)
@@ -35,13 +34,13 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   calls(name, args)
   return { data: name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false),
-    error: name === 'learnAdaptiveCanvas:getCanvas' ? canvasError : ref(null), refresh: name === 'learnAdaptiveCanvas:getCanvas' ? refreshCanvas : vi.fn() }
+    error: name === 'learnAdaptiveCanvas:getCanvas' ? canvasError : ref(null) }
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 describe('adaptive thread route isolation', () => {
-  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); canvasError.value = null; refreshCanvas.mockReset(); sessionStorage.clear() })
+  beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); canvasError.value = null; sessionStorage.clear() })
 
   it('does not subscribe to folder documents for a no-source thread', async () => {
     const Page = await import(path)
@@ -480,24 +479,15 @@ describe('adaptive thread route isolation', () => {
     expect(wrapper.find('[data-testid="learn-representative-outcome"]').exists()).toBe(false)
   })
 
-  it('explains a denied current activity instead of the generic fallback, and retries other failures', async () => {
+  it('matches dev while responses are off: canvas errors fall through to the existing fallback', async () => {
     const Page = await import(path)
     projection.value = { ownerId: 'owner_1', thread: { id: 'thread_1', outcome: 'Explain orbital motion', intent: 'understand', evidenceState: 'ready', lifecycle: 'active', revision: 2, authorityKind: 'v2_mission', learningVoidId: 'void_1' },
       currentActivity: null, history: [], nextAction: { kind: 'continue', label: 'Start learning', activityId: null } }
     canvasError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
     const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
     const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
-    expect(shell.get('[data-testid="learn-adaptive-canvas-read-paused"]').text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
-    expect(shell.find('[data-testid="learn-adaptive-canvas-read-retry"]').exists()).toBe(false)
-    expect(shell.find('[data-testid="learn-adaptive-canvas-fallback"]').exists()).toBe(false)
-
-    canvasError.value = new Error('Network request failed')
-    refreshCanvas.mockImplementation(async () => { canvasError.value = null })
-    await nextTick()
-    expect(shell.get('[data-testid="learn-adaptive-canvas-read-error"]').attributes('role')).toBe('alert')
-    await shell.get('[data-testid="learn-adaptive-canvas-read-retry"]').trigger('click')
-    expect(refreshCanvas).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(shell.find('[data-testid="learn-adaptive-canvas-read-error"]').exists()).toBe(false))
+    expect(shell.find('[data-testid="learn-adaptive-canvas-read-paused"]').exists()).toBe(false)
+    expect(shell.find('[data-testid="learn-adaptive-canvas-read-error"]').exists()).toBe(false)
     expect(shell.get('[data-testid="learn-adaptive-canvas-fallback"]').text()).toContain('unavailable')
     wrapper.unmount()
   })

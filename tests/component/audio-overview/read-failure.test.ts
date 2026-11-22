@@ -1,10 +1,13 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nextTick, ref, type Ref } from 'vue'
+import { nextTick, onScopeDispose, ref, toValue } from 'vue'
 import { createAudioOverviewPlayback } from '~/composables/useAudioOverviewStore'
+import { deniedRead as denied, resetTeachingReads, teachingClient, teachingRead, type TeachingRead } from '../support/teaching-reads'
 
-const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
 
 const v2 = {
   schemaVersion: 2 as const,
@@ -19,12 +22,12 @@ const v2 = {
   finalArtifact: { artifactId: 'artifact-1' },
 }
 
-type Query = { data: Ref<unknown>, error: Ref<unknown>, refresh: ReturnType<typeof vi.fn> }
-let queries: Record<string, Query>
+let queries: Record<string, TeachingRead>
 
 function stubQueries(names: string[]) {
-  queries = Object.fromEntries(names.map(name => [name, { data: ref(null), error: ref(null), refresh: vi.fn() }]))
-  vi.stubGlobal('useConvexQuery', (reference: unknown) => queries[getFunctionName(reference as never)] ?? { data: ref(null), error: ref(null), refresh: vi.fn() })
+  resetTeachingReads()
+  queries = Object.fromEntries(names.map(name => [name, teachingRead(name)]))
+  for (const read of Object.values(queries)) read.data.value = null
 }
 
 const ownerOverview = { _id: 'overview-1', title: 'Owner overview', turns: [], hostNames: { hostA: 'Host A', hostB: 'Host B' }, sourceDocumentIds: [] }
@@ -38,7 +41,7 @@ function fakeAudio() {
   return el
 }
 
-describe('audio teaching read failures', () => {
+describe('audio teaching read failures with responses on', () => {
   let store: ReturnType<typeof createAudioOverviewPlayback>
   beforeEach(() => {
     store = createAudioOverviewPlayback()
@@ -47,6 +50,9 @@ describe('audio teaching read failures', () => {
     vi.stubGlobal('useDocuments', () => ({ documents: ref([]) }))
     vi.stubGlobal('useAudioOverviewDownload', () => ({ downloadOverview: vi.fn() }))
     vi.stubGlobal('useAudioOverviewStore', () => store)
+    vi.stubGlobal('useConvex', () => teachingClient)
+    vi.stubGlobal('toValue', toValue)
+    vi.stubGlobal('onScopeDispose', onScopeDispose)
   })
 
   afterEach(() => vi.unstubAllGlobals())
@@ -79,21 +85,21 @@ describe('audio teaching read failures', () => {
       expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
     })
 
-    it('retries the failed read and recovers', async () => {
+    it('retries only the failed read and recovers', async () => {
       stubQueries(names)
       const failed = queries['audioOverviewV2:getPlaybackByShareToken']!
       failed.error.value = new Error('network')
-      failed.refresh.mockImplementation(() => {
-        failed.error.value = null
-        failed.data.value = v2
-      })
       const wrapper = await mountShell()
       expect(wrapper.get('[data-testid="audio-read-error"]').attributes('role')).toBe('alert')
       expect(wrapper.text()).toContain('Could not load this audio overview.')
+      const failedBefore = failed.subscriptions
+      const otherBefore = queries['audioOverviews:getByShareToken']!.subscriptions
       await wrapper.get('[data-testid="audio-read-retry"]').trigger('click')
+      expect(failed.subscriptions).toBe(failedBefore + 1)
+      expect(queries['audioOverviews:getByShareToken']!.subscriptions).toBe(otherBefore)
+      failed.data.value = v2
+      failed.error.value = null
       await flushPromises()
-      expect(failed.refresh).toHaveBeenCalledTimes(1)
-      expect(queries['audioOverviews:getByShareToken']!.refresh).not.toHaveBeenCalled()
       expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
       expect(wrapper.get('[data-testid="public-audio-title"]').text()).toBe(v2.title)
     })
@@ -203,17 +209,16 @@ describe('audio teaching read failures', () => {
 
     it('retries every failed read and clears the error', async () => {
       stubQueries(names)
-      for (const name of ['audioOverviews:getTurnUrls', 'audioOverviewV2:getPlaybackForOwner']) {
-        const query = queries[name]!
-        query.error.value = new Error('network')
-        query.refresh.mockImplementation(() => { query.error.value = null })
-      }
+      const failed = ['audioOverviews:getTurnUrls', 'audioOverviewV2:getPlaybackForOwner'].map(name => queries[name]!)
+      for (const query of failed) query.error.value = new Error('network')
       const wrapper = await mountPlayer()
+      const before = failed.map(query => query.subscriptions)
+      const overviewBefore = queries['audioOverviews:getWithTurns']!.subscriptions
       await wrapper.get('[data-testid="audio-read-retry"]').trigger('click')
+      expect(failed.map(query => query.subscriptions)).toEqual(before.map(count => count + 1))
+      expect(queries['audioOverviews:getWithTurns']!.subscriptions).toBe(overviewBefore)
+      for (const query of failed) query.error.value = null
       await flushPromises()
-      expect(queries['audioOverviews:getTurnUrls']!.refresh).toHaveBeenCalledTimes(1)
-      expect(queries['audioOverviewV2:getPlaybackForOwner']!.refresh).toHaveBeenCalledTimes(1)
-      expect(queries['audioOverviews:getWithTurns']!.refresh).not.toHaveBeenCalled()
       expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
     })
   })

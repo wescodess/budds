@@ -1,15 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
-import { flushPromises } from '@vue/test-utils'
 
 const mockOverviewData = ref<any>(null)
 const mockOverviewError = ref<any>(null)
-const mockRefresh = vi.fn()
-const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
 
 mockNuxtImport('useConvexQuery', () => {
   return (_apiRef: any, _args?: any) => {
-    return { data: mockOverviewData, error: mockOverviewError, refresh: mockRefresh }
+    return { data: mockOverviewData, error: mockOverviewError }
   }
 })
 
@@ -34,83 +31,30 @@ describe('AudioBlock', () => {
   beforeEach(() => {
     mockOverviewData.value = null
     mockOverviewError.value = null
-    mockRefresh.mockReset()
   })
 
-  it('pauses without retry while a check is open', async () => {
-    mockOverviewError.value = denied('test_open')
+  it('matches dev while responses are off: a stale SSR error never hides the overview that arrives later', async () => {
+    mockOverviewError.value = new Error('SSR query failed')
     const Comp = await import(componentPath)
     const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
-    const paused = wrapper.get('[data-testid="audio-read-paused"]')
-    expect(paused.attributes('role')).toBe('status')
-    expect(paused.text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
-    expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('Loading audio data')
-  })
-
-  it('says plainly when disclosure is unknown', async () => {
-    mockOverviewError.value = denied('disclosure_unknown')
-    const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
-    expect(wrapper.get('[data-testid="audio-read-paused"]').text()).toBe('This isn’t available right now.')
-    expect(wrapper.find('[data-testid="audio-read-retry"]').exists()).toBe(false)
-  })
-
-  it('retries a failed read and recovers to the player', async () => {
-    mockOverviewError.value = new Error('network')
-    mockRefresh.mockImplementation(() => {
-      mockOverviewError.value = null
-      mockOverviewData.value = sampleOverview
-    })
-    const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
-    expect(wrapper.get('[data-testid="audio-read-error"]').text()).toContain('Could not load this audio overview.')
-    expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(false)
-    await wrapper.get('[data-testid="audio-read-retry"]').trigger('click')
-    expect(mockRefresh).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() => expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(true))
-    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
-  })
-
-  it('stops playback and clears the transcript when a check opens mid-play, then reloads on recovery', async () => {
+    expect(wrapper.text()).toContain('Loading audio data')
     mockOverviewData.value = sampleOverview
-    const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
-    const audio = wrapper.get('audio').element as HTMLAudioElement
-    const pause = vi.spyOn(audio, 'pause').mockImplementation(() => {})
-    vi.spyOn(audio, 'play').mockResolvedValue(undefined)
-    vi.spyOn(audio, 'load').mockImplementation(() => {})
-    await wrapper.get('[data-testid="audio-block-play"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Pause audio primer')
-    expect(audio.getAttribute('src')).toBe('https://audio.test/1.mp3')
-    await wrapper.find('[data-testid="audio-block-transcript-toggle"]').trigger('click')
-    expect(wrapper.text()).toContain('SN1 reactions')
-
-    mockOverviewError.value = denied('test_open')
     await nextTick()
-    expect(pause).toHaveBeenCalled()
-    expect(audio.getAttribute('src')).toBeNull()
-    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(true)
-    expect(wrapper.find('audio').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="audio-block-play"]').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('SN1 reactions')
-    expect(wrapper.text()).not.toContain('Reaction Mechanisms Primer')
-
-    mockOverviewError.value = null
-    await nextTick()
-    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
+    expect(mockOverviewError.value).not.toBeNull()
     expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
-    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('aria-label')).toBe('Play audio primer')
-    expect(wrapper.text()).not.toContain('SN1 reactions')
+    expect(wrapper.find('audio').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="audio-block-play"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
   })
 
-  it('ignores read failures when there is no audio to load', async () => {
-    mockOverviewError.value = new Error('network')
+  it('ignores denial-shaped errors while responses are off', async () => {
+    mockOverviewData.value = sampleOverview
+    mockOverviewError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
     const Comp = await import(componentPath)
-    const wrapper = await mountSuspended(Comp.default, { props: {} })
-    expect(wrapper.find('[data-testid="audio-read-error"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('No audio available')
+    const wrapper = await mountSuspended(Comp.default, { props: { entityId: 'audio_123' } })
+    expect(wrapper.text()).toContain('Reaction Mechanisms Primer')
+    expect(wrapper.find('[data-testid="audio-read-paused"]').exists()).toBe(false)
   })
 
   it('shows loading state when no entityId', async () => {

@@ -1,4 +1,5 @@
 import { reactive, computed, ref, shallowRef, toRefs } from 'vue'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 import type { Id } from '../../convex/_generated/dataModel'
 
 export interface AudioOverviewTurn {
@@ -349,7 +350,7 @@ export function createAudioOverviewPlayback() {
     if (!import.meta.client) return
     audioElRef.value = el
     preloadElRef.value = preloadEl
-    if (el && listenersElement !== el) {
+    if (el && (listenersElement === null || (LEARN_MEASUREMENT_CAPABILITIES.responses && listenersElement !== el))) {
       setupListeners(el)
       listenersElement = el
     }
@@ -589,8 +590,8 @@ export function createAudioOverviewPlayback() {
   function dismiss() {
     pause()
     stopVisualizer()
-    for (const el of [audioElRef.value, preloadElRef.value]) {
-      if (!el) continue
+    const el = audioElRef.value
+    if (el) {
       el.removeAttribute('src')
       el.load()
     }
@@ -617,7 +618,13 @@ export function createAudioOverviewPlayback() {
   }
 
   function release(overviewId: string) {
-    if (state.overviewId === overviewId) dismiss()
+    if (state.overviewId !== overviewId) return
+    dismiss()
+    const preload = preloadElRef.value
+    if (preload) {
+      preload.removeAttribute('src')
+      preload.load()
+    }
   }
 
   const shellVisible = ref(false)

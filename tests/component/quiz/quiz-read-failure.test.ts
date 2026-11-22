@@ -2,15 +2,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
+import { resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
 
-const teachingData = ref<any>(null)
-const teachingError = ref<any>(null)
-const refresh = vi.fn()
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+
+const withQuestions = teachingRead('quizzes:getWithQuestions')
+const attemptResults = teachingRead('quizzes:getAttemptResults')
+attemptResults.data = withQuestions.data
+attemptResults.error = withQuestions.error
+const teachingData = withQuestions.data as Ref<any>
+const teachingError = withQuestions.error as Ref<any>
+const subscriptions = () => withQuestions.subscriptions + attemptResults.subscriptions
 const attemptsData = ref<any>([])
 
+mockNuxtImport('useConvex', () => () => teachingClient)
 mockNuxtImport('useConvexQuery', () => (reference: any) => {
   const name = getFunctionName(reference) ?? ''
-  if (name.includes('getWithQuestions') || name.includes('getAttemptResults')) return { data: teachingData, error: teachingError, refresh }
   if (name.includes('listAttempts')) return { data: attemptsData, error: ref(null), refresh: vi.fn() }
   return { data: ref([]), error: ref(null), refresh: vi.fn() }
 })
@@ -41,7 +51,7 @@ const props = {
 const mounted: Array<{ unmount: () => void }> = []
 async function mountTracked(path: string, mountProps: Record<string, unknown>) {
   const Comp = await import(path)
-  const wrapper = await mountSuspended(Comp.default, { props: mountProps })
+  const wrapper = await mountSuspended(Comp.default, { props: mountProps, global: { stubs: { Motion: { template: '<div><slot /></div>' } } } })
   mounted.push(wrapper)
   return wrapper
 }
@@ -54,13 +64,9 @@ describe('quiz teaching-read failures', () => {
     for (const wrapper of mounted.splice(0)) wrapper.unmount()
   })
   beforeEach(() => {
+    resetTeachingReads()
     teachingData.value = null
-    teachingError.value = null
     attemptsData.value = []
-    refresh.mockReset().mockImplementation(() => {
-      teachingError.value = null
-      teachingData.value = quiz
-    })
   })
 
   for (const name of ['Taker', 'QuizBlock'] as const) {
@@ -87,8 +93,11 @@ describe('quiz teaching-read failures', () => {
         teachingError.value = denied('unavailable')
         const wrapper = await mount(name)
         expect(wrapper.get('[data-testid="quiz-read-error"]').attributes('role')).toBe('alert')
+        const before = subscriptions()
         await wrapper.get('[data-testid="quiz-read-retry"]').trigger('click')
-        expect(refresh).toHaveBeenCalledTimes(1)
+        expect(subscriptions()).toBe(before + 1)
+        teachingError.value = null
+        teachingData.value = quiz
         await flushPromises()
         expect(wrapper.find('[data-testid="quiz-read-error"]').exists()).toBe(false)
         expect(wrapper.text()).toContain('Cells have membranes.')
@@ -111,14 +120,14 @@ describe('quiz teaching-read failures', () => {
 
   for (const name of ['OverviewView', 'ResultsView', 'Editor', 'CardPreview'] as const) {
     it(`${name} shows the paused state and the retryable error`, async () => {
-      refresh.mockReset()
       teachingError.value = denied('test_open')
       const wrapper = await mount(name)
       expect(wrapper.get('[data-testid="quiz-read-paused"]').text()).toContain('This is paused while you have a check open.')
       teachingError.value = new Error('Network down')
       await flushPromises()
+      const before = subscriptions()
       await wrapper.get('[data-testid="quiz-read-retry"]').trigger('click')
-      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(subscriptions()).toBe(before + 1)
     })
   }
 

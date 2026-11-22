@@ -1,27 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
-import { getFunctionName } from 'convex/server'
+import { resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
 
-const roomData = ref<any>(null)
-const roomError = ref<unknown>(null)
-const versionsData = ref<any>(null)
-const versionsError = ref<unknown>(null)
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
+
+const room = teachingRead('flashcardRooms:getRoom')
+const versions = teachingRead('flashcardRooms:listRoomVersions')
+const roomData = room.data as Ref<any>
+const roomError = room.error as Ref<any>
+const versionsData = versions.data as Ref<any>
+const versionsError = versions.error as Ref<any>
 const roomContent = {
   room: { _id: 'room_1', _creationTime: Date.now(), title: 'Cell Biology', userId: 'user_a', folderId: 'folder_abc', updatedAt: Date.now() },
   cards: [{ _id: 'c1', displayOrder: 0, term: 'Mitosis', definition: 'Cell division' }],
 }
-const refreshRoom = vi.fn(async () => { roomError.value = null; roomData.value = roomContent })
-const refreshVersions = vi.fn(async () => { versionsError.value = null; versionsData.value = [] })
 
 const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
 
-mockNuxtImport('useConvexQuery', () => (apiRef: any) => {
-  const name = getFunctionName(apiRef) ?? ''
-  if (name.includes('listRoomVersions')) return { data: versionsData, error: versionsError, refresh: refreshVersions }
-  if (name.includes('getRoomVersion')) return { data: ref(null), error: ref(null), refresh: vi.fn() }
-  return { data: roomData, error: roomError, refresh: refreshRoom }
-})
+mockNuxtImport('useConvex', () => () => teachingClient)
+mockNuxtImport('useConvexQuery', () => () => ({ data: ref(null), error: ref(null), refresh: vi.fn() }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn(), isLoading: ref(false) }))
 mockNuxtImport('useTasks', () => () => ({ tasks: ref([]), activeCount: ref(0), cancel: vi.fn(), dismiss: vi.fn(), retry: vi.fn() }))
 
@@ -30,16 +31,15 @@ const panelPath = ['~', 'components', 'flashcards', 'RoomHistoryPanel.vue'].join
 
 async function mountShell() {
   const Comp = await import(shellPath)
-  const wrapper = await mountSuspended(Comp.default, { props: { roomId: 'room_1', folderId: 'folder_abc' } })
+  const wrapper = await mountSuspended(Comp.default, { props: { roomId: 'room_1', folderId: 'folder_abc' }, global: { stubs: { Motion: { template: '<div><slot /></div>' }, AnimatePresence: { template: '<div><slot /></div>' } } } })
   await flushPromises()
   return wrapper
 }
 
 describe('RoomShell teaching read failures', () => {
   beforeEach(() => {
+    resetTeachingReads()
     roomData.value = null
-    roomError.value = null
-    refreshRoom.mockClear()
   })
 
   it('pauses while a check is open, with no retry', async () => {
@@ -63,9 +63,12 @@ describe('RoomShell teaching read failures', () => {
     roomError.value = new Error('Network down')
     const wrapper = await mountShell()
     expect(wrapper.get('[data-testid="flashcards-read-error"]').text()).toContain('Could not load these flashcards.')
+    const before = room.subscriptions
     await wrapper.get('[data-testid="flashcards-read-retry"]').trigger('click')
+    expect(room.subscriptions).toBe(before + 1)
+    roomError.value = null
+    roomData.value = roomContent
     await flushPromises()
-    expect(refreshRoom).toHaveBeenCalledTimes(1)
     expect(wrapper.find('[data-testid="flashcards-read-error"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="flashcard-room-title"]').text()).toBe('Cell Biology')
   })
@@ -79,11 +82,9 @@ describe('RoomShell teaching read failures', () => {
 
 describe('RoomHistoryPanel teaching read failures', () => {
   beforeEach(() => {
+    resetTeachingReads()
     versionsData.value = null
-    versionsError.value = null
     roomData.value = null
-    roomError.value = null
-    refreshVersions.mockClear()
     document.body.innerHTML = ''
   })
 
@@ -94,17 +95,20 @@ describe('RoomHistoryPanel teaching read failures', () => {
     await flushPromises()
     expect(document.querySelector('[data-testid="flashcard-room-history-empty"]')).toBeNull()
     expect(document.querySelector('[data-testid="flashcard-history-read-error"]')?.textContent).toContain('Could not load version history.')
+    const before = versions.subscriptions
     ;(document.querySelector('[data-testid="flashcard-history-read-retry"]') as HTMLButtonElement).click()
+    expect(versions.subscriptions).toBe(before + 1)
+    versionsError.value = null
+    versionsData.value = []
     await flushPromises()
-    expect(refreshVersions).toHaveBeenCalledTimes(1)
     expect(document.querySelector('[data-testid="flashcard-history-read-error"]')).toBeNull()
     expect(document.querySelector('[data-testid="flashcard-room-history-empty"]')).not.toBeNull()
   })
 
 describe('RoomShell denial after cards were shown', () => {
   beforeEach(() => {
+    resetTeachingReads()
     roomData.value = roomContent
-    roomError.value = null
     document.body.innerHTML = ''
   })
 

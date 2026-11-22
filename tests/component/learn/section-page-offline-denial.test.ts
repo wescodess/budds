@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { getFunctionName } from 'convex/server'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
+import { deniedRead, resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
+
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
 
 const isOnline = ref(false)
-const section = ref<Record<string, unknown> | null>(null)
-const sectionError = ref<Error | null>(null)
+const section = teachingRead('courseSections:get')
+const course = teachingRead('courses:get')
 const getCachedSection = vi.fn()
 const forgetCachedCourse = vi.fn()
-const denied = (reasonCode: string) => Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode } } })
 const cached = {
   sectionId: 'section_1',
   courseId: 'course_1',
@@ -17,12 +21,9 @@ const cached = {
   contentBlocks: [{ type: 'text' as const, content: 'Cached explanation of inertia', order: 0 }],
 }
 
+mockNuxtImport('useConvex', () => () => teachingClient)
 mockNuxtImport('useRoute', () => () => ({ params: { courseId: 'course_1', sectionId: 'section_1' } }))
-mockNuxtImport('useConvexQuery', () => (apiRef: unknown) => {
-  const name = getFunctionName(apiRef as never) ?? ''
-  if (name === 'courseSections:get') return { data: section, error: sectionError, refresh: vi.fn() }
-  return { data: ref(null), error: ref(null), refresh: vi.fn() }
-})
+mockNuxtImport('useConvexQuery', () => () => ({ data: ref(null) }))
 mockNuxtImport('useConvexMutation', () => () => ({ mutate: vi.fn(), isLoading: ref(false) }))
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useOfflineCache', () => () => ({ cacheSectionContent: vi.fn(), getCachedSection, forgetCachedCourse }))
@@ -32,11 +33,10 @@ vi.mock('~/composables/useFolderPageContext', () => ({ injectFolderContext: () =
 
 const pagePath = ['~', 'pages', 'app', 'folders', '[id]', 'learn', '[courseId]', '[sectionId].vue'].join('/')
 
-describe('section page offline copy after a denial', () => {
+describe('section page offline copy after a denial, responses on', () => {
   beforeEach(() => {
+    resetTeachingReads()
     isOnline.value = false
-    section.value = null
-    sectionError.value = null
     getCachedSection.mockReset().mockResolvedValue(cached)
     forgetCachedCourse.mockReset().mockResolvedValue(undefined)
   })
@@ -46,7 +46,7 @@ describe('section page offline copy after a denial', () => {
     const wrapper = await mountSuspended(Page.default)
     await vi.waitFor(() => expect(wrapper.text()).toContain('Cached explanation of inertia'))
 
-    sectionError.value = denied('test_open')
+    section.error.value = deniedRead('test_open')
     await vi.waitFor(() => expect(wrapper.find('[data-testid="section-page-read-paused"]').exists()).toBe(true))
     expect(wrapper.get('[data-testid="section-page-read-paused"]').text()).toBe('This is paused while you have a check open. Finish the check, then come back.')
     expect(wrapper.text()).not.toContain('Cached explanation of inertia')
@@ -56,7 +56,7 @@ describe('section page offline copy after a denial', () => {
 
   it('never loads the offline copy while a denial stands', async () => {
     isOnline.value = true
-    sectionError.value = denied('disclosure_unknown')
+    section.error.value = deniedRead('disclosure_unknown')
     const Page = await import(pagePath)
     const wrapper = await mountSuspended(Page.default)
     expect(forgetCachedCourse).toHaveBeenCalledWith('course_1')
@@ -67,5 +67,19 @@ describe('section page offline copy after a denial', () => {
     expect(getCachedSection).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="section-page-read-paused"]').text()).toBe('This isn’t available right now.')
     expect(wrapper.text()).not.toContain('Cached explanation of inertia')
+  })
+
+  it('clears a stale network error once the live section arrives', async () => {
+    isOnline.value = true
+    section.error.value = new Error('network down')
+    const Page = await import(pagePath)
+    const wrapper = await mountSuspended(Page.default)
+    expect(wrapper.find('[data-testid="section-page-read-error"]').exists()).toBe(true)
+    course.data.value = { _id: 'course_1', title: 'Physics', totalSectionCount: 1 }
+    section.error.value = null
+    section.data.value = { _id: 'section_1', courseId: 'course_1', title: 'Live forces', order: 0, status: 'ready', masteryLevel: 'new', contentBlocks: [{ type: 'text', content: 'Live explanation of inertia', order: 0 }] }
+    await vi.waitFor(() => expect(wrapper.text()).toContain('Live explanation of inertia'))
+    expect(wrapper.find('[data-testid="section-page-read-error"]').exists()).toBe(false)
+    expect(forgetCachedCourse).not.toHaveBeenCalled()
   })
 })
