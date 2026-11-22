@@ -169,8 +169,7 @@ const valid = computed(() => {
   const value = draft.value
   if (!value) return false
   if (removing.value) return true
-  if (!value.title.trim() || !value.capability.trim() || !isLearnMapMinutes(value.effortMinutes)) return false
-  if (splitMinutes.value && !isLearnMapMinutes(splitMinutes.value[0])) return false
+  if (!value.title.trim() || !value.capability.trim() || !(splitMinutes.value ?? [value.effortMinutes]).every(isLearnMapMinutes)) return false
   if (value.coverage !== 'gap' && !value.supportingSourceKeys.length) return false
   return value.coverage === 'strong' || Boolean(value.gapReason?.trim())
 })
@@ -345,6 +344,7 @@ async function submit() {
   if (!value || !key || !canSave.value) return
   if (removing.value) return await commit({ kind: 'remove_objective', objectiveKey: key }, 'close')
   const objective = normalized(value)
+  if (splitMinutes.value) objective.effortMinutes = splitMinutes.value[0]
   if (key === NEW) return await commit({ kind: 'save_objective', objective }, 'close')
   const title = objective.title.trim()
   await commit({ kind: 'save_objective', objective, order: placed.value.map(row => row.key), ...(splitMinutes.value ? { split: { secondTitle: `${title.slice(0, 193)}: apply`, minutes: [splitMinutes.value[0], splitMinutes.value[1]] } } : {}) }, 'keep')

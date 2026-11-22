@@ -204,10 +204,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   async function createPlanPreview(schedulingInput: LearnScheduleInput) { const row = mission.value; if (!row?.currentBlueprint) return; return await run(() => createPreviewMutation.mutate({ learningVoidId: row.learningVoid._id, blueprintRevisionId: row.currentBlueprint._id, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, idempotencyKey: key('plan-preview'), schedulingInput })) }
   async function editPlanPreview(schedulingInput: LearnScheduleInput, changeReason: 'availability_changed' | 'deadline_changed' | 'session_length_changed') { const row = mission.value; const preview = row?.plan?.preview; if (!row?.currentBlueprint || !preview) return; return await run(() => editPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedPlanRecordRevision: preview.recordRevision, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, changeReason, idempotencyKey: key('edit-plan-preview'), schedulingInput })) }
   async function editLearningMap(edit: LearnMapEdit): Promise<LearnMapSaveResult> { const original = mission.value; if (!original?.currentBlueprint || !original.map) return { ok: false, reason: 'changed' }; busy.value = true; try {
-    // A draft left by an earlier failed save is already the editable copy, so reuse it.
-    const fork: any = original.currentBlueprint.status === 'draft'
-      ? original.currentBlueprint
-      : await forkBlueprint.mutate({ blueprintRevisionId: original.currentBlueprint._id, expectedRecordRevision: original.currentBlueprint.recordRevision, expectedVoidRevision: original.learningVoid.revision, idempotencyKey: key('fork-map') })
+    const fork: any = await forkBlueprint.mutate({ blueprintRevisionId: original.currentBlueprint._id, expectedRecordRevision: original.currentBlueprint.recordRevision, expectedVoidRevision: original.learningVoid.revision, idempotencyKey: key('fork-map') })
     // The fork copies sources and the authoritative map. Wait for the subscription so
     // candidate source IDs are scoped to that new revision rather than the source map.
     await new Promise<void>((resolve, reject) => {

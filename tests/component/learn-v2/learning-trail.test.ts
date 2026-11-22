@@ -232,7 +232,25 @@ describe('Learner map editor', () => {
     expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toBe('15 min, second part')
     expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr 25 min')
     await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
-    expect(save.mock.calls[0]![0]).toMatchObject({ kind: 'save_objective', objective: { effortMinutes: 25 }, split: { minutes: [40, 15] } })
+    expect(save.mock.calls[0]![0]).toMatchObject({ kind: 'save_objective', objective: { effortMinutes: 40 }, split: { minutes: [40, 15] } })
+    wrapper.unmount()
+  })
+
+  it('validates the split parts shown, not the cleared time before the split', async () => {
+    const { wrapper, save } = await mountTrail()
+
+    await wrapper.get('[data-testid="learn-v2-map-select-objective-1"]').trigger('click')
+    await wrapper.get('[id$="-chip-time"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-effort"]').setValue('')
+    await wrapper.get('[data-testid="learn-v2-map-split-objective"]').trigger('click')
+    await wrapper.get('[data-testid="learn-v2-objective-effort"]').setValue('20')
+    expect(wrapper.get('[id$="-chip-time"]').text()).toBe('20 min, first part, change time')
+    expect(wrapper.get('[data-testid="learn-v2-map-split-second-time"]').text()).toBe('15 min, second part')
+    expect(wrapper.get('[data-testid="learn-v2-map-order"]').text()).toContain('about 3 hr 5 min')
+    expect(wrapper.get('[data-testid="learn-v2-save-objective"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('[data-testid="learn-v2-save-objective"]').trigger('click')
+    expect(save.mock.calls[0]![0]).toMatchObject({ kind: 'save_objective', objective: { effortMinutes: 20 }, split: { minutes: [20, 15] } })
     wrapper.unmount()
   })
 
