@@ -17,7 +17,8 @@ const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
 const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['in_progress', 'ready', 'blocked', 'generation_failed', 'planned']
 
-function rank(session: { placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
+function rank(session: { assessmentPurpose?: string, placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.scheduledStartAt <= now) return -1
   if (session.placementKind === 'retained_review' && session.scheduledStartAt <= now) return 0
   if (session.schedulingPriority === 'overdue_retained_review') return 0
   if (record?.state === 'needs_review' || record?.nextReviewAt !== undefined && record.nextReviewAt <= now || session.schedulingPriority === 'prerequisite_remediation') return 1
@@ -121,6 +122,11 @@ export const getToday = query({
     const now = Date.now()
     const candidates: Candidate[] = []
     for (const session of sessions) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId) {
+        const check = await ctx.db.get(session.assessmentOpportunityId)
+        if (check?.userId === userId && (check.contextPins.kind === 'session' && check.contextPins.canvas
+          || check.submissionId || now >= check.closeAt)) continue
+      }
       const plan = await ctx.db.get(session.studyPlanRevisionId); const root = plan && await ctx.db.get(plan.studyPlanId)
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
@@ -132,6 +138,7 @@ export const getToday = query({
     }
     const nextScheduledAt = candidates.filter(row => row.session.status !== 'in_progress' && row.session.scheduledStartAt > now).map(row => row.session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null
     const selectable = candidates.filter(row => {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && row.session.assessmentPurpose === 'measurement_delayed' && row.session.scheduledStartAt > now) return false
       if (row.session.status === 'in_progress') return true
       if (row.session.scheduledEndAt !== undefined && row.session.scheduledEndAt < now) return false
       if (row.session.scheduledStartAt <= now) return true
@@ -146,7 +153,7 @@ export const getToday = query({
       reason: candidate.session.auditReasonCode ?? 'session_generation_unavailable',
       sessionId: candidate.session._id,
       sessionRevision: candidate.session.revision,
-      canRetryGeneration: true,
+      canRetryGeneration: !(LEARN_MEASUREMENT_CAPABILITIES.responses && isTestOnlyMeasurementSession(candidate.session)),
       nextScheduledAt,
     }
     if (candidate.session.status === 'planned') return { status: 'pending' as const, sessionId: candidate.session._id, scheduledStartAt: candidate.session.scheduledStartAt, nextScheduledAt }

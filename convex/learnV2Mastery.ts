@@ -43,6 +43,7 @@ import { isLearnScoringReceiptCommittable, learnMeasurementItemPinsSchema, deriv
 import { canEmitLearnMeasurementOutcomeEvent, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../shared/learn-adaptive-events'
 import { freezeFirstIndependentClaimForOwner, writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork'
+import { resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
 import { requireSavedLearnScoringInput, reserveSavedLearnScoring, readSavedLearnScoringState, prepareSavedLearnModelScoring,
@@ -561,7 +562,7 @@ async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: 
   const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now
   const durationMinutes = Math.max(15, Math.min(60, input.scope.objective.estimatedMinutes ?? 30))
   const sessionId = await ctx.db.insert('studySessions', { userId: input.userId, studyPlanRevisionId: input.scope.plan._id, primaryObjectiveId: input.scope.objective._id, status: 'planned', revision: 1, scheduledStartAt, scheduledEndAt: scheduledStartAt + durationMinutes * 60_000, timezone: input.timezone, placementKind: kind, schedulingPriority: priority, schedulerVersion: 'learn-v2.mastery-followup.v1', auditReasonCode: `mastery_followup:${input.attemptId}` })
-  if (kind === 'retained_review' && input.testOnly) return { sessionId, scheduledStartAt }
+  if (kind === 'retained_review' && input.testOnly) return await resolveLearnRetainedShell(ctx, input.userId, sessionId, input.attemptId)
   const inputDigest = await digest({ attemptId: String(input.attemptId), planRevisionId: String(input.scope.plan._id), sessionId: String(sessionId), objectiveId: String(input.scope.objective._id), sourceIds: input.sourceIds.map(String).sort() })
   const jobId = await ctx.db.insert('learnJobs', { userId: input.userId, learningVoidId: input.scope.voidRow._id, blueprintRevisionId: input.scope.blueprint._id, studyPlanRevisionId: input.scope.plan._id, studySessionId: sessionId, type: FOLLOW_UP_JOB_TYPE, status: 'queued', revision: 1, idempotencyKey: `mastery-followup:${input.attemptId}`, requestFingerprint: inputDigest, inputDigest, expectedVoidRevision: input.scope.voidRow.revision, expectedBlueprintRecordRevision: input.scope.blueprint.recordRevision, expectedSessionRevision: 1, attempts: 0, dispatchSupportingSourceSnapshotIds: input.sourceIds, providerEnabled: process.env.LEARN_V2_SESSION_CONTENT_PROVIDER_ENABLED === 'true', providerModel: process.env.LEARN_V2_SESSION_CONTENT_MODEL?.trim() || undefined, providerPolicyVersion: 'learn-v2.session-content-provider.v1', createdAt: input.now, updatedAt: input.now })
   await ctx.scheduler.runAfter(0, internal.learnV2SessionContent.executeSessionContentGeneration, { tokenIdentifier: input.userId, jobId, expectedRevision: 1 })

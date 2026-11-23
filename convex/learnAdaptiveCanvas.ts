@@ -155,6 +155,37 @@ export const prepareCanvasSession = mutation({
   handler: prepareCanvasSessionForOwner,
 })
 
+export const listDueChecks = query({
+  args: {},
+  returns: v.object({ status: v.union(v.literal('available'), v.literal('disabled'), v.literal('unavailable')), reasonCode: v.union(v.string(), v.null()),
+    checks: v.array(v.object({ assessmentOpportunityId: v.id('learnAssessmentOpportunities'), studySessionId: v.id('studySessions'),
+      sessionRevision: v.number(), contentRevision: v.number(), horizonDays: v.union(v.literal(7), v.literal(30)), dueAt: v.number(), closeAt: v.number() })) }),
+  handler: async (ctx) => {
+    const userId = await requireAdaptiveQueryAccess(ctx)
+    const unavailable = (reasonCode: string) => ({ status: 'unavailable' as const, reasonCode, checks: [] })
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery) return { status: 'disabled' as const, reasonCode: 'disabled', checks: [] }
+    const checks = []
+    for (const phase of ['ready', 'test_open'] as const) {
+      const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase)).take(33)
+      if (rows.length > 32) return unavailable('discovery_limit')
+      for (const row of rows) {
+        if (row.purpose.kind !== 'measurement_delayed' || row.submissionId || Date.now() < row.openAt || Date.now() >= row.closeAt
+          || row.contextPins.kind !== 'session' || !row.contextPins.canvas) continue
+        const scope = await canvasAssessmentScope(ctx, userId, row.contextPins.canvas.threadId)
+        if (!scope || scope.opportunity._id !== row._id) return unavailable('pins_mismatch')
+        if (!await canvasPilotAllowed(userId, scope)) return unavailable('canvas_not_admitted')
+        const state = await readLearnAssessmentStateForOwner(ctx, userId, row._id, 'canvas')
+        if (state.status !== 'available') return unavailable(state.status === 'disabled' ? 'disabled' : state.reasonCodes[0] ?? 'assessment_unavailable')
+        checks.push({ assessmentOpportunityId: row._id, studySessionId: scope.session._id, sessionRevision: scope.session.revision,
+          contentRevision: scope.content.revision, horizonDays: row.purpose.horizonDays, dueAt: row.dueAt!, closeAt: row.closeAt })
+        if (checks.length > 32) return unavailable('discovery_limit')
+      }
+    }
+    checks.sort((a, b) => a.dueAt - b.dueAt || String(a.assessmentOpportunityId).localeCompare(String(b.assessmentOpportunityId)))
+    return { status: 'available' as const, reasonCode: null, checks }
+  },
+})
+
 async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRequest) {
   const userId = await requireAdaptiveMutationAccess(ctx)
   const prepared = await prepareAdaptiveCommand({ userId, commandName: 'attachReadySession', targetId: String(args.studySessionId),

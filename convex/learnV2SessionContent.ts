@@ -1433,6 +1433,12 @@ export const startStudySession = mutation({
             deliveryGrantId: opportunity.deliveryGrantId, revision: opportunity.revision, phase: 'test_open' as const }
           : await grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id,
             expectedRevision: opportunity.revision, idempotencyKey: (await privacyDigest(args.idempotencyKey)).slice(7), flow: 'today' });
+        if (grant.status === 'granted' && session.status === 'ready' && opportunity.contextPins.kind === 'session'
+          && opportunity.contextPins.studySessionId === session._id) {
+          await ctx.db.patch(session._id, { status: 'in_progress', revision: session.revision + 1,
+            startedSessionContentId: content._id, startedSessionContentRevision: content.revision });
+          await ctx.db.patch(opportunity._id, { contextPins: { ...opportunity.contextPins, sessionRevision: session.revision + 1 } });
+        }
         const current = await resolveTodayAssessment(ctx, userId, session);
         return receipt(current.kind === 'ordinary' ? assessment : current, undefined, grant);
       }

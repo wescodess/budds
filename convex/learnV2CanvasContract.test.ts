@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { anyApi, type ApiFromModules } from 'convex/server'
+import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
@@ -33,6 +33,7 @@ vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementS
 
 const modules = import.meta.glob('./**/*.ts')
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
+const materializeDue = makeFunctionReference<'mutation', { userId: string, through: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
 const OWNER = canvasIdentity
 const NOW = 1_800_000_000_001
 const HASH = `sha256:${'a'.repeat(64)}`
@@ -104,12 +105,91 @@ async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v
     prepare, preparation, reference: { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: prepared.opportunityId } }
 }
 
+test.each([7, 30] as const)('Canvas discovers and plays its original day-%s item without replaying cold or exposing siblings', async horizon => {
+  const s = await fixture()
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { endsAt: new Date(NOW + 40 * 86_400_000).toISOString() })
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const cold = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (cold.kind !== 'accepted') throw new Error('Expected cold seal')
+  await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: cold.submissionId, idempotencyKey: 'cold_before_delayed_canvas_1234567890' })
+  const slots = () => s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(8))
+  const original = (await slots()).find(row => row.horizonDays === horizon)!
+  vi.setSystemTime(original.openAt + 1000)
+  await s.t.mutation(materializeDue, { userId: OWNER.tokenIdentifier, through: Date.now() })
+  const due = await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})
+  expect(due).toMatchObject({ status: 'available', checks: [{ assessmentOpportunityId: original._id, horizonDays: horizon }] })
+  expect(JSON.stringify(due)).not.toMatch(/Hypothetical|PRIVATE|declaredStimulus|promptDigest/)
+  const check = due.checks[0]!
+  expect(check.studySessionId).not.toBe(s.f.studySessionId)
+  expect(await s.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: original._id, expectedRevision: 1, idempotencyKey: 'delayed_canvas_today_bypass_1234567890' }))
+    .toMatchObject({ status: 'unavailable', reasonCodes: ['flow_mismatch'] })
+  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: check.studySessionId,
+    expectedSessionRevision: check.sessionRevision, idempotencyKey: 'attach_due_canvas_check_1234567890' })
+  if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
+  expect(attached.threadId).not.toBe(s.stage.threadId)
+  const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  if (original.assessmentPins.kind !== 'measurement') throw new Error('Expected item pins')
+  const item = (await s.t.run(ctx => ctx.db.get(original.assessmentPins.kind === 'measurement' ? original.assessmentPins.itemPins.itemId : s.prepared.itemId)))!
+  expect(canvas).toMatchObject({ status: 'started', responsePrompt: item.prompt, declaredStimulus: item.declaredStimulus })
+  const siblings = await s.t.run(ctx => ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q =>
+    q.eq('userId', OWNER.tokenIdentifier).eq('familyId', item.familyId).eq('familyRevision', item.familyRevision)).take(7))
+  for (const sibling of siblings.filter(row => row._id !== item._id)) expect(JSON.stringify(canvas)).not.toContain(sibling.prompt)
+  expect(JSON.stringify(canvas)).not.toContain('PRIVATE')
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    studySessionId: check.studySessionId, expectedRevision: canvas.activity.planRevision!, expectedSessionRevision: canvas.session.revision,
+    response: answer, confidence: 3, idempotencyKey: 'seal_due_canvas_check_1234567890' })
+  if (sealed.kind !== 'accepted') throw new Error('Expected delayed seal')
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'score_due_canvas_check_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  const scored = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
+  expect(scored).toMatchObject({ status: 'feedback', assessment: { phase: 'scored_pass' } })
+  expect(scored!.activity.controls.options.every(option => !option.available)).toBe(true)
+  await s.t.run(async ctx => {
+    const opportunity = (await ctx.db.get(original._id))!
+    expect(await ctx.db.get(opportunity.deliveryGrantId!)).toMatchObject({ caseId: item.caseId, provenanceVersion: 'learn-v2.assessment-delivery.canvas.v1' })
+    expect(await ctx.db.get(opportunity.authoritativeAttemptId!)).toMatchObject({ kind: 'measurement_delayed', horizonDays: horizon, masteryStateAfter: 'unseen' })
+    if (horizon === 30) expect((await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })
+  })
+})
+
 function modelReply(awarded = true, key = 'private-criterion') {
   return new Response(JSON.stringify({ id: 'synthetic-execution', model: 'synthetic/model', choices: [{ index: 0, finish_reason: 'stop',
     message: { role: 'assistant', content: JSON.stringify({ criterionResults: [{ key, awarded }], misconceptionTags: [] }) } }],
     usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
       endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } }))
 }
+
+test.each(['pilot', 'entitlement', 'source', 'protocol'] as const)('due Canvas discovery and attachment recheck %s before a new grant', async gate => {
+  const s = await fixture()
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { endsAt: new Date(NOW + 40 * 86_400_000).toISOString() })
+  const cold = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  expect(cold.kind).toBe('accepted')
+  const day7 = (await s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt + 1000)
+  await s.t.mutation(materializeDue, { userId: OWNER.tokenIdentifier, through: Date.now() })
+  const check = (await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})).checks[0]!
+  const before = await s.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))
+  if (gate === 'pilot') Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: false })
+  if (gate === 'protocol') policy.protocol = null
+  await s.t.run(async ctx => {
+    if (gate === 'source') await ctx.db.patch(s.family.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() })
+    if (gate === 'entitlement') {
+      const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', OWNER.tokenIdentifier)).unique())!
+      await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: false, updatedAt: Date.now() } })
+    }
+  })
+  const attach = { studySessionId: check.studySessionId, expectedSessionRevision: check.sessionRevision, idempotencyKey: 'revoked_due_canvas_grant_1234567890' }
+  if (gate === 'entitlement') {
+    await expect(s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})).rejects.toThrow(/access denied/)
+    await expect(s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).rejects.toThrow(/access denied/)
+  } else {
+    expect(await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})).toMatchObject({ status: 'unavailable', checks: [] })
+    expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).toMatchObject({ kind: 'not_admitted' })
+  }
+  expect(await s.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))).toEqual(before)
+})
 
 test('fresh Canvas preparation atomically binds its flow and enrollment without granting or disclosing an item', async () => {
   const s = await fixture({ prepare: false, attach: false })
@@ -172,6 +252,8 @@ test('fresh Canvas preparation rejects anonymous and foreign callers', async () 
   const s = await fixture({ prepare: false, attach: false })
   await expect(s.t.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)).rejects.toThrow(/access denied/)
   await expect(s.t.withIdentity({ tokenIdentifier: 'https://foreign.example|publisher', subject: OWNER.subject }).mutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)).rejects.toThrow(/access denied/)
+  await expect(s.t.query(api.learnAdaptiveCanvas.listDueChecks, {})).rejects.toThrow(/access denied/)
+  await expect(s.t.withIdentity({ tokenIdentifier: 'https://foreign.example|publisher', subject: OWNER.subject }).query(api.learnAdaptiveCanvas.listDueChecks, {})).rejects.toThrow(/access denied/)
   expect(await s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).toEqual([])
 })
 

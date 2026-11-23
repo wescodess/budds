@@ -25,6 +25,7 @@ test('disabled Canvas preparation returns metadata without changing an existing 
   const before = await snapshot()
   const request = { studySessionId: f.studySessionId, expectedSessionRevision: before.session!.revision, idempotencyKey: 'off_canvas_preparation_1234567890' }
   expect(await owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, request)).toEqual({ kind: 'not_admitted', reasonCode: 'disabled', observations: 'no_observations' })
+  expect(await owner.query(api.learnAdaptiveCanvas.listDueChecks, {})).toEqual({ status: 'disabled', reasonCode: 'disabled', checks: [] })
   expect(await owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, request)).toEqual({ kind: 'not_admitted', reasonCode: 'disabled', observations: 'no_observations' })
   expect(await snapshot()).toEqual(before)
 })

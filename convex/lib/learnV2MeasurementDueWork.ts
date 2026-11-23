@@ -16,6 +16,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } fro
 import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
+import { bindLearnDelayedCheck } from './learnV2DelayedDelivery'
 
 async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
   patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode'>>) {
@@ -62,6 +63,14 @@ async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssig
   if (reason) {
     await updateOpportunity(ctx, assignment, row, { operationalEligibility: 'blocked', reasonCode: reason })
     return
+  }
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.delivery) {
+    const binding = await bindLearnDelayedCheck(ctx, assignment, row)
+    if (binding.kind === 'blocked') {
+      await updateOpportunity(ctx, assignment, row, { operationalEligibility: 'blocked', reasonCode: binding.reasonCode })
+      return
+    }
+    row = (await ctx.db.get(row._id))!
   }
   await updateOpportunity(ctx, assignment, row, { phase: row.phase === 'preparing' ? 'ready' : row.phase,
     operationalEligibility: 'eligible', reasonCode: undefined, eligibleAt: row.eligibleAt ?? observedAt })
