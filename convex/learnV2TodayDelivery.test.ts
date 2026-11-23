@@ -99,6 +99,109 @@ function ordinaryScorer() {
   return network
 }
 
+async function sealedDay7(f: Awaited<ReturnType<typeof fixture>>) {
+  const cold = await f.seal()
+  await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: cold.accepted.submissionId, idempotencyKey: 'terminal_cold_score_1234567890' })
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  if (today.status !== 'ready') throw new Error('Expected day 7')
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
+    expectedSessionRevision: today.sessionRevision, expectedContentRevision: today.content.revision, idempotencyKey: 'terminal_day7_start_1234567890' })
+  const before = (await f.opportunities()).find(row => row._id === day7._id)!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'terminal_day7_seal_1234567890', response: { target: { assessmentOpportunityId: day7._id }, expectedRevision: before.revision,
+      payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected sealed day 7')
+  return { today, before, accepted }
+}
+
+function responseContextPins(response: Doc<'learnResponses'> | null) {
+  if (!response || response.scopeKind !== 'v2') throw new Error('Expected a V2 response')
+  return response.contextPins
+}
+
+test.each(['sealed', 'scored'] as const)('many historical %s check shells do not consume Today\'s active-session limit', async state => {
+  const f = await fixture()
+  const check = await sealedDay7(f)
+  const sealedPins = await f.t.run(async ctx => responseContextPins(await ctx.db.get(check.accepted.submissionId)))
+  if (state === 'scored') await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'terminal_day7_score_1234567890' })
+  const historical = await f.t.run(async ctx => {
+    const session = (await ctx.db.get(check.today.sessionId))!
+    expect(await ctx.db.get(check.accepted.submissionId)).toMatchObject({ contextPins: sealedPins })
+    const { _id, _creationTime, ...fields } = session
+    for (let index = 0; index < 140; index++) await ctx.db.insert('studySessions', { ...fields,
+      scheduledStartAt: session.scheduledStartAt - (index + 1) * 86_400_000 })
+    return session
+  })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: day30._id } } })
+  expect(historical).toMatchObject({ status: 'completed', revision: check.before.contextPins.kind === 'session' ? check.before.contextPins.sessionRevision : 0 })
+})
+
+test.each(['expiration', 'due_work', 'score'] as const)('%s cleanup retires an existing sealed check without changing acceptance pins', async path => {
+  const f = await fixture()
+  const check = await sealedDay7(f)
+  const accepted = await f.t.run(async ctx => responseContextPins(await ctx.db.get(check.accepted.submissionId)))
+  await f.t.run(ctx => ctx.db.patch(check.today.sessionId, { status: 'in_progress' }))
+  if (path === 'expiration') await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'sealed_check_cleanup_1234567890' })
+  if (path === 'due_work') await f.t.mutation(due, { userId, through: Date.now() })
+  if (path === 'score') await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'existing_sealed_score_1234567890' })
+  await f.t.run(async ctx => {
+    expect(await ctx.db.get(check.today.sessionId)).toMatchObject({ status: 'completed' })
+    expect(await ctx.db.get(check.accepted.submissionId)).toMatchObject({ contextPins: accepted })
+  })
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'repaired_sealed_score_1234567890' })).toMatchObject({ status: 'scored' })
+})
+
+test('disabled lifecycle cleanup preserves an existing active check session', async () => {
+  const f = await fixture()
+  const check = await sealedDay7(f)
+  await f.t.run(ctx => ctx.db.patch(check.today.sessionId, { status: 'in_progress' }))
+  const before = await f.t.run(ctx => ctx.db.get(check.today.sessionId))
+  vi.setSystemTime(check.before.closeAt + 1)
+  policy.responses = false
+  await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'off_check_cleanup_1234567890' })
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect(await f.t.run(ctx => ctx.db.get(check.today.sessionId))).toEqual(before)
+})
+
+test('expiration terminalizes a started dedicated check while preserving ordinary sessions and opportunity pins', async () => {
+  const f = await fixture()
+  await f.seal()
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+  const ordinary = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(day7.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  if (today.status !== 'ready') throw new Error('Expected day 7')
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
+    expectedSessionRevision: today.sessionRevision, expectedContentRevision: today.content.revision, idempotencyKey: 'missed_check_start_1234567890' })
+  const before = (await f.opportunities()).find(row => row._id === day7._id)!
+  vi.setSystemTime(day7.closeAt)
+  const missed = await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'missed_check_cleanup_1234567890' })
+  expect(missed.missedSessionIds).toContain(today.sessionId)
+  await f.t.run(async ctx => {
+    expect(await ctx.db.get(today.sessionId)).toMatchObject({ status: 'missed', missedAt: day7.closeAt })
+    expect(await ctx.db.get(f.graph.studySessionId)).toEqual(ordinary)
+    expect((await ctx.db.get(day7._id))!.contextPins).toEqual(before.contextPins)
+  })
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.opportunities()).find(row => row._id === day7._id)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { state: { assessmentOpportunityId: day30._id } } })
+})
+
 test.each([7, 30] as const)('Today discovers, grants, seals and scores its original day-%s case below Independent', async horizon => {
   const f = await fixture()
   const cold = await f.seal()
@@ -134,11 +237,15 @@ test.each([7, 30] as const)('Today discovers, grants, seals and scores its origi
     idempotencyKey: 'seal_due_today_check_1234567890', response: { target: { assessmentOpportunityId: original._id }, expectedRevision: current.revision,
       payload: { kind: 'numeric', value: Number(numbers[1]) * Number(numbers[2]), unit: 'members' } } } })
   if (accepted.kind !== 'accepted') throw new Error(JSON.stringify(accepted))
+  const acceptedPins = await f.t.run(async ctx => responseContextPins(await ctx.db.get(accepted.submissionId)))
+  expect(await f.t.run(ctx => ctx.db.get(today.sessionId))).toMatchObject({ status: 'completed', revision: current.contextPins.kind === 'session' ? current.contextPins.sessionRevision : 0 })
   expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
     submissionId: accepted.submissionId, idempotencyKey: 'score_due_today_check_1234567890' })).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
   await f.t.run(async ctx => {
     const row = (await ctx.db.get(original._id))!
     const attempt = (await ctx.db.get(row.authoritativeAttemptId!))!
+    expect(await ctx.db.get(today.sessionId)).toMatchObject({ status: 'completed' })
+    expect(await ctx.db.get(accepted.submissionId)).toMatchObject({ contextPins: acceptedPins })
     expect(attempt).toMatchObject({ kind: 'measurement_delayed', horizonDays: horizon, masteryStateBefore: 'unseen', masteryStateAfter: 'unseen' })
     expect(await ctx.db.get(row.deliveryGrantId!)).toMatchObject({ assessmentOpportunityId: row._id,
       caseId: item!.caseId, provenanceVersion: 'learn-v2.assessment-delivery.today.v1' })

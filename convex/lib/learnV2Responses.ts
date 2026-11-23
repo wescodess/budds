@@ -30,6 +30,7 @@ import {
 } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } from '../../shared/learn-v2-assessment-disclosure'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import {
   appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
 } from './learnV2MeasurementFacts'
@@ -502,6 +503,7 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
         scoringBinding: value.row.scoringBinding, type: 'sealed_response_scoring', status: 'queued', revision: 1,
         idempotencyKey: `submission:${submissionId}`, requestFingerprint: value.payloadDigest, providerEnabled: false, attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.patch(value.row._id, { phase: 'submitted_sealed', submissionId, scoringJobId: jobId, revision: value.row.revision + 1 })
+      if (value.row.purpose.kind === 'measurement_delayed') await finalizeLearnDelayedCheckSession(ctx, userId, (await ctx.db.get(value.row._id))!)
     }
     await ctx.db.insert('learnResponseBodies', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
       ...aggregate(value.row), submissionId, payload: value.entry.payload, payloadBytes: value.payloadBytes, payloadDigest: value.payloadDigest })

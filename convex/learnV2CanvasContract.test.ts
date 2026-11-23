@@ -141,6 +141,12 @@ test.each([7, 30] as const)('Canvas discovers and plays its original day-%s item
     studySessionId: check.studySessionId, expectedRevision: canvas.activity.planRevision!, expectedSessionRevision: canvas.session.revision,
     response: answer, confidence: 3, idempotencyKey: 'seal_due_canvas_check_1234567890' })
   if (sealed.kind !== 'accepted') throw new Error('Expected delayed seal')
+  const acceptedPins = await s.t.run(async ctx => {
+    const response = await ctx.db.get(sealed.submissionId)
+    if (!response || response.scopeKind !== 'v2') throw new Error('Expected a V2 response')
+    return response.contextPins
+  })
+  expect(await s.t.run(ctx => ctx.db.get(check.studySessionId))).toMatchObject({ status: 'completed', revision: canvas.session.revision })
   expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
     submissionId: sealed.submissionId, idempotencyKey: 'score_due_canvas_check_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
   const scored = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
@@ -148,6 +154,8 @@ test.each([7, 30] as const)('Canvas discovers and plays its original day-%s item
   expect(scored!.activity.controls.options.every(option => !option.available)).toBe(true)
   await s.t.run(async ctx => {
     const opportunity = (await ctx.db.get(original._id))!
+    expect(await ctx.db.get(check.studySessionId)).toMatchObject({ status: 'completed', revision: canvas.session.revision })
+    expect(await ctx.db.get(sealed.submissionId)).toMatchObject({ contextPins: acceptedPins })
     expect(await ctx.db.get(opportunity.deliveryGrantId!)).toMatchObject({ caseId: item.caseId, provenanceVersion: 'learn-v2.assessment-delivery.canvas.v1' })
     expect(await ctx.db.get(opportunity.authoritativeAttemptId!)).toMatchObject({ kind: 'measurement_delayed', horizonDays: horizon, masteryStateAfter: 'unseen' })
     if (horizon === 30) expect((await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })

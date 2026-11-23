@@ -43,7 +43,7 @@ import { isLearnScoringReceiptCommittable, learnMeasurementItemPinsSchema, deriv
 import { canEmitLearnMeasurementOutcomeEvent, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../shared/learn-adaptive-events'
 import { freezeFirstIndependentClaimForOwner, writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork'
-import { resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
+import { finalizeLearnDelayedCheckSession, resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
 import { requireSavedLearnScoringInput, reserveSavedLearnScoring, readSavedLearnScoringState, prepareSavedLearnModelScoring,
@@ -1351,6 +1351,7 @@ export const commitSealedMasteryAttempt = internalMutation({
     await ctx.db.patch(execution._id, { authoritativeAttemptId: attemptId, committedAt: now })
     await ctx.db.patch(job._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, revision: job.revision + 1, updatedAt: now })
     await ctx.db.patch(opportunity._id, { authoritativeAttemptId: attemptId, phase: scorePercent >= 80 ? 'scored_pass' : 'scored_fail', revision: opportunity.revision + 1 })
+    if (kind === 'measurement_delayed') await finalizeLearnDelayedCheckSession(ctx, args.tokenIdentifier, opportunity)
     let followUp: { sessionId: Id<'studySessions'>, scheduledStartAt: number } | null = null
     if (outcome && kind !== 'calibration' && pins.kind !== 'calibration') {
       const plan = await ctx.db.get(pins.studyPlanRevisionId)

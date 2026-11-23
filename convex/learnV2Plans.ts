@@ -1,4 +1,5 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -249,9 +250,22 @@ export const markExpiredSessionsMissed = mutation({
     if (!revision || revision.userId !== userId || revision.studyPlanId !== plans[0]!._id) throw new Error('Current active Study Plan revision not found')
     const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
     if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
-    for (const session of sessions) if ((session.status === 'planned' || session.status === 'ready') && (session.scheduledEndAt ?? session.scheduledStartAt) < now) {
-      await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' }); missedSessionIds.push(session._id)
-      await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+    for (const session of sessions) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId) {
+        const opportunity = await ctx.db.get(session.assessmentOpportunityId)
+        const terminal = opportunity && await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session)
+        if (terminal) {
+          if (terminal === 'missed') {
+            missedSessionIds.push(session._id)
+            await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+          }
+          continue
+        }
+      }
+      if ((session.status === 'planned' || session.status === 'ready') && (session.scheduledEndAt ?? session.scheduledStartAt) < now) {
+        await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' }); missedSessionIds.push(session._id)
+        await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+      }
     }
     const response = { missedSessionIds }
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'markExpiredSessionsMissed', requestFingerprint, response, nowUtcMs: now })

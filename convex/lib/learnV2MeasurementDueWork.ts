@@ -16,7 +16,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } fro
 import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
-import { bindLearnDelayedCheck } from './learnV2DelayedDelivery'
+import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 
 async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
   patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode'>>) {
@@ -49,9 +49,14 @@ async function emitEligibility(ctx: MutationCtx, assignment: AdmittedAssignment,
 async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol,
   row: Doc<'learnAssessmentOpportunities'>, through: number) {
   const observedAt = Date.now()
-  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase) || through < row.openAt || observedAt < row.openAt) return
+  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) {
+    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
+    return
+  }
+  if (through < row.openAt || observedAt < row.openAt) return
   if (observedAt >= row.closeAt) {
     await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: 'missed_window' })
+    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
     return
   }
   const reason = assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
