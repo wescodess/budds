@@ -360,6 +360,56 @@ describe('viewer grants and current revocation', () => {
 })
 
 describe('snapshot failure controls', () => {
+  test.each(['pinning', 'extracting', 'computing'] as const)('owner deletion during %s terminates the run and retries allocate a new one', async phase => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    if (phase !== 'pinning') await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })
+    if (phase === 'computing') {
+      for (let batch = 0; batch < 8; batch++) {
+        const run = (await f.t.run(ctx => ctx.db.get(reportRunId)))!
+        if (reportControl(run).phase === 'computing') break
+        await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId })
+      }
+      expect(reportControl((await f.t.run(ctx => ctx.db.get(reportRunId)))!).phase).toBe('computing')
+    }
+    await f.t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: OWNER, status: 'active', phase: 'learnV2', startedAt: REPORT_NOW, updatedAt: REPORT_NOW }))
+    if (phase === 'pinning') {
+      expect(await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })).toEqual({ status: 'failed', reasonCode: 'source_invalidated' })
+    } else if (phase === 'extracting') await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId })
+    else await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId })
+    const manifest = await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })
+    expect(['failed', 'stale']).toContain(manifest.status)
+    expect(manifest).toMatchObject({ reasonCodes: ['source_invalidated'] })
+    expect(await f.t.run(ctx => ctx.db.get(reportRunId))).toMatchObject({ status: manifest.status, sourceCoverage: 'unknown' })
+    const retry = await f.begin()
+    expect(retry).not.toBe(reportRunId)
+    const fresh = await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, { ...f.request, idempotencyKey: 'report-fixture-command-retry' })
+    expect(fresh).toMatchObject({ status: 'requested', reportRunId: retry })
+    const jobs = await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())
+    expect(jobs.some(job => job.name === 'learnV2MeasurementReports:pinReportOwners' && job.args[0].reportRunId === retry)).toBe(true)
+  })
+
+  test('an expired grant during pinning records failure even though build authorization throws', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.t.run(ctx => ctx.db.patch(f.grantId, { expiresAt: REPORT_NOW }))
+    expect(await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })).toEqual({ status: 'failed', reasonCode: 'report_access_revoked' })
+    expect(await f.t.run(ctx => ctx.db.get(reportRunId))).toMatchObject({ status: 'failed', sourceCoverage: 'unknown', reasonCode: 'report_access_revoked' })
+    await f.t.run(ctx => ctx.db.patch(f.grantId, { expiresAt: REPORT_NOW + 86_400_000 }))
+    expect(await f.begin()).not.toBe(reportRunId)
+  })
+
+  test.each(['failed', 'stale'] as const)('a retry never reuses a %s run, including the original idempotency key', async status => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'source_invalidated', stale: status === 'stale' })
+    const retry = await f.begin()
+    expect(retry).not.toBe(reportRunId)
+    await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_build_failure' })
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status, reasonCodes: ['source_invalidated'] })
+    expect(await f.begin()).toBe(retry)
+  })
+
   test('rejects nine-record pages and conflicting duplicate pages', async () => {
     const f = await fixture()
     const runId = await f.begin()

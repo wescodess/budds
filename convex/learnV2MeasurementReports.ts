@@ -86,7 +86,8 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
     const control = reportControl(candidate)
     if (candidate.codeVersion !== REPORT_CODE_VERSION || control.scopeDigest !== await approvalDigest(approval)) continue
     if (control.requestKeys.includes(requestKey) && control.requestDigest !== requestDigest) return unavailable('unavailable', 'idempotency_conflict')
-    if (control.requestDigest === requestDigest && (control.requestKeys.includes(requestKey) || candidate.status === 'building')) {
+    if (candidate.status !== 'failed' && candidate.status !== 'stale' && control.requestDigest === requestDigest
+      && (control.requestKeys.includes(requestKey) || candidate.status === 'building')) {
       if (!control.requestKeys.includes(requestKey)) {
         if (control.requestKeys.length === 64) return unavailable('unavailable', 'refresh_inventory_overflow')
         control.requestKeys.push(requestKey)
@@ -162,32 +163,40 @@ async function writeSources(ctx: MutationCtx, run: Doc<'learnMeasurementReportRu
   control.sourcePages.push({ sequence, count: rows.length, digest })
   await ctx.db.patch(run._id, { rowCount: run.rowCount + rows.length, cursor: controlJson(control) })
 }
+async function recordReportFailure(ctx: MutationCtx, reportRunId: Id<'learnMeasurementReportRuns'>, reason: string, stale = false) {
+  const reasonCode = reason === 'Learn access denied' ? 'report_access_revoked'
+    : /^[a-z][a-z0-9_]{0,80}$/.test(reason) ? reason : 'source_incomplete'
+  const run = await ctx.db.get(reportRunId)
+  if (run?.status === 'building') await ctx.db.patch(run._id, { status: stale ? 'stale' : 'failed', sourceCoverage: 'unknown', reasonCode })
+  return { status: 'failed' as const, reasonCode }
+}
 export const pinReportOwners = internalMutation({
-  args: runArgs, returns: v.null(), handler: async (ctx, args) => {
+  args: runArgs, returns: v.union(v.null(), v.object({ status: v.literal('failed'), reasonCode: v.string() })), handler: async (ctx, args) => {
     if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return null
-    const { run, approval } = await internalRun(ctx, args.reportRunId)
-    if (run.status !== 'building') return null
-    const control = reportControl(run)
-    if (control.phase !== 'pinning') return null
-    const owners = [...approval.owners].sort()
-    const rows = []
-    for (const userId of owners.slice(control.pinnedOwners, control.pinnedOwners + 8)) {
-      if (await hasAccountDeletionTombstone(ctx, userId)) throw new Error('source_invalidated')
-      const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique()
-      if (!watermark) {
-        await ctx.db.patch(run._id, { status: 'failed', reasonCode: 'missing_owner_watermark' })
-        return null
+    try {
+      const { run, approval } = await internalRun(ctx, args.reportRunId)
+      if (run.status !== 'building') return null
+      const control = reportControl(run)
+      if (control.phase !== 'pinning') return null
+      const owners = [...approval.owners].sort()
+      const rows = []
+      for (const userId of owners.slice(control.pinnedOwners, control.pinnedOwners + 8)) {
+        if (await hasAccountDeletionTombstone(ctx, userId)) throw new Error('source_invalidated')
+        const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique()
+        if (!watermark) throw new Error('missing_owner_watermark')
+        rows.push({ userId, sourceWatermark: watermark.sequence, snapshot: await readLearnMeasurementWatermarkSnapshot(ctx, userId, run._id) })
       }
-      rows.push({ userId, sourceWatermark: watermark.sequence, snapshot: await readLearnMeasurementWatermarkSnapshot(ctx, userId, run._id) })
+      await writeSources(ctx, run, run.rowCount + 1, rows)
+      const updated = (await ctx.db.get(run._id))!
+      const next = reportControl(updated)
+      next.pinnedOwners += rows.length
+      if (next.pinnedOwners === owners.length) next.phase = 'extracting'
+      await ctx.db.patch(run._id, { cursor: controlJson(next) })
+      await ctx.scheduler.runAfter(0, next.phase === 'pinning' ? internal.learnV2MeasurementReports.pinReportOwners : internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: run._id })
+      return null
+    } catch (error) {
+      return recordReportFailure(ctx, args.reportRunId, error instanceof Error ? error.message : 'source_incomplete')
     }
-    await writeSources(ctx, run, run.rowCount + 1, rows)
-    const updated = (await ctx.db.get(run._id))!
-    const next = reportControl(updated)
-    next.pinnedOwners += rows.length
-    if (next.pinnedOwners === owners.length) next.phase = 'extracting'
-    await ctx.db.patch(run._id, { cursor: controlJson(next) })
-    await ctx.scheduler.runAfter(0, next.phase === 'pinning' ? internal.learnV2MeasurementReports.pinReportOwners : internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: run._id })
-    return null
   },
 })
 export const readBuildState = internalQuery({
@@ -249,8 +258,7 @@ export const saveSourcePage = internalMutation({
 })
 export const failReport = internalMutation({
   args: { ...runArgs, reason: v.string(), stale: v.optional(v.boolean()) }, returns: v.null(), handler: async (ctx, args) => {
-    const run = await ctx.db.get(args.reportRunId)
-    if (run && run.status !== 'sealed') await ctx.db.patch(run._id, { status: args.stale ? 'stale' : 'failed', sourceCoverage: 'unknown', reasonCode: /^[a-z][a-z0-9_]{0,80}$/.test(args.reason) ? args.reason : 'source_incomplete' })
+    await recordReportFailure(ctx, args.reportRunId, args.reason, args.stale)
     return null
   },
 })

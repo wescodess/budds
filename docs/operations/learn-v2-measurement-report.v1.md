@@ -1,6 +1,6 @@
-# Offline measurement report replay v1
+# Offline measurement report replay v2
 
-The Node 24 entry point calls the frozen C6.1 `buildLearningMeasurementReport`
+The Node 24 entry point calls the frozen C6.1 `buildPublishedLearningMeasurementReport`
 reducer. It computes no metric arithmetic of its own. Report output v3, source v4,
 query v1, `verified_learning_gain.v1` and `false_mastery_next_delayed.v1` retain
 their [C1 contract](../plans/learn-v2-c1-public-api-contract.md#frozen-report-output-v3).
@@ -36,17 +36,30 @@ shasum -a 256 /tmp/measurement-fixture.json /tmp/measurement-sealed-format.json
 Expected complete stdout SHA-256 values, including formatting and final newline:
 
 ```text
-77823d93961399e3825ae3031713d083f1493ed6b246a3c7357f2374fef9ea84  fixture
-0a39313d64656dae0271f479ba0249c4d01b5fc8a3caa9e3ae03ba75041fec42  sealed-format
+39162b65275a145a97ce0cc436fc022be5237ed7dffa7a43f050ac86bec319ba  fixture
+796a26fd22e77d73559530e0b611a324743c4a0c09b7ce6d358e2e60843ba3fa  sealed-format
 ```
 
 These two outputs differ only in the input-class and replay reason labels. Both
-are fixture evidence. The day-7 VLG oracle is −20 percentage points with missing
-outcome bounds [−30,20], two matured episodes and one comparable pair. The
-first-check oracle has N=2, M=1, F=1, observed failure 1 and bounds [0.5,1]. Both
-all-eligible points are null. The unassigned day-30 horizon has no eligible
-population and null values. Counts and repeated inventory context must not be
-summed across strata, horizons or weightings.
+are fixture evidence. The checked-in fixture has two learners, below the
+publication minimum of five distinct contributing learners. Every cell therefore
+includes `insufficient_learners`: all values, bounds, intervals, counts and
+value-bearing breakdowns are null, as are the published provenance's episode
+count and input bytes. The unassigned day-30 horizon retains
+`no_eligible_population` alongside suppression. Exit 0 confirms a successful
+suppressed replay, not permission to publish the underlying arithmetic.
+
+The independent unpublished reducer oracles remain day-7 VLG −20 percentage
+points with bounds [−30,20], and first-check N=2, M=1, F=1 with observed failure 1
+and bounds [0.5,1]. They are test expectations, not CLI output. Counts and repeated
+inventory context must not be summed across strata, horizons or weightings.
+
+For a five-learner example, see `publishes replayed values only once five distinct
+learners contribute` in [the CLI tests](../../scripts/learn-v2-measurement-report.test.ts).
+It constructs inputs with [the computation fixtures](../../tests/fixtures/learn-v2-measurement-computation.ts),
+replays them through the CLI, and publishes day-7 VLG −20 with five comparable
+pairs and bounds [−20,−20]. Removing one learner suppresses those fields. Five
+learners do not meet the separate 20-learner minimum for bootstrap intervals.
 
 ## Accepted input and failures
 
@@ -66,7 +79,7 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`learn-v2.report-code.c6.2.v2`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v4`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
 manifest's code pin to bypass rejection does not constitute exact replay. Replay
 v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null
