@@ -25,4 +25,6 @@ crons.interval('purge Learn V2 calendar webhook receipts', { hours: 1 }, interna
 crons.interval('purge stopped Learn V2 calendar watches', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeStoppedWatches, {})
 crons.interval('purge expired Adaptive Learn operational events', { hours: 24 }, internal.learnActivityEventRetention.purgeExpiredLearnActivityEvents, {})
 
+crons.interval('purge expired report access audits', { hours: 24 }, internal.learnV2MeasurementReports.purgeExpiredAccessAudits, {})
+
 export default crons

@@ -70,6 +70,10 @@ const cases: Array<{ name: string, call: (actor: Actor, f: Fixture) => Promise<u
   { name: 'getReport', call: (actor, f) => actor.query(api.learnV2MeasurementReports.getReport, f.reportReference), expected: reportDisabled },
   { name: 'getReportCells', call: (actor, f) => actor.query(api.learnV2MeasurementReports.getReportCells, { ...f.reportReference, cursor: null }), expected: reportDisabled },
   { name: 'exportAggregateReport', call: (actor, f) => actor.query(api.learnV2MeasurementReports.exportAggregateReport, { ...f.reportReference, cursor: null }), expected: reportDisabled },
+  { name: 'readReportManifest', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.readReportManifest, f.reportReference), expected: reportDisabled },
+  { name: 'readReportCells', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.readReportCells, { ...f.reportReference, cursor: null }), expected: reportDisabled },
+  { name: 'exportReportPage', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.exportReportPage, { ...f.reportReference, cursor: null }), expected: reportDisabled },
+  { name: 'downloadReportPage', call: (actor, f) => actor.mutation(api.learnV2MeasurementReports.downloadReportPage, { ...f.reportReference, cursor: null }), expected: reportDisabled },
 ]
 
 async function snapshot(t: Actor) {

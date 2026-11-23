@@ -10,6 +10,18 @@ The sweep searched added and removed hunks for limits, `take`, throws, required/
 
 ## Differential evidence
 
+### C6 consumer amendment
+
+The C6 implementation preserves the owner decision "No change while off". It changes internal measurement extraction/computation and owner-only aggregate reports, with no teaching, chat, share, playback or learner assessment transport change. The three report readers retain the `summary_or_own_work` classification listed in [the read audit](c4-read-path-audit.md#c6-aggregate-reports); `requestReport` returns only an owner-authorized refresh receipt. Reports remain default-off and the server approval catalogue is empty. The responses capability does not turn an aggregate report into teaching delivery or grant learner access.
+
+| C6 surface | Off-state disposition | Evidence |
+| --- | --- | --- |
+| Public report request, manifest, pages and aggregate export | Fixed aggregate/status projection and original owner/grant/deletion checks; disabled receipts when reports are off | `convex/learnV2MeasurementReports.test.ts`, `convex/learnV2PublicApi.test.ts` |
+| Source inventory, snapshot writes, finalize/refresh and CLI | Internal or offline; no existing learner-visible output | v2 claim normalization, exactly-once denominator, late-link, watermark and export-canary regressions |
+| Existing learner teaching and personal exports | Unchanged C4 capability branches and always-on private-assessment omissions | `convex/learnV2DisclosureOffParity.test.ts`, `server/api/disclosure-off-parity.test.ts` |
+
+The original #514 inventory and pinned-dev expectations below remain unchanged. C6 check results are recorded at its PR head.
+
 `node scripts/c4-record-dev.mjs` runs the real registered Convex functions through `convex-test` and imports the actual Nitro handlers. Its Vite loader replaces production module sources and their production dependencies with `git show <pin>:<path>` from the baseline. It retains only the current additive storage schema so legacy and newer optional provenance rows can be seeded together. The lockfile/runtime, deterministic seed, frozen clock, identity and provider/R2 stubs are the same for both runs. No provider or remote deployment is called.
 
 The recorder writes complete JSON values, including error/status and pagination metadata, to `tests/fixtures/c4-off-parity/dev-58d2ae62.json`; normal tests only read that file. Expected bodies are never obtained from the current implementation. New Delivery/replay aliases have no dev registration, so their unwrapped body is compared to the recorded original query result. Optional new signing is tested separately. Ordinary malformed legacy fallback text is compared against dev; always-on private-fallback regressions explicitly bind the activity to a held-out assessment context. The Journey source contract is compared in full; its assessment/map/plan envelope intentionally uses C4.1 fixed projections and has separate omission regressions rather than claiming raw-dev envelope parity.
