@@ -38,6 +38,24 @@ export async function hasLearnReflowPlanAuthority(ctx: ReadCtx, userId: string, 
   return false
 }
 
+export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, source: Plan) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return source
+  const [root, learningVoid, blueprint] = await Promise.all([ctx.db.get(source.studyPlanId), ctx.db.get(source.learningVoidId),
+    source.blueprintRevisionId ? ctx.db.get(source.blueprintRevisionId) : null])
+  const active = root?.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : null
+  const folder = learningVoid && await ctx.db.get(learningVoid.folderId)
+  if (!root || root.userId !== userId || !learningVoid || learningVoid.userId !== userId || learningVoid.status === 'archived'
+    || !folder || folder.userId !== userId || !blueprint || blueprint.userId !== userId || blueprint.status !== 'accepted'
+    || blueprint.learningVoidId !== learningVoid._id || learningVoid.activeBlueprintRevisionId !== blueprint._id
+    || root.learningVoidId !== learningVoid._id || !active || active.status !== 'accepted' || !samePlanScope(source, active, userId)
+    || active.blueprintRecordRevision !== blueprint.recordRevision
+    || active._id !== source._id && !await hasLearnReflowPlanAuthority(ctx, userId, source)) throw new Error('Learn follow-up active plan unavailable')
+  const latest = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_studyPlanId_and_revision', q =>
+    q.eq('userId', userId).eq('studyPlanId', root._id)).order('desc').first()
+  if (!latest || latest._id !== active._id && latest.status !== 'draft') throw new Error('Learn follow-up active plan unavailable')
+  return active
+}
+
 export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan, limit: number) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
   const plans = [active]

@@ -291,6 +291,17 @@ Dedicated check sessions are identified by their measurement purpose, opportunit
 
 A5 adds only optional `learnAssessmentOpportunities.replacementBinding` (`assessmentOpportunityId`, `itemPinsDigest`) and the `studySessions` index `by_userId_and_studyPlanRevisionId_and_assessmentPurpose`. There is no required field, backfill, new production endpoint, scorer-identity change or flag-default change. New provenance, ancestor lookup, fixed-check projection and calendar handling run only with responses enabled. The C4 capability-off goldens remain unchanged. Registered replacement journeys cover both horizons in both flows; forged-provenance controls cover disclosure, grant and acceptance. The mixed-consumer sweep covers live and terminal checks, ordinary reflow equivalence, retained resolution, expiry, export and deletion. Provider transport remains synthetic.
 
+With responses enabled, ordinary mastery follow-ups resolve the owned active accepted plan before creating either a session or its generation job. The resolver validates the live Void, folder, current Blueprint and bounded reflow ancestry. A newer unaccepted draft does not displace the active plan. Missing, archived, deleted or conflicting authority is unavailable; scoring cannot commit an unreachable follow-up. Frozen check, response, opportunity and attempt pins retain their original plan identity.
+
+| Session/job creator | Plan authority after a check outcome |
+| --- | --- |
+| `learnV2Mastery.createFollowUp`, canonical and compatibility score commits | Remediation, guided review and ordinary retained shells use the validated active plan. Their generation digest and job use the same plan. Responses-enabled ordinary shells have scheduling identities for subsequent reflow. |
+| `resolveLearnRetainedShell`, `bindLearnDelayedCheck` | A ready assigned check retains its frozen original binding; an unused ordinary successor shell is removed. An unavailable retained shell remains explicitly blocked on the active plan. Reflow preserves that assessment purpose and reason without creating a generation job. |
+| `learnV2Plans.acceptPlanPreview`, `reflowFutureIncomplete`; session generation retry | Acceptance and reflow create work on their explicit current successor. Retry validates the owned active plan and excludes check-only sessions. Generation revalidates the active pointer, accepted Blueprint and live Void before leasing, dispatch and publication. |
+| Response/mastery scoring reservation; measurement family, calibration and Blueprint generation | Scoring jobs retain frozen evidence pins. Family generation validates current session authority; calibration and Blueprint jobs do not inherit a check's plan. These paths create no ordinary outcome follow-up outside `createFollowUp`. |
+
+Registered regressions cover day-7/day-30 failure after Independent and reflow, repeated reflow, pending drafts, Today/candidate recovery and generation input admission; guided review, ready/unavailable retained follow-ups and another reflow; scoring replay and invalid active authority. No endpoint, schema, flag default or scorer identity changes. Off uses the original follow-up, reflow and generation paths; both C4 golden sets remain unchanged.
+
 | Terminal transition | Delivery-session invariant |
 | --- | --- |
 | Canonical response seal | `acceptLearnResponseForOwner` completes the dedicated session atomically with the sealed opportunity. |

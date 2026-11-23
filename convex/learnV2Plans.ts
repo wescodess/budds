@@ -1,6 +1,6 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -318,6 +318,7 @@ export const reflowFutureIncomplete = mutation({
     if (plan.recordRevision !== args.expectedPlanRecordRevision || !['accepted', 'active'].includes(plan.status)) throw new Error('Study-plan revision conflict')
     const planRoot = await ctx.db.get(plan.studyPlanId)
     if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
+    await requireLearnActiveWorkPlan(ctx, userId, plan)
     const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
     if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
     const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan, MAX_SESSIONS) : []
@@ -355,7 +356,10 @@ export const reflowFutureIncomplete = mutation({
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
       // Content belongs to the immutable old session identity. A successor
       // shell must regenerate rather than exposing `ready` without content.
-      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : 'preserved_during_reflow' })
+      const retainedBlock = LEARN_MEASUREMENT_CAPABILITIES.responses && session.status === 'blocked'
+        && session.assessmentPurpose === 'retained_transfer' && !session.assessmentOpportunityId
+      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : retainedBlock ? session.auditReasonCode : 'preserved_during_reflow',
+        ...(retainedBlock ? { assessmentPurpose: session.assessmentPurpose } : {}) })
       if (session.status === 'ready' || session.status === 'planned') generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt })
     }
     if (plan.blueprintRevisionId) {

@@ -13,6 +13,7 @@ import {
 } from '../../shared/learn-v2-measurement'
 import { learnTextSchema, learnVersionSchema, parseLearnContract } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { requireLearnActiveWorkPlan } from './learnV2FixedChecks'
 
 export const MEASUREMENT_PUBLICATION_VERSION = 'learn-v2.measurement-publication.v1'
 export const MEASUREMENT_NOVELTY_VERSION = 'learn-v2.measurement-novelty.v1'
@@ -112,6 +113,7 @@ export async function sessionMeasurementScope(ctx: QueryCtx | MutationCtx, userI
     blueprintRecordRevision: blueprint.recordRevision, assessmentContractVersion: objective.assessmentContract.version,
     assessmentContractDigest: await measurementDigest(objective.assessmentContract), depth: objective.depth }
   await requireMeasurementScope(ctx, userId, scope)
+  await requireLearnActiveWorkPlan(ctx, userId, plan)
   return { scope, plan }
 }
 async function liveSupport(ctx: ReadCtx, userId: string, scope: Capability, pin: Support) {

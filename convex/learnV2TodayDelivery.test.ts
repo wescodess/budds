@@ -13,6 +13,7 @@ import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '.
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
+import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
@@ -607,6 +608,301 @@ test('fixed-check plan additions stay absent when responses are off', async () =
   for (const check of f.checks) expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, {
     learningVoidId: f.graph.learningVoidId, studySessionId: check._id })).toBeNull()
   expect(await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))).toEqual(before)
+})
+
+async function independentWithReflow(count = 1) {
+  const f = await fixture()
+  const cold = await f.seal()
+  await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: cold.accepted.submissionId, idempotencyKey: 'outcome_route_cold_score_1234567890' })
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+  ordinaryScorer()
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1,
+    response: 'My separate-case application.', confidence: 3, idempotencyKey: 'outcome_route_independent_1234567890' }))
+    .toMatchObject({ status: 'completed', state: 'independent' })
+  let activePlanId = f.graph.studyPlanRevisionId
+  if (count) await f.t.run(async ctx => {
+    await seedFixedCheckPlan(ctx, userId, f.graph, Date.now())
+    await ctx.db.patch(f.graph.studySessionId, { status: 'completed', missedAt: undefined })
+  })
+  for (let index = 0; index < count; index++) {
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: activePlanId,
+      expectedPlanRecordRevision: 1, idempotencyKey: `outcome_route_reflow_${index}_1234567890` })
+    if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+    activePlanId = reflow.successorPlanRevisionId
+  }
+  return { ...f, activePlanId }
+}
+
+async function sealOutcomeCheck(f: Awaited<ReturnType<typeof fixture>>, horizon: 7 | 30) {
+  const original = (await f.opportunities()).find(row => row.horizonDays === horizon)!
+  vi.setSystemTime(original.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  if (today.status !== 'ready') throw new Error('Expected check')
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId, expectedSessionRevision: today.sessionRevision,
+    expectedContentRevision: today.content.revision, idempotencyKey: 'outcome_route_check_start_1234567890' })
+  const opportunity = (await f.opportunities()).find(row => row._id === original._id)!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'outcome_route_check_seal_1234567890', response: { target: { assessmentOpportunityId: original._id }, expectedRevision: opportunity.revision,
+      payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected sealed check')
+  const frozen = await f.t.run(async ctx => ({ session: await ctx.db.get(today.sessionId), response: await ctx.db.get(accepted.submissionId) }))
+  return { original, today, opportunity, accepted, frozen }
+}
+
+async function acceptFollowUpGeneration(f: Awaited<ReturnType<typeof fixture>>, session: Doc<'studySessions'>) {
+  const job = (await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_studySessionId_and_type_and_status', q =>
+    q.eq('userId', userId).eq('studySessionId', session._id).eq('type', 'session_content_generation').eq('status', 'queued')).take(4)))[0]!
+  expect(job).toMatchObject({ studyPlanRevisionId: session.studyPlanRevisionId, expectedSessionRevision: session.revision })
+  const lease = await f.t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration, { tokenIdentifier: userId, jobId: job._id, expectedRevision: job.revision })
+  expect(lease.kind).toBe('leased')
+  if (lease.kind !== 'leased') throw new Error('Expected generation lease')
+  const running = await f.t.mutation(internal.learnV2SessionContent.beginSessionContentGeneration,
+    { tokenIdentifier: userId, jobId: job._id, expectedRevision: lease.revision, leaseToken: lease.leaseToken })
+  expect(running.status).toBe('running')
+  expect(await f.t.query(internal.learnV2SessionContent.getSessionContentGenerationInput,
+    { tokenIdentifier: userId, jobId: job._id, expectedRevision: running.revision, leaseToken: lease.leaseToken }))
+    .toMatchObject({ sources: [expect.objectContaining({ sourceSnapshotId: f.graph.sourceSnapshotId })] })
+  return job
+}
+
+test.each([{ horizon: 7, reflows: 0, draft: false }, { horizon: 7, reflows: 1, draft: false },
+  { horizon: 30, reflows: 2, draft: false }, { horizon: 7, reflows: 1, draft: true }] as const)(
+  'a failed day-$horizon check after $reflows reflows creates reachable remediation: draft=$draft', async ({ horizon, reflows, draft }) => {
+  const f = await independentWithReflow(reflows)
+  if (draft) await f.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...plan } = (await ctx.db.get(f.activePlanId))!
+    await ctx.db.insert('studyPlanRevisions', { ...plan, revision: plan.revision + 1, status: 'draft', parentRevisionId: f.activePlanId,
+      changeReason: 'availability_changed', acceptedAt: undefined })
+  })
+  const { original, today, opportunity, accepted, frozen } = await sealOutcomeCheck(f, horizon)
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: 'outcome_route_check_score_1234567890' })
+  if (result.status !== 'scored') throw new Error('Expected score')
+  expect(await f.t.run(ctx => ctx.db.get(result.result.attemptId))).toMatchObject({ masteryStateAfter: 'needs_review' })
+  const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const remediation = sessions.find(row => row.auditReasonCode === `mastery_followup:${result.result.attemptId}`)!
+  expect(remediation).toMatchObject({ studyPlanRevisionId: f.activePlanId, placementKind: 'review', schedulingPriority: 'prerequisite_remediation' })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'pending', sessionId: remediation._id })
+  expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: remediation._id }))
+    .toMatchObject({ studySessionId: remediation._id, status: 'planned' })
+  await acceptFollowUpGeneration(f, remediation)
+  expect(await f.t.run(ctx => ctx.db.get(today.sessionId))).toEqual(frozen.session)
+  expect(await f.t.run(ctx => ctx.db.get(accepted.submissionId))).toEqual(frozen.response)
+  const scored = (await f.opportunities()).find(row => row._id === original._id)!
+  expect(scored.contextPins).toEqual(opportunity.contextPins)
+  expect(scored.assessmentPins).toEqual(opportunity.assessmentPins)
+  expect(scored.firstCheckClaim).toEqual(opportunity.firstCheckClaim)
+  expect(scored.delayedCheckId).toBe(opportunity.delayedCheckId)
+})
+
+test.each(['archived', 'deleted_void', 'no_active', 'deleted_successor', 'foreign_successor', 'unrelated_successor', 'stale_blueprint', 'missing_folder'] as const)(
+  'a check creates no ordinary work with invalid active-plan authority: %s', async change => {
+  const f = await independentWithReflow()
+  const check = await sealOutcomeCheck(f, 7)
+  await f.t.run(async ctx => {
+    if (change === 'archived') await ctx.db.patch(f.graph.learningVoidId, { status: 'archived' })
+    if (change === 'deleted_void') await ctx.db.delete(f.graph.learningVoidId)
+    if (change === 'no_active') await ctx.db.patch(f.graph.studyPlanId, { activeRevisionId: undefined })
+    if (change === 'deleted_successor') await ctx.db.delete(f.activePlanId)
+    if (change === 'foreign_successor') await ctx.db.patch(f.activePlanId, { userId: 'another-owner' })
+    if (change === 'unrelated_successor') await ctx.db.patch(f.activePlanId, { changeReason: 'availability_changed' })
+    if (change === 'stale_blueprint') await ctx.db.patch(f.graph.blueprintRevisionId, { recordRevision: 2 })
+    if (change === 'missing_folder') await ctx.db.delete((await ctx.db.get(f.graph.learningVoidId))!.folderId)
+  })
+  const snapshot = () => f.t.run(async ctx => ({
+    sessions: await ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32),
+    jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(32),
+    attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).take(32),
+  }))
+  const before = await snapshot()
+  await expect(f.t.run(async ctx => requireLearnActiveWorkPlan(ctx, userId, (await ctx.db.get(f.graph.studyPlanRevisionId))!)))
+    .rejects.toThrow('Learn follow-up active plan unavailable')
+  await expect(f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'no_active_check_score_1234567890' })).rejects.toThrow(/unavailable|denied/)
+  expect(await snapshot()).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.get(check.today.sessionId))).toEqual(check.frozen.session)
+  expect(await f.t.run(ctx => ctx.db.get(check.accepted.submissionId))).toEqual(check.frozen.response)
+})
+
+async function successorLesson() {
+  const f = await fixture()
+  const cold = await f.seal()
+  await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: cold.accepted.submissionId, idempotencyKey: 'creator_cold_score_1234567890' })
+  await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'creator_reflow_1234567890' })
+  if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+  const planId = reflow.successorPlanRevisionId
+  const lesson = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(8))).find(row => row.status === 'planned')!
+  await publishDeliveryTeaching({ t: f.t, graph: { ...f.graph, studySessionId: lesson._id, studyPlanRevisionId: planId } })
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: lesson._id, expectedSessionRevision: 2,
+    expectedContentRevision: 1, idempotencyKey: 'creator_lesson_start_1234567890' })
+  return { ...f, planId, lesson }
+}
+
+test.each(['guided_review', 'retained_unavailable'] as const)('the %s creator and its next reflow use the active plan', async creator => {
+  const f = await successorLesson()
+  if (creator === 'guided_review') await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.lesson._id,
+    expectedSessionRevision: 3, kind: 'substantive_hint' })
+  else policy.protocol = null
+  ordinaryScorer()
+  const result = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: f.lesson._id,
+    expectedSessionRevision: creator === 'guided_review' ? 4 : 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1,
+    expectedBlueprintRecordRevision: 1, response: 'My separate-case application.', confidence: 3, idempotencyKey: 'creator_application_1234567890' })
+  if (result.status !== 'completed') throw new Error('Expected completed application')
+  expect(result.state).toBe(creator === 'guided_review' ? 'guided' : 'independent')
+  const followUp = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32)))
+    .find(row => row.auditReasonCode === `mastery_followup:${result.attemptId}` || row.assessmentPurpose === 'retained_transfer')!
+  expect(followUp.studyPlanRevisionId).toBe(f.planId)
+  expect(followUp.placementId).toBeTruthy()
+  expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: followUp._id }))
+    .toMatchObject({ studySessionId: followUp._id, status: creator === 'guided_review' ? 'planned' : 'blocked' })
+  if (creator === 'guided_review') {
+    expect(followUp).toMatchObject({ placementKind: 'review', schedulingPriority: 'due_review' })
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'pending', sessionId: followUp._id })
+  } else expect(followUp).toMatchObject({ status: 'blocked', assessmentPurpose: 'retained_transfer', auditReasonCode: 'protocol_not_frozen' })
+  const again = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.planId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'creator_second_reflow_1234567890' })
+  if (!again.successorPlanRevisionId) throw new Error('Expected second successor')
+  const carried = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', again.successorPlanRevisionId!)).take(8))).find(row => row.placementId === followUp.placementId)!
+  expect(carried).toMatchObject({ placementKind: followUp.placementKind, schedulingPriority: followUp.schedulingPriority, status: followUp.status })
+  if (creator === 'guided_review') {
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'pending', sessionId: carried._id })
+    await acceptFollowUpGeneration(f, carried)
+  } else {
+    expect(carried).toMatchObject({ assessmentPurpose: 'retained_transfer', auditReasonCode: 'protocol_not_frozen' })
+    const jobs = await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_studySessionId_and_type_and_status', q =>
+      q.eq('userId', userId).eq('studySessionId', carried._id).eq('type', 'session_content_generation')).take(4))
+    expect(jobs).toEqual([])
+    vi.setSystemTime(carried.scheduledStartAt + 1000)
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'blocked', reason: 'protocol_not_frozen', canRetryGeneration: false })
+  }
+})
+
+test('a remediation follow-up survives its own reflow and scoring replay', async () => {
+  const f = await independentWithReflow()
+  const check = await sealOutcomeCheck(f, 7)
+  const request = { version: LEARN_V2_PUBLIC_API_VERSION, submissionId: check.accepted.submissionId, idempotencyKey: 'remediation_second_score_1234567890' }
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, request)
+  if (result.status !== 'scored') throw new Error('Expected scored check')
+  const followUp = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32)))
+    .find(row => row.auditReasonCode === `mastery_followup:${result.result.attemptId}`)!
+  const again = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.activePlanId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'remediation_second_reflow_1234567890' })
+  if (!again.successorPlanRevisionId) throw new Error('Expected successor')
+  const carried = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', again.successorPlanRevisionId!)).take(8))).find(row => row.placementId === followUp.placementId)!
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'pending', sessionId: carried._id })
+  expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: carried._id }))
+    .toMatchObject({ status: 'planned' })
+  await acceptFollowUpGeneration(f, carried)
+  const before = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, request)).toMatchObject({ status: 'scored', result: result.result })
+  expect(await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.get(check.today.sessionId))).toEqual(check.frozen.session)
+  expect(await f.t.run(ctx => ctx.db.get(check.accepted.submissionId))).toEqual(check.frozen.response)
+})
+
+test.each(['draft_off', 'archived'] as const)('follow-up generation revalidates active-plan authority: %s', async change => {
+  const f = await independentWithReflow()
+  const check = await sealOutcomeCheck(f, 7)
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'generation_route_score_1234567890' })
+  if (result.status !== 'scored') throw new Error('Expected scored check')
+  const followUp = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32)))
+    .find(row => row.auditReasonCode === `mastery_followup:${result.result.attemptId}`)!
+  const job = (await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_studySessionId_and_type_and_status', q =>
+    q.eq('userId', userId).eq('studySessionId', followUp._id).eq('type', 'session_content_generation')).take(4)))[0]!
+  await f.t.run(async ctx => {
+    if (change === 'archived') await ctx.db.patch(f.graph.learningVoidId, { status: 'archived' })
+    else {
+      const { _id: _id, _creationTime: _time, ...plan } = (await ctx.db.get(f.activePlanId))!
+      await ctx.db.insert('studyPlanRevisions', { ...plan, revision: plan.revision + 1, status: 'draft', parentRevisionId: f.activePlanId,
+        changeReason: 'availability_changed', acceptedAt: undefined })
+    }
+  })
+  if (change === 'draft_off') {
+    policy.responses = false
+    expect(await f.t.run(async ctx => requireLearnActiveWorkPlan(ctx, userId, (await ctx.db.get(f.graph.studyPlanRevisionId))!)))
+      .toMatchObject({ _id: f.graph.studyPlanRevisionId, status: 'superseded' })
+  }
+  expect(await f.t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration,
+    { tokenIdentifier: userId, jobId: job._id, expectedRevision: job.revision })).toMatchObject({ kind: 'blocked' })
+  expect(await f.t.run(ctx => ctx.db.get(job._id))).toMatchObject({ status: 'blocked', terminalReason: 'input_revision_conflict' })
+  expect(await f.t.run(ctx => ctx.db.get(check.today.sessionId))).toEqual(check.frozen.session)
+  expect(await f.t.run(ctx => ctx.db.get(check.accepted.submissionId))).toEqual(check.frozen.response)
+})
+
+test.each(['valid', 'archived', 'no_active', 'missing_folder'] as const)('follow-up retry creates work only under valid active authority: %s', async change => {
+  const f = await independentWithReflow()
+  const check = await sealOutcomeCheck(f, 7)
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'retry_route_score_1234567890' })
+  if (result.status !== 'scored') throw new Error('Expected scored check')
+  const followUp = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32)))
+    .find(row => row.auditReasonCode === `mastery_followup:${result.result.attemptId}`)!
+  const job = (await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId_and_studySessionId_and_type_and_status', q =>
+    q.eq('userId', userId).eq('studySessionId', followUp._id).eq('type', 'session_content_generation')).take(4)))[0]!
+  const lease = await f.t.mutation(internal.learnV2SessionContent.leaseSessionContentGeneration,
+    { tokenIdentifier: userId, jobId: job._id, expectedRevision: job.revision })
+  if (lease.kind !== 'leased') throw new Error('Expected generation lease')
+  await f.t.mutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, { tokenIdentifier: userId, jobId: job._id,
+    expectedRevision: lease.revision, leaseToken: lease.leaseToken, reason: 'synthetic_candidate_failure', sessionStatus: 'generation_failed' })
+  await f.t.run(async ctx => {
+    if (change === 'archived') await ctx.db.patch(f.graph.learningVoidId, { status: 'archived' })
+    if (change === 'no_active') await ctx.db.patch(f.graph.studyPlanId, { activeRevisionId: undefined })
+    if (change === 'missing_folder') await ctx.db.delete((await ctx.db.get(f.graph.learningVoidId))!.folderId)
+  })
+  const before = await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const request = { studySessionId: followUp._id, expectedSessionRevision: followUp.revision + 1, idempotencyKey: 'retry_route_generation_1234567890' }
+  if (change === 'valid') {
+    const retry = await f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, request)
+    expect(retry).toMatchObject({ status: 'pending' })
+    const retried = (await f.t.run(ctx => ctx.db.get(followUp._id)))!
+    const accepted = await acceptFollowUpGeneration(f, retried)
+    expect(accepted._id).toBe(retry.jobId)
+    expect(accepted.studyPlanRevisionId).toBe(f.activePlanId)
+    expect(await f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, request)).toEqual(retry)
+  } else {
+    await expect(f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, request)).rejects.toThrow(/not current|unavailable/)
+    await expect(f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.activePlanId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'retry_route_invalid_reflow_1234567890' })).rejects.toThrow(/archived|not current|not found|unavailable/)
+    expect(await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(32))).toEqual(before)
+    expect(await f.t.run(ctx => ctx.db.get(followUp._id))).toMatchObject({ status: 'generation_failed', revision: followUp.revision + 1 })
+  }
+})
+
+test.each(['valid', 'archived', 'no_active'] as const)('family generation from an outcome session validates active authority: %s', async change => {
+  const f = await independentWithReflow()
+  const check = await sealOutcomeCheck(f, 7)
+  const result = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: check.accepted.submissionId, idempotencyKey: 'family_route_score_1234567890' })
+  if (result.status !== 'scored') throw new Error('Expected scored check')
+  const followUp = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32)))
+    .find(row => row.auditReasonCode === `mastery_followup:${result.result.attemptId}`)!
+  const family = (await f.t.run(ctx => ctx.db.get(f.begun.familyId)))!
+  await f.t.run(async ctx => {
+    if (change === 'archived') await ctx.db.patch(f.graph.learningVoidId, { status: 'archived' })
+    if (change === 'no_active') await ctx.db.patch(f.graph.studyPlanId, { activeRevisionId: undefined })
+  })
+  const before = await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
+  const request = { tokenIdentifier: userId, studySessionId: followUp._id, expectedSessionRevision: followUp.revision,
+    familyKey: 'outcome.family.v1', revision: 1, coreFormCount: 3 as const, equivalenceVersion: family.equivalenceVersion,
+    equivalenceDescriptorJson: JSON.stringify(family.equivalenceDescriptor), idempotencyKey: 'family_route_generation_1234567890' }
+  if (change === 'valid') {
+    const begun = await f.t.mutation(commands.beginFamilyGeneration, request)
+    expect(await f.t.run(ctx => ctx.db.get(begun.jobId))).toMatchObject({ studySessionId: followUp._id, studyPlanRevisionId: f.activePlanId })
+  } else {
+    await expect(f.t.mutation(commands.beginFamilyGeneration, request)).rejects.toThrow(/unavailable|pins_mismatch/)
+    expect(await f.t.run(ctx => ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(32))).toEqual(before)
+  }
 })
 
 test('a retained follow-up after reflow binds the frozen original plan instead of blocking a valid item', async () => {

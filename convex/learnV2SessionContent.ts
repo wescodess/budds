@@ -52,7 +52,7 @@ import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementD
 import { parseLearnContract } from '../shared/learn-v2-responses';
 import { bindSessionApplication } from './lib/learnV2SessionApplication';
 import { readLearnDelayedCheckBinding } from './lib/learnV2DelayedDelivery';
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks';
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -332,7 +332,7 @@ async function inputs(
   const stable = await ctx.db.get(plan.studyPlanId);
   if (
     !latest ||
-    latest._id !== plan._id ||
+    (latest._id !== plan._id && (!LEARN_MEASUREMENT_CAPABILITIES.responses || latest.status !== "draft")) ||
     stable?.activeRevisionId !== plan._id
   )
     throw new Error("input_revision_conflict");
@@ -341,6 +341,7 @@ async function inputs(
   if (
     !learningVoid ||
     learningVoid.userId !== userId ||
+    (LEARN_MEASUREMENT_CAPABILITIES.responses && learningVoid.status === "archived") ||
     learningVoid.revision !== job.expectedVoidRevision ||
     !folder ||
     folder.userId !== userId
@@ -1315,6 +1316,7 @@ export const retrySessionContentGeneration = mutation({
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new Error("Study session is not current");
+    await requireLearnActiveWorkPlan(ctx, userId, plan);
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const terminalJobs = (await Promise.all((["blocked", "failed"] as const).map((status) => ctx.db.query("learnJobs")
       .withIndex("by_userId_and_studySessionId_and_type_and_status", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("type", TYPE).eq("status", status))
