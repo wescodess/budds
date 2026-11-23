@@ -32,7 +32,7 @@ const modules = import.meta.glob('./**/*.ts')
 const originalSealReport = makeFunctionReference<'mutation', FunctionArgs<typeof internal.learnV2MeasurementReports.sealReport>, null>('measurementReportRecoveryOriginals:sealReport')
 beforeEach(() => { capabilities.reports = true; capabilities.maxInputBytes = 64 * 1024 * 1024; capabilities.maxEpisodes = 10_000; LEARN_REPORT_APPROVALS.splice(0); vi.useFakeTimers(); vi.setSystemTime(REPORT_NOW) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); LEARN_REPORT_APPROVALS.splice(0) })
-async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'scored', overrides: Partial<typeof reportFunctions> = {}, transactionLimits = false) {
+async function fixture(count = 5, mode: 'scored' | 'missing' | 'unscored' = 'scored', overrides: Partial<typeof reportFunctions> = {}, transactionLimits = false) {
   const t = convexTest({ schema, transactionLimits, modules: { ...modules,
     './learnV2MeasurementReports.ts': async () => ({ ...reportFunctions, ...overrides }),
     './measurementReportRecoveryOriginals.ts': async () => ({ sealReport: reportFunctions.sealReport }),
@@ -118,7 +118,7 @@ describe('bounded real-table report snapshots', () => {
   })
 
   test.each([0, 1])('normalizes a linked claim without the opportunity back-reference at sequence %i as unresolved', async checkSequence => {
-    const f = await fixture(2)
+    const f = await fixture()
     const claim = await f.t.run(ctx => seedOrdinaryReportClaim(ctx, f.sources[0]!))
     await f.t.run(ctx => ctx.db.patch(claim.firstCheckOpportunityId, { firstCheckClaim: undefined, checkSequence }))
     const runId = await f.begin()
@@ -154,10 +154,10 @@ describe('bounded real-table report snapshots', () => {
     expect(reportControl(run).cellPages.length).toBeGreaterThan(1)
     // Every fixture pair goes 60 -> 40: an eight-owner stratum has 8*(-20)/8 = -20.
     const cell = cells.find(value => value.metric === 'verified_learning_gain.v1' && value.horizonDays === 7 && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
-    expect(cell).toMatchObject({ observedValue: -20, allEligibleValue: -20, missingOutcomeBounds: { lower: -20, upper: -20 }, counts: { considered: 9, comparablePairs: 8 } })
+    expect(cell).toMatchObject({ observedValue: -20, allEligibleValue: -20, missingOutcomeBounds: { lower: -20, upper: -20 }, counts: { considered: 8, comparablePairs: 8 } })
     expect(new Set(cells.flatMap(value => value.legacyIndependentAudit ? [JSON.stringify(value.legacyIndependentAudit)] : [])).size).toBe(1)
-    expect(cells.find(value => value.metric === 'verified_learning_gain.v1' && value.horizonDays === 7 && value.stratum.entryPoint === 'today.alternate'
-      && value.stratum.startingBand === 'all')).toMatchObject({ observedValue: null, missingOutcomeBounds: null, counts: null })
+    expect(cells.some(value => value.stratum.entryPoint === 'today.alternate')).toBe(false)
+    expect(cells).toHaveLength(20)
     const exported = await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })
     const serialized = JSON.stringify(exported)
     for (const secret of [...Object.values(STORAGE_CANARIES), VIEWER.tokenIdentifier, OWNER, 'learnerKey', 'capabilityKey', 'submissionId', 'frozenConfiguration']) expect(serialized).not.toContain(secret)
@@ -166,7 +166,7 @@ describe('bounded real-table report snapshots', () => {
   })
 
   test.each(['missing', 'unscored'] as const)('retains %s outcomes without dropping admissions or imputing gains', async mode => {
-    const f = await fixture(1, mode)
+    const f = await fixture(5, mode)
     const runId = await f.begin()
     expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
     const cell = (await computedCells(f, runId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
@@ -174,23 +174,17 @@ describe('bounded real-table report snapshots', () => {
     expect(cell.observedValue).toBeNull()
     expect(cell.allEligibleValue).toBeNull()
     expect(cell.missingOutcomeBounds).toEqual(mode === 'missing' ? { lower: -100, upper: 100 } : { lower: -60, upper: 40 })
-    expect(cell.counts).toMatchObject({ considered: 1, maturedEpisodes: 1, acceptedSubmissions: mode === 'missing' ? 0 : 1 })
+    expect(cell.counts).toMatchObject({ considered: 5, maturedEpisodes: 5, acceptedSubmissions: mode === 'missing' ? 0 : 5 })
   })
 
-  test('withholds a singleton cold score from public cells and the owner export', async () => {
+  test('a singleton cohort reads exactly like an empty one, withholding its cold score from cells and the owner export', async () => {
     const f = await fixture(1, 'unscored')
     const runId = await f.begin()
-    await f.complete(runId)
-    expect((await computedCells(f, runId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all'
-      && value.weighting === 'capability_episode')).toMatchObject({ missingOutcomeBounds: { lower: -60, upper: 40 } })
+    const empty = { status: 'failed', reasonCodes: ['no_eligible_population'] }
+    expect(await f.complete(runId)).toMatchObject(empty)
+    expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportCells').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).take(1))).toEqual([])
     const exported = await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })
-    if (exported.status !== 'aggregate_page') throw new Error(JSON.stringify(exported))
-    expect(exported.manifest.provenance).toMatchObject({ episodeCount: null, inputBytes: null })
-    for (const cell of [...await allCells(f, runId), ...exported.page.cells]) {
-      expect(cell).toMatchObject({ observedValue: null, allEligibleValue: null, missingOutcomeBounds: null, counts: null,
-        allocations: null, attritionByStartingBand: null, sensitivity: null, replacements: null })
-      expect(cell.reasonCodes).toContain('insufficient_learners')
-    }
+    expect(exported).toMatchObject(empty)
     expect(JSON.stringify(exported)).not.toMatch(/"(lower|upper)":/)
   })
 
@@ -198,14 +192,14 @@ describe('bounded real-table report snapshots', () => {
     const f = await fixture()
     const runId = await f.begin()
     await f.complete(runId)
-    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v4' }))
+    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v5' }))
     const stale = { status: 'stale', reasonCodes: ['report_policy_changed'] }
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject(stale)
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
     const rebuilt = await f.begin()
     expect(rebuilt).not.toBe(runId)
-    expect(await f.complete(rebuilt)).toMatchObject({ status: 'sealed', provenance: { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' } })
+    expect(await f.complete(rebuilt)).toMatchObject({ status: 'sealed', provenance: { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v3' } })
   })
 
   test('enumerates an ordinary blocked first claim without an assignment or thread and preserves unknown state', async () => {
@@ -279,7 +273,7 @@ describe('bounded real-table report snapshots', () => {
   })
 
   test('missing source pages cannot seal', async () => {
-    const f = await fixture()
+    const f = await fixture(1)
     const runId = await f.begin()
     await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
     await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: runId })
@@ -364,7 +358,7 @@ describe('viewer grants and current revocation', () => {
   })
 
   test('large post-watermark score history in another epoch leaves audited reads sealed until an integrity change', async () => {
-    const f = await fixture(1, 'scored', {}, true)
+    const f = await fixture(5, 'scored', {}, true)
     const runId = await f.begin()
     expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
     const owner = f.sources[0]!
@@ -433,14 +427,15 @@ describe('viewer grants and current revocation', () => {
     })
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
     vi.setSystemTime(REPORT_NOW + 1000)
-    await f.t.run(ctx => ctx.db.patch(owner.watermarkId, { dueWorkThrough: REPORT_NOW + 1000 }))
+    await f.t.run(async ctx => { for (const source of f.sources) await ctx.db.patch(source.watermarkId, { dueWorkThrough: REPORT_NOW + 1000 }) })
     const next = await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, { ...f.request, cutoff: REPORT_NOW + 1000 })
     if (next.status !== 'requested') throw new Error('Expected refresh')
     expect(next.reportRunId).not.toBe(runId)
     expect(await f.complete(next.reportRunId)).toMatchObject({ status: 'sealed' })
     expect((await f.t.run(ctx => ctx.db.get(next.reportRunId)))!.inputDigest).not.toBe(inputDigest)
     const cell = (await computedCells(f, next.reportRunId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
-    expect(cell).toMatchObject({ observedValue: null, allEligibleValue: null, missingOutcomeBounds: { lower: -60, upper: 40 } })
+    // Four pairs go 60 -> 40; the excluded delayed score leaves cold 60, so bounds are (4*-20 - 60)/5 and (4*-20 + 40)/5.
+    expect(cell).toMatchObject({ observedValue: -20, allEligibleValue: null, missingOutcomeBounds: { lower: -28, upper: -8 }, counts: { comparablePairs: 4 } })
   })
 
   test('refresh creates a new run and exposes the dated last-completed manifest while building', async () => {
@@ -535,7 +530,7 @@ describe('report continuation recovery', () => {
 
   test('ignores a late valid seal after recovery and keeps the original terminal reason', async () => {
     let allowSeal = false
-    const f = await fixture(1, 'scored', { sealReport: internalMutation({
+    const f = await fixture(5, 'scored', { sealReport: internalMutation({
       args: { reportRunId: v.id('learnMeasurementReportRuns'), cellCount: v.number(), inputDigest: v.string() }, returns: v.null(),
       handler: async (ctx, args) => allowSeal ? ctx.runMutation(originalSealReport, args) : null,
     }) })
@@ -591,7 +586,7 @@ describe('snapshot failure controls', () => {
     const reportRunId = await f.begin()
     if (phase !== 'pinning') await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })
     if (phase === 'computing') {
-      for (let batch = 0; batch < 8; batch++) {
+      for (let batch = 0; batch < 40; batch++) {
         const run = (await f.t.run(ctx => ctx.db.get(reportRunId)))!
         if (reportControl(run).phase === 'computing') break
         await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId })
@@ -637,7 +632,7 @@ describe('snapshot failure controls', () => {
   })
 
   test('rejects nine-record pages and conflicting duplicate pages', async () => {
-    const f = await fixture()
+    const f = await fixture(1)
     const runId = await f.begin()
     await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
     const page = await f.t.query(internal.learnV2MeasurementReports.readInventoryRecord, { reportRunId: runId, ownerIndex: 0, factId: (await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assignmentId', q => q.eq('userId', OWNER).eq('fact.assignmentId', f.sources[0]!.rows.learnMeasurementAssignments)).first()))!._id })
@@ -697,7 +692,7 @@ test('the registered scheduled pipeline completes without a model call', async (
 })
 
 test('population overflow is checked against the configured ceiling before a page is committed', async () => {
-  const f = await fixture()
+  const f = await fixture(1)
   capabilities.maxEpisodes = 0
   const runId = await f.begin()
   expect(await f.complete(runId)).toMatchObject({ status: 'failed', reasonCodes: ['source_input_overflow'] })
@@ -725,7 +720,7 @@ test('a missing source fact is diagnosed from the owner sequence, including acro
 })
 
 test('changing a normalized source row without its manifest cannot seal', async () => {
-  const f = await fixture()
+  const f = await fixture(1)
   const runId = await f.begin()
   await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
   await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: runId })
@@ -771,12 +766,12 @@ test('a completed source purge rebuilds excluded outcomes without restoring priv
   await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER, sourceIdentityId: owner.sourceIdentityId })
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
   vi.setSystemTime(REPORT_NOW + 1000)
-  await f.t.run(ctx => ctx.db.patch(owner.watermarkId, { dueWorkThrough: REPORT_NOW + 1000 }))
+  await f.t.run(async ctx => { for (const source of f.sources) await ctx.db.patch(source.watermarkId, { dueWorkThrough: REPORT_NOW + 1000 }) })
   const next = await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, { ...f.request, cutoff: REPORT_NOW + 1000 })
   if (next.status !== 'requested') throw new Error('Expected refresh')
   expect(await f.complete(next.reportRunId)).toMatchObject({ status: 'sealed' })
   const cell = (await computedCells(f, next.reportRunId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
-  expect(cell).toMatchObject({ observedValue: null, allEligibleValue: null, counts: { considered: 1, validColdScores: 0, validDelayedScores: 0, acceptedSubmissions: 1 } })
+  expect(cell).toMatchObject({ observedValue: -20, allEligibleValue: null, sourceCoverage: 'complete', counts: { considered: 5, validColdScores: 4, validDelayedScores: 4, acceptedSubmissions: 5 } })
   expect(await f.t.run(ctx => ctx.db.get(owner.outcomes[0]!.executionId!))).toMatchObject({ evidenceStatus: 'evidence_unavailable' })
 })
 
@@ -845,7 +840,7 @@ test('a captured ordinary blocked first slot remains unresolved with its blockin
 })
 
 test('an unanswered original slot retains its terminalization disposition', async () => {
-  const f = await fixture(1, 'missing')
+  const f = await fixture(5, 'missing')
   await f.t.run(async ctx => {
     const id = f.sources[0]!.delayedId
     await appendLearnMeasurementFact(ctx, OWNER, { epoch: 'fixture-epoch', learningVoidId: f.sources[0]!.learningVoidId, occurredAt: REPORT_NOW,

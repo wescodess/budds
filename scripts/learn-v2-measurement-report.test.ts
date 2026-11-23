@@ -13,7 +13,8 @@ import { measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-
 const script = fileURLToPath(new URL('./learn-v2-measurement-report.mjs', import.meta.url))
 const fixturePath = fileURLToPath(new URL('./learn-v2-measurement-report.fixture.v1.json', import.meta.url))
 const fixture = () => JSON.parse(readFileSync(fixturePath, 'utf8'))
-const fixtureOutputDigest = 'dbff4f796a54eb1e59d5c8268992af01d103018192cd9080e5ce9d80d64ed8f5'
+const fixtureOutputDigest = '1cc788e6fd69b67aa8d616d67df3d6367f27fd0d9178d28dab83503ac7555a06'
+const sealedOutputDigest = '26423699722bfcd5e9da0b1e0512348005190c261c14463eba857ae2be33c96c'
 let directory: string
 let guard: string
 let sequence = 0
@@ -79,18 +80,21 @@ async function unpublished(input: ReturnType<typeof fixture>) {
   return { cells: computed.pages.flatMap(page => page.cells) }
 }
 
-function expectWithheld(output: ReturnType<typeof fixture>) {
-  expect(output.cells.length).toBeGreaterThan(0)
-  for (const cell of output.cells) {
-    expect(cell).toMatchObject({ observedValue: null, allEligibleValue: null, missingOutcomeBounds: null, confidenceInterval: null,
-      counts: null, allocations: null, attritionByStartingBand: null, sensitivity: null, replacements: null, sourceAccounting: null })
-    expect(cell.reasonCodes).toContain('insufficient_learners')
-  }
-  expect(output.manifest.provenance).toMatchObject({ episodeCount: null, inputBytes: null })
+function expectEmpty(output: ReturnType<typeof fixture>) {
+  expect(output).toMatchObject({ status: 'unavailable', reasonCodes: ['no_eligible_population'], manifest: null, cells: [] })
+}
+
+async function computed(sources: Awaited<ReturnType<typeof computationEpisode>>[]) {
+  const prepared = await computationInput(sources.flatMap(source => [source.watermark, source.episode]))
+  const input = fixture()
+  input.rows = prepared.rows
+  input.roster = prepared.roster
+  Object.assign(input.report.provenance, prepared.provenance, { codeVersion: fixture().report.provenance.codeVersion })
+  return input
 }
 
 describe('Node 24 offline measurement report CLI', () => {
-  it('replays v2 late-linked and unresolved claims once while withholding suppressed reasons', async () => {
+  it('replays v2 late-linked and unresolved claims once while releasing nothing about two learners', async () => {
     const input = fixture()
     input.rows = input.rows.map((row: LearnReportInputSnapshot) => {
       if (row.kind !== 'first_check_claim') return row
@@ -104,30 +108,26 @@ describe('Node 24 offline measurement report CLI', () => {
     })
     const sealed = await reseal(input)
     const { code, output } = replay(sealed, '--sealed-input')
-    expect(code).toBe(0)
-    expect(output.status).toBe('replayed')
-    expectWithheld(output)
+    expect(code).toBe(2)
+    expectEmpty(output)
     const cells = (await unpublished(sealed)).cells.filter(cell =>
       cell.metric === 'false_mastery_next_delayed.v1' && cell.stratum.startingBand === 'all' && cell.weighting === 'capability_episode')
     expect(cells.reduce((sum, cell) => sum + cell.counts.maturedClaims, 0)).toBe(2)
     expect(cells.reduce((sum, cell) => sum + cell.counts.checkedClaims, 0)).toBe(1)
-    expect(primary(output, 'false_mastery_next_delayed.v1', null)).toMatchObject({
-      reasonCodes: ['insufficient_learners'], observedValue: null, allEligibleValue: null,
-    })
+    expect(cells.find(cell => cell.horizonDays === null)!.reasonCodes).toContain('no_qualifying_delayed_slot')
   })
 
   it('replays fixture diagnostics to the exact full serialized output and independent arithmetic oracle', async () => {
     const { code, output, serialized } = run(['--fixture', fixturePath])
-    expect(code).toBe(0)
+    expect(code).toBe(2)
     expect(createHash('sha256').update(serialized).digest('hex')).toBe(fixtureOutputDigest)
-    expect(output).toMatchObject({ inputClass: 'fixture_diagnostic', status: 'replayed', reasonCodes: ['fixture_only', 'insufficient_learners'],
-      readiness: { sourceAdmission: 'pending', viewerGrant: 'unverified_offline', realObservations: 'unverified_offline', baselineCapture: 'unproven' },
-      manifest: { cutoffDate: '2026-11-02T00:00:00.000Z', reportVersion: 'learn-v2.measurement-report.v3',
-        provenance: { sourceVersion: 'learn-v2.measurement-report-source.v4', bootstrapReplicates: 10_000 } } })
-    expectWithheld(output)
-    expect(primary(output)).toMatchObject({ status: 'insufficient_data' })
-    expect(primary(output, 'false_mastery_next_delayed.v1')).toMatchObject({ status: 'insufficient_data' })
-    expect(primary(output, 'verified_learning_gain.v1', 30)).toMatchObject({ status: 'insufficient_data' })
+    expect(output).toMatchObject({ inputClass: 'fixture_diagnostic',
+      readiness: { sourceAdmission: 'pending', viewerGrant: 'unverified_offline', realObservations: 'unverified_offline', baselineCapture: 'unproven' } })
+    expectEmpty(output)
+    const empty = fixture()
+    empty.rows = []
+    empty.roster = []
+    expect(replay(await reseal(empty)).serialized).toBe(serialized)
     const oracle = await unpublished(fixture())
     expect(primary(oracle)).toMatchObject({ status: 'partial_observed', observedValue: -20, allEligibleValue: null,
       missingOutcomeBounds: { lower: -30, upper: 20 }, confidenceInterval: null,
@@ -138,37 +138,40 @@ describe('Node 24 offline measurement report CLI', () => {
   })
 
   it('publishes replayed values only once five distinct learners contribute', async () => {
-    const sources = await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index)))
-    const prepared = await computationInput(sources.flatMap(source => [source.watermark, source.episode]))
-    const input = fixture()
-    input.rows = prepared.rows
-    input.roster = prepared.roster
-    Object.assign(input.report.provenance, prepared.provenance, { codeVersion: fixture().report.provenance.codeVersion })
+    const input = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index))))
     const { code, output } = replay(input, '--sealed-input')
     expect(code).toBe(0)
-    expect(output.reasonCodes).toEqual(['offline_replay_only', 'insufficient_learners'])
+    expect(output).toMatchObject({ status: 'replayed', reasonCodes: ['offline_replay_only', 'insufficient_learners'],
+      manifest: { cutoffDate: '2026-11-02T00:00:00.000Z', reportVersion: 'learn-v2.measurement-report.v3',
+        provenance: { sourceVersion: 'learn-v2.measurement-report-source.v4', bootstrapReplicates: 10_000, episodeCount: null, inputBytes: null } } })
+    expect(output.cells).toHaveLength(20)
     expect(primary(output)).toMatchObject({ observedValue: -20, allEligibleValue: -20, missingOutcomeBounds: { lower: -20, upper: -20 },
-      confidenceInterval: null, counts: { maturedEpisodes: 5, comparablePairs: 5 }, publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' })
+      confidenceInterval: null, counts: { maturedEpisodes: 5, comparablePairs: 5 }, publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v3' })
     expect(primary(output).reasonCodes).not.toContain('insufficient_learners')
     input.rows = input.rows.filter((row: LearnReportInputSnapshot) => row.learnerKey !== input.roster[0])
     input.roster = input.roster.slice(1)
-    const withheld = replay(await reseal(input), '--sealed-input').output
-    expect(primary(withheld)).toMatchObject({ observedValue: null, missingOutcomeBounds: null, counts: null })
+    expectEmpty(replay(await reseal(input), '--sealed-input').output)
   })
 
   it('exactly replays a sealed-input envelope without promoting the file to trusted live evidence', () => {
     const { code, output, serialized } = replay(fixture(), '--sealed-input')
-    expect(code).toBe(0)
-    expect(createHash('sha256').update(serialized).digest('hex')).toBe('c46c42107cf6ce79164c24cda9c4d7059449a08ab1a1c4c6f44bf9c15e01696d')
-    expect(output).toMatchObject({ inputClass: 'sealed_input_replay', reasonCodes: ['offline_replay_only', 'insufficient_learners'] })
+    expect(code).toBe(2)
+    expect(createHash('sha256').update(serialized).digest('hex')).toBe(sealedOutputDigest)
+    expect(output).toMatchObject({ inputClass: 'sealed_input_replay' })
+    expectEmpty(output)
     expect(output.readiness.sourceAdmission).toBe('pending')
   })
 
-  it('is deterministic across row and roster order, preserving saved cutoff/digest/seed', () => {
+  it('is deterministic across row and roster order, preserving saved cutoff/digest/seed', async () => {
     const input = fixture()
     input.rows.reverse()
     input.roster.reverse()
     expect(createHash('sha256').update(replay(input).serialized).digest('hex')).toBe(fixtureOutputDigest)
+    const published = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index))))
+    const forward = replay(published, '--sealed-input').serialized
+    published.rows.reverse()
+    published.roster.reverse()
+    expect(replay(published, '--sealed-input').serialized).toBe(forward)
   })
 
   it.each(['stale', 'building', 'disabled', 'unavailable', 'failed'])('withholds every number for a %s snapshot', (status) => {
@@ -187,7 +190,7 @@ describe('Node 24 offline measurement report CLI', () => {
     if (version === 'source') input.report.provenance.sourceVersion = 'learn-v2.measurement-report-source.v3'
     if (version === 'query') input.report.query.version = 'obsolete.v0'
     if (version === 'provenanceQuery') input.report.provenance.queryVersion = 'obsolete.v0'
-    if (version === 'code') input.report.provenance.codeVersion = 'learn-v2.report-code.c6.2.v4'
+    if (version === 'code') input.report.provenance.codeVersion = 'learn-v2.report-code.c6.2.v5'
     expect(replay(input).output).toMatchObject({ status: 'failed', reasonCodes: ['incompatible_version'], manifest: null, cells: [] })
   })
 
@@ -219,9 +222,10 @@ describe('Node 24 offline measurement report CLI', () => {
   })
 
   it('keeps unknown source coverage explicit and all-eligible values null', async () => {
-    const input = fixture()
+    const input = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index))))
     input.report.provenance.sourceCoverage = 'unknown'
     const output = replay(await reseal(input)).output
+    expect(output.cells.length).toBeGreaterThan(0)
     expect(output.reasonCodes).toContain('unknown_source_coverage')
     expect(output.cells.every((cell: ReturnType<typeof fixture>) => cell.allEligibleValue === null && cell.sourceCoverage === 'unknown')).toBe(true)
   })
@@ -247,20 +251,13 @@ describe('Node 24 offline measurement report CLI', () => {
         row.unresolvedReason = 'missing_delayed'
       }
     }
-    const output = replay(await reseal(input)).output
-    expect(output.reasonCodes).toEqual(['fixture_only', 'insufficient_learners'])
+    expectEmpty(replay(await reseal(input)).output)
     expect(primary(await unpublished(input))).toMatchObject({ observedValue: null, allEligibleValue: null,
       counts: { maturedEpisodes: 2, comparablePairs: 0 } })
-    expect(output.cells.every((cell: ReturnType<typeof fixture>) => cell.observedValue === null && cell.allEligibleValue === null)).toBe(true)
   })
 
   it('reports absent outcomes only when an unsuppressed population can disclose them', async () => {
-    const sources = await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index, { delayed: null })))
-    const prepared = await computationInput(sources.flatMap(source => [source.watermark, source.episode]))
-    const input = fixture()
-    input.rows = prepared.rows
-    input.roster = prepared.roster
-    Object.assign(input.report.provenance, prepared.provenance, { codeVersion: fixture().report.provenance.codeVersion })
+    const input = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index, { delayed: null }))))
     const { code, output } = replay(input, '--sealed-input')
     expect(code).toBe(0)
     expect(output.reasonCodes).toContain('no_observed_outcomes')
@@ -285,8 +282,8 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(serialized).not.toContain('protected_field_canary')
   })
 
-  it('omits every computation key and source identifier on both successful replay paths', () => {
-    const input = fixture()
+  it('omits every computation key and source identifier on both successful replay paths', async () => {
+    const input = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index))))
     const protectedValues = new Set<string>([input.report.reportRunId, ...input.roster])
     function collect(value: ReturnType<typeof fixture>) {
       for (const [key, nested] of Object.entries(value)) {
@@ -296,7 +293,8 @@ describe('Node 24 offline measurement report CLI', () => {
     }
     input.rows.forEach(collect)
     for (const mode of ['--fixture', '--sealed-input']) {
-      const { serialized } = replay(input, mode)
+      const { serialized, output } = replay(input, mode)
+      expect(output.status).toBe('replayed')
       for (const value of protectedValues) expect(serialized).not.toContain(JSON.stringify(value))
       for (const field of ['learnerKey', 'capabilityKey', 'assignmentId', 'attemptId', 'reportRunId', 'rows', 'roster', 'cursor']) {
         expect(serialized).not.toContain(`"${field}"`)

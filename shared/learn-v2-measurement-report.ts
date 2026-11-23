@@ -19,7 +19,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v5' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v6' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -698,7 +698,7 @@ type ComputedReportRow = {
   coldForm: string, delayedForm: string, observedColdForm: string | null, observedDelayedForm: string | null,
 }
 type ReportGroup = { metric: LearnReportMetric['metric'], horizon: LearnReportMetric['horizonDays'], stratum: LearnReportMetric['stratum'],
-  policy: LearnReportMetric['replacements']['policy'], rows: ComputedReportRow[], sourceRows: ReportFirstClaim[] }
+  policy: LearnReportMetric['replacements']['policy'], rows: ComputedReportRow[], sourceRows: ReportFirstClaim[], assignmentIds: string[] }
 
 function validatedReportRows(rows: readonly unknown[]) {
   if (rows.length > 4 * LEARN_MEASUREMENT_STORAGE_LIMITS.maxReportEpisodes) throw new Error('Report source exceeds its row ceiling')
@@ -1105,7 +1105,10 @@ type LearnReportBuildInput = {
   roster: readonly string[], rows: readonly LearnReportInputSnapshot[],
 }
 type ComputedReportCell = { cell: LearnReportMetric, disclosure: LearnReportDisclosure }
-async function computeLearningMeasurementReport(input: LearnReportBuildInput): Promise<{ report: LearnMeasurementReport, cells: ComputedReportCell[] }> {
+function publishableReportGroup(group: ReportGroup) {
+  return learnReportDisclosure(group.metric === VERIFIED_LEARNING_GAIN_VERSION, group.rows, group.rows.filter(row => row.stage === 'matured')).cell
+}
+async function computeLearningMeasurementReport(input: LearnReportBuildInput, publication: boolean): Promise<{ report: LearnMeasurementReport, cells: ComputedReportCell[] }> {
   const metadata = z.strictObject({ reportRunId: learnIdSchema<'learnMeasurementReportRuns'>(), query: learnReportQuerySchema,
     provenance: learnReportProvenanceSchema, roster: z.array(learnReportOpaqueKeySchema).max(10_000), rows: z.array(z.unknown()).max(40_000) }).parse(input)
   const source = validatedReportRows(metadata.rows)
@@ -1161,11 +1164,12 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput): P
     && row.dueWorkThrough !== null && row.dueWorkThrough >= metadata.query.cutoff)
   const groups = new Map<string, ReportGroup>()
   const add = (metric: LearnReportMetric['metric'], horizon: LearnReportMetric['horizonDays'], stratum: LearnReportMetric['stratum'],
-    policy: LearnReportMetric['replacements']['policy'], row: ComputedReportRow, sourceRow?: ReportFirstClaim) => {
+    policy: LearnReportMetric['replacements']['policy'], row: ComputedReportRow, source: ReportFirstClaim | string) => {
     const key = JSON.stringify([metric, horizon, stratum, policy])
-    const group = groups.get(key) ?? { metric, horizon, stratum, policy, rows: [], sourceRows: [] }
+    const group = groups.get(key) ?? { metric, horizon, stratum, policy, rows: [], sourceRows: [], assignmentIds: [] }
     group.rows.push(row)
-    if (sourceRow) group.sourceRows.push(sourceRow)
+    if (typeof source === 'string') group.assignmentIds.push(source)
+    else group.sourceRows.push(source)
     groups.set(key, group)
   }
   const assignmentRows = new Map<string, ReportEpisode[]>()
@@ -1187,7 +1191,7 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput): P
           resultBy(predeclared && row.coldReplacement ? row.coldReplacement.result : row.cold, metadata.query.cutoff)]
           .find(result => result !== null && matchesReportConfiguration(result, row.assignment.scorerConfiguration!)) ?? null
     const frozen = { ...row.assignment, responseKind: row.assignment.responseKind!, scorerConfiguration: row.assignment.scorerConfiguration! }
-    add(VERIFIED_LEARNING_GAIN_VERSION, horizon, reportStratum(frozen, observed), row.replacementPolicy!, computed)
+    add(VERIFIED_LEARNING_GAIN_VERSION, horizon, reportStratum(frozen, observed), row.replacementPolicy!, computed, row.assignmentId)
   }
   for (const claim of claims) {
     const slot = linkedReportClaim(claim)
@@ -1201,23 +1205,28 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput): P
         observedUpstream: null, familyValidationStatus: 'unknown' }, { kind: 'secondary_only' }, computeUnlinkedClaimRow(claim, metadata.query.cutoff), claim)
     }
   }
-  if (!groups.size) {
-    const reasons = inventory.length ? ['not_admitted'] : ['no_eligible_population']
-    if (inventory.some(row => row.assignment.protocolStatus === 'protocol_not_frozen')) reasons.push('protocol_not_frozen')
-    if (inventory.some(row => row.reasonCodes.includes('unmeasurable_no_t0'))) reasons.push('unmeasurable_no_t0')
+  const empty = (considered: readonly ReportEpisode[]) => {
+    const reasons = considered.length ? ['not_admitted'] : ['no_eligible_population']
+    if (considered.some(row => row.assignment.protocolStatus === 'protocol_not_frozen')) reasons.push('protocol_not_frozen')
+    if (considered.some(row => row.reasonCodes.includes('unmeasurable_no_t0'))) reasons.push('unmeasurable_no_t0')
     return unavailable('unavailable', reasons)
   }
+  if (!groups.size) return empty(inventory)
   const frozenGroups = new Map<string, ReportGroup[]>()
   for (const group of groups.values()) {
     const key = JSON.stringify([group.metric, group.horizon, { ...group.stratum, observedModel: null, observedUpstream: null }, group.policy])
     frozenGroups.set(key, [...(frozenGroups.get(key) ?? []), group])
   }
   groups.clear()
-  for (const grouped of frozenGroups.values()) {
-    const observed = grouped.filter(group => group.stratum.observedModel !== null || group.stratum.observedUpstream !== null)
+  const isObserved = (group: ReportGroup) => group.stratum.observedModel !== null || group.stratum.observedUpstream !== null
+  for (const frozen of frozenGroups.values()) {
+    const grouped = publication ? frozen.filter(group => !isObserved(group) || publishableReportGroup(group)) : frozen
+    const observed = grouped.filter(isObserved)
+    if (!grouped.length) continue
     if (observed.length <= 1) {
       const first = observed[0] ?? grouped[0]!
-      const group = { ...first, rows: grouped.flatMap(value => value.rows), sourceRows: grouped.flatMap(value => value.sourceRows) }
+      const group = { ...first, rows: grouped.flatMap(value => value.rows), sourceRows: grouped.flatMap(value => value.sourceRows),
+        assignmentIds: grouped.flatMap(value => value.assignmentIds) }
       groups.set(JSON.stringify([group.metric, group.horizon, group.stratum, group.policy]), group)
     }
     else for (const group of grouped) {
@@ -1226,11 +1235,15 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput): P
       groups.set(JSON.stringify([group.metric, group.horizon, group.stratum, group.policy]), group)
     }
   }
+  const released = [...groups].filter(([, group]) => !publication || publishableReportGroup(group))
+  const releasedAssignments = new Set(released.flatMap(([, group]) => group.assignmentIds))
+  const considered = publication ? inventory.filter(row => row.assignment.status !== 'admitted' || releasedAssignments.has(row.assignmentId)) : inventory
+  if (!released.length) return empty(considered)
   const cells: ComputedReportCell[] = []
-  for (const [key, group] of [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
+  for (const [key, group] of released.sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     const bands = ['all', ...LEARN_V2_REPORT_STARTING_BANDS.filter(band => band !== 'all')] as const
     const computed = bands.map(band => (['capability_episode', 'learner_sensitivity'] as const).map(weighting => reportCell({ ...group, weighting,
-      stratum: { ...group.stratum, startingBand: band }, inventory, audit, sourceKnown, seed: `${metadata.provenance.bootstrapSeed}:${key}:${band}:${weighting}` })))
+      stratum: { ...group.stratum, startingBand: band }, inventory: considered, audit, sourceKnown, seed: `${metadata.provenance.bootstrapSeed}:${key}:${band}:${weighting}` })))
     const occupied = computed.slice(1).filter((_, index) => group.rows.some(row => row.band === bands[index + 1]))
     const disclosures = reconcileLearnReportBandDisclosures(computed[0]![0]!.disclosure, occupied.map(weightings => weightings[0]!.disclosure))
     computed.forEach((weightings, index) => {
@@ -1254,12 +1267,12 @@ function reportPages<Cell, Page>(reportRunId: string, cells: readonly Cell[], va
 
 /** Internal unpublished computation for tests and audits; every adapter that releases cells uses the published build. */
 export async function buildLearningMeasurementReport(input: LearnReportBuildInput) {
-  const computed = await computeLearningMeasurementReport(input)
+  const computed = await computeLearningMeasurementReport(input, false)
   return { report: computed.report, pages: reportPages(input.reportRunId, computed.cells.map(({ cell }) => cell), validateLearnMeasurementReportCells) }
 }
 
 export async function buildPublishedLearningMeasurementReport(input: LearnReportBuildInput) {
-  const computed = await computeLearningMeasurementReport(input)
+  const computed = await computeLearningMeasurementReport(input, true)
   if (computed.report.status !== 'sealed') return { report: computed.report, pages: [] }
   const cells = computed.cells.map(({ cell, disclosure }) => publishLearnReportCell(cell, disclosure))
   return { report: learnPublishedMeasurementReportSchema.parse({ ...computed.report, provenance: publishLearnReportProvenance(computed.report.provenance) }),

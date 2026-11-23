@@ -1,6 +1,6 @@
 import type { LearnPublishedReportMetric, LearnReportMetric } from './learn-v2-measurement-report'
 
-export const LEARN_REPORT_PUBLICATION_POLICY_VERSION = 'learn-v2.report-publication.minimum-five-learners.v2' as const
+export const LEARN_REPORT_PUBLICATION_POLICY_VERSION = 'learn-v2.report-publication.minimum-five-learners.v3' as const
 export const LEARN_REPORT_MINIMUM_CONTRIBUTING_LEARNERS = 5
 export const LEARN_REPORT_INSUFFICIENT_LEARNERS = 'insufficient_learners'
 
@@ -19,8 +19,13 @@ export const LEARN_REPORT_INSUFFICIENT_LEARNERS = 'insufficient_learners'
  * - starting bands: band cells partition the group's "all" cell, so one unsafe band suppresses
  *   every band cell, the "all" cell's band attrition, and any nested breakdown that is unsafe in
  *   one band cell is suppressed in all band cells.
- * Every group emits all fixed starting bands. Suppressed values are null; status is
- * insufficient_data, coverage/validity/precision are unknown, and the sole reason is insufficient_learners.
+ * Groups (metric, horizon, frozen stratum, observed scorer identity, policy) whose "all" cell fails
+ * are omitted entirely, so a sub-threshold group reads exactly like an empty one. Observed scorer
+ * identities are counted for splitting only when their own group passes, and the considered
+ * inventory keeps only non-admitted episodes and assignments with a released row. A report with no
+ * released group is unavailable with the same reasons as an empty cohort. Every released group
+ * emits all fixed starting bands. Suppressed band values are null; status is insufficient_data,
+ * coverage/validity/precision are unknown, and the sole reason is insufficient_learners.
  * Bootstrap intervals still need twenty contributing learners.
  *
  * This rule is defense-in-depth, not complete disclosure control. It checks each cell, and each

@@ -18,9 +18,10 @@ node scripts/learn-v2-measurement-report.mjs --fixture scripts/learn-v2-measurem
 node scripts/learn-v2-measurement-report.mjs --sealed-input /permitted/private/retained-snapshot.json > /permitted/aggregate-replay.json
 ```
 
-The first report command returns unavailable diagnostics and exits 2. Fixture
-replay exits 0 and labels the output `fixture_diagnostic` / `fixture_only`.
-The sealed-input command labels it `sealed_input_replay` / `offline_replay_only`.
+The first report command returns unavailable diagnostics and exits 2. A
+successful replay exits 0. Fixture replay labels its output `fixture_diagnostic` /
+`fixture_only`, and the sealed-input command labels it `sealed_input_replay` /
+`offline_replay_only`.
 Only use the latter inside a separately authorized, purpose-scoped process that
 already has permission to handle the retained normalized inputs. Aggregate-viewer
 permission alone grants no right to acquire another learner's input rows. There
@@ -36,18 +37,18 @@ shasum -a 256 /tmp/measurement-fixture.json /tmp/measurement-sealed-format.json
 Expected complete stdout SHA-256 values, including formatting and final newline:
 
 ```text
-39162b65275a145a97ce0cc436fc022be5237ed7dffa7a43f050ac86bec319ba  fixture
-796a26fd22e77d73559530e0b611a324743c4a0c09b7ce6d358e2e60843ba3fa  sealed-format
+1cc788e6fd69b67aa8d616d67df3d6367f27fd0d9178d28dab83503ac7555a06  fixture
+26423699722bfcd5e9da0b1e0512348005190c261c14463eba857ae2be33c96c  sealed-format
 ```
 
-These two outputs differ only in the input-class and replay reason labels. Both
-are fixture evidence. The checked-in fixture has two learners, below the
-publication minimum of five distinct contributing learners. Every cell therefore
-includes `insufficient_learners`: all values, bounds, intervals, counts and
-value-bearing breakdowns are null, as are the published provenance's episode
-count and input bytes. The unassigned day-30 horizon retains
-`no_eligible_population` alongside suppression. Exit 0 confirms a successful
-suppressed replay, not permission to publish the underlying arithmetic.
+These two outputs differ only in the input-class label. Both are fixture
+evidence. The checked-in fixture has two learners, below the publication minimum
+of five distinct contributing learners, so no group survives publication. Both
+commands exit 2 with `unavailable` / `no_eligible_population`, no manifest and no
+cells, byte-for-byte the output of the same envelope with an empty roster and no
+rows. Nothing in the output depends on the fixture's learners. The exit code
+confirms only that a sub-threshold cohort reads as empty, not permission to
+publish the underlying arithmetic.
 
 The independent unpublished reducer oracles remain day-7 VLG −20 percentage
 points with bounds [−30,20], and first-check N=2, M=1, F=1 with observed failure 1
@@ -57,9 +58,10 @@ inventory context must not be summed across strata, horizons or weightings.
 For a five-learner example, see `publishes replayed values only once five distinct
 learners contribute` in [the CLI tests](../../scripts/learn-v2-measurement-report.test.ts).
 It constructs inputs with [the computation fixtures](../../tests/fixtures/learn-v2-measurement-computation.ts),
-replays them through the CLI, and publishes day-7 VLG −20 with five comparable
-pairs and bounds [−20,−20]. Removing one learner suppresses those fields. Five
-learners do not meet the separate 20-learner minimum for bootstrap intervals.
+replays them through the CLI, exits 0 and publishes day-7 VLG −20 with five comparable
+pairs and bounds [−20,−20]. Removing one learner makes the replay read as an
+empty cohort. Five learners do not meet the separate 20-learner minimum for
+bootstrap intervals.
 
 ## Accepted input and failures
 
@@ -79,7 +81,7 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`learn-v2.report-code.c6.2.v5`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v6`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
 manifest's code pin to bypass rejection does not constitute exact replay. Replay
 v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null
@@ -105,7 +107,7 @@ cutoff/counts/seed and cohort/protocol pins. The CLI never fixes these saved pin
 | Condition | Result |
 | --- | --- |
 | Replayed sealed or fixture input | Exit 0; aggregate cells and dated safe manifest; source/grant/real-evidence readiness still pending/unverified |
-| No input, missing protocol or no admitted population | Exit 2; explicit unavailable reason, no numerical cells |
+| No input, missing protocol, no admitted population or no group that passes publication | Exit 2; explicit unavailable reason, no numerical cells |
 | Stale manifest | Exit 2; `stale`, `snapshot_stale`, no cells |
 | Disabled/building/unavailable/failed saved manifest | Exit 2; explicit `snapshot_*` diagnostic, no cells; saved free-text reasons are withheld |
 | Wrong replay/report/source/query/code version | Exit 1; `incompatible_version`, no cells |
@@ -125,7 +127,16 @@ a numerical pass, baseline capture, sample-adequacy or release decision.
 
 Online requests support at most **600 roster owners** (five revocation ranges per owner within the 3,000-range budget). Larger rosters return `unavailable` / `roster_capacity_exceeded` before any run, owner pinning or extraction is scheduled. The 10,000-assignment/claim ceiling is separate. Revocation checks remain transactional and are not paged; the byte budget can still fail closed with `source_validation_incomplete`.
 
-Every metric/horizon/stratum breakdown emits the fixed bands `all`, `0_40`, `40_80`, `80_100` and `unknown` for each weighting, including empty bands. If any nonempty band fails the publication policy, all sibling band cells are suppressed. Suppressed cells keep only their metric, horizon, weighting and frozen stratum labels: all value-bearing fields are null, status is `insufficient_data`, population state, source coverage, outcome coverage, validity and precision are `unknown`, and reason codes are exactly `[insufficient_learners]`. No learner-derived status, precision or reasons survive. Empty bands do not themselves force complementary suppression.
+Publication policy `learn-v2.report-publication.minimum-five-learners.v3` releases only these:
+
+- **Released groups.** A group is one metric, horizon, frozen stratum (flow, entry point, depth, response kind, scoring kind, configuration digest, family status), observed scorer identity and replacement policy. Its `all` cell must pass the publication policy. Any other group is omitted, so its presence, sort position and labels are never released. A sub-threshold group reads exactly like an empty one.
+- **Observed scorer identity.** Rows are split by observed model and upstream first. An identity's rows count as a group only when they pass on their own. If exactly one identity passes, the frozen stratum's rows without an observed identity join it and carry its labels. If two or more pass, each stays separate and is marked `scorer_identity_strata_unknown` with unknown population. An identity that fails is dropped before that choice, so it can't change another group's labels, state, coverage or reasons.
+- **Inventory context.** `considered`, `notAdmitted` and VLG source accounting count non-admitted episodes plus admitted assignments with at least one row in a released group. Learners whose groups were all omitted are not counted.
+- **Band cells.** Each released group emits the fixed bands `all`, `0_40`, `40_80`, `80_100` and `unknown` for each weighting, including empty bands. Band cells partition the group's `all` cell. If any nonempty band fails, every band cell in the group is suppressed, along with the `all` cell's band attrition. A nested breakdown that fails in one band cell is suppressed in all of them. Sensitivity, replacement and allocation breakdowns are checked against their complements inside each released cell. Empty bands do not by themselves force suppression.
+- **Suppressed cells.** These keep only their metric, horizon, weighting and released stratum labels. All value-bearing fields are null. Status is `insufficient_data`; population state, source coverage, outcome coverage, validity and precision are `unknown`; and reason codes are exactly `[insufficient_learners]`. No learner-derived status, precision or reasons survive.
+- **No released group.** A report with no released group returns `unavailable` with the reasons an empty cohort gives: `no_eligible_population`, or `not_admitted` when only non-admitted inventory remains. Online, the run fails with that reason.
+
+The source-coverage watermark check and the legacy-independent audit remain roster-wide. A watermark marked incomplete could be hiding rows in any group. The audit covers legacy rows, which belong to no stratum. Differencing published values across overlapping cells or successive snapshots remains the accepted owner-only residual.
 
 ## Provenance, privacy and retention
 
