@@ -159,6 +159,24 @@ Do not retain private inputs merely to reproduce a historical digest. A refresh
 uses a new run/cutoff and newly permitted source facts; it does not rewrite the
 old report or invent missing historical coverage.
 
+## Online aggregate access audits
+
+When reports are enabled, online consumers use the mutations
+`readReportManifest`, `readReportCells`, `exportReportPage` and
+`downloadReportPage`. Each successful page acquisition commits its owner-scoped,
+payload-free access record before returning. Download records describe server
+page acquisition; saving already acquired bytes locally is not a new server
+access. The legacy query transports withhold enabled report data with
+`audited_access_required`, because cached queries cannot commit per-access logs.
+Their capability-off behavior is unchanged. Requests and scheduled refreshes are
+audited as well; denied attempts emit only a status.
+
+The separate audit table stores only actor, run reference, action/status and
+time, with at most 128 records per actor, 30-day retention and account deletion.
+It is excluded from personal exports, activity events and analytics. Offline
+replay does not authenticate a viewer or acquire a server report, and remains
+separate from these online access records.
+
 ## Separate collection actions
 
 The owner must approve and freeze the actual protocol/epoch, anchor/windows,

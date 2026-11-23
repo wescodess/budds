@@ -29,6 +29,8 @@ import { readLearnMeasurementWatermarkSnapshot } from './lib/learnV2MeasurementF
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 
+import { deniedReportAccess, reportAccessError, writeReportAccessAudit, REPORT_ACCESS_AUDIT_BATCH, REPORT_ACCESS_AUDIT_RETENTION_MS, type ReportAccessAction } from './lib/learnV2MeasurementReportAudit'
+
 const unavailable = (status: 'disabled' | 'unavailable' | 'building' | 'failed' | 'stale', reason: string) => ({ version, status, reasonCodes: status === 'disabled' ? [reason, 'protocol_not_frozen'] : [reason] })
 const runArgs = { reportRunId: v.id('learnMeasurementReportRuns') }
 const REPORT_PROGRESS_LEASE_MS = 15 * 60 * 1000
@@ -70,6 +72,28 @@ async function scheduleReportStep(ctx: MutationCtx, reportRunId: Id<'learnMeasur
     : phase === 'extracting' ? internal.learnV2MeasurementReports.buildReportBatch : internal.learnV2MeasurementReports.finalizeReport
   const continuationId = await ctx.scheduler.runAfter(0, step, { reportRunId })
   await ctx.db.patch(reportRunId, { continuationId, progressDeadlineAt: Date.now() + REPORT_PROGRESS_LEASE_MS })
+}
+type ReportAccessResult = LearnV2ReportRequest | LearnV2Report | LearnV2ReportCells | LearnV2AggregateExport
+async function auditedAccess<T extends ReportAccessResult>(ctx: MutationCtx, action: ReportAccessAction,
+  access: () => Promise<{ userId: string, reportRunId: Id<'learnMeasurementReportRuns'> | null, result: T }>): Promise<T> {
+  let completed: { userId: string, reportRunId: Id<'learnMeasurementReportRuns'> | null, result: T }
+  try { completed = await access() }
+  catch (error) { deniedReportAccess(); throw reportAccessError(error) }
+  const { result } = completed
+  const reportRunId = 'reportRunId' in result ? result.reportRunId : 'manifest' in result ? result.manifest.reportRunId : completed.reportRunId
+  try { await writeReportAccessAudit(ctx, completed.userId, reportRunId, action, 'status' in result ? result.status : 'read') }
+  catch { console.info({ status: 'failed' }); throw new Error('Report audit unavailable') }
+  return result
+}
+async function requestWithAudit(ctx: MutationCtx, args: ReturnType<typeof requestReportSchema.parse>, authenticated: boolean, action: 'request' | 'refresh'): Promise<LearnV2ReportRequest> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return begin(ctx, parsePublicLearnRequest(requestReportSchema, args), authenticated)
+  return auditedAccess(ctx, action, async () => {
+    const request = parsePublicLearnRequest(requestReportSchema, args)
+    const result = await begin(ctx, request, authenticated)
+    const grant = await ctx.db.get(request.viewerGrantId)
+    if (!grant) throw new Error('Learn access denied')
+    return { userId: grant.userId, reportRunId: null, result }
+  })
 }
 async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportSchema.parse>, authenticated: boolean): Promise<LearnV2ReportRequest> {
   let grant: Doc<'learnMeasurementReportViewerGrants'>
@@ -125,14 +149,17 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
 export const requestReport = mutation({
   args: requestReportArgs, returns: requestReportValidator,
   handler: async (ctx, args): Promise<LearnV2ReportRequest> => {
-    const request = parsePublicLearnRequest(requestReportSchema, args)
-    if (!LEARN_MEASUREMENT_CAPABILITIES.reports) { await requireOwnedReportGrant(ctx, request.viewerGrantId); return unavailable('disabled', 'disabled') }
-    return begin(ctx, request, true)
+    if (!LEARN_MEASUREMENT_CAPABILITIES.reports) {
+      const request = parsePublicLearnRequest(requestReportSchema, args)
+      await requireOwnedReportGrant(ctx, request.viewerGrantId)
+      return unavailable('disabled', 'disabled')
+    }
+    return requestWithAudit(ctx, args, true, 'request')
   },
 })
 export const beginReportSnapshot = internalMutation({
   args: requestReportArgs, returns: requestReportValidator,
-  handler: async (ctx, args): Promise<LearnV2ReportRequest> => begin(ctx, parsePublicLearnRequest(requestReportSchema, args), false),
+  handler: async (ctx, args): Promise<LearnV2ReportRequest> => requestWithAudit(ctx, args, false, 'request'),
 })
 
 async function writeSources(ctx: MutationCtx, run: Doc<'learnMeasurementReportRuns'>, sequence: number,
@@ -428,7 +455,7 @@ export const finalizeReport = internalAction({
   },
 })
 
-async function visibleRun(ctx: QueryCtx, requestedId: Id<'learnMeasurementReportRuns'>) {
+async function visibleRun(ctx: QueryCtx | MutationCtx, requestedId: Id<'learnMeasurementReportRuns'>) {
   const authorized = await requireReportRun(ctx, requestedId)
   if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return { ...authorized, reason: 'disabled' }
   let { run } = authorized
@@ -442,7 +469,7 @@ async function visibleRun(ctx: QueryCtx, requestedId: Id<'learnMeasurementReport
   const reason = run.status === 'sealed' ? await reportRevocationReason(ctx, run, authorized.approval) : null
   return { run, approval: authorized.approval, reason }
 }
-async function manifestFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementReportRuns'>): Promise<LearnV2Report> {
+async function manifestFor(ctx: QueryCtx | MutationCtx, reportRunId: Id<'learnMeasurementReportRuns'>): Promise<LearnV2Report> {
   if (!LEARN_MEASUREMENT_CAPABILITIES.reports) { await requireOwnedReport(ctx, reportRunId); return unavailable('disabled', 'disabled') }
   const { run, reason } = await visibleRun(ctx, reportRunId)
   if (reason) return unavailable(reason === 'disabled' ? 'disabled' : 'stale', reason)
@@ -450,7 +477,7 @@ async function manifestFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementRepor
   if (run.codeVersion !== REPORT_CODE_VERSION) return unavailable('stale', 'report_policy_changed')
   return { version, status: 'sealed', reportRunId: run._id, query: runQueryValue(run), provenance: publishLearnReportProvenance(provenance(run)) }
 }
-async function cellsFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementReportRuns'>, cursor: string | null, resolved?: Extract<LearnV2Report, { status: 'sealed' }>): Promise<LearnV2ReportCells> {
+async function cellsFor(ctx: QueryCtx | MutationCtx, reportRunId: Id<'learnMeasurementReportRuns'>, cursor: string | null, resolved?: Extract<LearnV2Report, { status: 'sealed' }>): Promise<LearnV2ReportCells> {
   const manifest = resolved ?? await manifestFor(ctx, reportRunId)
   if (manifest.status !== 'sealed') return manifest
   const { run } = await requireReportRun(ctx, manifest.reportRunId)
@@ -468,29 +495,90 @@ async function cellsFor(ctx: QueryCtx, reportRunId: Id<'learnMeasurementReportRu
     || await privacyDigest(cells) !== next.digest) return unavailable('failed', 'cell_manifest_mismatch')
   return validateLearnPublishedMeasurementReportCells({ version, reportRunId: run._id, cells, cursor: after + cells.length < total ? String(after + cells.length) : null, isDone: after + cells.length === total })
 }
+async function legacyReportRead(ctx: QueryCtx, reference: () => Id<'learnMeasurementReportRuns'>) {
+  try {
+    await requireReportRun(ctx, reference())
+    return unavailable('unavailable', 'audited_access_required')
+  } catch (error) { throw reportAccessError(error) }
+  finally { deniedReportAccess() }
+}
+async function exportFor(ctx: QueryCtx | MutationCtx, request: ReturnType<typeof reportPageSchema.parse>): Promise<LearnV2AggregateExport> {
+  const manifest = await manifestFor(ctx, request.reportRunId)
+  if (manifest.status !== 'sealed') return manifest
+  const page = await cellsFor(ctx, manifest.reportRunId, request.cursor, manifest)
+  if ('status' in page) return page
+  return { version, status: 'aggregate_page', manifest: { reportRunId: manifest.reportRunId, query: manifest.query, provenance: manifest.provenance }, page }
+}
 export const getReport = query({
-  args: reportReferenceArgs, returns: reportValidator, handler: async (ctx, args): Promise<LearnV2Report> => manifestFor(ctx, parsePublicLearnRequest(reportReferenceSchema, args).reportRunId),
+  args: reportReferenceArgs, returns: reportValidator, handler: async (ctx, args): Promise<LearnV2Report> => {
+    if (LEARN_MEASUREMENT_CAPABILITIES.reports) return legacyReportRead(ctx, () => parsePublicLearnRequest(reportReferenceSchema, args).reportRunId)
+    return manifestFor(ctx, parsePublicLearnRequest(reportReferenceSchema, args).reportRunId)
+  },
 })
 export const getReportCells = query({
   args: reportPageArgs, returns: reportCellsValidator, handler: async (ctx, args): Promise<LearnV2ReportCells> => {
+    if (LEARN_MEASUREMENT_CAPABILITIES.reports) return legacyReportRead(ctx, () => parsePublicLearnRequest(reportPageSchema, args).reportRunId)
     const request = parsePublicLearnRequest(reportPageSchema, args)
     return cellsFor(ctx, request.reportRunId, request.cursor)
   },
 })
 export const exportAggregateReport = query({
   args: reportPageArgs, returns: aggregateExportValidator, handler: async (ctx, args): Promise<LearnV2AggregateExport> => {
+    if (LEARN_MEASUREMENT_CAPABILITIES.reports) return legacyReportRead(ctx, () => parsePublicLearnRequest(reportPageSchema, args).reportRunId)
+    return exportFor(ctx, parsePublicLearnRequest(reportPageSchema, args))
+  },
+})
+export const readReportManifest = mutation({
+  args: reportReferenceArgs, returns: reportValidator, handler: async (ctx, args): Promise<LearnV2Report> => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return manifestFor(ctx, parsePublicLearnRequest(reportReferenceSchema, args).reportRunId)
+    return auditedAccess(ctx, 'manifest', async () => {
+      const { reportRunId } = parsePublicLearnRequest(reportReferenceSchema, args)
+      const { run } = await requireReportRun(ctx, reportRunId)
+      return { userId: run.userId, reportRunId, result: await manifestFor(ctx, reportRunId) }
+    })
+  },
+})
+export const readReportCells = mutation({
+  args: reportPageArgs, returns: reportCellsValidator, handler: async (ctx, args): Promise<LearnV2ReportCells> => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.reports) {
+      const request = parsePublicLearnRequest(reportPageSchema, args)
+      return cellsFor(ctx, request.reportRunId, request.cursor)
+    }
+    return auditedAccess(ctx, 'page', async () => {
+      const { reportRunId, cursor } = parsePublicLearnRequest(reportPageSchema, args)
+      const { run } = await requireReportRun(ctx, reportRunId)
+      return { userId: run.userId, reportRunId, result: await cellsFor(ctx, reportRunId, cursor) }
+    })
+  },
+})
+async function auditedExport(ctx: MutationCtx, args: ReturnType<typeof reportPageSchema.parse>, action: 'export' | 'download'): Promise<LearnV2AggregateExport> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return exportFor(ctx, parsePublicLearnRequest(reportPageSchema, args))
+  return auditedAccess(ctx, action, async () => {
     const request = parsePublicLearnRequest(reportPageSchema, args)
-    const manifest = await manifestFor(ctx, request.reportRunId)
-    if (manifest.status !== 'sealed') return manifest
-    const page = await cellsFor(ctx, manifest.reportRunId, request.cursor, manifest)
-    if ('status' in page) return page
-    return { version, status: 'aggregate_page', manifest: { reportRunId: manifest.reportRunId, query: manifest.query, provenance: manifest.provenance }, page }
+    const { run } = await requireReportRun(ctx, request.reportRunId)
+    return { userId: run.userId, reportRunId: request.reportRunId, result: await exportFor(ctx, request) }
+  })
+}
+export const exportReportPage = mutation({
+  args: reportPageArgs, returns: aggregateExportValidator,
+  handler: async (ctx, args): Promise<LearnV2AggregateExport> => auditedExport(ctx, args, 'export'),
+})
+export const downloadReportPage = mutation({
+  args: reportPageArgs, returns: aggregateExportValidator,
+  handler: async (ctx, args): Promise<LearnV2AggregateExport> => auditedExport(ctx, args, 'download'),
+})
+export const purgeExpiredAccessAudits = internalMutation({
+  args: {}, returns: v.null(), handler: async (ctx) => {
+    const rows = await ctx.db.query('learnMeasurementReportAccessAudits')
+      .withIndex('by_createdAt', q => q.lt('createdAt', Date.now() - REPORT_ACCESS_AUDIT_RETENTION_MS)).take(REPORT_ACCESS_AUDIT_BATCH)
+    for (const row of rows) await ctx.db.delete(row._id)
+    if (rows.length === REPORT_ACCESS_AUDIT_BATCH) await ctx.scheduler.runAfter(0, internal.learnV2MeasurementReports.purgeExpiredAccessAudits, {})
+    return null
   },
 })
 export const dailyRefresh = internalMutation({
   args: requestReportArgs, returns: requestReportValidator, handler: async (ctx, args): Promise<LearnV2ReportRequest> => {
-    const request = parsePublicLearnRequest(requestReportSchema, { ...args, cutoff: Date.now() })
-    const result = await begin(ctx, request, false)
+    const result = await requestWithAudit(ctx, { ...args, cutoff: Date.now() }, false, 'refresh')
     if (result.status === 'requested') await ctx.scheduler.runAfter(86_400_000, internal.learnV2MeasurementReports.dailyRefresh, args)
     return result
   },

@@ -54,9 +54,12 @@ The personal export/original-file exception follows [the disclosure resolution, 
 | --- | --- | --- |
 | `requestReport` | Owner-only measurement refresh receipt | Verified owner and server-managed scoped viewer grant; reports capability default-off; no public grant provisioning. |
 | `getReport`, `getReportCells`, `exportAggregateReport` | `summary_or_own_work`; owner-only aggregate/status DTOs | Recheck the verified principal, approved cohort/epoch grant, expiry, revocation, deletion and source invalidation. No learner report access or raw row export. |
+| `readReportManifest`, `readReportCells`, `exportReportPage`, `downloadReportPage` (mutations) | Same owner-only aggregate/status DTOs | Atomic payload-free access audit; repeated ownership, grant, deletion and source checks. Legacy queries withhold report data while reports are enabled. |
 | `beginReportSnapshot`, `dailyRefresh`, `pinReportOwners`, build/finalize/save/seal operations | Internal measurement processing | Internal registrations, server approval scope and bounded reads; no learner transport. |
 | `readBuildState`, `readSourcePage`, `readInventoryPage`, `readInventoryRecord` | Internal measurement source | Internal registrations and approved run scope; normalized rows remain internal. |
 | `scripts/learn-v2-measurement-report.mjs` | Offline aggregate diagnostic/replay | No RPC, teaching delivery or viewer-grant authority. Offline provenance remains unverified. |
+
+Enabled report data uses audited mutations because cached queries cannot commit per-access records. The old query transports return `audited_access_required` while reports are enabled. The separate owner audit table is bounded, retained for 30 days and included in account deletion; it is excluded from personal exports. Denied attempts emit only a status to the runtime log. No audit goes to activity events or analytics.
 
 No responses-capability teaching wrapper is needed for these aggregate-only results. With reports off, owner-authorized calls retain disabled receipts without writes. With responses off, existing teaching, history, shares and personal exports retain the C4 parity behavior. `convex/learnV2MeasurementReports.test.ts` covers aggregate privacy canaries, anonymous/foreign/different-issuer denial, scoped grants, deletion and revocation; the C4 differential suites cover existing learner paths.
 

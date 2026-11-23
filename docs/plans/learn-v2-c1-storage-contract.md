@@ -185,6 +185,33 @@ C6.2 and C6.3 must run full reconciliation, fingerprinting and report computatio
 
 The provisional 95% interval uses 10,000 whole-learner cluster resamples, retaining every eligible row and its weighting. Clusters sort by opaque learner key. Mulberry32 is seeded with FNV-1a of `bootstrapSeed + ':' + JSON.stringify([metric,horizon,stratum,policy]) + ':' + band + ':' + weighting + ':' + estimateKind`, where kinds are `primary`, `replacement`, `excluding_flags`; the group stratum has startingBand=all and observed scorer labels. The interval uses linearly interpolated 2.5th/97.5th percentiles (index p×9999). Fewer than 20 contributing learners gives `insufficient_clusters`; equal contributing cluster means, an empty contributing resample or equal percentile endpoints gives `insufficient_variation`. Unknown population/source or quarantine gives null precision. Counts, descriptive points and missingness bounds remain separate; no sample adequacy, causal conclusion or reliable individual gain follows.
 
+## 524 report-access audits (#366 §5)
+
+The additive `learnMeasurementReportAccessAudits` security table is separate
+from report inputs, `learnActivityEvents`, PostHog and personal-export datasets.
+Its only application fields are `userId` (the verified actor or trusted internal
+grant principal), nullable `reportRunId`, `action`, `status` and `createdAt`.
+There is no free-form detail field. It retains no cells, cohort/roster details,
+learner identities, answers, prompts, keys, raw fingerprints or provider payloads.
+
+Enabled request/refresh and manifest/page/export/download mutations commit an
+audit before returning their closed result. Each export or download page records
+its own access; repeated calls are separate records. A served fallback manifest
+records the actual returned run. An unavailable request without a run records a
+null reference. Denied attempts use a structured status-only runtime log, with no
+actor, requested reference or exception text; existing and missing foreign runs
+have the same denial. Legacy queries withhold enabled report data and direct
+callers to these mutations, because cached queries cannot write per-access audits.
+
+The owner-indexed history retains at most 128 records per actor. Each write reads
+at most 129 actor records and removes at most eight expired/excess records. A
+30-day retention sweep also drains expired records through `by_createdAt` in
+eight-row scheduled mutations. Its daily cleanup remains active if reports
+are later disabled; an empty default-off table adds no audit records. Actor
+account deletion drains the table through `by_userId`, including when reports
+have since been turned off. Audit storage is withheld from personal exports;
+the existing export inventory and capability-off read behavior stay fixed.
+
 ## 524 report continuation recovery
 
 Report runs retain optional `continuationId` (`_scheduled_functions`) and

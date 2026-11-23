@@ -28,6 +28,21 @@ Authentication derives ownership from `tokenIdentifier` through `requireAuth`, i
 | `learnV2MeasurementReports.getReport` | `reportReferenceArgs` / `reportValidator` | Owned run plus current scoped viewer grant required; disabled, no snapshot/source rows | C6.2 #438 |
 | `learnV2MeasurementReports.getReportCells` | `reportPageArgs` / `reportCellsValidator` | Same repeated authorization; disabled, no fabricated cells | C6.2 #438 |
 | `learnV2MeasurementReports.exportAggregateReport` | `reportPageArgs` / `aggregateExportValidator` | Same authorization; disabled, no file, learner rows or private inputs | C6.2 #438; replay [C6.3 #439](https://github.com/wescodess/budds/issues/439) |
+| `learnV2MeasurementReports.readReportManifest` (mutation) | `reportReferenceArgs` / `reportValidator` | Same closed manifest/status projection; enabled reads commit a payload-free access audit | C6.2 #438; #366 §5 |
+| `learnV2MeasurementReports.readReportCells` (mutation) | `reportPageArgs` / `reportCellsValidator` | Same closed cell/status projection; one audit per page read | C6.2 #438; #366 §5 |
+| `learnV2MeasurementReports.exportReportPage`, `downloadReportPage` (mutations) | `reportPageArgs` / `aggregateExportValidator` | Same aggregate page DTO; one audit per export/download page before release | C6.2 #438; #366 §5 |
+
+**Report access auditing (#366 §5).** With reports enabled, use the four audited
+mutations above. The legacy `getReport`, `getReportCells` and
+`exportAggregateReport` query transports return
+`unavailable` / `audited_access_required` after authorization and release no
+report data. A cached query cannot commit a record for each access. The mutation
+paths retain the existing DTOs and commit the read and its audit together;
+failed audit persistence withholds the result. With reports disabled, all
+original query receipts, ownership checks and errors remain unchanged, and no
+audit is written or logged. Denied enabled attempts log only `{status: 'denied'}`,
+without an actor, supplied reference, existence result or exception payload.
+
 
 Delivery mutations and prompt reads are separate. A future grant result is only a reference; a query cannot create the first grant. Future state/score returns use the C1.2 own-work and safe-result DTOs. Private keys, rubric criteria, sibling forms, seeds, source locators and provider payloads are absent from the new public return validators. The report request identifies a server-managed viewer grant, not a client-chosen cohort/epoch; the grant supplies its authorized scope. Reads recheck its scope, revocation, time and deletion state. Report pages reserve the bounded aggregate DTO; there is no public raw-source adapter or self-grant command.
 

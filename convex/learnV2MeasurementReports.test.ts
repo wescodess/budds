@@ -9,6 +9,7 @@ import { api, internal } from './_generated/api'
 import schema from './schema'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
 import * as source from './lib/learnV2MeasurementReportSource'
+import * as reportAudit from './lib/learnV2MeasurementReportAudit'
 import { appendLearnMeasurementFact, writeLearnMeasurementEnrollmentFact } from './lib/learnV2MeasurementFacts'
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION as version, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION as queryVersion, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION as sourceVersion,
@@ -65,7 +66,7 @@ async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'sco
       await t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId })
     }
     await t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId })
-    return viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })
+    return viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })
   }
   return { t, sources, viewer, grantId, request, begin, complete }
 }
@@ -73,7 +74,7 @@ async function allCells(f: Awaited<ReturnType<typeof fixture>>, reportRunId: Id<
   const cells: LearnPublishedReportMetric[] = []
   let cursor: string | null = null
   for (let pageIndex = 0; pageIndex < 100; pageIndex++) {
-    const page: LearnV2ReportCells = await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId, cursor })
+    const page: LearnV2ReportCells = await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId, cursor })
     if ('status' in page) throw new Error(JSON.stringify(page))
     cells.push(...page.cells)
     if (page.isDone) return cells
@@ -119,7 +120,7 @@ describe('bounded real-table report snapshots', () => {
     expect(new Set(cells.flatMap(value => value.legacyIndependentAudit ? [JSON.stringify(value.legacyIndependentAudit)] : [])).size).toBe(1)
     expect(cells.find(value => value.metric === 'verified_learning_gain.v1' && value.horizonDays === 7 && value.stratum.entryPoint === 'today.alternate'
       && value.stratum.startingBand === 'all')).toMatchObject({ observedValue: null, missingOutcomeBounds: null, counts: null })
-    const exported = await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })
+    const exported = await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })
     const serialized = JSON.stringify(exported)
     for (const secret of [...Object.values(STORAGE_CANARIES), VIEWER.tokenIdentifier, OWNER, 'learnerKey', 'capabilityKey', 'submissionId', 'frozenConfiguration']) expect(serialized).not.toContain(secret)
     expect(exported).toMatchObject({ status: 'aggregate_page', manifest: { provenance: { cutoff: REPORT_NOW } } })
@@ -144,7 +145,7 @@ describe('bounded real-table report snapshots', () => {
     await f.complete(runId)
     expect((await computedCells(f, runId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all'
       && value.weighting === 'capability_episode')).toMatchObject({ missingOutcomeBounds: { lower: -60, upper: 40 } })
-    const exported = await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })
+    const exported = await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })
     if (exported.status !== 'aggregate_page') throw new Error(JSON.stringify(exported))
     expect(exported.manifest.provenance).toMatchObject({ episodeCount: null, inputBytes: null })
     for (const cell of [...await allCells(f, runId), ...exported.page.cells]) {
@@ -161,9 +162,9 @@ describe('bounded real-table report snapshots', () => {
     await f.complete(runId)
     await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v3' }))
     const stale = { status: 'stale', reasonCodes: ['report_policy_changed'] }
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject(stale)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject(stale)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
     const rebuilt = await f.begin()
     expect(rebuilt).not.toBe(runId)
     expect(await f.complete(rebuilt)).toMatchObject({ status: 'sealed', provenance: { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' } })
@@ -198,7 +199,7 @@ describe('bounded real-table report snapshots', () => {
     const saved = rows.filter(row => row.rowKind === 'first_check_claim_v2')
     expect(saved).toHaveLength(1)
     expect(saved[0]).toMatchObject({ learningVoidId: f.sources[0]!.learningVoidId, facts: { claimKey: claim.claim.claimKey, claimSequence: 1 } })
-    const serialized = JSON.stringify(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null }))
+    const serialized = JSON.stringify(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null }))
     for (const secret of [...Object.values(STORAGE_CANARIES), OWNER, claim.claim.claimKey, claim.claim.basisAttemptId, claim.firstCheckOpportunityId]) expect(serialized).not.toContain(secret)
   })
 
@@ -247,7 +248,7 @@ describe('bounded real-table report snapshots', () => {
     await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: runId })
     await f.t.run(async ctx => { const row = await ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId).eq('sequence', 2)).unique(); await ctx.db.delete(row!._id) })
     await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId: runId })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_manifest_mismatch'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_manifest_mismatch'] })
   })
 
   test('oversized source records fail incomplete instead of silently truncating', async () => {
@@ -256,7 +257,7 @@ describe('bounded real-table report snapshots', () => {
     await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
     capabilities.maxInputBytes = 1
     await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: runId })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_input_overflow'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_input_overflow'] })
   })
 })
 
@@ -267,9 +268,9 @@ describe('viewer grants and current revocation', () => {
     await f.complete(runId)
     for (const client of [f.t, f.t.withIdentity(FOREIGN), f.t.withIdentity({ tokenIdentifier: 'https://report.example|stranger', subject: 'stranger' })]) {
       await expect(client.mutation(api.learnV2MeasurementReports.requestReport, f.request)).rejects.toThrow()
-      await expect(client.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).rejects.toThrow()
-      await expect(client.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).rejects.toThrow()
-      await expect(client.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).rejects.toThrow()
+      await expect(client.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).rejects.toThrow()
+      await expect(client.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).rejects.toThrow()
+      await expect(client.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).rejects.toThrow()
     }
     const foreignId = await f.t.run(async ctx => {
       const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(runId))!
@@ -281,7 +282,7 @@ describe('viewer grants and current revocation', () => {
       await ctx.db.delete(id)
       return id
     })
-    for (const reportRunId of [foreignId, missingId]) await expect(f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).rejects.toThrow('Learn access denied')
+    for (const reportRunId of [foreignId, missingId]) await expect(f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).rejects.toThrow('Learn access denied')
   })
 
   test.each(['revoked', 'expired', 'binding', 'grantVersion', 'cohort', 'epoch', 'unapproved'] as const)('rechecks %s grant on every RPC and export', async change => {
@@ -293,9 +294,9 @@ describe('viewer grants and current revocation', () => {
       : change === 'expired' ? { expiresAt: REPORT_NOW } : change === 'binding' ? { principalBindingVersion: 'forged' }
         : change === 'grantVersion' ? { grantVersion: 'forged' } : change === 'cohort' ? { cohortVersion: 'foreign.cohort' } : { epoch: 'foreign.epoch' }))
     await expect(f.viewer.mutation(api.learnV2MeasurementReports.requestReport, f.request)).rejects.toThrow('Learn access denied')
-    await expect(f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).rejects.toThrow('Learn access denied')
-    await expect(f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).rejects.toThrow('Learn access denied')
-    await expect(f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).rejects.toThrow('Learn access denied')
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).rejects.toThrow('Learn access denied')
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).rejects.toThrow('Learn access denied')
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).rejects.toThrow('Learn access denied')
   })
 
   test.each(['active', 'complete'] as const)('a %s requester deletion tombstone denies stale JWT replay', async status => {
@@ -303,7 +304,7 @@ describe('viewer grants and current revocation', () => {
     const runId = await f.begin()
     await f.complete(runId)
     await f.t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: VIEWER.tokenIdentifier, status, phase: 'learnV2', startedAt: REPORT_NOW, updatedAt: REPORT_NOW }))
-    await expect(f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).rejects.toThrow('deletion')
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).rejects.toThrow('deletion')
   })
 
   test('a source-owner tombstone immediately withholds cached aggregates before bounded deletion drains', async () => {
@@ -311,8 +312,8 @@ describe('viewer grants and current revocation', () => {
     const runId = await f.begin()
     await f.complete(runId)
     await f.t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: OWNER, status: 'active', phase: 'learnV2', startedAt: REPORT_NOW, updatedAt: REPORT_NOW }))
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['source_invalidated'] })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale' })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['source_invalidated'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale' })
   })
 
   test('source purge immediately revokes reads even before all cached runs have been marked stale', async () => {
@@ -320,8 +321,8 @@ describe('viewer grants and current revocation', () => {
     const runId = await f.begin()
     await f.complete(runId)
     await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER, sourceIdentityId: f.sources[0]!.sourceIdentityId })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale' })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale' })
   })
 
   test('a later integrity fact revokes the old snapshot and a new run rebuilds permitted scalar evidence', async () => {
@@ -339,7 +340,7 @@ describe('viewer grants and current revocation', () => {
         fact: { kind: 'integrity', submissionId: owner.outcomes[1]!.submissionId, integrityEventId: eventId,
           currentEligibility: 'excluded', evidenceAvailable: false, bodyAvailability: 'available' } })
     })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
     vi.setSystemTime(REPORT_NOW + 1000)
     await f.t.run(ctx => ctx.db.patch(owner.watermarkId, { dueWorkThrough: REPORT_NOW + 1000 }))
     const next = await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, { ...f.request, cutoff: REPORT_NOW + 1000 })
@@ -359,9 +360,10 @@ describe('viewer grants and current revocation', () => {
     const next = await f.t.mutation(internal.learnV2MeasurementReports.dailyRefresh, f.request)
     if (next.status !== 'requested') throw new Error('Expected refresh')
     expect(next.reportRunId).not.toBe(first)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: next.reportRunId })).toMatchObject({
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: next.reportRunId })).toMatchObject({
       status: 'sealed', reportRunId: first, query: { cutoff: REPORT_NOW }, provenance: { extractionEndedAt: REPORT_NOW },
     })
+    expect((await reportAudits(f)).at(-1)).toMatchObject({ action: 'manifest', reportRunId: first })
     const jobs = await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())
     expect(jobs.some(job => job.name === 'learnV2MeasurementReports:dailyRefresh' && job.scheduledTime > REPORT_NOW + 86_400_000)).toBe(true)
   })
@@ -392,7 +394,7 @@ describe('report continuation recovery', () => {
     expect(errors).toHaveBeenCalledTimes(state === 'failed' ? 1 : 0)
     const replacement = await f.begin()
     expect(replacement).not.toBe(reportRunId)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
     expect((await continuation(f, replacement)).job).toMatchObject({ name: 'learnV2MeasurementReports:pinReportOwners', state: { kind: 'pending' } })
     expect(await f.begin()).toBe(replacement)
   })
@@ -411,7 +413,7 @@ describe('report continuation recovery', () => {
     expect(before.job).toMatchObject({ name: 'learnV2MeasurementReports:buildReportBatch', state: { kind: 'failed' } })
     expect(errors).toHaveBeenCalledOnce()
     expect(await f.begin()).not.toBe(reportRunId)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
   })
 
   test.each(['pending', 'inProgress'] as const)('expires a progress lease with a %s job without letting requests renew it', async state => {
@@ -436,7 +438,7 @@ describe('report continuation recovery', () => {
     const replacement = await f.begin()
     expect(replacement).not.toBe(reportRunId)
     if (state === 'inProgress') { release(); await f.t.finishInProgressScheduledFunctions() }
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['progress_deadline_exceeded'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['progress_deadline_exceeded'] })
     expect((await continuation(f, replacement)).job?.state.kind).toBe('pending')
   })
 
@@ -458,7 +460,7 @@ describe('report continuation recovery', () => {
     await f.t.mutation(internal.learnV2MeasurementReports.sealReport, seal)
     await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId })
     await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_worker_failure', stale: true })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
   })
 
   test('tracks new steps, renews only on progress, and preserves a normally sealed run', async () => {
@@ -480,7 +482,7 @@ describe('report continuation recovery', () => {
     expect(sealed.job).toMatchObject({ name: 'learnV2MeasurementReports:finalizeReport', state: { kind: 'success' } })
     await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_worker_failure' })
     expect(await f.begin()).toBe(reportRunId)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'sealed' })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'sealed' })
   })
 
   test('rebuilds a legacy building run without persisted continuation metadata', async () => {
@@ -488,7 +490,7 @@ describe('report continuation recovery', () => {
     const reportRunId = await f.begin()
     await f.t.run(ctx => ctx.db.patch(reportRunId, { continuationId: undefined, progressDeadlineAt: undefined }))
     expect(await f.begin()).not.toBe(reportRunId)
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
   })
 })
 
@@ -510,7 +512,7 @@ describe('snapshot failure controls', () => {
       expect(await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })).toEqual({ status: 'failed', reasonCode: 'source_invalidated' })
     } else if (phase === 'extracting') await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId })
     else await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId })
-    const manifest = await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })
+    const manifest = await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })
     expect(['failed', 'stale']).toContain(manifest.status)
     expect(manifest).toMatchObject({ reasonCodes: ['source_invalidated'] })
     expect(await f.t.run(ctx => ctx.db.get(reportRunId))).toMatchObject({ status: manifest.status, sourceCoverage: 'unknown' })
@@ -539,7 +541,7 @@ describe('snapshot failure controls', () => {
     const retry = await f.begin()
     expect(retry).not.toBe(reportRunId)
     await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_build_failure' })
-    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status, reasonCodes: ['source_invalidated'] })
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).toMatchObject({ status, reasonCodes: ['source_invalidated'] })
     expect(await f.begin()).toBe(retry)
   })
 
@@ -578,13 +580,13 @@ describe('snapshot failure controls', () => {
     await g.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: stuck })
     const spy = vi.spyOn(source, 'readLearnReportFactPage').mockResolvedValueOnce({ records: [], isDone: false, bytes: 0 })
     await g.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: stuck })
-    expect(await g.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: stuck })).toMatchObject({ status: 'failed', reasonCodes: ['stuck_source_cursor'] })
+    expect(await g.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: stuck })).toMatchObject({ status: 'failed', reasonCodes: ['stuck_source_cursor'] })
     spy.mockRestore()
     const h = await fixture()
     const runId = await h.begin()
     await h.complete(runId)
     await h.t.run(async ctx => { const cell = await ctx.db.query('learnMeasurementReportCells').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).first(); await ctx.db.delete(cell!._id) })
-    expect(await h.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'failed', reasonCodes: ['cell_manifest_mismatch'] })
+    expect(await h.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'failed', reasonCodes: ['cell_manifest_mismatch'] })
   })
 
   test('default-off report commands do not schedule work or invoke a model', async () => {
@@ -600,7 +602,7 @@ test('the registered scheduled pipeline completes without a model call', async (
   const f = await fixture()
   const runId = await f.begin()
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
-  expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'sealed' })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'sealed' })
 })
 
 test('population overflow is checked against the configured ceiling before a page is committed', async () => {
@@ -643,7 +645,7 @@ test('changing a normalized source row without its manifest cannot seal', async 
     await ctx.db.patch(row._id, { snapshot: { ...row.snapshot, assignment: { ...row.snapshot.assignment, historyStatus: 'unknown' } } })
   })
   await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId: runId })
-  expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_manifest_mismatch'] })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_manifest_mismatch'] })
 })
 
 test.each(['digest', 'cell_count', 'empty_cells', 'source_count', 'phase'] as const)('sealing rejects an incomplete %s clause', async clause => {
@@ -667,7 +669,7 @@ test('a lost live watermark invalidates cached output and internal reads enforce
   await f.complete(runId)
   await expect(f.t.query(internal.learnV2MeasurementReports.readSourcePage, { reportRunId: runId, after: 0, count: 9 })).rejects.toThrow('invalid_source_page')
   await f.t.run(ctx => ctx.db.delete(f.sources[0]!.watermarkId))
-  expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['missing_owner_watermark'] })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['missing_owner_watermark'] })
 })
 
 test('a completed source purge rebuilds excluded outcomes without restoring private scorer evidence', async () => {
@@ -698,7 +700,7 @@ test('changing the approved roster cannot authorize a cached run under a differe
   const runId = await f.begin()
   await f.complete(runId)
   LEARN_REPORT_APPROVALS[0]!.owners = [FOREIGN.tokenIdentifier]
-  await expect(f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).rejects.toThrow('Learn access denied')
+  await expect(f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).rejects.toThrow('Learn access denied')
 })
 
 test('raw source byte accounting is enforced even for pages without admissions', async () => {
@@ -711,7 +713,7 @@ test('raw source byte accounting is enforced even for pages without admissions',
   const runId = await f.begin()
   await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: runId })
   await f.t.action(internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: runId })
-  expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_input_overflow'] })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'failed', reasonCodes: ['source_input_overflow'] })
 })
 
 test('invalidation is immediate for a cached run beyond the first eight cleanup rows', async () => {
@@ -728,7 +730,7 @@ test('invalidation is immediate for a cached run beyond the first eight cleanup 
   }
   await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER, sourceIdentityId: f.sources[0]!.sourceIdentityId })
   expect((await f.t.run(ctx => ctx.db.get(last)))!.status).toBe('sealed')
-  expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId: last, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['source_invalidated'] })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: last, cursor: null })).toMatchObject({ status: 'stale', reasonCodes: ['source_invalidated'] })
 })
 
 test('an altered aggregate cell with the same page length fails its digest check', async () => {
@@ -739,7 +741,7 @@ test('an altered aggregate cell with the same page length fails its digest check
     const cell = (await ctx.db.query('learnMeasurementReportCells').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).first())!
     await ctx.db.patch(cell._id, { reasonCodes: [...cell.reasonCodes, 'fixture_corruption'] })
   })
-  expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'failed', reasonCodes: ['cell_manifest_mismatch'] })
+  expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'failed', reasonCodes: ['cell_manifest_mismatch'] })
 })
 
 test('a captured ordinary blocked first slot remains unresolved with its blocking disposition', async () => {
@@ -763,4 +765,189 @@ test('an unanswered original slot retains its terminalization disposition', asyn
   await f.complete(runId)
   const cell = (await computedCells(f, runId)).find(value => value.horizonDays === 7 && value.stratum.startingBand === 'all' && value.weighting === 'capability_episode')!
   expect(cell.counts.dispositions.abandoned).toBe(1)
+})
+
+async function reportAudits(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.t.run(ctx => ctx.db.query('learnMeasurementReportAccessAudits').withIndex('by_userId', q => q.eq('userId', VIEWER.tokenIdentifier)).take(129))
+}
+
+describe('report access audits', () => {
+  test.each(['manifest', 'page', 'export', 'download'] as const)('records every %s page before releasing its closed result', async action => {
+    const f = await fixture(9)
+    const reportRunId = await f.begin()
+    await f.complete(reportRunId)
+    await f.t.run(async ctx => { for (const row of await ctx.db.query('learnMeasurementReportAccessAudits').take(129)) await ctx.db.delete(row._id) })
+    let cursor: string | null = null
+    let calls = 0
+    for (let index = 0; index < 100; index++) {
+      const reference = { version, reportRunId }
+      calls++
+      if (action === 'manifest') {
+        expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, reference)).toMatchObject({ status: 'sealed' })
+        break
+      }
+      const args: FunctionArgs<typeof api.learnV2MeasurementReports.readReportCells> = { ...reference, cursor }
+      if (action === 'page') {
+        const page: LearnV2ReportCells = await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, args)
+        if ('status' in page) throw new Error('Expected audited cells')
+        cursor = page.cursor
+      } else {
+        const result = action === 'export' ? await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, args)
+          : await f.viewer.mutation(api.learnV2MeasurementReports.downloadReportPage, args)
+        if (result.status !== 'aggregate_page') throw new Error('Expected audited aggregate page')
+        cursor = result.page.cursor
+      }
+      if (cursor === null) break
+      if (index === 99) throw new Error('Audited pagination did not finish')
+    }
+    const rows = await reportAudits(f)
+    expect(rows).toHaveLength(calls)
+    if (action !== 'manifest') expect(calls).toBeGreaterThan(1)
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(['_creationTime', '_id', 'action', 'createdAt', 'reportRunId', 'status', 'userId'])
+      expect(row).toMatchObject({ userId: VIEWER.tokenIdentifier, reportRunId, action, createdAt: REPORT_NOW,
+        status: action === 'manifest' ? 'sealed' : action === 'page' ? 'read' : 'aggregate_page' })
+      for (const secret of [...Object.values(STORAGE_CANARIES), OWNER, 'cohortVersion', 'inputDigest', 'rosterDigest', 'bootstrapSeed', 'cells']) expect(JSON.stringify(row)).not.toContain(secret)
+    }
+  })
+
+  test('denied existing and missing references emit only a status and never a foreign reference or actor', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    const references = await f.t.run(async ctx => {
+      const { _id: _id, _creationTime: _time, ...fields } = (await ctx.db.get(reportRunId))!
+      const foreign = await ctx.db.insert('learnMeasurementReportRuns', { ...fields, userId: FOREIGN.tokenIdentifier })
+      const missing = await ctx.db.insert('learnMeasurementReportRuns', fields)
+      await ctx.db.delete(missing)
+      for (const row of await ctx.db.query('learnMeasurementReportAccessAudits').take(129)) await ctx.db.delete(row._id)
+      return [foreign, missing]
+    })
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    for (const id of references) {
+      const reference = { version, reportRunId: id }
+      const calls = [
+        () => f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, reference),
+        () => f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { ...reference, cursor: null }),
+        () => f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { ...reference, cursor: null }),
+        () => f.viewer.mutation(api.learnV2MeasurementReports.downloadReportPage, { ...reference, cursor: null }),
+        () => f.viewer.query(api.learnV2MeasurementReports.getReport, reference),
+        () => f.viewer.query(api.learnV2MeasurementReports.getReportCells, { ...reference, cursor: null }),
+        () => f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { ...reference, cursor: null }),
+      ]
+      for (const call of calls) await expect(call()).rejects.toThrow('Learn access denied')
+    }
+    await expect(f.t.withIdentity(FOREIGN).mutation(api.learnV2MeasurementReports.requestReport, f.request)).rejects.toThrow('Learn access denied')
+    await expect(f.t.mutation(api.learnV2MeasurementReports.downloadReportPage, { version, reportRunId, cursor: null })).rejects.toThrow('Unauthenticated')
+    expect(log.mock.calls).toEqual(Array.from({ length: 16 }, () => [{ status: 'denied' }]))
+    expect(await reportAudits(f)).toEqual([])
+  })
+
+  test('legacy query transports cannot bypass audited access while reports are enabled', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.complete(reportRunId)
+    const before = await reportAudits(f)
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const expected = { status: 'unavailable', reasonCodes: ['audited_access_required'] }
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject(expected)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, { version, reportRunId, cursor: null })).toMatchObject(expected)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, { version, reportRunId, cursor: null })).toMatchObject(expected)
+    expect(log.mock.calls).toEqual(Array.from({ length: 3 }, () => [{ status: 'denied' }]))
+    expect(await reportAudits(f)).toEqual(before)
+  })
+
+  test('an unavailable audit store fails closed without returning cells or logging a payload', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.complete(reportRunId)
+    const before = await reportAudits(f)
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(reportAudit, 'writeReportAccessAudit').mockRejectedValueOnce(new Error('private-audit-error-canary'))
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId, cursor: null })).rejects.toThrow('Report audit unavailable')
+    expect(log.mock.calls).toEqual([[{ status: 'failed' }]])
+    expect(await reportAudits(f)).toEqual(before)
+  })
+
+  test('bounds each actor history and prunes expired audit rows in eight-row batches', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    const other = await f.t.run(async ctx => {
+      for (let index = 1; index < reportAudit.REPORT_ACCESS_AUDIT_LIMIT; index++) await ctx.db.insert('learnMeasurementReportAccessAudits', {
+        userId: VIEWER.tokenIdentifier, reportRunId, action: 'manifest', status: 'building', createdAt: REPORT_NOW - index,
+      })
+      return ctx.db.insert('learnMeasurementReportAccessAudits', { userId: FOREIGN.tokenIdentifier, reportRunId: null,
+        action: 'request', status: 'requested', createdAt: REPORT_NOW + reportAudit.REPORT_ACCESS_AUDIT_RETENTION_MS + 86_400_000 })
+    })
+    await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })
+    expect(await reportAudits(f)).toHaveLength(reportAudit.REPORT_ACCESS_AUDIT_LIMIT)
+    expect((await reportAudits(f)).some(row => row.action === 'manifest' && row.createdAt === REPORT_NOW)).toBe(true)
+    await f.t.run(async ctx => { const run = (await ctx.db.get(reportRunId))!; await ctx.scheduler.cancel(run.continuationId!) })
+    vi.setSystemTime(REPORT_NOW + reportAudit.REPORT_ACCESS_AUDIT_RETENTION_MS + 1)
+    capabilities.reports = false
+    await f.t.mutation(internal.learnV2MeasurementReports.purgeExpiredAccessAudits, {})
+    expect(await reportAudits(f)).toHaveLength(reportAudit.REPORT_ACCESS_AUDIT_LIMIT - reportAudit.REPORT_ACCESS_AUDIT_BATCH)
+    await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    expect(await reportAudits(f)).toEqual([])
+    expect(await f.t.run(ctx => ctx.db.get(other))).not.toBeNull()
+  })
+
+  test('actor account deletion drains audits even with reports off and cannot repopulate them', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.complete(reportRunId)
+    const foreign = await f.t.run(ctx => ctx.db.insert('learnMeasurementReportAccessAudits', { userId: FOREIGN.tokenIdentifier, reportRunId: null,
+      action: 'request', status: 'requested', createdAt: REPORT_NOW }))
+    capabilities.reports = false
+    await f.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: VIEWER.tokenIdentifier })
+    await f.t.run(async ctx => {
+      const job = (await ctx.db.query('accountDeletionJobs').withIndex('by_userId', q => q.eq('userId', VIEWER.tokenIdentifier)).unique())!
+      await ctx.db.patch(job._id, { phase: 'learnV2' })
+    })
+    for (let batch = 0; batch < 5 && (await reportAudits(f)).length; batch++) await f.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: VIEWER.tokenIdentifier })
+    expect(await reportAudits(f)).toEqual([])
+    expect(await f.t.run(ctx => ctx.db.get(foreign))).not.toBeNull()
+    capabilities.reports = true
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    await expect(f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId })).rejects.toThrow('deletion')
+    expect(log.mock.calls).toEqual([[{ status: 'denied' }]])
+    expect(await reportAudits(f)).toEqual([])
+  })
+
+  test('capability-off access paths add no audit records or logs', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.t.run(async ctx => { for (const row of await ctx.db.query('learnMeasurementReportAccessAudits').take(129)) await ctx.db.delete(row._id) })
+    capabilities.reports = false
+    const log = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const reference = { version, reportRunId }
+    const page = { ...reference, cursor: null }
+    const expected = { status: 'disabled', reasonCodes: ['disabled', 'protocol_not_frozen'] }
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, f.request)).toMatchObject(expected)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, reference)).toMatchObject(expected)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReportCells, page)).toMatchObject(expected)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.exportAggregateReport, page)).toMatchObject(expected)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, reference)).toMatchObject(expected)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, page)).toMatchObject(expected)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, page)).toMatchObject(expected)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.downloadReportPage, page)).toMatchObject(expected)
+    await f.t.mutation(internal.learnV2MeasurementReports.purgeExpiredAccessAudits, {})
+    expect(await reportAudits(f)).toEqual([])
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  test('records requests and scheduled refreshes with the closed payload-free fields', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    expect(await f.t.mutation(internal.learnV2MeasurementReports.beginReportSnapshot, f.request)).toMatchObject({ status: 'requested', reportRunId })
+    const refreshed = await f.t.mutation(internal.learnV2MeasurementReports.dailyRefresh, f.request)
+    expect(refreshed).toMatchObject({ status: 'requested', reportRunId })
+    const rows = await reportAudits(f)
+    expect(rows).toHaveLength(3)
+    expect(rows.map(row => row.action)).toEqual(['request', 'request', 'refresh'])
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(['_creationTime', '_id', 'action', 'createdAt', 'reportRunId', 'status', 'userId'])
+      expect(row).toMatchObject({ userId: VIEWER.tokenIdentifier, reportRunId, status: 'requested', createdAt: REPORT_NOW })
+      for (const secret of [...Object.values(STORAGE_CANARIES), OWNER, 'cohortVersion', 'inputDigest', 'rosterDigest', 'bootstrapSeed', 'cells']) expect(JSON.stringify(row)).not.toContain(secret)
+    }
+  })
 })
