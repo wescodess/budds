@@ -323,7 +323,7 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
     const rubric: unknown = JSON.parse(authority.content.assessmentRubricSnapshot)
     const blocks = await ctx.db.query('sessionContentBlocks')
       .withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', authority.content!._id)).take(16)
-    const prompts = blocks.filter(block => block.kind === 'transfer_challenge' && block.content)
+    const prompts = blocks.filter(block => (block.kind === 'independent_application' || block.kind === 'transfer_challenge') && block.content)
     if (prompts.length !== 1 || await digest(prompts[0]!.content) !== pins.promptDigest || await digest(rubric) !== pins.rubricDigest) reject('pins_mismatch')
   } else if (pins.assessmentContractDigest !== row.assessmentContractDigest || pins.assessmentContractVersion !== row.assessmentContractVersion) reject('pins_mismatch')
   const { record } = await getScopedMasteryRecord(ctx, userId, row.blueprintRevisionId, row.objectiveId)

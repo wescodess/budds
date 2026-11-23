@@ -2,6 +2,7 @@
 import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
+import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import type { Doc } from './_generated/dataModel'
 import { deterministicLearnScoringReceipt } from './lib/learnV2MeasurementScoring'
 import { normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
@@ -13,16 +14,18 @@ import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, s
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
 const due = makeFunctionReference<'mutation', { userId: string, through?: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
-const policy = vi.hoisted(() => ({ responses: true, enrollment: true, protocol: null as unknown }))
+const policy = vi.hoisted(() => ({ responses: true, enrollment: true, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
-  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, scoring: true,
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, scoring: true, delivery: true,
     get responses() { return policy.responses }, get enrollment() { return policy.enrollment } } }
 })
 vi.mock('./lib/learnV2MeasurementAssignment', async original => {
   const value = await original<typeof import('./lib/learnV2MeasurementAssignment')>()
   return { ...value, getFrozenLearnMeasurementProtocol: () => policy.protocol }
 })
+
+vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementScorer: async () => policy.scorer }))
 
 const userId = deliveryIdentity.tokenIdentifier
 const PRIVATE = ['PRIVATE-SOLUTION', 'PRIVATE-ORDINARY-RUBRIC', 'PRIVATE-RUBRIC-CANARY', 'scoringSpecDigest', 'supportManifestDigest', 'assessmentRubricSnapshot', 'randomizationSeed']
@@ -36,6 +39,13 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
 async function fixture() {
+  const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
+    requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
+      family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
+  const saved = await sealLearnScorerConfiguration(definition)
+  const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1', configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }],
+    legacyAllowlist: [definition.configurationId], prospectiveConfigurationId: null })
+  policy.scorer = { registry, saved }
   const f = await assessmentDeliveryFixture()
   const contentId = await publishDeliveryTeaching(f)
   const request = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'today_start_command' }
@@ -77,6 +87,67 @@ async function fixture() {
 function forms(value: unknown) {
   return new Set([...JSON.stringify(value).matchAll(/Hypothetical ([A-F]):/gu)].map(match => match[1]))
 }
+
+test.each([false, true])('Today enrolls, seals and scores cold, then scores a separate application with first-claim and assistance rules: assisted=%s', async assisted => {
+  const f = await fixture()
+  const sealed = await f.seal()
+  const network = vi.fn(async () => new Response(JSON.stringify({ id: 'synthetic-ordinary-execution', model: 'synthetic/model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({ criterionResults: [{ key: 'accuracy', awarded: true }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } })))
+  vi.stubGlobal('fetch', network)
+  for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.accepted.submissionId, idempotencyKey: 'today_cold_score_1234567890' })).toMatchObject({ status: 'scored', result: { scorePercent: 0 } })
+  expect(network).not.toHaveBeenCalled()
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'in_progress' })
+  const delivery = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'ordinary_lesson_delivery_1234567890' })
+  expect(JSON.stringify(delivery)).toContain('TEACHING-CANARY-explanation')
+  expect(JSON.stringify(delivery)).not.toContain('TEACHING-CANARY-worked_example')
+  if (assisted) expect(await f.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 3, kind: 'substantive_hint' })).toMatchObject({ revision: 4, assistance: { content: expect.stringContaining('TEACHING-CANARY-faded_example') } })
+  const ordinary = (await f.opportunities()).find(row => row.purpose.kind === 'independent_application')!
+  expect(ordinary).toMatchObject({ phase: 'test_open', contextPins: { kind: 'session', studySessionId: f.graph.studySessionId, sessionRevision: assisted ? 4 : 3, sessionContentId: f.contentId } })
+  expect(ordinary.assessmentPins.kind).toBe('session_application')
+  expect(ordinary.scoringBinding).toMatchObject({ kind: 'model', scorerVersion: 'learn-v2.mastery-scorer.v1', requestedModel: 'synthetic/model' })
+  const acceptedAt = Date.now()
+  const result = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: assisted ? 4 : 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1,
+    response: 'My separate-case application.', confidence: 3, idempotencyKey: 'ordinary_application_after_cold_1234567890' })
+  expect(result).toMatchObject({ status: 'completed', state: assisted ? 'guided' : 'independent', scorePercent: 100 })
+  expect(network).toHaveBeenCalledTimes(1)
+  await f.t.run(async ctx => {
+    const attempts = await ctx.db.query('masteryAttempts').take(8)
+    expect(attempts).toHaveLength(2)
+    expect(attempts.find(row => row.kind === 'measurement_cold')).toMatchObject({ masteryStateAfter: 'unseen' })
+    const basis = attempts.find(row => row.kind === 'independent_application')!
+    expect(basis).toMatchObject({ acceptedAt, assistanceSnapshot: { state: assisted ? 'assisted' : 'unassisted' }, masteryStateAfter: assisted ? 'guided' : 'independent' })
+    const facts = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId', q => q.eq('userId', userId)).take(64)
+    const claims = facts.filter(row => row.fact.kind === 'independent_claim_v2')
+    expect(claims).toHaveLength(assisted ? 0 : 1)
+    if (assisted) return
+    const day7 = (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(8)).find(row => row.horizonDays === 7)!
+    expect(claims[0]!.fact).toMatchObject({ version: 'learn-v2.first-independent-claim.v2', basisAttemptId: basis._id,
+      firstIndependentAt: acceptedAt, firstSlot: { kind: 'linked', firstCheckOpportunityId: day7._id }, stratum: { flow: 'v2_today' } })
+    expect(day7.originalSlot).toBe(true)
+    expect(day7.firstCheckClaim?.basisAttemptId).toBe(basis._id)
+  })
+})
+
+test('starting an ordinary application cannot upgrade unknown assistance history', async () => {
+  const f = await fixture()
+  await f.t.run(ctx => ctx.db.patch(f.graph.catalogId, { historyCompleteness: 'unknown' }))
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'in_progress' })
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).not.toHaveProperty('assistanceRevision')
+  const application = (await f.opportunities()).find(row => row.purpose.kind === 'independent_application')!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'unknown_history_application_1234567890', response: { target: { assessmentOpportunityId: application._id }, expectedRevision: application.revision,
+      payload: { kind: 'text', text: 'An ordinary application response.' }, confidence: 3 } } })
+  expect(accepted.kind).toBe('accepted')
+  if (accepted.kind !== 'accepted') throw new Error('Expected saved response')
+  expect(await f.t.run(ctx => ctx.db.get(accepted.submissionId))).toMatchObject({ assistanceSnapshot: { state: 'unknown' } })
+})
 
 test.each(['no_grant', 'open', 'sealed', 'pending', 'scored', 'revoked'] as const)('both Today entry points enforce the %s disclosure boundary', async state => {
   for (const entryPoint of ['today', 'session_deep_link'] as const) {
@@ -210,7 +281,7 @@ test('a missing protocol blocks the episode; a recorded non-admission continues 
   await f.t.run(ctx => ctx.db.patch(f.begun.familyId, { status: 'quarantined' }))
   expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'in_progress' })
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').unique())).toMatchObject({ status: 'not_admitted', exclusionReasons: expect.arrayContaining(['novel_item_unavailable']) })
-  expect(await f.opportunities()).toHaveLength(0)
+  expect(await f.opportunities()).toEqual([expect.objectContaining({ purpose: { kind: 'independent_application' } })])
   expect(JSON.stringify(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId, idempotencyKey: 'ordinary_lesson' }))).toContain('TEACHING-CANARY')
 })
 

@@ -50,6 +50,7 @@ import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract';
 import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } from './lib/learnV2MeasurementAssignment';
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork';
 import { parseLearnContract } from '../shared/learn-v2-responses';
+import { bindSessionApplication } from './lib/learnV2SessionApplication';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -1501,6 +1502,7 @@ export const startStudySession = mutation({
       startedSessionContentId: content._id,
       startedSessionContentRevision: content.revision,
     });
+    await bindSessionApplication(ctx, userId, (await ctx.db.get(session._id))!, content);
     const meaningfulAdaptive = adaptive?.activity.status === "eligible"
       && await isAuthoritativeReadyAdaptiveSessionActivity(ctx, userId, adaptive.activity, content) ? adaptive : null;
     if (adaptive?.activity.boundaryOrdinal === 1) {
@@ -1616,6 +1618,11 @@ export const recordMeaningfulActivityStarted = mutation({
 const getSessionContentRead = defineTeachingRead({
   name: 'learnV2SessionContent.getSessionContent',
   scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'session', id: args.studySessionId }]),
+  baselineSessionContent: async (ctx, userId, args) => {
+    const session = await ctx.db.get(args.studySessionId);
+    return session?.userId === userId && session.status === 'in_progress' && session.assessmentPurpose === 'independent_application'
+      ? session.startedSessionContentId ?? null : null;
+  },
 
   args: { studySessionId: v.id("studySessions") },
   handler: async (ctx, args) => {

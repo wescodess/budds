@@ -3,12 +3,13 @@ import { ADAPTIVE_V2_PILOT_MANIFEST } from '../../shared/adaptive-v2-pilot-polic
 import { learnScorerBindingSchema, LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, type LearnScorerBinding } from '../../shared/learn-v2-measurement'
 import { learnDigestSchema, learnTextSchema, learnVersionSchema } from '../../shared/learn-v2-responses'
 import { baselineMasteryScoringArtifacts, scorerCanonicalJson, scorerDigest } from '../../server/utils/learn-v2-mastery-scorer'
+import { LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION, measurementRubricScoringArtifacts } from '../../server/utils/learn-v2-measurement-rubric-scorer'
 
 // Server-only inventory. There are deliberately no admitted production entries.
 // Construct this registry from reviewed inventory, never from a request/model override.
 const definitionSchema = z.strictObject({
   configurationId: learnVersionSchema, configurationVersion: learnVersionSchema,
-  kind: z.enum(['legacy_baseline', 'strict_prospective']), requestedModel: learnTextSchema(200),
+  kind: z.enum(['legacy_baseline', 'strict_prospective', 'measurement_rubric']), requestedModel: learnTextSchema(200),
   endpoint: learnTextSchema(200).nullable(),
   identity: z.strictObject({
     mappingVersion: learnVersionSchema, canonicalModel: learnTextSchema(200).nullable(),
@@ -16,7 +17,7 @@ const definitionSchema = z.strictObject({
     verifiedReturnedModels: z.array(learnTextSchema(200)).max(16)
       .refine(values => new Set(values).size === values.length),
   }),
-}).refine(value => value.kind === 'legacy_baseline' ? value.endpoint === null : value.endpoint !== null && /^[A-Za-z0-9._:-]+\/[A-Za-z0-9._:/-]+$/.test(value.endpoint),
+}).refine(value => value.kind !== 'strict_prospective' ? value.endpoint === null : value.endpoint !== null && /^[A-Za-z0-9._:-]+\/[A-Za-z0-9._:/-]+$/.test(value.endpoint),
   'Legacy routing stays automatic; strict routing requires an endpoint')
 
 export type LearnScorerConfigurationDefinition = z.infer<typeof definitionSchema>
@@ -47,13 +48,16 @@ function freeze<T>(value: T): T {
 
 export async function sealLearnScorerConfiguration(input: LearnScorerConfigurationDefinition): Promise<BoundLearnScorerConfiguration> {
   const definition = definitionSchema.parse(input)
-  const artifacts = await baselineMasteryScoringArtifacts()
+  const measurement = definition.kind === 'measurement_rubric'
+  const artifacts = measurement ? await measurementRubricScoringArtifacts() : await baselineMasteryScoringArtifacts()
+  const scorerVersion = measurement ? LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION : 'learn-v2.mastery-scorer.v1'
   const snapshot = scorerCanonicalJson({
     schemaVersion: 'learn-v2.scorer-configuration.v1', ...definition,
     transportVersion: 'openrouter-via-cloudflare-ai-gateway.v1', apiVersion: 'openrouter.chat-completions.v1',
-    routing: { mode: definition.kind === 'legacy_baseline' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint, allowFallbacks: false },
+    routing: { mode: definition.kind !== 'strict_prospective' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint, allowFallbacks: false },
     components: { ...artifacts, implementation: LEARN_MASTERY_IMPLEMENTATION_PINS,
-      scorerVersion: 'learn-v2.mastery-scorer.v1', parserVersion: 'learn-v2.mastery-parser.v1', guardVersion: 'learn-v2.scoring-receipt-guard.v2' },
+      ...(measurement ? { measurementRubricImplementation: 'sha256:503a0a18f7fa8d3fc0161dcf7b38f357fdb010736f961bcf0299106c01ce0586' } : {}),
+      scorerVersion, parserVersion: 'learn-v2.mastery-parser.v1', guardVersion: 'learn-v2.scoring-receipt-guard.v2' },
     threshold: { version: 'learn-v2.mastery-threshold.v1', percent: 80, comparator: 'gte', transitionVersion: 'learn-v2.mastery-transition.v1' },
     limits: ADAPTIVE_V2_PILOT_MANIFEST.limits,
     metadata: { version: 'learn-v2.scoring-provenance.v1', enabled: true, maxLookups: 1, timeoutMs: 10_000 },
@@ -62,8 +66,8 @@ export async function sealLearnScorerConfiguration(input: LearnScorerConfigurati
   const binding = learnScorerBindingSchema.parse({
     kind: 'model', configurationId: definition.configurationId, configurationVersion: definition.configurationVersion,
     configurationDigest: digest, requestedModel: definition.requestedModel,
-    routingMode: definition.kind === 'legacy_baseline' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint,
-    scorerVersion: 'learn-v2.mastery-scorer.v1', promptVersion: artifacts.promptVersion,
+    routingMode: definition.kind !== 'strict_prospective' ? 'legacy_auto' : 'strict', endpoint: definition.endpoint,
+    scorerVersion, promptVersion: artifacts.promptVersion,
     responseSchemaVersion: artifacts.responseSchemaVersion, parserVersion: 'learn-v2.mastery-parser.v1',
     guardVersion: 'learn-v2.scoring-receipt-guard.v2', thresholdVersion: 'learn-v2.mastery-threshold.v1',
     thresholdPercent: 80, transitionVersion: 'learn-v2.mastery-transition.v1',
@@ -87,7 +91,7 @@ export async function createLearnScorerRegistry(input: {
   if (entries.some((entry, index) => entry.binding.configurationDigest !== learnDigestSchema.parse(input.configurations[index]!.expectedDigest))) throw new Error('Scorer configuration differs from its reviewed digest')
   if (new Set(entries.map(entry => entry.binding.configurationId)).size !== entries.length) throw new Error('Scorer configuration IDs are immutable')
   const legacy = entries.filter(entry => input.legacyAllowlist.includes(entry.binding.configurationId))
-  if (legacy.length !== input.legacyAllowlist.length || legacy.some(entry => entry.binding.routingMode !== 'legacy_auto')
+  if (legacy.length !== input.legacyAllowlist.length || legacy.some(entry => JSON.parse(entry.frozenConfiguration.snapshot).kind !== 'legacy_baseline')
     || new Set(legacy.map(entry => entry.binding.requestedModel)).size !== legacy.length) throw new Error('Invalid closed baseline allowlist')
   const prospective = entries.find(entry => entry.binding.configurationId === input.prospectiveConfigurationId)
   if (input.prospectiveConfigurationId !== null && prospective?.binding.routingMode !== 'strict') throw new Error('Invalid prospective scorer configuration')

@@ -529,22 +529,24 @@ async function seedIndependent(f: Pick<Awaited<ReturnType<typeof fixture>>, 't' 
     firstIndependentPassAt: NOW, firstIndependentLocalDate: '2027-03-07', firstIndependentTimezone: 'America/Toronto', updatedAt: NOW }))
 }
 
-async function configureModelFixture(f: Awaited<ReturnType<typeof fixture>>) {
-  const definition = { configurationId: 'synthetic.legacy', configurationVersion: 'synthetic.config.v1', kind: 'legacy_baseline' as const,
+async function configureModelFixture(f: Awaited<ReturnType<typeof fixture>>, measurement = true) {
+  const definition = { configurationId: measurement ? 'synthetic.measurement' : 'synthetic.application', configurationVersion: 'synthetic.config.v2',
+    kind: measurement ? 'measurement_rubric' as const : 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
   const saved = await sealLearnScorerConfiguration(definition)
   const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1',
-    configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }], legacyAllowlist: [definition.configurationId], prospectiveConfigurationId: null })
+    configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }], legacyAllowlist: measurement ? [] : [definition.configurationId], prospectiveConfigurationId: null })
   policy.scorer = { registry, saved }
   policy.protocol = { ...syntheticProtocol(), scoringBinding: saved.binding }
   vi.stubEnv('OPENROUTER_API_KEY', 'synthetic-unused')
   vi.stubEnv('CF_ACCOUNT_ID', 'synthetic-unused')
   vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'synthetic-unused')
   await f.t.run(async ctx => {
-    for (const id of f.f.itemIds) {
+    for (const id of measurement ? f.f.itemIds : []) {
       const item = (await ctx.db.get(id))!
-      await ctx.db.patch(id, { responseSpec: { kind: 'bounded_rubric', version: 'response.v1', maxCodeUnits: 12000 } })
+      const responseSpec = { kind: 'bounded_rubric' as const, version: 'response.v1', maxCodeUnits: 12000 as const }
+      await ctx.db.patch(id, { responseSpec, promptDigest: await privacyDigest({ prompt: item.prompt, declaredStimulus: item.declaredStimulus ?? null, responseSpec }) })
       await ctx.db.patch(item.scoringSpecId!, { scoringBinding: saved.binding, payload: { kind: 'bounded_rubric', keyInsufficientReason: 'Reasoning is required.',
         criteria: [{ key: 'rule', description: 'PRIVATE CRITERION DESCRIPTION', weightPercent: 100 }] } })
     }
@@ -677,7 +679,7 @@ test.each(['model', 'upstream', 'terminal'] as const)('a %s mismatch stays unsco
 async function ordinaryFixture() {
   const f = await fixture()
   policy.scoring = true
-  const saved = await configureModelFixture(f)
+  const saved = await configureModelFixture(f, false)
   const args = await f.t.run(async ctx => {
     const userId = OWNER.tokenIdentifier
     const session = (await ctx.db.get(f.f.studySessionId))!

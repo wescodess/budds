@@ -590,6 +590,14 @@ const recordAssistanceUseTeaching = defineTeachingMutation({name:'learnV2Mastery
       ...(args.kind === 'substantive_hint' ? { substantiveHintUsedAt: now } : { answerRevealedAt: now }),
       assistanceRevision: (scope.session.assistanceRevision ?? 0) + 1, revision: scope.session.revision + 1,
     })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const applications = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q => q.eq('userId', userId).eq('contextPins.studySessionId', scope.session._id)).take(3)
+      for (const row of applications) {
+        if (row.submissionId || row.purpose.kind !== 'independent_application' || row.contextPins.kind !== 'session') continue
+        if (row.contextPins.sessionContentId !== scope.content._id || row.contextPins.sessionRevision !== scope.session.revision) throw new Error('Learn application revision conflict')
+        await ctx.db.patch(row._id, { contextPins: { ...row.contextPins, sessionRevision: scope.session.revision + 1 }, revision: row.revision + 1 })
+      }
+    }
     const adaptive = await hasAdaptiveExperienceAccess(ctx, userId)
       ? await linkedAdaptiveActivityForSession(ctx, userId, scope.content._id)
       : null

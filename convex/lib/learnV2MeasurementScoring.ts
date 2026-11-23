@@ -3,6 +3,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { getLearnMeasurementScorer } from './learnV2MeasurementScorerInventory'
 import { getLearnResponseStateForOwner } from './learnV2Responses'
 import { calibrationEvidence } from '../learnV2MapCalibration'
+import { LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION, learnMeasurementRubricScoringProtocol } from '../../server/utils/learn-v2-measurement-rubric-scorer'
 import { learnCalibrationScoringProtocol } from './learnV2MeasurementCalibrationScorer'
 import { hasLearnV2Access } from './learnV2Access'
 import { requireAuth } from './auth'
@@ -42,6 +43,7 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
   let rubric = { version: contract.version as string, criteria: contract.criteria }
   let rubricSnapshot: string | null = null
   let challenge = contract.instructions
+  let declaredStimulus: string | null | undefined
   const evidence: BaselineMasteryScoringInput['evidence'] = []
   let scoringSpec: ReturnType<typeof learnPrivateScoringPayloadSchema.parse> | null = null
   if (opportunity.assessmentPins.kind === 'measurement') {
@@ -53,7 +55,12 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
     const spec = (await ctx.db.get(pins.scoringSpecId))!
     scoringSpec = learnPrivateScoringPayloadSchema.parse(spec.payload)
     challenge = item.prompt!
-    if (scoringSpec.kind === 'bounded_rubric') rubric = { version: contract.version, criteria: scoringSpec.criteria }
+    if (scoringSpec.kind === 'bounded_rubric') {
+      if (await privacyDigest({ prompt: item.prompt, declaredStimulus: item.declaredStimulus ?? null, responseSpec: item.responseSpec }) !== pins.promptDigest) throw new Error('Learn scoring stimulus pins mismatch')
+      if (response.scoringBinding.kind !== 'model' || response.scoringBinding.scorerVersion !== LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION) throw new Error('Learn declared stimulus scorer configuration required')
+      rubric = { version: contract.version, criteria: scoringSpec.criteria }
+      declaredStimulus = item.declaredStimulus ?? null
+    }
     const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(33)
     for (const claim of claims) {
       const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(9)
@@ -78,7 +85,7 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
       rubric = JSON.parse(rubricSnapshot ?? 'null')
       if (!rubric || opportunity.assessmentPins.kind !== 'session_application' || await privacyDigest(rubric) !== opportunity.assessmentPins.rubricDigest) throw new Error('Learn scoring rubric unavailable')
       const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(16)
-      const prompts = blocks.filter(row => row.kind === 'transfer_challenge' && row.content)
+      const prompts = blocks.filter(row => (row.kind === 'independent_application' || row.kind === 'transfer_challenge') && row.content)
       if (prompts.length !== 1 || await privacyDigest(prompts[0]!.content) !== opportunity.assessmentPins.promptDigest) throw new Error('Learn scoring prompt unavailable')
       challenge = prompts[0]!.content!
       const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33)
@@ -104,7 +111,7 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
     }
   }
   if (evidence.length > 64) throw new Error('Learn scoring evidence exceeds its bound')
-  const scoringInput: BaselineMasteryScoringInput = { rubric, challenge, evidence,
+  const scoringInput: BaselineMasteryScoringInput = { rubric, challenge, evidence, ...(declaredStimulus !== undefined ? { declaredStimulus } : {}),
     learnerResponse: payload.kind === 'text' ? payload.text : payload.kind === 'source_comparison' ? payload.comparison : scorerCanonicalJson(payload) }
   if (response.contextPins.kind === 'session' && response.contextPins.canvas) {
     const canvas = response.contextPins.canvas
@@ -147,7 +154,10 @@ export async function prepareSavedLearnModelScoring(input: SavedLearnScoringInpu
   if (!saved || scorerCanonicalJson(saved.binding) !== scorerCanonicalJson(binding)) throw new Error('Learn bound scorer configuration unavailable')
   const calibration = input.calibrationSnapshot ? JSON.parse(input.calibrationSnapshot) as { objective: { title: string, capability?: string, assessmentContract?: unknown }, evidence: Array<{ alias: string, excerpt?: string, locator: string }> } : null
   if (calibration && binding.scorerVersion !== 'learn-v2.calibration-scorer.v1') throw new Error('Calibration scorer configuration required')
-  const service = createLearnMasteryScorerService(registry, undefined, Date.now, calibration ? learnCalibrationScoringProtocol(calibration.objective, calibration.evidence) : undefined)
+  if (!calibration && !input.scoringSpec && binding.scorerVersion !== 'learn-v2.mastery-scorer.v1') throw new Error('Learn application scorer configuration required')
+  const protocol = calibration ? learnCalibrationScoringProtocol(calibration.objective, calibration.evidence)
+    : input.scoringSpec?.kind === 'bounded_rubric' ? learnMeasurementRubricScoringProtocol : undefined
+  const service = createLearnMasteryScorerService(registry, undefined, Date.now, protocol)
   const prepared = await service.prepare({ saved, scoringInput: { ...input.scoringInput, rubric: JSON.parse(input.rubricSnapshot) }, leaseExpiresAt: input.job.leaseExpiresAt!,
     context: { assessmentOpportunityId: input.opportunity._id, submissionId: input.response._id, jobId: input.job._id,
       dispatchedAt: receipt.dispatchedAt, dispatchOrdinal: receipt.dispatchOrdinal, leaseIdentityHash: receipt.leaseIdentityHash, responseDigest: input.response.payloadDigest, assessmentPins: learnAssessmentPinsSchema.parse(input.opportunity.assessmentPins) } })

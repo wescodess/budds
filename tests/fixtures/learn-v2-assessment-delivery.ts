@@ -124,10 +124,10 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
   return { t, owner, graph, begun, args, generated, descriptor }
 }
 
-export async function publishDeliveryTeaching(f: Awaited<ReturnType<typeof assessmentDeliveryFixture>>) {
+export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof assessmentDeliveryFixture>>, 't' | 'graph'>) {
   const jobId = await f.t.run(ctx => ctx.db.insert('learnJobs', { userId, learningVoidId: f.graph.learningVoidId,
     blueprintRevisionId: f.graph.blueprintRevisionId, studyPlanRevisionId: f.graph.studyPlanRevisionId, studySessionId: f.graph.studySessionId,
-    type: 'session_content_generation', status: 'running', revision: 1, idempotencyKey: 'synthetic-teaching-job', inputDigest: 'synthetic-teaching-input',
+    type: 'session_content_generation', status: 'running', revision: 1, providerResponseModel: 'synthetic/model', idempotencyKey: 'synthetic-teaching-job', inputDigest: `sha256:${'a'.repeat(64)}`,
     expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 1,
     leaseToken: 'synthetic-teaching-lease', leaseExpiresAt: Date.now() + 60_000, dispatchSupportingSourceSnapshotIds: [f.graph.sourceSnapshotId] }))
   const candidate = { version: 'learn-v2.session-content.v1', generatorVersion: 'synthetic.teaching.v1', assessmentRubric: rubric,

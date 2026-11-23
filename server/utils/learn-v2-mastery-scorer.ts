@@ -16,6 +16,7 @@ const scorerResponseSchema = {
 export type BaselineMasteryScoringInput = {
   rubric: { version: string, criteria: Array<{ key: string, description?: string, weightPercent: number }> }
   challenge: string
+  declaredStimulus?: string | null
   evidence: Array<{ alias: string, claim: string, excerpt?: string }>
   learnerResponse: string
 }

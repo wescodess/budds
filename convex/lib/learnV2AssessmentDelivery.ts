@@ -117,7 +117,7 @@ async function assessmentProjection(ctx: ReadCtx, userId: string, row: Doc<'lear
   try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? '') } catch { return null }
   if (await privacyDigest(rubric) !== pins.rubricDigest) return null
   const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
-  const prompts = blocks.filter(block => block.kind === 'transfer_challenge' && block.content)
+  const prompts = blocks.filter(block => (block.kind === 'independent_application' || block.kind === 'transfer_challenge') && block.content)
   if (blocks.length > 16 || prompts.length !== 1 || await privacyDigest(prompts[0]!.content) !== pins.promptDigest) return null
   return { identity: { kind: 'session_application' as const, sessionContentId: content._id, contentRevision: content.revision, promptDigest: pins.promptDigest },
     prompt: prompts[0]!.content!, declaredStimulus: null, instructions: 'Respond to the check.', responseSpec, projectionDigest: pins.promptDigest }

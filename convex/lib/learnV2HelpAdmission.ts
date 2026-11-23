@@ -201,9 +201,9 @@ async function recordInterveningLearning(ctx: MutationCtx, userId: string, rows:
   }
 }
 
-export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false): Promise<LearnHelpAdmission> {
+export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  return await admitLearnHelp(ctx, userId, input, delivery)
+  return await admitLearnHelp(ctx, userId, input, delivery, false, baselineSessionContent)
 }
 
 export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
@@ -214,9 +214,9 @@ export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
   return false
 }
 
-export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
+export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  return await admitLearnHelp(ctx, userId, input, false, true)
+  return await admitLearnHelp(ctx, userId, input, false, true, baselineSessionContent)
 }
 
 export async function admitLearnHelpForAudioJob(ctx: MutationCtx, job: Doc<'audioOverviewJobs'>): Promise<LearnHelpAdmission> {
@@ -229,7 +229,7 @@ export async function inspectLearnHelpForAudioJob(ctx: ReadCtx, job: Doc<'audioO
     idempotencyKey: `audio_read_${job._id}`, scope: { references: [{ kind: 'audio_job', id: job._id }] }, ordinaryOnly: true }, false, true)
 }
 
-async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false): Promise<LearnHelpAdmission> {
+async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
   const now = Date.now()
@@ -243,8 +243,13 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   for (const phase of LEARN_HELP_OPEN_PHASES) {
     const limit = LEARN_HELP_LIMITS.openOpportunities + 1 - open.length + (phase === 'preparing' ? FUTURE_OPPORTUNITY_LIMIT - future.length : 0)
     const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase)).take(limit)
-    if (phase === 'preparing' && rows.length === limit) return deny('disclosure_unknown')
-    for (const row of rows) (futurePreparing(row, now) ? future : open).push(row)
+    if ((phase === 'preparing' || baselineSessionContent) && rows.length === limit) return deny('disclosure_unknown')
+    for (const row of rows) {
+      if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'
+        && row.contextPins.sessionContentId === baselineSessionContent) continue
+      if (futurePreparing(row, now)) future.push(row)
+      else open.push(row)
+    }
     if (open.length > LEARN_HELP_LIMITS.openOpportunities) return deny('disclosure_unknown')
   }
   if (!open.length && !future.length) return ordinary

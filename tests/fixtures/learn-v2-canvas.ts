@@ -21,7 +21,7 @@ const binding = { kind: 'deterministic' as const, engineVersion: 'fixture.numeri
 const privateRubric = { kind: 'bounded_rubric' as const, keyInsufficientReason: 'The capability requires written reasoning.',
   criteria: [{ key: 'private-criterion', description: 'PRIVATE-RUBRIC-CANARY', weightPercent: 100 }] }
 // Publication adapters supply synthetic validation evidence; grant, acceptance and scoring authority stay real.
-export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean } = { rubric: true }) {
+export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean } = { rubric: true }) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const t = convexTest(schema, modules)
   const owner = t.withIdentity(identity)
@@ -63,11 +63,13 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
   const members = [...labels].map((formLabel, index) => {
     const groups = index + 3
     const size = index + 5
-    const prompt = `Hypothetical ${formLabel}: ${groups} groups of ${size} members. Find the total.`
+    const prompt = `Hypothetical ${formLabel}: find the total using the declared givens.`
     return { formLabel, reserve: index >= core, prompt, declaredStimulus: `Hypothetical givens: groups=${groups}, size=${size}.`,
       responseSpec: options.rubric ? { kind: 'bounded_rubric', version: 'response.v1', maxCodeUnits: 12000 }
-        : options.keyed ? { kind: 'keyed', version: 'response.v1', maxSelections: 1 } : { kind: 'numeric', version: 'response.v1', unit: 'members' },
+        : options.keyed ? { kind: 'keyed', version: 'response.v1', maxSelections: 1 }
+        : options.ordered ? { kind: 'ordered', version: 'response.v1', maxEntries: 1 } : { kind: 'numeric', version: 'response.v1', unit: 'members' },
       privateScoring: options.rubric ? privateRubric : options.keyed ? { kind: 'keyed', acceptedSets: [[String(groups * size)]], normalizationVersion: 'normalize.v1' }
+        : options.ordered ? { kind: 'ordered', expected: [String(groups * size)], normalizationVersion: 'normalize.v1' }
         : { kind: 'numeric', expected: groups * size, unit: 'members', absoluteTolerance: 0, relativeTolerance: 0, normalizationVersion: 'normalize.v1' },
       referenceSolution: `PRIVATE-SOLUTION-${formLabel}: ${groups} * ${size} = ${groups * size}.`, derivation: `${groups} * ${size} follows the source multiplication rule.`,
       scoringBinding: options.rubric ? modelBinding : binding,
@@ -93,8 +95,8 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
     }))
   }
   const descriptor = { operation: 'Apply multiplication', contentCoverage: 'One accepted synthetic rule', transferDemand: 'A different hypothetical case',
-    responseModality: options.rubric ? 'bounded_rubric' : options.keyed ? 'keyed' : 'numeric', scoreScale: 'percent_0_100',
-    criteriaDigest: await measurementDigest(options.rubric ? privateRubric.criteria : { kind: options.keyed ? 'keyed' : 'numeric' }), thresholdVersion: options.rubric ? modelBinding.thresholdVersion : binding.thresholdVersion,
+    responseModality: options.rubric ? 'bounded_rubric' : options.keyed ? 'keyed' : options.ordered ? 'ordered' : 'numeric', scoreScale: 'percent_0_100',
+    criteriaDigest: await measurementDigest(options.rubric ? privateRubric.criteria : { kind: options.keyed ? 'keyed' : options.ordered ? 'ordered' : 'numeric' }), thresholdVersion: options.rubric ? modelBinding.thresholdVersion : binding.thresholdVersion,
     rationale: 'Synthetic comparability fixture only.', difficultyPrior: 'Unverified outside this fixture.' }
   const begun = await t.mutation(commands.beginFamilyGeneration, { tokenIdentifier: userId, studySessionId: graph.studySessionId, expectedSessionRevision: 1,
     familyKey: 'synthetic.family.v1', revision: 1, coreFormCount: core, equivalenceVersion: 'equivalence.v1', equivalenceDescriptorJson: JSON.stringify(descriptor), idempotencyKey: 'fixture-generation' })
