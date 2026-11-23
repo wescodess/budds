@@ -1,3 +1,4 @@
+import { measurementReadContext } from './learnV2MeasurementReadContext'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasLearnV2Access } from './learnV2Access'
@@ -118,6 +119,7 @@ export async function measurementFlowReason(ctx: ReadCtx, userId: string, flow: 
 
 export async function measurementItemReason(ctx: ReadCtx, userId: string, pins: LearnMeasurementItemPins, scope: MeasurementScope,
   scoringBinding: Doc<'learnAssessmentOpportunities'>['scoringBinding']) {
+  ctx = measurementReadContext(ctx, userId)
   const [item, family, spec, caseRow, validation] = await Promise.all([
     ctx.db.get(pins.itemId), ctx.db.get(pins.familyId), ctx.db.get(pins.scoringSpecId), ctx.db.get(pins.caseId), ctx.db.get(pins.publicationValidationId),
   ])
@@ -216,6 +218,7 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
 }
 
 export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: string, request: EnrollmentRequest) {
+  ctx = measurementReadContext(ctx, userId)
   const authority = await requireMeasurementSession(ctx, userId, request)
   const supplied = getFrozenLearnMeasurementProtocol()
   if (!supplied) return { status: 'protocol_not_frozen' as const, assignmentId: null, reasonCodes: ['protocol_not_frozen'] }

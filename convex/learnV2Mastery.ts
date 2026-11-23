@@ -1,3 +1,4 @@
+import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingMutation } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v, type Infer } from 'convex/values'
@@ -1068,6 +1069,7 @@ export async function acceptMasterySubmissionForOwner(
 ): Promise<LearnResponseReceipt> {
   const request = parsePublicLearnRequest(acceptMasterySubmissionSchema, input)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await acceptResponseForOwner(ctx, tokenIdentifier, request.submission)
+  ctx = measurementReadContext(ctx, tokenIdentifier)
   const entry = 'response' in request.submission ? request.submission.response : request.submission.application
   const target = 'assessmentOpportunityId' in entry.target ? await ctx.db.get(entry.target.assessmentOpportunityId) : null
   const existed = target?.submissionId !== undefined

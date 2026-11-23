@@ -71,7 +71,8 @@ export async function measurementDigest(value: unknown) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(measurementCanonical(value))))
   return `sha256:${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`
 }
-function fail(reason: string): never { throw new Error(reason) }
+export class MeasurementValidationError extends Error {}
+function fail(reason: string): never { throw new MeasurementValidationError(reason) }
 function capability(row: Capability): Capability {
   return { learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId,
     blueprintRecordRevision: row.blueprintRecordRevision, assessmentContractVersion: row.assessmentContractVersion,

@@ -1,3 +1,4 @@
+import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { v } from "convex/values";
@@ -1397,6 +1398,7 @@ export const startStudySession = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx);
+    ctx = measurementReadContext(ctx, userId);
     if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 128)
       throw new Error("Idempotency key is invalid");
     const session = await ctx.db.get(args.studySessionId);
@@ -1456,6 +1458,7 @@ export const startStudySession = mutation({
           await ctx.db.patch(opportunity._id, { contextPins: { ...opportunity.contextPins, sessionRevision: session.revision + 1 } });
         }
         const current = await resolveTodayAssessment(ctx, userId, session);
+        if (current.kind !== 'check' && grant.status === 'granted') throw new Error('Learn assessment delivery authority changed');
         return receipt(current.kind === 'ordinary' ? assessment : current, undefined, grant);
       }
       if (assessment.kind === 'teach') {

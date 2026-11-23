@@ -1,3 +1,4 @@
+import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { createResponsePrivacyReadContext, privacyRead, responsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
@@ -40,6 +41,7 @@ const canvasUnavailable = (reasonCode: string) => ({ kind: 'not_admitted' as con
 
 async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: CanvasAttachmentRequest) {
   const userId = await requireAdaptiveMutationAccess(ctx)
+  ctx = measurementReadContext(ctx, userId)
   const prepared = await prepareAdaptiveCommand({ userId, commandName: 'prepareCanvasSession', targetId: String(args.studySessionId),
     expectedRevision: args.expectedSessionRevision, idempotencyKey: args.idempotencyKey, payload: { studySessionId: String(args.studySessionId) } })
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery || !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return canvasUnavailable('disabled')
@@ -348,6 +350,7 @@ export const attachReadySession = mutation({
   handler: async (ctx, args) => {
     if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
       const userId = await requireAdaptiveMutationAccess(ctx)
+      ctx = measurementReadContext(ctx, userId)
       const session = await ctx.db.get(args.studySessionId)
       if (session?.userId === userId && !session.assessmentOpportunityId) {
         const prepared = await prepareCanvasSessionForOwner(ctx, { ...args, idempotencyKey: `canvas_prepare_${(await privacyDigest(args.idempotencyKey)).slice(7)}` })
@@ -909,6 +912,7 @@ type CanvasSubmissionRequest = {
 
 async function acceptCanvasSubmission(ctx: MutationCtx, args: CanvasSubmissionRequest) {
   const userId = await requireAdaptiveMutationAccess(ctx)
+  ctx = measurementReadContext(ctx, userId)
   await prepareAdaptiveCommand({ userId, commandName: 'submitCanvasResponse', targetId: String(args.threadId),
     expectedRevision: args.expectedRevision, idempotencyKey: args.idempotencyKey, payload: {} })
   const scope = await canvasAssessmentScope(ctx, userId, args.threadId)

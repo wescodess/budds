@@ -13,6 +13,9 @@ import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '.
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
+import * as assessmentDelivery from './lib/learnV2AssessmentDelivery'
+import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
@@ -42,7 +45,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
-async function fixture(options: { reserve?: boolean, reserveCount?: number } = {}) {
+async function fixture(options: { reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean } = {}) {
   const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -1428,4 +1431,126 @@ test('help admission: the reserved case and its sibling forms are never taught',
   const allowed = cold.kind === 'measurement' ? cold.itemPins.formLabel : null
   expect([...forms(reads)].every(label => label === allowed)).toBe(true)
   expect((await f.exposures()).filter(row => row.purpose === 'teaching')).toHaveLength(0)
+})
+
+test.each([false, true])('published repeated-source inventory fits Today start: limits=%s', async transactionLimits => {
+  const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 2 }, transactionLimits })
+  const measured = await f.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnV2SessionContent.startStudySession, f.request)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'today-start', transactionLimits, queries: measured.metrics.databaseQueries.used,
+    documents: measured.metrics.documentsRead.used, bytes: measured.metrics.bytesRead.used }))
+  expect(measured.value).toMatchObject({ status: 'assessment', assessment: { kind: 'check' }, deliveryGrant: { status: 'granted' } })
+  expect(measured.metrics.databaseQueries.used).toBeLessThan(3072)
+})
+
+test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 11, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Today start: %j', async shape => {
+  const f = await fixture({ reserveCount: shape.reserves, inventory: { ...shape, sources: 64 } })
+  const measured = await f.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnV2SessionContent.startStudySession, f.request)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'today-start', shape, payloadBytes: new TextEncoder().encode(JSON.stringify(f.generated)).length,
+    queries: measured.metrics.databaseQueries.used, documents: measured.metrics.documentsRead.used, bytes: measured.metrics.bytesRead.used,
+    reason: measured.value.status === 'assessment' ? measured.value.assessment.reasonCode : null }))
+  expect(measured.value).toMatchObject({ status: 'assessment', assessment: { kind: 'check' }, deliveryGrant: { status: 'granted' } })
+  expect(measured.metrics.databaseQueries.used).toBeLessThan(3072)
+  const opportunity = await f.cold()
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'check' } })
+  const granted = await f.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision, idempotencyKey: 'max_inventory_grant_1234567890' })
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(granted.value).toMatchObject({ status: 'granted' })
+  const accepted = await f.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'max_inventory_accept_1234567890', response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+        payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(accepted.value).toMatchObject({ kind: 'accepted' })
+  for (const [path, call] of [['today-grant', granted], ['today-accept', accepted]] as const) {
+    console.info('delivery-read-budget', JSON.stringify({ path, shape, queries: call.metrics.databaseQueries.used,
+      documents: call.metrics.documentsRead.used, bytes: call.metrics.bytesRead.used }))
+    expect(call.metrics.databaseQueries.used).toBeLessThan(3072)
+  }
+
+})
+
+test.each((['patch', 'replace', 'delete', 'insert'] as const).flatMap(write => [false, true].map(child => ({ write, child }))))(
+  'source authority is revalidated after $write with a child read scope=$child', async ({ write, child }) => {
+  const f = await fixture()
+  await f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
+  const opportunity = await f.cold()
+  const result = await f.owner.mutation(async original => {
+    const parent = createResponsePrivacyReadContext(original, userId).ctx
+    let ctx = measurementReadContext(parent, userId)
+    if (child) ctx = measurementReadContext(createResponsePrivacyReadContext(ctx, userId).ctx, userId)
+    expect(await assessmentDelivery.readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, 'today')).toMatchObject({ status: 'available' })
+    if (write === 'patch') await ctx.db.patch(f.graph.sourceIdentityId, { tombstonedAt: Date.now() })
+    if (write === 'delete') await ctx.db.delete(f.graph.sourceExcerptId)
+    if (write === 'replace' || write === 'insert') {
+      const { _id: _id, _creationTime: _time, ...source } = (await ctx.db.get(f.graph.sourceSnapshotId))!
+      if (write === 'replace') await ctx.db.replace(f.graph.sourceSnapshotId, { ...source, rightsStatus: 'prohibited' })
+      else await ctx.db.insert('learnSourceSnapshots', { ...source, revision: source.revision + 1 })
+    }
+    return await assessmentDelivery.grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id,
+      expectedRevision: opportunity.revision, idempotencyKey: 'revoked_in_invocation_1234567890', flow: 'today' })
+  })
+  expect(result).toMatchObject({ status: 'unavailable', reasonCodes: ['evidence_unavailable'] })
+  expect(await f.exposures()).toEqual([])
+})
+
+test('Today rolls back instead of returning a blocked assessment with a successful grant', async () => {
+  const f = await fixture()
+  const original = assessmentDelivery.readLearnAssessmentStateForOwner
+  vi.spyOn(assessmentDelivery, 'readLearnAssessmentStateForOwner').mockImplementation(async (ctx, owner, id, flow) => {
+    const row = await ctx.db.get(id)
+    if (row?.deliveryGrantId) {
+      if (!('patch' in ctx.db)) throw new Error('Expected mutation context')
+      await ctx.db.patch(f.graph.sourceIdentityId, { tombstonedAt: Date.now() })
+    }
+    return await original(ctx, owner, id, flow)
+  })
+  await expect(f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).rejects.toThrow('Learn assessment delivery authority changed')
+  expect(await f.exposures()).toEqual([])
+  expect(await f.opportunities()).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.sourceIdentityId))).not.toHaveProperty('tombstonedAt')
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: 'ready', revision: 2 })
+})
+
+test.each(['grant', 'accept'] as const)('native read exhaustion aborts %s instead of becoming unavailable or invalid payload', async phase => {
+  const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64 } })
+  await f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
+  if (phase === 'accept') await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+  const opportunity = await f.cold()
+  const exposures = await f.exposures()
+  await expect(f.owner.mutation(async ctx => phase === 'grant'
+    ? await ctx.runMutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision, idempotencyKey: 'budget_exhaustion_grant_1234567890' },
+    { transactionLimits: { databaseQueries: 180 } })
+    : await ctx.runMutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'budget_exhaustion_accept_1234567890', response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+        payload: { kind: 'numeric', value: 0, unit: 'members' } } } }, { transactionLimits: { databaseQueries: 180 } }))).rejects.toThrow('Too many index ranges')
+  expect(await f.exposures()).toEqual(exposures)
+  expect(await f.cold()).toEqual(opportunity)
+  expect(await f.t.run(ctx => ctx.db.query('learnResponses').withIndex('by_userId', q => q.eq('userId', userId)).take(2))).toEqual([])
+})
+
+
+test('the largest published inventory can grant before starting its session', async () => {
+  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, extraSupports: 11, backingDocuments: true } })
+  await f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
+  const opportunity = await f.cold()
+  const granted = await f.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: opportunity._id, expectedRevision: opportunity.revision, idempotencyKey: 'max_first_grant_1234567890' })
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(granted.value).toMatchObject({ status: 'granted' })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'today-first-grant', queries: granted.metrics.databaseQueries.used,
+    documents: granted.metrics.documentsRead.used, bytes: granted.metrics.bytesRead.used }))
+  expect(granted.metrics.databaseQueries.used).toBeLessThan(3072)
 })

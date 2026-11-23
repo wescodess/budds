@@ -54,7 +54,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
 })
 
-async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, reserve?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
+async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
   const definition = { configurationId: 'canvas.synthetic.v2', configurationVersion: 'canvas.synthetic.v2', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -69,7 +69,7 @@ async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v
     modelPolicies: [{ model: 'synthetic/model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
     productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
     rollback: { ...originalManifest.rollback, ownerSubjectHash: await privacyDigest(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier]) } })
-  const family = await canvasFamilyFixture(saved.binding, { reserve: options.reserve, rubric: options.rubric !== false, keyed: options.format === 'keyed', ordered: options.format === 'ordered' })
+  const family = await canvasFamilyFixture(saved.binding, { reserve: options.reserve, reserveCount: options.reserveCount, inventory: options.inventory, transactionLimits: options.transactionLimits, rubric: options.rubric !== false, keyed: options.format === 'keyed', ordered: options.format === 'ordered' })
   const { t, owner, graph } = family
   await t.run(async ctx => {
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', OWNER.tokenIdentifier)).unique())!
@@ -500,7 +500,7 @@ test('disabled saved-ID scoring and assessment Canvas reads disclose no check bo
 })
 
 test('standalone diagnostics use a non-factual slot with the tighter byte limit and no V2 attempt', async () => {
-  const t = convexTest(schema, modules)
+  const t = convexTest({ schema, modules, transactionLimits: true })
   const owner = t.withIdentity(OWNER)
   const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
   const slotId = await t.run(async ctx => {
@@ -529,7 +529,7 @@ test('standalone diagnostics use a non-factual slot with the tighter byte limit 
 })
 
 test('contribution conversion rechecks held-out lineage and preserves recorded exposure', async () => {
-  const t = convexTest(schema, modules)
+  const t = convexTest({ schema, modules, transactionLimits: true })
   const owner = t.withIdentity(OWNER)
   const f = await t.run(ctx => seedMeasurementStorage(ctx, OWNER.tokenIdentifier))
   await t.run(ctx => ctx.db.insert('users', { tokenIdentifier: OWNER.tokenIdentifier, name: 'Learner', learnV2Entitlement: { enabled: true, updatedAt: NOW }, learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: NOW } }))
@@ -822,4 +822,37 @@ test('saved-ID scoring rejects hybrid raw requests before dispatch', async () =>
     submissionId: receipt.submissionId, response: 'A replacement raw body', idempotencyKey: 'hybrid_saved_score_1234567890' })).rejects.toThrow(/only a submission reference/)
   expect(network).not.toHaveBeenCalled()
   expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toHaveLength(1)
+})
+
+test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 10, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Canvas preparation and attachment: %j', async shape => {
+  const s = await fixture({ prepare: false, attach: false, reserveCount: shape.reserves, inventory: { ...shape, sources: 64 } })
+  const prepared = await s.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'canvas-prepare', shape, queries: prepared.metrics.databaseQueries.used,
+    documents: prepared.metrics.documentsRead.used, bytes: prepared.metrics.bytesRead.used }))
+  expect(prepared.value).toMatchObject({ kind: 'prepared' })
+  const attached = await s.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'canvas-attach', shape, queries: attached.metrics.databaseQueries.used,
+    documents: attached.metrics.documentsRead.used, bytes: attached.metrics.bytesRead.used, reason: attached.value.kind === 'not_admitted' ? attached.value.reasonCode : null }))
+  expect(attached.value).toMatchObject({ kind: 'attached' })
+  expect(attached.metrics.databaseQueries.used).toBeLessThan(3072)
+  if (attached.value.kind !== 'attached') throw new Error('Expected attached check')
+  const attachment = attached.value
+  const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attachment.threadId }))!
+  const accepted = await s.owner.mutation(async ctx => {
+    const value = await ctx.runMutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attachment.threadId,
+      activityId: attachment.activityId, studySessionId: s.f.studySessionId, expectedRevision: canvas.activity.planRevision!,
+      expectedSessionRevision: canvas.session.revision, response: answer, confidence: 3, idempotencyKey: 'max_canvas_accept_1234567890' })
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(accepted.value).toMatchObject({ kind: 'accepted' })
+  console.info('delivery-read-budget', JSON.stringify({ path: 'canvas-accept', shape, queries: accepted.metrics.databaseQueries.used,
+    documents: accepted.metrics.documentsRead.used, bytes: accepted.metrics.bytesRead.used }))
+  expect(accepted.metrics.databaseQueries.used).toBeLessThan(3072)
+
 })

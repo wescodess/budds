@@ -1,3 +1,5 @@
+import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { ZodError } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
@@ -6,7 +8,7 @@ import {
   type LearnV2AssessmentDelivery, type LearnV2AssessmentState, type LearnV2DeliveryGrant,
 } from './learnV2PublicContract'
 import { resolveAssessmentDisclosureContext } from './learnV2AssessmentDisclosure'
-import { getValidatedMeasurementFamily, measurementCanonical, measurementDigest, requireMeasurementCapability } from './learnV2MeasurementItems'
+import { getValidatedMeasurementFamily, measurementCanonical, measurementDigest, requireMeasurementCapability, MeasurementValidationError } from './learnV2MeasurementItems'
 import { measurementCaseExposed, measurementItemReason, measurementScopeReason, writeMeasurementOpportunityFact } from './learnV2Measurement'
 import { getFrozenLearnMeasurementProtocol, measurementWindowPolicyDigest } from './learnV2MeasurementAssignment'
 import { getScopedMasteryRecord } from './learnV2MasteryScope'
@@ -28,6 +30,7 @@ const provenance = (flow: Flow) => `learn-v2.assessment-delivery.${flow}.v1`
 const unavailable = (reasonCode: string) => ({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'unavailable' as const, reasonCodes: [reasonCode] })
 
 async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, flow: Flow) {
+  ctx = measurementReadContext(ctx, userId)
   const target = await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: id })
   if (!('assessmentPins' in target)) throw new Error('Assessment is unavailable')
   const row = target
@@ -59,7 +62,10 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
   }
   if (isLearnAssessmentTestOnly(purpose.data)) {
     try { await requireMeasurementCapability(ctx, userId) }
-    catch { return deny('unknown_history') }
+    catch (error) {
+      if (!(error instanceof MeasurementValidationError) && !(error instanceof ZodError)) throw error
+      return deny('unknown_history')
+    }
     const caseId = pins.data.kind === 'measurement' ? pins.data.itemPins.caseId : pins.data.caseId
     const caseRow = await ctx.db.get(caseId)
     if (!caseRow || caseRow.userId !== userId || !caseRow.identityValidationId
@@ -80,7 +86,10 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
       if (!manifest.members.some(member => (itemPins.noveltyPolicyVersion === member.pins.noveltyPolicyVersion
         || itemPins.noveltyPolicyVersion === caseRow?.identityPolicyVersion)
         && measurementCanonical({ ...member.pins, noveltyPolicyVersion: itemPins.noveltyPolicyVersion }) === measurementCanonical(itemPins))) return deny('pins_mismatch')
-    } catch { return deny('evidence_unavailable') }
+    } catch (error) {
+      if (!(error instanceof MeasurementValidationError) && !(error instanceof ZodError)) throw error
+      return deny('evidence_unavailable')
+    }
   }
   if (purpose.data.kind === 'retained_transfer' && !row.submissionId) {
     const basis = await ctx.db.get(purpose.data.basisAttemptId)
@@ -128,6 +137,7 @@ export async function grantLearnAssessmentDeliveryForOwner(
   userId: string,
   request: { assessmentOpportunityId: Id<'learnAssessmentOpportunities'>; expectedRevision: number; idempotencyKey: string; flow: 'today' | 'canvas' },
 ): Promise<LearnV2DeliveryGrant> {
+  ctx = measurementReadContext(ctx, userId)
   const { flow, ...input } = request
   parsePublicLearnRequest(grantAssessmentDeliverySchema, { version: LEARN_V2_PUBLIC_API_VERSION, ...input })
   const authority = await deliveryAuthority(ctx, userId, request.assessmentOpportunityId, flow)
@@ -182,6 +192,7 @@ export async function grantLearnAssessmentDeliveryForOwner(
 }
 
 export async function readLearnAssessmentForOwner(ctx: ReadCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, flow: Flow): Promise<LearnV2AssessmentDelivery> {
+  ctx = measurementReadContext(ctx, userId)
   const authority = await deliveryAuthority(ctx, userId, id, flow)
   if (authority.reasonCode) return authority.reasonCode === 'disabled' ? disabledLearnV2Result() : unavailable(authority.reasonCode)
   const projection = await assessmentProjection(ctx, userId, authority.row)
@@ -190,6 +201,7 @@ export async function readLearnAssessmentForOwner(ctx: ReadCtx, userId: string, 
 }
 
 export async function readLearnAssessmentStateForOwner(ctx: ReadCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, flow: Flow): Promise<LearnV2AssessmentState> {
+  ctx = measurementReadContext(ctx, userId)
   const authority = await deliveryAuthority(ctx, userId, id, flow)
   if (authority.reasonCode) return authority.reasonCode === 'disabled' ? disabledLearnV2Result() : unavailable(authority.reasonCode)
   if (!authority.context) return unavailable('disclosure_unknown')

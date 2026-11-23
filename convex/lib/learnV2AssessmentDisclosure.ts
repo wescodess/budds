@@ -1,3 +1,4 @@
+import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { v, type PropertyValidators, type ObjectType } from 'convex/values'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
@@ -170,6 +171,7 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, id: Id<'learnSource
 
 export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>): Promise<LearnAssessmentDisclosureContext | null> {
   const userId = await requireAuth(ctx)
+  ctx = measurementReadContext(ctx, userId)
   const row = await ctx.db.get(assessmentOpportunityId)
   if (!row || row.userId !== userId) return null
   const purpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
@@ -248,8 +250,9 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
         : Boolean(assigned && JSON.stringify(assigned) === JSON.stringify(p))
       evidenceAvailable &&= assignment.evidenceStatus === 'available' && assignment.invalidatedAt === undefined
     }
-    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', p.itemId)).take(65)
-    evidenceAvailable &&= supports.length > 0 && supports.length <= 64
+    const supportLimit = LEARN_MEASUREMENT_CAPABILITIES.responses ? 32 * 8 : 64
+    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', p.itemId)).take(supportLimit + 1)
+    evidenceAvailable &&= supports.length > 0 && supports.length <= supportLimit
     for (const support of supports) {
       const source = await ctx.db.get(support.sourceSnapshotId)
       const excerpt = await ctx.db.get(support.sourceExcerptId)

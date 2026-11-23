@@ -1,3 +1,4 @@
+import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -433,6 +434,7 @@ async function saveRejection(ctx: MutationCtx, userId: string, row: Target, key:
 }
 
 export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: string, input: LearnV2AcceptResponseCommand): Promise<LearnResponseReceipt> {
+  ctx = measurementReadContext(ctx, userId)
   const request = parsePublicLearnRequest(acceptResponseCommandSchema, input)
   const entries = 'response' in request ? [request.response] : [request.teachBack, request.application]
   const rows: Target[] = []
@@ -479,6 +481,8 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
     prepared = []
     for (let index = 0; index < entries.length; index++) prepared.push(await prepareResponse(ctx, userId, entries[index]!, rows[index]!, now))
   } catch (error) {
+    const payloadError = error instanceof Error && ['Learn payload ', 'Learn text ', 'Confidence does not match the owned slot'].some(prefix => error.message.startsWith(prefix))
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof ResponseRejection) && !(error instanceof z.ZodError) && !payloadError) throw error
     return await saveRejection(ctx, userId, main, request.idempotencyKey, requestDigest, error instanceof ResponseRejection ? error.code : 'invalid_payload')
   }
   const receiptId = await ctx.db.insert('learnResponseCommandReceipts', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION,

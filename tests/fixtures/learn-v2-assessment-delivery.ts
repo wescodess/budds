@@ -37,11 +37,11 @@ export function syntheticDeliveryProtocol(now = Date.now(), model = false) {
 }
 
 export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding,
-  test?: TestConvex<typeof schema>, identity?: typeof deliveryIdentity } = {}) {
+  test?: TestConvex<typeof schema>, identity?: typeof deliveryIdentity, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean } = {}) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const identity = options.identity ?? deliveryIdentity
   const userId = identity.tokenIdentifier
-  const t = options.test ?? convexTest(schema, { ...modules, ...measurementReplacementModules })
+  const t = options.test ?? convexTest({ schema, modules: { ...modules, ...measurementReplacementModules }, transactionLimits: options.transactionLimits ?? true })
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
@@ -92,6 +92,34 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
       claims: (['stimulus', options.rubric ? 'rubric' : 'key', 'solution'] as const).map((part, order) => ({ order, part,
         claim: `${part} uses the multiplication rule.`, revision: 1, supports: [graph.support] })) }
   })
+  if (options.inventory) {
+    const inventory = options.inventory
+    const supports = await t.run(async ctx => {
+      const { _id: _identityId, _creationTime: _identityTime, ...identity } = (await ctx.db.get(graph.sourceIdentityId))!
+      const { _id: _sourceId, _creationTime: _sourceTime, ...source } = (await ctx.db.get(graph.sourceSnapshotId))!
+      const { _id: _excerptId, _creationTime: _excerptTime, ...excerpt } = (await ctx.db.get(graph.sourceExcerptId))!
+      const rows = [graph.support]
+      for (let index = 1; index < inventory.sources; index++) {
+        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { ...identity, externalKey: `inventory-source-${index}` })
+        const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { ...source, sourceIdentityId })
+        const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { ...excerpt, sourceSnapshotId })
+        await ctx.db.insert('learnObjectiveSources', { userId, objectiveId: graph.objectiveId, sourceSnapshotId, coverage: 'strong' })
+        const { supportDigest: _digest, ...fields } = graph.support
+        const pin = { ...fields, sourceSnapshotId, sourceExcerptId }
+        rows.push({ ...pin, supportDigest: await measurementDigest(pin) })
+      }
+      if (inventory.backingDocuments) for (const pin of rows) {
+        const snapshot = (await ctx.db.get(pin.sourceSnapshotId))!
+        const folderId = await ctx.db.insert('folders', { userId, name: 'Inventory document', documentCount: 1 })
+        const folderDocumentId = await ctx.db.insert('documents', { userId, folderId, filename: 'inventory.txt', fileSize: 1,
+          status: 'success', contentHash: snapshot.contentHash, sourceRevision: snapshot.sourceRevision })
+        await ctx.db.patch(snapshot.sourceIdentityId, { origin: 'folder_document', folderDocumentId })
+      }
+      return rows
+    })
+    for (const member of members) member.claims = Array.from({ length: inventory.claims }, (_, order) => ({ ...member.claims[order % 3]!, order,
+      supports: Array.from({ length: Math.min(8, inventory.supports + Math.max(0, (inventory.extraSupports ?? 0) - order * (8 - inventory.supports))) }, (_, index) => supports[(order * inventory.supports + index) % supports.length]!) }))
+  }
   const generated = { generatorVersion: 'fixture.generation.v1', members }
   if (options.adapters !== false) {
     vi.spyOn(measurementItemAdapters, 'generate').mockResolvedValue(generated)
