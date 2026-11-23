@@ -16,13 +16,17 @@ import {
 } from './lib/learnV2PublicContract'
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION,
+  LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION,
   type LearnResponseReceipt,
 } from '../shared/learn-v2-responses'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, deriveLearnReportLearnerKey,
+import { LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, deriveLearnReportLearnerKey,
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema } from '../shared/learn-v2-measurement-report'
+import { measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
 import { LEARN_HELP_ADMISSION_VERSION } from './lib/learnV2HelpContract'
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -693,5 +697,151 @@ describe('atomic scalar report facts', () => {
     await f.owner.mutation(integrity, { ...request, kind: 'body_purged' })
     expect((await ledger(f.t)).bodies).toEqual([])
     expect(await f.owner.query(api.learnV2Responses.getResponseState, { version: LEARN_V2_PUBLIC_API_VERSION, target: f.assessmentTarget })).toMatchObject({ work: { body: { bodyAvailability: 'purged', purgedAt: NOW } } })
+  })
+})
+
+async function firstCheckFixture(captured = true) {
+  const f = await fixture()
+  const source = await measurementReportSourceFixture()
+  await f.t.run(async ctx => {
+    const basisAttemptId = await ctx.db.insert('masteryAttempts', { userId: OWNER.tokenIdentifier,
+      blueprintRevisionId: f.capability.blueprintRevisionId, objectiveId: f.capability.objectiveId,
+      attemptedAt: source.claim.claim.firstIndependentAt, acceptedAt: source.claim.claim.firstIndependentAt,
+      attemptLocalDate: source.claim.claim.firstIndependentLocalDate, attemptTimezone: source.claim.claim.firstIndependentTimezone,
+      idempotencyKey: 'seeded-basis', kind: 'independent_application', serverScorePercent: 80,
+      masteryStateBefore: 'guided', masteryStateAfter: 'independent', masteryRecordRevision: source.claim.claim.masteryRecordRevision,
+      masteryTransitionVersion: source.claim.claim.transitionVersion,
+      assistanceSnapshot: { ...f.f.assistanceSnapshot, policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION },
+      validitySnapshot: { ...f.f.validitySnapshot, policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION, masteryEligible: true } })
+    const claimKey = await privacyDigest(['learn-v2.first-independent.v1', await masteryScopeKey(OWNER.tokenIdentifier,
+      f.capability.blueprintRevisionId, f.capability.objectiveId), 'first-check.epoch'])
+    const claim = { ...source.claim.claim, claimKey, basisAttemptId, claimSequence: 1 as const, claimFactSequence: (await facts.nextLearnMeasurementSourceSequence(ctx, OWNER.tokenIdentifier)).sequence }
+    const opportunity = (await ctx.db.get(f.assessmentTarget.assessmentOpportunityId))!
+    const flow = opportunity.contextPins.kind === 'session' && opportunity.contextPins.canvas ? 'v2_canvas' : 'v2_today'
+    const clock = { ...source.claim.clock, openAt: opportunity.openAt, closeAt: opportunity.closeAt, dueAt: NOW,
+      dueLocalDate: new Date(NOW).toISOString().slice(0, 10) }
+    await ctx.db.patch(opportunity._id, { firstCheckClaim: claim, originalSlot: true, checkSequence: 1, dueAt: NOW, firstSlotEpoch: 'first-check.epoch',
+      purpose: { kind: 'retained_transfer', basisAttemptId, clock } })
+    await ctx.db.insert('masteryRecords', { userId: OWNER.tokenIdentifier, blueprintRevisionId: f.capability.blueprintRevisionId,
+      objectiveId: f.capability.objectiveId, scopeKey: await masteryScopeKey(OWNER.tokenIdentifier, f.capability.blueprintRevisionId, f.capability.objectiveId),
+      state: 'independent', recordRevision: 2 })
+    await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: 'first-check.epoch', learningVoidId: f.f.learningVoidId,
+      occurredAt: NOW, fact: { kind: 'independent_claim_v2', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, ...claim,
+        blueprintRevisionId: f.capability.blueprintRevisionId, objectiveId: f.capability.objectiveId,
+        stratum: { epoch: 'first-check.epoch', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1', flow, entryPoint: 'retained_check', depth: opportunity.depth },
+        policyPins: { assistancePolicyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, validityPolicyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
+          thresholdVersion: 'learn-v2.mastery-threshold.v1', thresholdPercent: 80 },
+        firstSlot: { kind: 'linked', firstCheckOpportunityId: opportunity._id, checkSequence: 1, linkedAt: NOW, clock,
+          stratum: { ...source.claim.stratum, epoch: 'first-check.epoch', flow, entryPoint: 'retained_check', depth: opportunity.depth,
+            familyId: null, familyRevision: null, equivalenceVersion: null, familyValidationStatus: 'unknown', responseKind: 'bounded_rubric',
+            scorerConfiguration: await deriveLearnScorerConfiguration(opportunity.scoringBinding) } } } })
+    await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: 'first-check.epoch', learningVoidId: f.f.learningVoidId,
+      occurredAt: NOW - 1, fact: { kind: 'opportunity', assessmentOpportunityId: f.assessmentTarget.assessmentOpportunityId,
+        recordRevision: 1, status: 'eligible', dueAt: NOW - 1000, closeAt: NOW + 100000, clock: null, originalSlot: true,
+        ...(captured ? { stateAtEligibility: 'retained' as const } : {}) } })
+  })
+  return f
+}
+
+describe('ordinary first-check facts (#538)', () => {
+  test.each([['linked', 0], ['linked', 1], ['later_link', 0], ['later_link', 1]] as const)('records ordinary acceptance without a back-reference using a %s fact at sequence %i', async (kind, checkSequence) => {
+    const f = await firstCheckFixture()
+    await f.t.run(async ctx => {
+      await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, { firstCheckClaim: undefined, checkSequence })
+      if (kind === 'later_link') {
+        const row = (await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_sequence',
+          q => q.eq('userId', OWNER.tokenIdentifier).eq('sequence', 1)).unique())!
+        if (row.fact.kind !== 'independent_claim_v2' || row.fact.firstSlot.kind !== 'linked') throw new Error('Expected linked claim')
+        const slot = row.fact.firstSlot
+        await ctx.db.patch(row._id, { fact: { ...row.fact, firstSlot: { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' } } })
+        await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: row.epoch, learningVoidId: row.learningVoidId,
+          occurredAt: NOW, fact: { kind: 'first_slot_link', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+            claimKey: row.fact.claimKey, claimSequence: 1, claimFactSequence: row.fact.claimFactSequence, slot } })
+      }
+    })
+    const response = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const state = await ledger(f.t)
+    expect(state.facts.filter(row => row.fact.kind === 'response')).toEqual([
+      expect.objectContaining({ epoch: 'first-check.epoch', fact: expect.objectContaining({ submissionId: response.submissionId, stateAtAcceptance: 'independent' }) }),
+    ])
+  })
+
+  test('acceptance and integrity races each append once under the frozen claim epoch', async () => {
+    const f = await firstCheckFixture()
+    const args = { submission: f.submission }
+    const results = await Promise.all([f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, args), f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, args)])
+    const response = accepted(results[0]!)
+    expect(results[1]).toEqual(response)
+    const request = { submissionId: response.submissionId, kind: 'pre_seal_contamination' as const, effectiveAt: NOW }
+    const events = await Promise.all([f.owner.mutation(integrity, request), f.owner.mutation(integrity, request)])
+    expect(events[0]).toBe(events[1])
+    const state = await ledger(f.t)
+    expect(state.facts.map(row => [row.sequence, row.epoch, row.fact.kind])).toEqual([
+      [1, 'first-check.epoch', 'independent_claim_v2'], [2, 'first-check.epoch', 'opportunity'],
+      [3, 'first-check.epoch', 'response'], [4, 'first-check.epoch', 'integrity'],
+    ])
+    expect(state.facts[2]?.fact).toMatchObject({ stateAtAcceptance: 'independent', submissionId: response.submissionId })
+    expect(state.watermark?.sequence).toBe(4)
+    expect(await f.t.run(ctx => ctx.db.query('learnResponseIntegrityEvents').unique())).toMatchObject({ sequence: 1, sourceFactSequence: 4 })
+    await f.t.run(async ctx => { for (const row of await ctx.db.query('masteryRecords').take(8)) await ctx.db.patch(row._id, { state: 'needs_review' }) })
+    expect((await ledger(f.t)).facts).toEqual(state.facts)
+  })
+
+  test.each([true, false])('terminalization replays once and preserves captured=%s eligibility without reading current mastery', async captured => {
+    const f = await firstCheckFixture(captured)
+    await f.t.run(async ctx => { for (const row of await ctx.db.query('masteryRecords').take(8)) await ctx.db.patch(row._id, { state: 'needs_review' }) })
+    const request = { version: LEARN_V2_PUBLIC_API_VERSION, target: f.assessmentTarget, expectedRevision: 1, idempotencyKey: KEY, reason: 'abandoned' as const }
+    const results = await Promise.all([f.owner.mutation(api.learnV2Responses.terminalizeResponse, request), f.owner.mutation(api.learnV2Responses.terminalizeResponse, request)])
+    expect(results[1]).toEqual(results[0])
+    expect(results[0]).toMatchObject({ status: 'terminal' })
+    const state = await ledger(f.t)
+    expect(state.facts).toHaveLength(3)
+    expect(state.facts[2]).toMatchObject({ sequence: 3, epoch: 'first-check.epoch', fact: { kind: 'opportunity', status: 'abandoned', stateAtEligibility: captured ? 'retained' : 'unknown' } })
+    expect(state.watermark?.sequence).toBe(3)
+  })
+
+  test('missing acceptance state is captured as unknown and acceptance failure rolls back the watermark', async () => {
+    const f = await firstCheckFixture(false)
+    await f.t.run(async ctx => { for (const row of await ctx.db.query('masteryRecords').take(8)) await ctx.db.delete(row._id) })
+    const before = await ledger(f.t)
+    const append = facts.appendLearnMeasurementFact
+    const spy = vi.spyOn(facts, 'writeLearnResponseAcceptanceFact').mockImplementationOnce(async (...args) => {
+      await append(args[0], args[1], { epoch: args[3], learningVoidId: f.f.learningVoidId, occurredAt: NOW,
+        fact: { kind: 'response', submissionId: args[2]._id, acceptedAt: NOW, stateAtAcceptance: 'unknown',
+          measurementEligible: false, masteryEligible: false, assistanceSnapshot: args[2].assistanceSnapshot, validitySnapshot: args[2].validitySnapshot } })
+      throw new Error('after fact and watermark')
+    })
+    await expect(f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })).rejects.toThrow('after fact and watermark')
+    expect(await ledger(f.t)).toEqual(before)
+    spy.mockRestore()
+    accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    expect((await ledger(f.t)).facts[2]?.fact).toMatchObject({ stateAtAcceptance: 'unknown' })
+  })
+
+  test.each(['terminalization', 'integrity'] as const)('%s failure after appending rolls back facts, watermark and source changes', async kind => {
+    const f = await firstCheckFixture()
+    const response = kind === 'integrity' ? accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })) : null
+    const before = await ledger(f.t)
+    const beforeOpportunity = await f.t.run(ctx => ctx.db.get(f.assessmentTarget.assessmentOpportunityId))
+    const append = facts.appendLearnMeasurementFact
+    vi.spyOn(facts, 'appendLearnMeasurementFact').mockImplementationOnce(async (...args) => {
+      await append(...args)
+      throw new Error('after append')
+    })
+    const operation = response ? f.owner.mutation(integrity, { submissionId: response.submissionId, kind: 'pre_seal_contamination', effectiveAt: NOW })
+      : f.owner.mutation(api.learnV2Responses.terminalizeResponse, { version: LEARN_V2_PUBLIC_API_VERSION, target: f.assessmentTarget,
+          expectedRevision: 1, idempotencyKey: KEY, reason: 'cancelled' })
+    await expect(operation).rejects.toThrow('after append')
+    expect(await ledger(f.t)).toEqual(before)
+    expect(await f.t.run(ctx => ctx.db.get(f.assessmentTarget.assessmentOpportunityId))).toEqual(beforeOpportunity)
+    expect(await f.t.run(ctx => ctx.db.query('learnResponseIntegrityEvents').take(8))).toEqual([])
+  })
+
+  test('forged first-slot link rolls acceptance back', async () => {
+    const f = await firstCheckFixture()
+    await f.t.run(ctx => ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, { checkSequence: 2 }))
+    const before = await ledger(f.t)
+    await expect(f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })).rejects.toThrow('first-check fact unavailable')
+    expect(await ledger(f.t)).toEqual(before)
   })
 })

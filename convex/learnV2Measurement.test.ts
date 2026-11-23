@@ -809,6 +809,10 @@ test('scheduling an ordinary retained original links an existing unresolved v2 c
   expect(rows.filter(row => row.fact.kind === 'independent_claim_v2')).toHaveLength(1)
   expect(rows.filter(row => row.fact.kind === 'first_slot_link')).toHaveLength(1)
   expect(rows.find(row => row.fact.kind === 'first_slot_link')?.fact).toMatchObject({ slot: { firstCheckOpportunityId: originalId, linkedAt: Date.now() } })
+  const savedClaim = rows.find(row => row.fact.kind === 'independent_claim_v2')
+  if (savedClaim?.fact.kind !== 'independent_claim_v2') throw new Error('Expected Independent claim')
+  expect(await f.t.run(ctx => ctx.db.get(originalId))).toMatchObject({ checkSequence: 1,
+    firstCheckClaim: { basisAttemptId: result.attemptId, claimKey: savedClaim.fact.claimKey } })
   await f.t.run(async ctx => registerLearnFirstSlotForOwner(ctx, (await ctx.db.get(originalId))!, syntheticProtocol().epoch))
   expect((await f.facts()).filter(row => row.fact.kind === 'first_slot_link')).toHaveLength(1)
 })

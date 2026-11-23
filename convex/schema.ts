@@ -1781,6 +1781,12 @@ export default defineSchema({
     .index('by_userId_and_reportRunId_and_sequence', ['userId', 'reportRunId', 'sequence'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_assignmentId_and_horizonDays', ['userId', 'assignmentId', 'horizonDays']),
+  learnMeasurementReportAccessAudits: defineTable({
+    userId: v.string(), reportRunId: v.union(v.id('learnMeasurementReportRuns'), v.null()),
+    action: v.union(v.literal('request'), v.literal('refresh'), v.literal('manifest'), v.literal('page'), v.literal('export'), v.literal('download')),
+    status: v.union(v.literal('requested'), v.literal('disabled'), v.literal('unavailable'), v.literal('building'), v.literal('failed'), v.literal('stale'), v.literal('sealed'), v.literal('read'), v.literal('aggregate_page')),
+    createdAt: v.number(),
+  }).index('by_userId', ['userId']).index('by_userId_and_createdAt', ['userId', 'createdAt']).index('by_createdAt', ['createdAt']),
   learnMeasurementReportRuns: defineTable(measurementStorage.reportRunFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_status_and_createdAt', ['userId', 'status', 'createdAt'])
@@ -1889,6 +1895,7 @@ export default defineSchema({
   learnMeasurementReportFacts: defineTable(measurementStorage.reportFactFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_sequence', ['userId', 'sequence'])
+    .index('by_userId_and_fact_kind_and_sequence', ['userId', 'fact.kind', 'sequence'])
     .index('by_userId_and_epoch_and_sequence', ['userId', 'epoch', 'sequence'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])

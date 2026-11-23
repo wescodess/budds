@@ -6,7 +6,7 @@ import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWo
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
-import { masteryScopeKey } from './learnV2MasteryScope'
+import { getScopedMasteryRecord, masteryScopeKey } from './learnV2MasteryScope'
 import { findCurrentAdaptiveActivityForSessionContent } from './learnAdaptiveEvents'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readEarliestLearnFirstSlot, readLearnFirstSlotInventory, writeLearnMeasurementEnrollmentFact } from './learnV2MeasurementFacts'
 import {
@@ -199,10 +199,20 @@ async function enrollmentHistory(ctx: ReadCtx, userId: string, scope: Measuremen
 export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignment: Pick<AdmittedAssignment, 'userId' | 'epoch' | 'learningVoidId'>, row: Doc<'learnAssessmentOpportunities'>) {
   const previous = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', assignment.userId).eq('fact.assessmentOpportunityId', row._id)).order('desc').first()
   if (previous?.fact.kind === 'opportunity' && previous.fact.recordRevision === row.revision) return previous.sequence
+  let stateAtEligibility = LEARN_MEASUREMENT_CAPABILITIES.responses && previous?.fact.kind === 'opportunity' ? previous.fact.stateAtEligibility : undefined
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && stateAtEligibility === undefined && row.originalSlot && 'clock' in row.purpose
+    && row.operationalEligibility === 'eligible' && ['ready', 'test_open'].includes(row.phase)) {
+    const history = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q =>
+      q.eq('userId', assignment.userId).eq('fact.assessmentOpportunityId', row._id)).order('asc').take(8)
+    const first = history.find(fact => fact.fact.kind === 'opportunity' && fact.fact.status === 'eligible')
+    stateAtEligibility = first?.fact.kind === 'opportunity' ? first.fact.stateAtEligibility ?? 'unknown'
+      : history.length === 8 ? 'unknown' : (await getScopedMasteryRecord(ctx, assignment.userId, row.blueprintRevisionId, row.objectiveId)).record?.state ?? 'unseen'
+  }
   return await appendLearnMeasurementFact(ctx, assignment.userId, { epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId,
     fact: { kind: 'opportunity', assessmentOpportunityId: row._id, recordRevision: row.revision,
       status: ['cancelled', 'abandoned', 'invalid'].includes(row.phase) ? row.phase : row.operationalEligibility, dueAt: row.dueAt ?? null, closeAt: row.closeAt,
-      clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot } })
+      clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot,
+      ...(stateAtEligibility !== undefined ? { stateAtEligibility } : {}) } })
 }
 
 export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: string, request: EnrollmentRequest) {

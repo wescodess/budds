@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { convexTest } from 'convex-test'
+import { convexTest, type TestConvex } from 'convex-test'
 import { anyApi, type ApiFromModules } from 'convex/server'
 import { vi } from 'vitest'
 import { api, internal } from '../../convex/_generated/api'
@@ -13,8 +13,6 @@ import { measurementReplacementModules } from './learn-v2-measurement-replacemen
 const modules = import.meta.glob('../../convex/**/*.ts')
 const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('../../convex/learnV2MeasurementItems') }>).learnV2MeasurementItems
 export const deliveryIdentity = { tokenIdentifier: 'https://auth.example|measurement-publisher', subject: 'publisher' }
-const identity = deliveryIdentity
-const userId = identity.tokenIdentifier
 export const deliveryRubric = { version: 'learn-v2.assessment.v1' as const, kind: 'machine_checkable' as const, responseFormat: 'short_text' as const,
   instructions: 'Apply the source rule.', passingScorePercent: 80 as const,
   criteria: [{ key: 'accuracy', description: 'PRIVATE-ORDINARY-RUBRIC', weightPercent: 100 }] }
@@ -38,9 +36,12 @@ export function syntheticDeliveryProtocol(now = Date.now(), model = false) {
     scoringBinding: model ? modelBinding : binding })
 }
 
-export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding } = {}) {
+export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding,
+  test?: TestConvex<typeof schema>, identity?: typeof deliveryIdentity } = {}) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
-  const t = convexTest(schema, { ...modules, ...measurementReplacementModules })
+  const identity = options.identity ?? deliveryIdentity
+  const userId = identity.tokenIdentifier
+  const t = options.test ?? convexTest(schema, { ...modules, ...measurementReplacementModules })
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
@@ -126,6 +127,9 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
 }
 
 export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof assessmentDeliveryFixture>>, 't' | 'graph'>) {
+  const session = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
+  if (!session) throw new Error('Missing teaching session')
+  const userId = session.userId
   const jobId = await f.t.run(ctx => ctx.db.insert('learnJobs', { userId, learningVoidId: f.graph.learningVoidId,
     blueprintRevisionId: f.graph.blueprintRevisionId, studyPlanRevisionId: f.graph.studyPlanRevisionId, studySessionId: f.graph.studySessionId,
     type: 'session_content_generation', status: 'running', revision: 1, providerResponseModel: 'synthetic/model', idempotencyKey: 'synthetic-teaching-job', inputDigest: `sha256:${'a'.repeat(64)}`,

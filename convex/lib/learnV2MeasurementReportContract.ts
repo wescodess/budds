@@ -2,7 +2,8 @@ import { v, type Validator } from 'convex/values'
 import type { z } from 'zod'
 import {
   LEARN_V2_REPORT_RESPONSE_KINDS, LEARN_V2_REPORT_SENSITIVITY_POLICY_VERSION, LEARN_V2_REPORT_STARTING_BANDS,
-  LEARN_V2_REPORT_STATUSES, LEARN_V2_REPORT_DISPOSITIONS, type learnReportMetricSchema,
+  LEARN_V2_REPORT_STATUSES, LEARN_V2_REPORT_DISPOSITIONS, type learnReportMetricSchema, type learnPublishedReportMetricSchema,
+  LEARN_REPORT_PUBLICATION_POLICY_VERSION,
   LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
   type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema, type learnReportInputSnapshotSchema,
 } from '../../shared/learn-v2-measurement-report'
@@ -14,6 +15,7 @@ const sourceCoverage = literals(['complete', 'unknown'])
 const responseKind = literals(LEARN_V2_REPORT_RESPONSE_KINDS)
 const familyStatus = literals(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired', 'unknown'])
 const masteryState = literals(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known'])
+export const learnReportCapturedMasteryStateValidator = v.union(masteryState, v.literal('unknown'))
 const replacementPolicy = v.union(v.object({ kind: v.literal('secondary_only') }),
   v.object({ kind: v.literal('predeclared'), protocolVersion: v.string(), ruleVersion: v.string(), ruleDigest: v.string() }))
 const interval = v.union(v.object({ lower: v.number(), upper: v.number() }), v.null())
@@ -33,13 +35,12 @@ const formCounts = v.object({ A: v.number(), B: v.number(), C: v.number(), D: v.
 const sourceReason = v.object({ covered: v.number(), affected: v.number(), unknown: v.number() })
 const bandCounts = v.object({ population: v.number(), accepted: v.number(), validScored: v.number(), paired: v.number() })
 
-// Reused verbatim by stored cells, public pages and aggregate export pages.
-export const learnReportMetricValidator = v.object({
-  metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30)),
+export const learnReportComputationMetricValidator = v.object({
+  metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30), v.null()),
   weighting: literals(['capability_episode', 'learner_sensitivity']), stratum: v.object({
     flow: literals(['v2_today', 'v2_canvas']), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
-    startingBand: literals(LEARN_V2_REPORT_STARTING_BANDS), responseKind: literals(LEARN_V2_REPORT_RESPONSE_KINDS), scoringKind: literals(['deterministic', 'model']),
-    configurationDigest: v.string(), observedModel: nullableString, observedUpstream: nullableString,
+    startingBand: literals(LEARN_V2_REPORT_STARTING_BANDS), responseKind: v.union(responseKind, v.literal('unknown')), scoringKind: literals(['deterministic', 'model', 'unknown']),
+    configurationDigest: nullableString, observedModel: nullableString, observedUpstream: nullableString,
     familyValidationStatus: familyStatus,
   }), ...estimateFields,
   legacyIndependentAudit: v.object({ unknownCount: nullableNumber, sourceCoverage }),
@@ -64,6 +65,16 @@ export const learnReportMetricValidator = v.object({
     purgedEvidence: sourceReason, replacement: sourceReason, treatmentChange: sourceReason, outsideHelpUncertainty: sourceReason }),
   attritionByStartingBand: v.object({ below40: bandCounts, from40To80: bandCounts, from80To100: bandCounts, unknown: bandCounts }),
 }) satisfies Validator<z.infer<typeof learnReportMetricSchema>, 'required', string>
+
+const rawMetric = learnReportComputationMetricValidator.fields
+// Stored cells, public pages and aggregate export pages carry only the published, small-cell-suppressed shape.
+export const learnReportMetricValidator = v.object({ ...rawMetric,
+  publicationPolicyVersion: v.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION),
+  counts: v.union(rawMetric.counts, v.null()), legacyIndependentAudit: v.union(rawMetric.legacyIndependentAudit, v.null()),
+  replacements: v.union(rawMetric.replacements, v.null()), instrumentation: v.union(rawMetric.instrumentation, v.null()),
+  sensitivity: v.union(rawMetric.sensitivity, v.null()), allocations: v.union(rawMetric.allocations, v.null()),
+  sourceAccounting: v.union(rawMetric.sourceAccounting, v.null()), attritionByStartingBand: v.union(rawMetric.attritionByStartingBand, v.null()),
+}) satisfies Validator<z.infer<typeof learnPublishedReportMetricSchema>, 'required', string>
 
 const scorerConfiguration = v.object({ scoringKind: literals(['deterministic', 'model']), configurationDigest: v.string(), scorerVersion: v.string() })
 const acceptance = v.object({ submissionId: v.id('learnResponses'), acceptedAt: v.number() })
@@ -109,16 +120,24 @@ export const learnReportResultSnapshotValidator = v.object({
 }) satisfies Validator<z.infer<typeof learnReportResultSnapshotSchema>, 'required', string>
 const nullableResult = v.union(learnReportResultSnapshotValidator, v.null())
 const nullableAcceptance = v.union(acceptance, v.null())
+const coldReplacement = v.object({
+  assessmentOpportunityId: v.id('learnAssessmentOpportunities'), replacesOpportunityId: v.id('learnAssessmentOpportunities'),
+  replacementReason: v.string(), openAt: v.number(), closeAt: v.number(), eligibilityPolicyVersion: v.string(),
+  operationalEligibility: literals(['pending', 'eligible', 'blocked']), acceptance: nullableAcceptance,
+  validitySnapshot: v.union(v.object({ policyVersion: v.string(), status: literals(['valid', 'excluded', 'unknown']),
+    measurementEligible: v.boolean(), masteryEligible: v.boolean(), exclusionReasons: v.array(v.string()) }), v.null()),
+  result: nullableResult,
+})
 export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('owner_watermark'), learnerKey: v.string(),
     sequence: v.number(), dueWorkThrough: nullableNumber, historyCoverage: sourceCoverage,
-    legacyIndependentAudit: learnReportMetricValidator.fields.legacyIndependentAudit }),
+    legacyIndependentAudit: rawMetric.legacyIndependentAudit }),
   v.object({ kind: v.literal('episode'), ...computationKeys, assignmentId: v.id('learnMeasurementAssignments'),
     learningVoidId: v.id('learningVoids'), blueprintRevisionId: v.id('learnBlueprintRevisions'), objectiveId: v.id('learnObjectives'),
     horizonDays: v.union(v.literal(7), v.literal(30)), assignment: learnReportAssignmentSnapshotValidator, clock: v.union(reportClock, v.null()),
     coldOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
     originalOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()), replacementOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
-    coldAcceptance: nullableAcceptance, delayedAcceptance: nullableAcceptance, cold: nullableResult, delayed: nullableResult,
+    coldAcceptance: nullableAcceptance, delayedAcceptance: nullableAcceptance, cold: nullableResult, delayed: nullableResult, coldReplacement: v.union(coldReplacement, v.null()),
     replacementClock: v.union(reportClock, v.null()), replacementAcceptance: nullableAcceptance, replacement: nullableResult, replacementPolicy: v.union(replacementPolicy, v.null()),
     operationalEligibility: literals(['pending', 'eligible', 'blocked']), disposition: literals(LEARN_V2_REPORT_DISPOSITIONS), reasonCodes: v.array(v.string()),
     mixedFlow: v.boolean(), treatmentEpochChanged: v.boolean(),
@@ -126,7 +145,7 @@ export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('first_check_claim'), ...computationKeys,
     stratum: learnReportFirstSlotStratumValidator, claim: firstCheckClaim,
     firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), clock: reportClock,
-    stateAtEligibility: masteryState, stateAtAcceptance: v.union(masteryState, v.null()), acceptance: nullableAcceptance,
+    stateAtEligibility: learnReportCapturedMasteryStateValidator, stateAtAcceptance: v.union(learnReportCapturedMasteryStateValidator, v.null()), acceptance: nullableAcceptance,
     result: nullableResult, unresolvedReason: nullableString,
   }),
   v.object({ kind: v.literal('first_check_claim_v2'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION), ...computationKeys,

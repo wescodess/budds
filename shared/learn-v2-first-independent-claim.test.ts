@@ -87,6 +87,13 @@ describe('first Independent claim v2', () => {
     expect(appended.firstSlot.kind === 'linked' && appended.firstSlot.clock).toEqual(slot.clock)
   })
 
+  it('resolves a late link without changing the original slot or its clock', () => {
+    const { claimFact, linkFact } = fixture()
+    const candidate = structuredClone(linkFact)
+    candidate.occurredAt = candidate.fact.slot.linkedAt = candidate.fact.slot.clock.closeAt + 1000
+    expect(resolveLearnReportFirstSlotV2(claimFact, candidate).firstSlot).toEqual(candidate.fact.slot)
+  })
+
   it.each(['claimKey', 'claimSequence', 'claimFactSequence', 'epoch', 'sequence', 'occurredAt', 'stratum'] as const)(
     'rejects a link with conflicting %s', field => {
       const { claimFact, linkFact } = fixture()

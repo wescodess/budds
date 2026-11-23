@@ -46,7 +46,30 @@ The four share-token query families and their aliases explicitly permit anonymou
 
 The personal export/original-file exception follows [the disclosure resolution, section 3.5](https://github.com/wescodess/budds/issues/373#issuecomment-6651824980): do not suspend lawful export during an open check; require its existing bounded export authorization and contamination/unknown accounting. Those endpoints do not become unaccounted teaching reads.
 
-All 128 public query names are listed below. Every new `Delivery`/`Preparation` alias belongs to the query in its row.
+## C6 aggregate reports
+
+`learnV2MeasurementReports` adds no teaching delivery or assessment-item read. The following classifications also apply to v2 first-Independent claims. Aggregate responses use closed stored/public/export validators in either responses-capability state; prompts, answers, criteria, rubrics, weights, keys, source locators and private execution payloads are absent.
+
+| Entry points | Classification | Authority and capability |
+| --- | --- | --- |
+| `requestReport` | Owner-only measurement refresh receipt | Verified owner and server-managed scoped viewer grant; reports capability default-off; no public grant provisioning. |
+| `getReport`, `getReportCells`, `exportAggregateReport` | `summary_or_own_work`; owner-only aggregate/status DTOs | Recheck the verified principal, approved cohort/epoch grant, expiry, revocation, deletion and source invalidation. No learner report access or raw row export. |
+| `readReportManifest`, `readReportCells`, `exportReportPage`, `downloadReportPage` (mutations) | Same owner-only aggregate/status DTOs | Atomic payload-free access audit; repeated ownership, grant, deletion and source checks. Legacy queries withhold report data while reports are enabled. |
+| `beginReportSnapshot`, `dailyRefresh`, `pinReportOwners`, build/finalize/save/seal operations | Internal measurement processing | Internal registrations, server approval scope and bounded reads; no learner transport. |
+| `readBuildState`, `readSourcePage`, `readInventoryPage`, `readInventoryRecord` | Internal measurement source | Internal registrations and approved run scope; normalized rows remain internal. |
+| `scripts/learn-v2-measurement-report.mjs` | Offline aggregate diagnostic/replay | No RPC, teaching delivery or viewer-grant authority. Offline provenance remains unverified. |
+
+Enabled report data uses audited mutations because cached queries cannot commit per-access records. The old query transports return `audited_access_required` while reports are enabled. The separate owner audit table is bounded, retained for 30 days and included in account deletion; it is excluded from personal exports. Denied attempts emit only a status to the runtime log. No audit goes to activity events or analytics.
+
+No responses-capability teaching wrapper is needed for these aggregate-only results. With reports off, owner-authorized calls retain disabled receipts without writes. With responses off, existing teaching, history, shares and personal exports retain the C4 parity behavior. `convex/learnV2MeasurementReports.test.ts` covers aggregate privacy canaries, anonymous/foreign/different-issuer denial, scoped grants, deletion and revocation; the C4 differential suites cover existing learner paths.
+
+The C5/C6 integration preserves both initial-link and later-link writers' transactionally recorded `firstCheckClaim` back-reference and sequence one on the earliest original. C6 continues to classify missing back-references as `first_slot_claim_missing` and reject conflicting identities. C5 eligibility facts now capture the owned mastery state when a clocked original first becomes eligible, and preserve that captured state through binding, delivery, scoring and replacement. Earlier eligible facts without a captured state remain `unknown`; current mastery cannot supply historical eligibility. These additional lookups and fact fields are responses-gated, and use C6's existing optional storage field.
+
+Reserve replacement keeps its recorded `replacementBinding`, secondary sequence zero, and the original allocation/first-slot clock. It cannot replace an accepted original and emits opportunity facts rather than response-integrity facts. A replacement therefore leaves an already sealed source snapshot unchanged. Subsequent response evidence purging emits an `integrity` fact; C6's owner/kind/sequence revocation index withholds the report as stale. C5's session-purpose index and optional replacement record coexist with C6's report-audit storage, revocation index and optional captured states; no required field or backfill is introduced.
+
+`convex/learnV2C5ReportsIntegration.test.ts` drives real registered cold/ordinary/day-7 delivery, acceptance and scoring into bounded C6 extraction, sealing and audited reads. It covers pass/fail, one reserve within a cohort, one claim per learner, the original first-slot identity, immutable snapshot access after replacement, and integrity revocation. Cohorts satisfy C6's publication thresholds; no disclosure threshold is relaxed. Historical-unknown and responses-off controls cover the eligibility writer. The C5 and dev C4 goldens are retained without regeneration. Canvas collection remains disabled pending [C5.6 #535](https://github.com/wescodess/budds/issues/535); synthetic publication/scorer transport establishes local behavior only.
+
+The original C4 inventory below lists 128 public query names. C5 and C6 additions are recorded in their sections. Every new `Delivery`/`Preparation` alias belongs to the query in its row.
 
 | Handling | Rule |
 | --- | --- |

@@ -11,7 +11,7 @@ import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
 import type { Doc, Id } from './_generated/dataModel'
 import { LEARN_V2_CONTRACT } from '../shared/learn-v2-contract'
-import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportMetricSchema, learnReportInputSnapshotSchema } from '../shared/learn-v2-measurement-report'
+import { LEARN_REPORT_PUBLICATION_POLICY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportMetricSchema, learnReportInputSnapshotSchema } from '../shared/learn-v2-measurement-report'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION,
   learnValiditySnapshotSchema, learnResponseTerminalizedResultSchema, resolveLearnResponseConfidenceRequested } from '../shared/learn-v2-responses'
 import { deriveLearnAssessmentResponseContext } from '../shared/learn-v2-measurement'
@@ -135,6 +135,17 @@ describe('inactive Phase C storage boundaries', () => {
     for (const field of ['legacyIndependentAudit', 'counts', 'stratum', 'replacements', 'instrumentation', 'sensitivity', 'allocations', 'sourceAccounting', 'attritionByStartingBand']) {
       expect(exported[0]).not.toHaveProperty(field)
     }
+  })
+
+  test('keeps earlier publication policy versions storable while rejecting unknown ones', async () => {
+    const t = convexTest(schema, modules)
+    const f = await t.run(ctx => seedMeasurementStorage(ctx, owner.tokenIdentifier))
+    const id = f.rows.learnMeasurementReportCells
+    for (const version of ['learn-v2.report-publication.minimum-five-learners.v1', 'learn-v2.report-publication.minimum-five-learners.v2', LEARN_REPORT_PUBLICATION_POLICY_VERSION]) {
+      await t.run(ctx => ctx.db.patch(id, { publicationPolicyVersion: version } as never))
+      expect((await t.run(ctx => ctx.db.get(id)))?.publicationPolicyVersion).toBe(version)
+    }
+    await expect(t.run(ctx => ctx.db.patch(id, { publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v0' } as never))).rejects.toThrow()
   })
 
   test('round-trips the aggregate legacy audit source snapshot without widening owner export', async () => {

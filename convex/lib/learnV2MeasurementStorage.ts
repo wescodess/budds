@@ -4,7 +4,7 @@ import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE
 import {
   learnReportMetricValidator, learnReportAssignmentSnapshotValidator as reportAssignmentSnapshot,
   learnReportResultSnapshotValidator as reportResultSnapshot, learnReportInputSnapshotValidator as reportInputSnapshot,
-  learnReportFirstSlotStratumValidator,
+  learnReportFirstSlotStratumValidator, learnReportCapturedMasteryStateValidator,
 } from './learnV2MeasurementReportContract'
 import { LEARN_V2_RESPONSE_CONTEXT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../shared/learn-v2-responses'
 
@@ -347,8 +347,8 @@ export const reportFactFields = {
   factVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), occurredAt: v.number(),
   fact: v.union(
     v.object({ kind: v.literal('enrollment'), assignmentId: v.id('learnMeasurementAssignments'), recordRevision: v.number(), status: v.union(v.literal('considered'), v.literal('not_admitted'), v.literal('admitted')), snapshot: reportAssignmentSnapshot }),
-    v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean() }),
-    v.object({ kind: v.literal('response'), submissionId: v.id('learnResponses'), acceptedAt: v.number(), measurementEligible: v.boolean(), masteryEligible: v.boolean(), assistanceSnapshot, validitySnapshot }),
+    v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean(), stateAtEligibility: v.optional(learnReportCapturedMasteryStateValidator) }),
+    v.object({ kind: v.literal('response'), submissionId: v.id('learnResponses'), acceptedAt: v.number(), measurementEligible: v.boolean(), masteryEligible: v.boolean(), assistanceSnapshot, validitySnapshot, stateAtAcceptance: v.optional(learnReportCapturedMasteryStateValidator) }),
     v.object({ kind: v.literal('score'), submissionId: v.id('learnResponses'), attemptId: v.id('masteryAttempts'), executionId: v.id('learnScoringExecutions'), scorePercent: v.number(), scoreCommittedAt: v.number(), snapshot: reportResultSnapshot }),
     v.object({ kind: v.literal('independent_claim'), ...firstCheckClaim.fields, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), stratum: learnReportFirstSlotStratumValidator }),
     v.object({ kind: v.literal('independent_claim_v2'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION),
@@ -372,6 +372,7 @@ export const reportRunFields = {
   adapterVersion: v.string(), codeVersion: v.string(), rosterDigest: v.string(), cutoff: v.number(),
   enrollmentStartAt: v.number(), enrollmentEndAt: v.number(), status: v.union(v.literal('building'), v.literal('sealed'), v.literal('failed'), v.literal('stale')),
   inputDigest: v.optional(v.string()), extractionStartedAt: v.number(), extractionEndedAt: v.optional(v.number()),
+  continuationId: v.optional(v.id('_scheduled_functions')), progressDeadlineAt: v.optional(v.number()),
   sourceCoverage: v.union(v.literal('complete'), v.literal('unknown')), rowCount: v.number(), inputBytes: v.number(),
   cursor: v.optional(v.string()), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000), reasonCode: v.optional(v.string()),
 }
@@ -388,6 +389,11 @@ export const reportRowFields = {
 export const reportCellFields = {
   ...base, reportRunId: v.id('learnMeasurementReportRuns'), cellKey: v.string(), sequence: v.number(),
   reportVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), ...learnReportMetricValidator.fields,
+  publicationPolicyVersion: v.optional(v.union(
+    v.literal('learn-v2.report-publication.minimum-five-learners.v1'),
+    v.literal('learn-v2.report-publication.minimum-five-learners.v2'),
+    learnReportMetricValidator.fields.publicationPolicyVersion,
+  )),
 }
 export const reportViewerGrantFields = {
   ...base, cohortVersion: v.string(), epoch: v.string(), principalBindingVersion: v.string(),
