@@ -605,6 +605,7 @@ export async function terminalizeLearnResponseForOwner(ctx: MutationCtx, userId:
   if ('stage' in row) await ctx.db.patch(row._id, { status: 'terminal', terminalReason: result.reasonCode, revision: result.revision })
   else {
     await ctx.db.patch(row._id, { phase: result.reasonCode, reasonCode: result.reasonCode, revision: result.revision })
+    await finalizeLearnDelayedCheckSession(ctx, userId, { ...row, phase: result.reasonCode, reasonCode: result.reasonCode, revision: result.revision })
     const assignment = await matchingAssignment(ctx, userId, row)
     if (assignment) await appendLearnMeasurementFact(ctx, userId, { epoch: assignment.epoch, learningVoidId: row.learningVoidId,
       occurredAt: result.terminalizedAt, fact: { kind: 'opportunity', assessmentOpportunityId: row._id, recordRevision: result.revision,

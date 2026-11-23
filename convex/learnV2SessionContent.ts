@@ -51,6 +51,7 @@ import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } fro
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork';
 import { parseLearnContract } from '../shared/learn-v2-responses';
 import { bindSessionApplication } from './lib/learnV2SessionApplication';
+import { readLearnDelayedCheckBinding } from './lib/learnV2DelayedDelivery';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -230,6 +231,11 @@ async function settleMissedCold(ctx: MutationCtx, assessment: TeachAssessment) {
 }
 
 async function todaySessionContentRow(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>) {
+  if (session.status === 'completed' && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId) {
+    const opportunity = await ctx.db.get(session.assessmentOpportunityId);
+    const binding = opportunity?.submissionId ? await readLearnDelayedCheckBinding(ctx, userId, opportunity, session) : null;
+    return binding?.content.status === 'published' ? binding.content : null;
+  }
   if (session.status !== 'ready' && session.status !== 'in_progress') return null;
   const content = session.status === 'in_progress'
     ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
@@ -1411,6 +1417,12 @@ export const startStudySession = mutation({
     if (resolved && resolved.kind !== 'ordinary') {
       if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1
         || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new Error('Expected session revision is invalid');
+      if (session.status === 'completed' && resolved.kind === 'check' && resolved.opportunity.submissionId) {
+        const binding = await readLearnDelayedCheckBinding(ctx, userId, resolved.opportunity, session);
+        if (!binding || binding.content.status !== 'published' || binding.content.revision !== args.expectedContentRevision) throw new Error('Study session is not ready');
+        return { status: 'assessment' as const, sessionContentId: binding.content._id, sessionContentRevision: binding.content.revision,
+          assessment: todayAssessmentSummary(resolved), deliveryGrant: null };
+      }
       const content = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', args.expectedContentRevision)).unique();
       if (!content || content.status !== 'published' || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id
         || content.objectiveId !== session.primaryObjectiveId || !['ready', 'in_progress'].includes(session.status)

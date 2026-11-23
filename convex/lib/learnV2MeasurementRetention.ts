@@ -1,7 +1,8 @@
 import { v } from 'convex/values'
 import type { Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } from '../../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 
 const BATCH_SIZE = LEARN_MEASUREMENT_STORAGE_LIMITS.pageSize
 export const measurementSourceValidator = v.union(
@@ -139,7 +140,14 @@ export async function deleteMeasurementVoidBatch(ctx: MutationCtx, userId: strin
   if (await invalidateMeasurementReportRowsBatch(ctx, userId)) return true
   for (const table of VOID_CHILDREN) {
     const rows = await readMeasurementVoidDescendants(ctx, userId, learningVoidId, table)
-    for (const row of rows) await ctx.db.delete(row.id)
+    for (const row of rows) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && row.collection === 'learnAssessmentOpportunities') {
+        const id = ctx.db.normalizeId('learnAssessmentOpportunities', row.id)
+        const opportunity = id && await ctx.db.get(id)
+        if (opportunity) await finalizeLearnDelayedCheckSession(ctx, userId, { ...opportunity, phase: 'cancelled', reasonCode: 'void_deleted' })
+      }
+      await ctx.db.delete(row.id)
+    }
     if (rows.length) return true
   }
   const exposures = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)

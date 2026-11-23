@@ -22,6 +22,8 @@ async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignmen
   patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode'>>) {
   if (Object.entries(patch).every(([key, value]) => row[key as keyof typeof row] === value)) return
   await ctx.db.patch(row._id, { ...patch, revision: row.revision + 1 })
+  if (patch.phase && ['invalid', 'cancelled', 'abandoned'].includes(patch.phase))
+    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, { ...row, ...patch })
   await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(row._id))!)
 }
 
@@ -49,14 +51,10 @@ async function emitEligibility(ctx: MutationCtx, assignment: AdmittedAssignment,
 async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol,
   row: Doc<'learnAssessmentOpportunities'>, through: number) {
   const observedAt = Date.now()
-  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) {
-    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
-    return
-  }
+  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) return
   if (through < row.openAt || observedAt < row.openAt) return
   if (observedAt >= row.closeAt) {
     await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: 'missed_window' })
-    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
     return
   }
   const reason = assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'

@@ -251,9 +251,10 @@ export const markExpiredSessionsMissed = mutation({
     const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
     if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
     for (const session of sessions) {
-      if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId
+        && ['planned', 'ready', 'in_progress'].includes(session.status) && now >= (session.scheduledEndAt ?? session.scheduledStartAt)) {
         const opportunity = await ctx.db.get(session.assessmentOpportunityId)
-        const terminal = opportunity && await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session)
+        const terminal = opportunity && !opportunity.submissionId && await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session)
         if (terminal) {
           if (terminal === 'missed') {
             missedSessionIds.push(session._id)

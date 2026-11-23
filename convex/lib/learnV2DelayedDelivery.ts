@@ -1,5 +1,5 @@
 import type { Doc, Id } from '../_generated/dataModel'
-import type { MutationCtx } from '../_generated/server'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { ADAPTIVE_ASSESSMENT_PLAN_VERSION, composeAdaptiveActivityPlan } from '../../shared/learn-adaptive-activity-plan'
 import { adaptiveV2PilotDecision } from '../../shared/adaptive-v2-pilot-policy'
@@ -15,26 +15,34 @@ import { privacyDigest } from './learnV2ResponsePrivacy'
 const VERSION = 'learn-v2.delayed-delivery.v1'
 type Binding = { kind: 'ready', sessionId: Id<'studySessions'>, scheduledStartAt: number } | { kind: 'blocked', reasonCode: string }
 
-export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
-  current?: Doc<'studySessions'>): Promise<'completed' | 'missed' | 'cancelled' | null> {
+export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
+  current?: Doc<'studySessions'>) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || row.userId !== userId || row.purpose.kind !== 'measurement_delayed'
     || row.contextPins.kind !== 'session' || row.contextPins.generatorVersion !== VERSION) return null
-  const now = Date.now()
-  const status = row.submissionId ? 'completed' : ['invalid', 'cancelled'].includes(row.phase) ? 'cancelled'
-    : row.phase === 'abandoned' || now >= row.closeAt ? 'missed' : null
-  if (!status) return null
   const session = current ?? await ctx.db.get(row.contextPins.studySessionId)
   if (!session || session.userId !== userId || session._id !== row.contextPins.studySessionId
     || session.assessmentOpportunityId !== row._id || session.assessmentPurpose !== 'measurement_delayed'
     || session.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId || session.primaryObjectiveId !== row.objectiveId
     || session.startedSessionContentId !== undefined && (session.startedSessionContentId !== row.contextPins.sessionContentId
       || session.startedSessionContentRevision !== row.contextPins.contentRevision)
-    || session.revision !== row.contextPins.sessionRevision || !['planned', 'ready', 'in_progress', 'blocked', 'generation_failed'].includes(session.status)) return null
+    || session.revision !== row.contextPins.sessionRevision) return null
   const content = await ctx.db.get(row.contextPins.sessionContentId)
   if (!content || content.userId !== userId || content.studySessionId !== session._id || content.assessmentOpportunityId !== row._id
     || content.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId || content.blueprintRevisionId !== row.blueprintRevisionId || content.objectiveId !== row.objectiveId
     || content.assessmentPurpose !== 'measurement_delayed' || content.generatorVersion !== VERSION
     || content.revision !== row.contextPins.contentRevision || content.inputDigest !== row.contextPins.contentInputDigest) return null
+  return { session, content }
+}
+
+export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
+  current?: Doc<'studySessions'>): Promise<'completed' | 'missed' | 'cancelled' | null> {
+  const now = Date.now()
+  const status = row.submissionId ? 'completed' : ['invalid', 'cancelled'].includes(row.phase) ? 'cancelled'
+    : row.phase === 'abandoned' || now >= row.closeAt ? 'missed' : null
+  if (!status) return null
+  const binding = await readLearnDelayedCheckBinding(ctx, userId, row, current)
+  if (!binding || !['planned', 'ready', 'in_progress', 'blocked', 'generation_failed'].includes(binding.session.status)) return null
+  const { session } = binding
   // Operational closure keeps the accepted content and assistance revision pinned.
   await ctx.db.patch(session._id, { status, ...(status === 'missed' ? { missedAt: now, auditReasonCode: 'session_expired' }
     : status === 'cancelled' ? { auditReasonCode: row.reasonCode ?? 'assessment_unavailable' } : {}) })
