@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { getDocumentSize } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -79,31 +80,27 @@ export async function requireReportRun(ctx: QueryCtx | MutationCtx, reportRunId:
 export async function reportRevocationReason(ctx: QueryCtx | MutationCtx, run: Doc<'learnMeasurementReportRuns'>, approval: LearnReportApproval) {
   if (run.status === 'stale') return 'source_invalidated'
   let ranges = 0
+  let bytes = 0
   const owners = [...approval.owners].sort()
   for (let index = 0; index < owners.length; index++) {
-    if ((ranges += 5) > 3000) return 'source_validation_incomplete'
+    // Reserve five 1-MiB documents before reading this owner, leaving transaction headroom.
+    if ((ranges += 5) > 3000 || bytes + 5 * 1024 * 1024 > 8 * 1024 * 1024) return 'source_validation_incomplete'
     const owner = owners[index]!
     if (await hasAccountDeletionTombstone(ctx, owner)) return 'source_invalidated'
     const pin = await ctx.db.query('learnMeasurementReportRows')
       .withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', run._id).eq('sequence', index + 1)).unique()
     const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', owner)).unique()
     if (!watermark || !pin || watermark.sequence < pin.sourceWatermark) return 'missing_owner_watermark'
+    // The other three lookups return immediately on a match, so only these accumulate.
+    bytes += getDocumentSize(pin) + getDocumentSize(watermark)
     if (pin.snapshot.kind === 'owner_watermark' && pin.snapshot.historyCoverage === 'complete' && watermark.historyCoverage !== 'complete') return 'source_invalidated'
     if (!pin || pin.userId !== owner || pin.rowKind !== 'owner_watermark' || pin.invalidatedAt !== undefined) return 'missing_owner_watermark'
     const lost = await ctx.db.query('learnMeasurementReportRows')
       .withIndex('by_userId_and_invalidatedAt', q => q.eq('userId', owner).gte('invalidatedAt', run.extractionStartedAt)).first()
     if (lost) return 'source_invalidated'
-    let sequence = pin.sourceWatermark
-    for (;;) {
-      if (++ranges > 3000) return 'source_validation_incomplete'
-      const changes = await ctx.db.query('learnMeasurementReportFacts')
-        .withIndex('by_userId_and_sequence', q => q.eq('userId', owner).gt('sequence', sequence)).take(8)
-      if (changes.some(row => row.fact.kind === 'integrity')) return 'source_invalidated'
-      if (changes.length < 8) break
-      const next = changes.at(-1)!.sequence
-      if (next <= sequence) return 'source_validation_incomplete'
-      sequence = next
-    }
+    const integrity = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_kind_and_sequence', q => q.eq('userId', owner).eq('fact.kind', 'integrity').gt('sequence', pin.sourceWatermark)).first()
+    if (integrity) return 'source_invalidated'
   }
   return null
 }

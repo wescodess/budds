@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { v } from 'convex/values'
+import { getDocumentSize, v } from 'convex/values'
 import { makeFunctionReference, type FunctionArgs } from 'convex/server'
 import { internalAction, internalMutation } from './_generated/server'
 import * as reportFunctions from './learnV2MeasurementReports'
@@ -32,11 +32,11 @@ const modules = import.meta.glob('./**/*.ts')
 const originalSealReport = makeFunctionReference<'mutation', FunctionArgs<typeof internal.learnV2MeasurementReports.sealReport>, null>('measurementReportRecoveryOriginals:sealReport')
 beforeEach(() => { capabilities.reports = true; capabilities.maxInputBytes = 64 * 1024 * 1024; capabilities.maxEpisodes = 10_000; LEARN_REPORT_APPROVALS.splice(0); vi.useFakeTimers(); vi.setSystemTime(REPORT_NOW) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); LEARN_REPORT_APPROVALS.splice(0) })
-async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'scored', overrides: Partial<typeof reportFunctions> = {}) {
-  const t = convexTest(schema, { ...modules,
+async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'scored', overrides: Partial<typeof reportFunctions> = {}, transactionLimits = false) {
+  const t = convexTest({ schema, transactionLimits, modules: { ...modules,
     './learnV2MeasurementReports.ts': async () => ({ ...reportFunctions, ...overrides }),
     './measurementReportRecoveryOriginals.ts': async () => ({ sealReport: reportFunctions.sealReport }),
-  })
+  } })
   const sources: Awaited<ReturnType<typeof seedReportSource>>[] = []
   for (let index = 0; index < count; index++) sources.push(await t.run(ctx => seedReportSource(ctx, index === 0 ? OWNER : `https://learner.example|learner-${index + 1}`, mode)))
   if (count > 8) await t.run(async ctx => {
@@ -323,6 +323,59 @@ describe('viewer grants and current revocation', () => {
     await f.t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: OWNER, sourceIdentityId: f.sources[0]!.sourceIdentityId })
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'stale' })
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'stale' })
+  })
+
+  test('large post-watermark score history in another epoch leaves audited reads sealed until an integrity change', async () => {
+    const f = await fixture(1, 'scored', {}, true)
+    const runId = await f.begin()
+    expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
+    const owner = f.sources[0]!
+    const score = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_kind', q => q.eq('userId', OWNER).eq('fact.kind', 'score')).first())
+    if (!score) throw new Error('Missing score fixture')
+    expect(getDocumentSize(score) * 12_000).toBeGreaterThan(16_777_216)
+    const { _id, _creationTime, ...record } = score
+    const watermark = (await f.t.run(ctx => ctx.db.get(owner.watermarkId)))!
+    for (let offset = 0; offset < 12_000; offset += 200) await f.t.run(async ctx => {
+      for (let index = 0; index < 200; index++) await ctx.db.insert('learnMeasurementReportFacts', {
+        ...record, epoch: 'another-epoch', sequence: watermark.sequence + offset + index + 1,
+      })
+    })
+    await f.t.run(ctx => ctx.db.patch(owner.watermarkId, { sequence: watermark.sequence + 12_000 }))
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject({ status: 'sealed' })
+    const page = await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })
+    expect(page).toMatchObject({ reportRunId: runId, cells: expect.any(Array) })
+    expect(page).not.toHaveProperty('status')
+    for (const read of [api.learnV2MeasurementReports.exportReportPage, api.learnV2MeasurementReports.downloadReportPage]) {
+      expect(await f.viewer.mutation(read, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'aggregate_page' })
+    }
+    await f.t.run(async ctx => {
+      const integrityEventId = await ctx.db.insert('learnResponseIntegrityEvents', { ...owner.base, learningVoidId: owner.learningVoidId,
+        submissionId: owner.outcomes[1]!.submissionId, sequence: 1, sourceFactSequence: watermark.sequence + 12_001,
+        kind: 'evidence_unavailable', reasonCode: 'source_invalidated', policyVersion: 'integrity.v1', effectiveAt: REPORT_NOW })
+      await appendLearnMeasurementFact(ctx, OWNER, { epoch: 'another-epoch', learningVoidId: owner.learningVoidId, occurredAt: REPORT_NOW,
+        fact: { kind: 'integrity', submissionId: owner.outcomes[1]!.submissionId, integrityEventId,
+          currentEligibility: 'excluded', evidenceAvailable: false, bodyAvailability: 'available' } })
+    })
+    const stale = { status: 'stale', reasonCodes: ['source_invalidated'] }
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject(stale)
+    for (const read of [api.learnV2MeasurementReports.readReportCells, api.learnV2MeasurementReports.exportReportPage, api.learnV2MeasurementReports.downloadReportPage]) {
+      expect(await f.viewer.mutation(read, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
+    }
+  }, 120_000)
+
+  test('revocation byte budget exhaustion returns incomplete without throwing under transaction limits', async () => {
+    const f = await fixture(9, 'scored', {}, true)
+    const runId = await f.begin()
+    expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
+    const pins = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows')
+      .withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).take(9))
+    for (const pin of pins) await f.t.run(ctx => ctx.db.patch(pin._id, { snapshot: { ...pin.snapshot, learnerKey: 'x'.repeat(900 * 1024) } }))
+    const incomplete = { status: 'stale', reasonCodes: ['source_validation_incomplete'] }
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject(incomplete)
+    for (const read of [api.learnV2MeasurementReports.readReportCells, api.learnV2MeasurementReports.exportReportPage, api.learnV2MeasurementReports.downloadReportPage]) {
+      expect(await f.viewer.mutation(read, { version, reportRunId: runId, cursor: null })).toMatchObject(incomplete)
+    }
   })
 
   test('a later integrity fact revokes the old snapshot and a new run rebuilds permitted scalar evidence', async () => {

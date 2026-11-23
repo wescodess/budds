@@ -1894,6 +1894,7 @@ export default defineSchema({
   learnMeasurementReportFacts: defineTable(measurementStorage.reportFactFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_sequence', ['userId', 'sequence'])
+    .index('by_userId_and_fact_kind_and_sequence', ['userId', 'fact.kind', 'sequence'])
     .index('by_userId_and_epoch_and_sequence', ['userId', 'epoch', 'sequence'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])

@@ -166,10 +166,20 @@ When reports are enabled, online consumers use the mutations
 `downloadReportPage`. Each successful page acquisition commits its owner-scoped,
 payload-free access record before returning. Download records describe server
 page acquisition; saving already acquired bytes locally is not a new server
-access. The legacy query transports withhold enabled report data with
-`audited_access_required`, because cached queries cannot commit per-access logs.
+access. The legacy queries `getReport`, `getReportCells` and
+`exportAggregateReport` withhold enabled report data with
+`unavailable` / `audited_access_required`, because cached queries cannot commit per-access logs.
 Their capability-off behavior is unchanged. Requests and scheduled refreshes are
 audited as well; denied attempts emit only a status.
+
+Online revocation checks use the additive `by_userId_and_fact_kind_and_sequence`
+index to find one integrity fact after each owner's pinned watermark across all
+epochs. The existing required `fact.kind` covers historical rows without a
+migration or backfill. Unrelated score history is never scanned. Validation has
+shared 3,000-range and 8-MiB document-read budgets, reserving five maximum-size
+documents before each owner; exhaustion withholds output with
+`source_validation_incomplete`. See [snapshot operations](learn-v2-measurement-snapshots.v1.md)
+for the remaining deletion, watermark and invalidation guards.
 
 The separate audit table stores only actor, run reference, action/status and
 time, with at most 128 records per actor, 30-day retention and account deletion.
