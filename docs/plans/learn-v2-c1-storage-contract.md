@@ -191,11 +191,13 @@ Report code `learn-v2.report-code.c6.2.v4` pins publication policy `learn-v2.rep
 
 - **Cell rule.** A cell publishes values only when its rows come from at least five distinct learners. Each learner set that determines a value must also be empty or reach five: all rows, the matured population, the observed-outcome contributors, the missing-outcome contributors, and the missing outcomes whose bound carries data (a missing delayed score with a valid cold score contributes [−c,100−c]). Without the missing-outcome sets, a published mean, count and bound solve for the missing learners. For example, E=6, P=5 and mean −20 with lower bound −26⅔ gives 5×(−20) − 6×(−26⅔) = 60, one learner's cold score (review A2). Otherwise the points, interval, missingness bounds, counts, legacy audit, replacements, instrumentation, sensitivity, allocations, source accounting and band attrition are all null. The reason `insufficient_learners` is added, while the cell, its stratum, status, coverage, validity, precision and other reasons remain.
 - **Nested breakdowns.** Within a published cell, each breakdown and its complement must pass the same sets (all, observed, missing and data-bearing missing), or the breakdown is null with `insufficient_learners`. The pairs are: flagged and unflagged rows for the sensitivity estimate, and linked rows under their replacement observations with unlinked rows under primary observations. For allocations, every assigned and observed order and form bucket must pass.
-- **Complementary suppression.** Band cells partition their group's `all` cell. If any band cell fails, every band cell in the group is suppressed, and so is the `all` cell's band attrition. A nested breakdown that fails in one band cell is suppressed in all of them. Groups that differ by metric, horizon, stratum or policy have no published parent, and cohort-level context (`considered`, `notAdmitted`, VLG source accounting, legacy audit) only appears in cells that already have five or more learners. Both weightings share one decision.
+- **Complementary suppression.** Band cells partition their group's `all` cell. If any band cell fails, every band cell in the group is suppressed, and so is the `all` cell's band attrition. A nested breakdown that fails in one band cell is suppressed in all of them. Groups that differ by metric, horizon, stratum or policy have no published parent, but they can still overlap in learners (see accepted residuals). Cohort-level context (`considered`, `notAdmitted`, VLG source accounting, legacy audit) only appears in cells that already have five or more learners. Both weightings share one decision.
 - **Manifest.** Published provenance replaces `episodeCount` and `inputBytes` with null, because byte size can reveal score digits in a small cohort.
 - The 20-learner bootstrap rule is unchanged.
 
-**Derived-value audit (review A2).** Each published value was checked for whether it combines with published counts to isolate a set of one to four learners:
+**Scope.** The five-learner rule is defense-in-depth, not complete disclosure control. It checks each cell, and each breakdown against its own complement, one at a time. It does not reconcile overlapping cells jointly, so several published cells that share learners can be combined to isolate one learner even when every cell passes on its own.
+
+**Derived-value audit (review A2).** Each published value was checked, within its own cell, for whether it combines with that cell's published counts to isolate a set of one to four learners:
 - **Covered by the rule:**
   - observed point: the observed set;
   - all-eligible point: only when observed equals population;
@@ -207,15 +209,16 @@ Report code `learn-v2.report-code.c6.2.v4` pins publication policy `learn-v2.rep
   - band cells and the `all` cell's band attrition: complementary suppression;
   - allocations: every bucket.
 - **Counts only, with no score value:** dispositions, instrumentation, source accounting, distinct-learner counts, the legacy audit, and `considered`/`notAdmitted`. They appear only in cells that already pass.
-- **Not a parent/child pair:** horizon-7 and horizon-30 cells share cold scores but cover different outcome sets. No published value is their sum, so neither can be subtracted from the other.
-
-**Accepted residuals.** The owner decided "Accept for owner-only (Recommended)" on 2026-11-22 for two residuals:
+**Accepted residuals.** The owner decided "Accept for owner-only (Recommended)" on 2026-11-22, in review rounds A2 and A3, for three residuals:
 - **Temporal differencing:** two sealed snapshots whose cohorts or matured windows differ by one to four learners can be subtracted.
 - **Dual weighting:** the episode-weighted and learner-weighted values of one cell can be solved for a dominant learner whose episode count is known.
+- **Within-report differencing across overlapping cells (review A3):** one snapshot's cells can share learners and be combined.
+  - **Horizons:** horizon-7 and horizon-30 cells share cold scores. When their missing-delayed sets differ by one learner, each horizon's missing-cold total (P × observed value − E × lower bound) can be subtracted to give that learner's cold score; the review found 363 − 300 = 63.
+  - **Breakdowns:** band cells, the sensitivity estimate and the replacement estimate cut the same rows in different ways. A band mean, a parent sensitivity mean and a sibling band mean can be subtracted to give one learner's gain, as can a replacement mean and an unflagged mean; the review found +17 both ways.
 
-Both are accepted only for an owner-only reader. The sole viewer grant is the project owner, who already has direct database access. Reports are internal and default-off. The grant excludes individual pair evidence by policy, not by mathematical guarantee.
+All three are accepted only for an owner-only reader. The sole viewer grant is the project owner, who already has direct database access. Reports are internal and default-off. The grant excludes individual pair evidence by policy, not by mathematical guarantee.
 
-**Guard:** before any second viewer grant is issued, both residuals must be fixed or re-reviewed.
+**Guard:** before any second viewer grant is issued, a formal disclosure design that reconciles all published cells jointly, across snapshots and weightings, must replace this per-cell rule ([#564](https://github.com/wescodess/budds/issues/564)).
 
 A scored endpoint whose form label or family revision conflicts with its frozen assignment is excluded as `pin_flow_treatment_mismatch`, with `form_assignment_mismatch` or `family_revision_mismatch`. It is never counted as missing. Observed form counts use the result's actual label, and a conflicting episode counts toward observed order `unknown`. First-claim rows carry no assigned form. Scorer configuration mismatches add `scorer_configuration_mismatch`. Observed model/upstream labels come only from results scored under the frozen configuration. Horizon labels are pinned by each opportunity's clock.
 

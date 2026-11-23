@@ -22,13 +22,19 @@ export const LEARN_REPORT_INSUFFICIENT_LEARNERS = 'insufficient_learners'
  * Suppressed fields are null with reason `insufficient_learners`; cell existence and status remain.
  * Bootstrap intervals still need twenty contributing learners.
  *
- * Accepted residuals ("Accept for owner-only (Recommended)", owner decision 2026-11-22): differencing
- * two sealed snapshots whose cohorts differ by fewer than five learners, and solving a cell's two
- * weightings for a dominant learner whose episode count is known. Both are accepted only while the
- * sole viewer grant is the project owner, who already has direct database access; reports are
- * internal and default-off, and the grant excludes individual pair evidence by policy rather than
- * by mathematical guarantee. Before any second viewer grant is issued, both must be fixed or
- * re-reviewed.
+ * This rule is defense-in-depth, not complete disclosure control. It checks each cell, and each
+ * breakdown against its own complement, one at a time; it does not reconcile overlapping cells.
+ *
+ * Accepted residuals ("Accept for owner-only (Recommended)", owner decision 2026-11-22, reviews A2
+ * and A3):
+ * - differencing two sealed snapshots whose cohorts differ by fewer than five learners;
+ * - solving a cell's two weightings for a dominant learner whose episode count is known;
+ * - differencing overlapping cells within one report: horizon-7 and horizon-30 cells share cold
+ *   scores, and band, sensitivity and replacement breakdowns cut the same rows differently.
+ * They are accepted only while the sole viewer grant is the project owner, who already has direct
+ * database access; reports are internal and default-off, and the grant excludes individual pair
+ * evidence by policy rather than by mathematical guarantee. Before any second viewer grant is
+ * issued, a formal disclosure design must replace this rule (#564).
  */
 export type LearnReportDisclosure = {
   cell: boolean, attrition: boolean, replacements: boolean, sensitivity: boolean, allocations: boolean,
