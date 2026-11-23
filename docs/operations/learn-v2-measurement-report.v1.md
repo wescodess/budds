@@ -79,13 +79,13 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`learn-v2.report-code.c6.2.v4`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v5`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
 manifest's code pin to bypass rejection does not constitute exact replay. Replay
 v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null
 horizon and unknown scorer stratum; it keeps its reason and contributes once to
 N after seven local calendar days, with no fabricated opportunity or clock.
-Late links keep the original slot and outcome. Older replay envelopes and code
+A linked v2 claim missing the opportunity back-reference is retained as unresolved with `first_slot_claim_missing`; a present conflicting claim still fails with `conflicting_first_slot`. Late links keep the original slot and outcome. Older replay envelopes and code
 pins are rejected; retain the earlier checkout to replay its saved inputs.
 
 The CLI uses Node's native type stripping with a temporary resolver limited to
@@ -117,11 +117,15 @@ cutoff/counts/seed and cohort/protocol pins. The CLI never fixes these saved pin
 Exceptions, source paths, offending values and validation stacks are never
 serialized. Standard output is one JSON object; ordinary errors emit no stderr.
 Unknown source coverage is explicitly flagged, with the reducer's null
-all-eligible/unknown-bound states retained. No observed outcomes adds
-`no_observed_outcomes`; absence never becomes an observed zero. Negative gain,
+all-eligible/unknown-bound states retained. An unsuppressed cell set with no observed outcomes adds
+`no_observed_outcomes`; suppressed cells reveal only `insufficient_learners`; absence never becomes an observed zero. Negative gain,
 wrong-answer failures, non-returners, partial coverage, null precision and
 provisional validity remain visible. Exit 0 means replay succeeded; it is never
 a numerical pass, baseline capture, sample-adequacy or release decision.
+
+Online requests support at most **600 roster owners** (five revocation ranges per owner within the 3,000-range budget). Larger rosters return `unavailable` / `roster_capacity_exceeded` before any run, owner pinning or extraction is scheduled. The 10,000-assignment/claim ceiling is separate. Revocation checks remain transactional and are not paged; the byte budget can still fail closed with `source_validation_incomplete`.
+
+Every metric/horizon/stratum breakdown emits the fixed bands `all`, `0_40`, `40_80`, `80_100` and `unknown` for each weighting, including empty bands. If any nonempty band fails the publication policy, all sibling band cells are suppressed. Suppressed cells keep only their metric, horizon, weighting and frozen stratum labels: all value-bearing fields are null, status is `insufficient_data`, population state, source coverage, outcome coverage, validity and precision are `unknown`, and reason codes are exactly `[insufficient_learners]`. No learner-derived status, precision or reasons survive. Empty bands do not themselves force complementary suppression.
 
 ## Provenance, privacy and retention
 

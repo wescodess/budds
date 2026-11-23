@@ -242,9 +242,16 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
   if (!slot) incomplete('conflicting_first_slot')
   const opportunity = await ctx.db.get(slot.firstCheckOpportunityId)
   if (!opportunity || opportunity.userId !== userId || basis.objectiveId !== opportunity.objectiveId || basis.blueprintRevisionId !== opportunity.blueprintRevisionId
-    || !opportunity.originalSlot || opportunity.replacesOpportunityId !== undefined || opportunity.checkSequence !== slot.checkSequence) incomplete('conflicting_first_slot')
+    || !opportunity.originalSlot || opportunity.replacesOpportunityId !== undefined
+    || opportunity.firstCheckClaim && opportunity.checkSequence !== slot.checkSequence) incomplete('conflicting_first_slot')
   await scopeAvailable(ctx, userId, opportunity)
   const claim = learnFirstCheckClaimSchema.strip().parse(fact)
+  if (!opportunity.firstCheckClaim && resolved) return [learnReportFirstClaimV2SnapshotSchema.parse({
+    kind: 'first_check_claim_v2', version: resolved.version,
+    ...await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...resolved }),
+    claim, stratum: resolved.stratum, policyPins: resolved.policyPins,
+    firstSlot: { kind: 'unresolved', reason: 'first_slot_claim_missing' },
+  })]
   if (JSON.stringify(learnFirstCheckClaimSchema.parse(opportunity.firstCheckClaim)) !== JSON.stringify(learnFirstCheckClaimSchema.parse(claim))) incomplete('conflicting_first_slot')
   const facts = await opportunityFacts(ctx, userId, opportunity._id, through)
   const clock = savedClock(facts)

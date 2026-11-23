@@ -22,6 +22,9 @@ export type LearnReportApproval = {
 
 // Server configuration only. No principal or collection scope is provisioned here.
 export const LEARN_REPORT_APPROVALS: LearnReportApproval[] = []
+export const REPORT_REVOCATION_RANGE_LIMIT = 3000
+export const REPORT_REVOCATION_RANGES_PER_OWNER = 5
+export const REPORT_MAX_OWNERS = REPORT_REVOCATION_RANGE_LIMIT / REPORT_REVOCATION_RANGES_PER_OWNER
 export const REPORT_ADAPTER_VERSION = 'learn-v2.report-adapter.v1'
 export { LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION as REPORT_CODE_VERSION } from '../../shared/learn-v2-measurement-report'
 const pageManifest = z.strictObject({ sequence: z.number().int().nonnegative(), count: z.number().int().min(1).max(8), digest: z.string() })
@@ -49,7 +52,7 @@ export function approvedReportGrant(grant: Doc<'learnMeasurementReportViewerGran
   if (!approval || grant.userId !== userId || grant.status !== 'active' || grant.revokedAt !== undefined
     || grant.grantedAt > now || grant.expiresAt <= now || approval.principalBindingVersion !== grant.principalBindingVersion
     || approval.grantVersion !== grant.grantVersion || !userId.includes('|') || !approval.owners.length
-    || approval.owners.length > 10_000 || new Set(approval.owners).size !== approval.owners.length) deny()
+    || new Set(approval.owners).size !== approval.owners.length) deny()
   return approval
 }
 export async function requireReportGrant(ctx: QueryCtx | MutationCtx, grantId: Id<'learnMeasurementReportViewerGrants'>) {
@@ -84,7 +87,7 @@ export async function reportRevocationReason(ctx: QueryCtx | MutationCtx, run: D
   const owners = [...approval.owners].sort()
   for (let index = 0; index < owners.length; index++) {
     // Reserve five 1-MiB documents before reading this owner, leaving transaction headroom.
-    if ((ranges += 5) > 3000 || bytes + 5 * 1024 * 1024 > 8 * 1024 * 1024) return 'source_validation_incomplete'
+    if ((ranges += REPORT_REVOCATION_RANGES_PER_OWNER) > REPORT_REVOCATION_RANGE_LIMIT || bytes + 5 * 1024 * 1024 > 8 * 1024 * 1024) return 'source_validation_incomplete'
     const owner = owners[index]!
     if (await hasAccountDeletionTombstone(ctx, owner)) return 'source_invalidated'
     const pin = await ctx.db.query('learnMeasurementReportRows')

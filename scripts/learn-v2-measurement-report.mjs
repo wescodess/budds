@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
 export const REPLAY_VERSION = 'learn-v2.measurement-report-replay.v2'
-export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v4'
+export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v5'
 const MAX_FILE_BYTES = 65 * 1024 * 1024
 
 // Node 24 strips types natively. Resolve only this worktree's shared module
@@ -90,10 +90,11 @@ export async function replayMeasurementReport(input, inputClass) {
     if (computed.report.status !== 'sealed') return result(inputClass, computed.report.status, computed.report.reasonCodes)
     const cells = computed.pages.flatMap(page => page.cells)
     const reasonCodes = inputClass === 'fixture_diagnostic' ? ['fixture_only'] : ['offline_replay_only']
-    if (report.provenance.sourceCoverage !== 'complete' || cells.some(cell => cell.sourceCoverage !== 'complete')) {
+    const shown = cells.filter(cell => cell.counts !== null)
+    if (report.provenance.sourceCoverage !== 'complete' || shown.some(cell => cell.sourceCoverage !== 'complete')) {
       reasonCodes.push('unknown_source_coverage')
     }
-    if (!cells.some(cell => ['partial_observed', 'observed_complete'].includes(cell.status))) reasonCodes.push('no_observed_outcomes')
+    if (shown.length && !shown.some(cell => ['partial_observed', 'observed_complete'].includes(cell.status))) reasonCodes.push('no_observed_outcomes')
     if (cells.some(cell => cell.reasonCodes.includes(contract.LEARN_REPORT_INSUFFICIENT_LEARNERS))) reasonCodes.push(contract.LEARN_REPORT_INSUFFICIENT_LEARNERS)
     // Closed public DTOs only. Omit run IDs, paging cursors and every source row.
     return result(inputClass, 'replayed', reasonCodes, {

@@ -734,6 +734,28 @@ async function firstCheckFixture(captured = true) {
 }
 
 describe('ordinary first-check facts (#538)', () => {
+  test.each([['linked', 0], ['linked', 1], ['later_link', 0], ['later_link', 1]] as const)('records ordinary acceptance without a back-reference using a %s fact at sequence %i', async (kind, checkSequence) => {
+    const f = await firstCheckFixture()
+    await f.t.run(async ctx => {
+      await ctx.db.patch(f.assessmentTarget.assessmentOpportunityId, { firstCheckClaim: undefined, checkSequence })
+      if (kind === 'later_link') {
+        const row = (await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_sequence',
+          q => q.eq('userId', OWNER.tokenIdentifier).eq('sequence', 1)).unique())!
+        if (row.fact.kind !== 'independent_claim_v2' || row.fact.firstSlot.kind !== 'linked') throw new Error('Expected linked claim')
+        const slot = row.fact.firstSlot
+        await ctx.db.patch(row._id, { fact: { ...row.fact, firstSlot: { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' } } })
+        await facts.appendLearnMeasurementFact(ctx, OWNER.tokenIdentifier, { epoch: row.epoch, learningVoidId: row.learningVoidId,
+          occurredAt: NOW, fact: { kind: 'first_slot_link', version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+            claimKey: row.fact.claimKey, claimSequence: 1, claimFactSequence: row.fact.claimFactSequence, slot } })
+      }
+    })
+    const response = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+    const state = await ledger(f.t)
+    expect(state.facts.filter(row => row.fact.kind === 'response')).toEqual([
+      expect.objectContaining({ epoch: 'first-check.epoch', fact: expect.objectContaining({ submissionId: response.submissionId, stateAtAcceptance: 'independent' }) }),
+    ])
+  })
+
   test('acceptance and integrity races each append once under the frozen claim epoch', async () => {
     const f = await firstCheckFixture()
     const args = { submission: f.submission }

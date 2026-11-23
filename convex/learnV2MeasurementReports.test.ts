@@ -103,6 +103,44 @@ async function computedCells(f: Awaited<ReturnType<typeof fixture>>, reportRunId
 }
 
 describe('bounded real-table report snapshots', () => {
+  test('rejects 601 owners before creating a run or scheduling work, but accepts 600', async () => {
+    const f = await fixture()
+    const approval = LEARN_REPORT_APPROVALS[0]!
+    const owners = Array.from({ length: 601 }, (_, index) => `https://learner.example|capacity-${index}`)
+    approval.owners = owners
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, f.request))
+      .toMatchObject({ status: 'unavailable', reasonCodes: ['roster_capacity_exceeded'] })
+    expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportRuns').take(1))).toEqual([])
+    expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').take(1))).toEqual([])
+    expect(await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').take(1))).toEqual([])
+    approval.owners = owners.slice(0, 600)
+    expect(await f.viewer.mutation(api.learnV2MeasurementReports.requestReport, f.request)).toMatchObject({ status: 'requested' })
+  })
+
+  test.each([0, 1])('normalizes a linked claim without the opportunity back-reference at sequence %i as unresolved', async checkSequence => {
+    const f = await fixture(2)
+    const claim = await f.t.run(ctx => seedOrdinaryReportClaim(ctx, f.sources[0]!))
+    await f.t.run(ctx => ctx.db.patch(claim.firstCheckOpportunityId, { firstCheckClaim: undefined, checkSequence }))
+    const runId = await f.begin()
+    expect(await f.complete(runId)).toMatchObject({ status: 'sealed' })
+    const cells = (await computedCells(f, runId)).filter(cell => cell.metric === 'false_mastery_next_delayed.v1'
+      && cell.stratum.startingBand === 'all' && cell.weighting === 'capability_episode')
+    expect(cells).toHaveLength(1)
+    expect(cells[0]).toMatchObject({ horizonDays: null, counts: { maturedClaims: 1, checkedClaims: 0 },
+      missingOutcomeBounds: { lower: 0, upper: 1 } })
+    expect(cells[0]!.reasonCodes).toContain('first_slot_claim_missing')
+    expect(reportControl((await f.t.run(ctx => ctx.db.get(runId)))!).claimCount).toBe(1)
+  })
+
+  test('still rejects conflicting opportunity and linked claim identities', async () => {
+    const f = await fixture()
+    const claim = await f.t.run(ctx => seedOrdinaryReportClaim(ctx, f.sources[0]!))
+    await f.t.run(ctx => ctx.db.patch(claim.firstCheckOpportunityId, { firstCheckClaim: { ...claim.claim, claimKey: 'conflicting-claim' } }))
+    const runId = await f.begin()
+    expect(await f.complete(runId)).toMatchObject({ status: 'failed', reasonCodes: ['conflicting_first_slot'] })
+    expect(reportControl((await f.t.run(ctx => ctx.db.get(runId)))!).cellPages).toEqual([])
+  })
+
   test('seals multiple bounded source/cell pages and preserves independent negative-gain arithmetic', async () => {
     const fetch = vi.fn(() => { throw new Error('No model or network work is authorized') })
     vi.stubGlobal('fetch', fetch)
@@ -160,7 +198,7 @@ describe('bounded real-table report snapshots', () => {
     const f = await fixture()
     const runId = await f.begin()
     await f.complete(runId)
-    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v3' }))
+    await f.t.run(ctx => ctx.db.patch(runId, { codeVersion: 'learn-v2.report-code.c6.2.v4' }))
     const stale = { status: 'stale', reasonCodes: ['report_policy_changed'] }
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportManifest, { version, reportRunId: runId })).toMatchObject(stale)
     expect(await f.viewer.mutation(api.learnV2MeasurementReports.readReportCells, { version, reportRunId: runId, cursor: null })).toMatchObject(stale)
@@ -792,7 +830,7 @@ test('an altered aggregate cell with the same page length fails its digest check
   await f.complete(runId)
   await f.t.run(async ctx => {
     const cell = (await ctx.db.query('learnMeasurementReportCells').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', runId)).first())!
-    await ctx.db.patch(cell._id, { reasonCodes: [...cell.reasonCodes, 'fixture_corruption'] })
+    await ctx.db.patch(cell._id, { stratum: { ...cell.stratum, entryPoint: 'fixture_corruption' } })
   })
   expect(await f.viewer.mutation(api.learnV2MeasurementReports.exportReportPage, { version, reportRunId: runId, cursor: null })).toMatchObject({ status: 'failed', reasonCodes: ['cell_manifest_mismatch'] })
 })

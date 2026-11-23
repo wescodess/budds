@@ -4,7 +4,7 @@ import {
   type LearnPublishedReportMetric, type LearnReportInputSnapshot,
 } from './learn-v2-measurement-report'
 import { learnReportDisclosure, type LearnReportDisclosureRow } from './learn-v2-measurement-report-policy'
-import { computationEpisode, computationInput } from '../tests/fixtures/learn-v2-measurement-computation'
+import { computationClaim, computationEpisode, computationInput } from '../tests/fixtures/learn-v2-measurement-computation'
 
 type Episode = Awaited<ReturnType<typeof computationEpisode>>
 type Options = Parameters<typeof computationEpisode>[1]
@@ -35,6 +35,39 @@ const suppressed = {
 }
 
 describe('minimum contributing learners publication policy', () => {
+  it('publishes identical suppressed singleton cells across bands, acceptance and reasons', async () => {
+    const first = await published(await episodes(1, () => ({ cold: 30, delayed: null, acceptedDelayed: true })))
+    const second = await published(await episodes(1, () => ({ cold: 90, delayed: null })))
+    expect(first).toHaveLength(20)
+    expect(first).toEqual(second)
+    for (const cell of first) expect(cell).toMatchObject({ ...suppressed, status: 'insufficient_data',
+      outcomeCoverage: 'unknown', precision: 'unknown', reasonCodes: ['insufficient_learners'] })
+  })
+
+  it('publishes identical suppressed five-learner cells when an unscored outlier changes band', async () => {
+    const first = await published(await episodes(5, index => ({ cold: index === 0 ? 90 : 60, delayed: index === 0 ? null : 40, acceptedDelayed: true })))
+    const second = await published(await episodes(5, index => ({ cold: index === 0 ? 30 : 60, delayed: index === 0 ? null : 40, acceptedDelayed: true })))
+    expect(first).toHaveLength(20)
+    expect(first).toEqual(second)
+    for (const cell of first.filter(cell => cell.horizonDays === 7)) expect(cell).toMatchObject(suppressed)
+  })
+
+  it('hides uniform false-mastery outcomes even with twenty observed learners in a suppressed cell', async () => {
+    const build = async (score: number) => {
+      const sources = await Promise.all(Array.from({ length: 21 }, (_, index) => computationClaim(index + 1,
+        { score: index === 20 ? null : score, accepted: true })))
+      const rows = sources.flatMap(source => [source.watermark, source.claim])
+      const result = await buildPublishedLearningMeasurementReport(await computationInput(rows))
+      expect(result.report.status).toBe('sealed')
+      return result.pages.flatMap(page => page.cells)
+    }
+    const failed = await build(60)
+    const passed = await build(90)
+    expect(failed).toHaveLength(10)
+    expect(failed).toEqual(passed)
+    for (const cell of failed) expect(cell).toMatchObject({ ...suppressed, precision: 'unknown' })
+  })
+
   it('withholds the singleton cold score that the unpublished bounds reveal', async () => {
     const sources = await episodes(1, () => ({ cold: 63, delayed: null }))
     const internal = (await buildLearningMeasurementReport(await input(sources))).pages.flatMap(page => page.cells)
@@ -56,7 +89,7 @@ describe('minimum contributing learners publication policy', () => {
       expect(cell).toMatchObject(suppressed)
       expect(cell.reasonCodes).toContain('insufficient_learners')
     }
-    expect(find(cells).status).toBe('observed_complete')
+    expect(find(cells).status).toBe('insufficient_data')
   })
 
   it('publishes five distinct learners and keeps the twenty-learner interval rule', async () => {
@@ -78,7 +111,7 @@ describe('minimum contributing learners publication policy', () => {
 
   it('withholds a cell whose observed outcomes come from fewer than five learners', async () => {
     const cells = await published(await episodes(6, index => ({ delayed: index === 0 ? 40 : null })))
-    expect(find(cells)).toMatchObject({ ...suppressed, status: 'partial_observed' })
+    expect(find(cells)).toMatchObject({ ...suppressed, status: 'insufficient_data' })
   })
 
   it('suppresses every sibling band and the parent band breakdown when one band is small', async () => {
@@ -125,7 +158,7 @@ describe('minimum contributing learners publication policy', () => {
     expect(5 * unpublished.observedValue! - 6 * unpublished.missingOutcomeBounds!.lower).toBeCloseTo(60)
     const cells = await published(sources)
     for (const weighting of ['capability_episode', 'learner_sensitivity'] as const) {
-      expect(find(cells, 'all', weighting)).toMatchObject({ ...suppressed, status: 'partial_observed' })
+      expect(find(cells, 'all', weighting)).toMatchObject({ ...suppressed, status: 'insufficient_data' })
     }
   })
 

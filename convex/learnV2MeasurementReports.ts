@@ -18,7 +18,7 @@ import { learnSerializedBytes } from '../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS as limits, LEARN_MEASUREMENT_STORAGE_VERSION as storageVersion } from '../shared/learn-v2-measurement-storage-manifest'
 import {
   approvedReportGrant, approvalDigest, reportControl, reportControlSchema,
-  requireReportGrant, requireReportRun, reportRevocationReason, REPORT_ADAPTER_VERSION, REPORT_CODE_VERSION,
+  requireReportGrant, requireReportRun, reportRevocationReason, REPORT_ADAPTER_VERSION, REPORT_CODE_VERSION, REPORT_MAX_OWNERS,
   type ReportControl,
 } from './lib/learnV2MeasurementReportAccess'
 import { requireOwnedReport, requireOwnedReportGrant } from './lib/learnV2PublicAccess'
@@ -106,6 +106,7 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
   }
   if (!LEARN_MEASUREMENT_CAPABILITIES.reports) return unavailable('disabled', 'disabled')
   const approval = approvedReportGrant(grant, grant.userId)
+  if (approval.owners.length > REPORT_MAX_OWNERS) return unavailable('unavailable', 'roster_capacity_exceeded')
   if (request.cutoff > Date.now() || approval.frozenAt > request.enrollmentStartAt) return unavailable('unavailable', 'protocol_not_frozen')
   const { idempotencyKey: _key, ...queryRequest } = request
   const requestDigest = await privacyDigest(queryRequest)

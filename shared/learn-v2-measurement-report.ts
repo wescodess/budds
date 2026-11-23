@@ -19,7 +19,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v4' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v5' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -644,7 +644,10 @@ export const learnPublishedReportMetricSchema = z.strictObject({ ...learnReportM
   const nestedFields = [value.replacements, value.sensitivity, value.allocations, value.attritionByStartingBand]
   const suppressed = value.counts === null
   if ((suppressed && (value.observedValue !== null || value.allEligibleValue !== null || value.missingOutcomeBounds !== null
-    || value.confidenceInterval !== null || [...cellFields, ...nestedFields].some(field => field !== null)))
+    || value.confidenceInterval !== null || [...cellFields, ...nestedFields].some(field => field !== null)
+    || value.status !== 'insufficient_data' || value.populationState !== 'unknown' || value.sourceCoverage !== 'unknown'
+    || value.outcomeCoverage !== 'unknown' || value.validity !== 'unknown' || value.precision !== 'unknown'
+    || value.reasonCodes.length !== 1 || value.reasonCodes[0] !== LEARN_REPORT_INSUFFICIENT_LEARNERS))
     || (!suppressed && cellFields.some(field => field === null))
     || ((suppressed || nestedFields.some(field => field === null)) && !value.reasonCodes.includes(LEARN_REPORT_INSUFFICIENT_LEARNERS))) {
     ctx.addIssue({ code: 'custom', message: 'Suppressed cells and breakdowns publish no value-bearing fields and state insufficient_learners' })
@@ -1225,12 +1228,15 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput): P
   }
   const cells: ComputedReportCell[] = []
   for (const [key, group] of [...groups].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
-    const bands: LearnReportMetric['stratum']['startingBand'][] = ['all', ...[...new Set(group.rows.map(row => row.band))].sort()]
+    const bands = ['all', ...LEARN_V2_REPORT_STARTING_BANDS.filter(band => band !== 'all')] as const
     const computed = bands.map(band => (['capability_episode', 'learner_sensitivity'] as const).map(weighting => reportCell({ ...group, weighting,
       stratum: { ...group.stratum, startingBand: band }, inventory, audit, sourceKnown, seed: `${metadata.provenance.bootstrapSeed}:${key}:${band}:${weighting}` })))
-    const disclosures = reconcileLearnReportBandDisclosures(computed[0]![0]!.disclosure, computed.slice(1).map(weightings => weightings[0]!.disclosure))
+    const occupied = computed.slice(1).filter((_, index) => group.rows.some(row => row.band === bands[index + 1]))
+    const disclosures = reconcileLearnReportBandDisclosures(computed[0]![0]!.disclosure, occupied.map(weightings => weightings[0]!.disclosure))
     computed.forEach((weightings, index) => {
-      for (const { cell } of weightings) cells.push({ cell, disclosure: index ? disclosures.bands[index - 1]! : disclosures.all })
+      const bandIndex = occupied.indexOf(weightings)
+      const disclosure = index === 0 ? disclosures.all : bandIndex < 0 ? weightings[0]!.disclosure : disclosures.bands[bandIndex]!
+      for (const { cell } of weightings) cells.push({ cell, disclosure })
     })
   }
   return { report: learnMeasurementReportSchema.parse({ version: LEARN_V2_MEASUREMENT_REPORT_VERSION, status: 'sealed',

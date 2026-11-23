@@ -280,8 +280,28 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
 }
 
 export async function readLearnFirstCheckFact(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
-  if (!opportunity.firstCheckClaim || !opportunity.originalSlot) return null
-  const claim = parseLearnContract(learnFirstCheckClaimSchema, opportunity.firstCheckClaim)
+  if (!opportunity.originalSlot) return null
+  let identity = opportunity.firstCheckClaim
+  if (!identity) {
+    const direct = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_firstSlot_firstCheckOpportunityId', q => q.eq('fact.firstSlot.firstCheckOpportunityId', opportunity._id)).take(2)
+    const links = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_slot_firstCheckOpportunityId', q => q.eq('fact.slot.firstCheckOpportunityId', opportunity._id)).take(2)
+    const matches = [...direct, ...links]
+    if (!matches.length) return null
+    const match = matches[0]!
+    if (matches.length !== 1 || match.userId !== userId
+      || (match.fact.kind !== 'independent_claim_v2' && match.fact.kind !== 'first_slot_link')) throw new Error('Learn first-check fact unavailable')
+    const fact = match.fact
+    const parent = fact.kind === 'independent_claim_v2' ? match
+      : await ctx.db.query('learnMeasurementReportFacts')
+        .withIndex('by_userId_and_sequence', q => q.eq('userId', userId).eq('sequence', fact.claimFactSequence)).unique()
+    if (!parent || parent.fact.kind !== 'independent_claim_v2' || parent.learningVoidId !== opportunity.learningVoidId
+      || parent.fact.blueprintRevisionId !== opportunity.blueprintRevisionId || parent.fact.objectiveId !== opportunity.objectiveId
+      || parent.fact.claimKey !== match.fact.claimKey || parent.fact.claimSequence !== match.fact.claimSequence) throw new Error('Learn first-check fact unavailable')
+    identity = learnFirstCheckClaimSchema.strip().parse(parent.fact)
+  }
+  const claim = parseLearnContract(learnFirstCheckClaimSchema, identity)
   const rows = await ctx.db.query('learnMeasurementReportFacts')
     .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId)
       .eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', claim.claimSequence)).take(3)
@@ -294,7 +314,8 @@ export async function readLearnFirstCheckFact(ctx: QueryCtx | MutationCtx, userI
   const saved = row.fact.kind === 'independent_claim_v2' ? resolveLearnReportFirstSlotV2(envelope(row), rows[1] ? envelope(rows[1]) : null) : row.fact
   const slot = saved.kind === 'independent_claim' ? saved : saved.kind === 'independent_claim_v2' && saved.firstSlot.kind === 'linked' ? saved.firstSlot : null
   if (!slot || row.fact.kind === 'independent_claim' && rows.length !== 1 || row.epoch !== ('stratum' in saved ? saved.stratum.epoch : null)
-    || slot.firstCheckOpportunityId !== opportunity._id || slot.checkSequence !== opportunity.checkSequence) throw new Error('Learn first-check fact unavailable')
+    || slot.firstCheckOpportunityId !== opportunity._id
+    || opportunity.firstCheckClaim && slot.checkSequence !== opportunity.checkSequence) throw new Error('Learn first-check fact unavailable')
   const savedClaim = learnFirstCheckClaimSchema.strip().parse(saved)
   if (JSON.stringify(parseLearnContract(learnFirstCheckClaimSchema, savedClaim)) !== JSON.stringify(claim)) throw new Error('Learn first-check fact unavailable')
   return row

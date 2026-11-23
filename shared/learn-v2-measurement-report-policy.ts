@@ -19,7 +19,8 @@ export const LEARN_REPORT_INSUFFICIENT_LEARNERS = 'insufficient_learners'
  * - starting bands: band cells partition the group's "all" cell, so one unsafe band suppresses
  *   every band cell, the "all" cell's band attrition, and any nested breakdown that is unsafe in
  *   one band cell is suppressed in all band cells.
- * Suppressed fields are null with reason `insufficient_learners`; cell existence and status remain.
+ * Every group emits all fixed starting bands. Suppressed values are null; status is
+ * insufficient_data, coverage/validity/precision are unknown, and the sole reason is insufficient_learners.
  * Bootstrap intervals still need twenty contributing learners.
  *
  * This rule is defense-in-depth, not complete disclosure control. It checks each cell, and each
@@ -101,7 +102,12 @@ export function publishLearnReportCell(cell: LearnReportMetric, disclosure: Lear
   const nested = shown && disclosure.attrition && disclosure.replacements && disclosure.sensitivity && disclosure.allocations
   return {
     ...cell, publicationPolicyVersion: LEARN_REPORT_PUBLICATION_POLICY_VERSION,
-    reasonCodes: nested ? cell.reasonCodes : [...new Set([...cell.reasonCodes, LEARN_REPORT_INSUFFICIENT_LEARNERS])].sort(),
+    status: shown ? cell.status : 'insufficient_data',
+    populationState: shown ? cell.populationState : 'unknown', sourceCoverage: shown ? cell.sourceCoverage : 'unknown',
+    outcomeCoverage: shown ? cell.outcomeCoverage : 'unknown', validity: shown ? cell.validity : 'unknown',
+    precision: shown ? cell.precision : 'unknown',
+    reasonCodes: !shown ? [LEARN_REPORT_INSUFFICIENT_LEARNERS]
+      : nested ? cell.reasonCodes : [...new Set([...cell.reasonCodes, LEARN_REPORT_INSUFFICIENT_LEARNERS])].sort(),
     observedValue: shown ? cell.observedValue : null, allEligibleValue: shown ? cell.allEligibleValue : null,
     missingOutcomeBounds: shown ? cell.missingOutcomeBounds : null, confidenceInterval: shown ? cell.confidenceInterval : null,
     counts: shown ? cell.counts : null, legacyIndependentAudit: shown ? cell.legacyIndependentAudit : null,

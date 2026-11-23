@@ -13,7 +13,7 @@ import { measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-
 const script = fileURLToPath(new URL('./learn-v2-measurement-report.mjs', import.meta.url))
 const fixturePath = fileURLToPath(new URL('./learn-v2-measurement-report.fixture.v1.json', import.meta.url))
 const fixture = () => JSON.parse(readFileSync(fixturePath, 'utf8'))
-const fixtureOutputDigest = '39162b65275a145a97ce0cc436fc022be5237ed7dffa7a43f050ac86bec319ba'
+const fixtureOutputDigest = 'dbff4f796a54eb1e59d5c8268992af01d103018192cd9080e5ce9d80d64ed8f5'
 let directory: string
 let guard: string
 let sequence = 0
@@ -90,7 +90,7 @@ function expectWithheld(output: ReturnType<typeof fixture>) {
 }
 
 describe('Node 24 offline measurement report CLI', () => {
-  it('replays v2 late-linked and unresolved claims once without losing the unresolved reason', async () => {
+  it('replays v2 late-linked and unresolved claims once while withholding suppressed reasons', async () => {
     const input = fixture()
     input.rows = input.rows.map((row: LearnReportInputSnapshot) => {
       if (row.kind !== 'first_check_claim') return row
@@ -112,7 +112,7 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(cells.reduce((sum, cell) => sum + cell.counts.maturedClaims, 0)).toBe(2)
     expect(cells.reduce((sum, cell) => sum + cell.counts.checkedClaims, 0)).toBe(1)
     expect(primary(output, 'false_mastery_next_delayed.v1', null)).toMatchObject({
-      reasonCodes: expect.arrayContaining(['no_qualifying_delayed_slot', 'insufficient_learners']), observedValue: null, allEligibleValue: null,
+      reasonCodes: ['insufficient_learners'], observedValue: null, allEligibleValue: null,
     })
   })
 
@@ -125,9 +125,9 @@ describe('Node 24 offline measurement report CLI', () => {
       manifest: { cutoffDate: '2026-11-02T00:00:00.000Z', reportVersion: 'learn-v2.measurement-report.v3',
         provenance: { sourceVersion: 'learn-v2.measurement-report-source.v4', bootstrapReplicates: 10_000 } } })
     expectWithheld(output)
-    expect(primary(output)).toMatchObject({ status: 'partial_observed' })
-    expect(primary(output, 'false_mastery_next_delayed.v1')).toMatchObject({ status: 'partial_observed' })
-    expect(primary(output, 'verified_learning_gain.v1', 30)).toMatchObject({ status: 'no_eligible_population' })
+    expect(primary(output)).toMatchObject({ status: 'insufficient_data' })
+    expect(primary(output, 'false_mastery_next_delayed.v1')).toMatchObject({ status: 'insufficient_data' })
+    expect(primary(output, 'verified_learning_gain.v1', 30)).toMatchObject({ status: 'insufficient_data' })
     const oracle = await unpublished(fixture())
     expect(primary(oracle)).toMatchObject({ status: 'partial_observed', observedValue: -20, allEligibleValue: null,
       missingOutcomeBounds: { lower: -30, upper: 20 }, confidenceInterval: null,
@@ -146,7 +146,7 @@ describe('Node 24 offline measurement report CLI', () => {
     Object.assign(input.report.provenance, prepared.provenance, { codeVersion: fixture().report.provenance.codeVersion })
     const { code, output } = replay(input, '--sealed-input')
     expect(code).toBe(0)
-    expect(output.reasonCodes).toEqual(['offline_replay_only'])
+    expect(output.reasonCodes).toEqual(['offline_replay_only', 'insufficient_learners'])
     expect(primary(output)).toMatchObject({ observedValue: -20, allEligibleValue: -20, missingOutcomeBounds: { lower: -20, upper: -20 },
       confidenceInterval: null, counts: { maturedEpisodes: 5, comparablePairs: 5 }, publicationPolicyVersion: 'learn-v2.report-publication.minimum-five-learners.v2' })
     expect(primary(output).reasonCodes).not.toContain('insufficient_learners')
@@ -159,7 +159,7 @@ describe('Node 24 offline measurement report CLI', () => {
   it('exactly replays a sealed-input envelope without promoting the file to trusted live evidence', () => {
     const { code, output, serialized } = replay(fixture(), '--sealed-input')
     expect(code).toBe(0)
-    expect(createHash('sha256').update(serialized).digest('hex')).toBe('796a26fd22e77d73559530e0b611a324743c4a0c09b7ce6d358e2e60843ba3fa')
+    expect(createHash('sha256').update(serialized).digest('hex')).toBe('c46c42107cf6ce79164c24cda9c4d7059449a08ab1a1c4c6f44bf9c15e01696d')
     expect(output).toMatchObject({ inputClass: 'sealed_input_replay', reasonCodes: ['offline_replay_only', 'insufficient_learners'] })
     expect(output.readiness.sourceAdmission).toBe('pending')
   })
@@ -187,7 +187,7 @@ describe('Node 24 offline measurement report CLI', () => {
     if (version === 'source') input.report.provenance.sourceVersion = 'learn-v2.measurement-report-source.v3'
     if (version === 'query') input.report.query.version = 'obsolete.v0'
     if (version === 'provenanceQuery') input.report.provenance.queryVersion = 'obsolete.v0'
-    if (version === 'code') input.report.provenance.codeVersion = 'unrecognized.v1'
+    if (version === 'code') input.report.provenance.codeVersion = 'learn-v2.report-code.c6.2.v4'
     expect(replay(input).output).toMatchObject({ status: 'failed', reasonCodes: ['incompatible_version'], manifest: null, cells: [] })
   })
 
@@ -248,8 +248,23 @@ describe('Node 24 offline measurement report CLI', () => {
       }
     }
     const output = replay(await reseal(input)).output
-    expect(output.reasonCodes).toContain('no_observed_outcomes')
+    expect(output.reasonCodes).toEqual(['fixture_only', 'insufficient_learners'])
+    expect(primary(await unpublished(input))).toMatchObject({ observedValue: null, allEligibleValue: null,
+      counts: { maturedEpisodes: 2, comparablePairs: 0 } })
     expect(output.cells.every((cell: ReturnType<typeof fixture>) => cell.observedValue === null && cell.allEligibleValue === null)).toBe(true)
+  })
+
+  it('reports absent outcomes only when an unsuppressed population can disclose them', async () => {
+    const sources = await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index, { delayed: null })))
+    const prepared = await computationInput(sources.flatMap(source => [source.watermark, source.episode]))
+    const input = fixture()
+    input.rows = prepared.rows
+    input.roster = prepared.roster
+    Object.assign(input.report.provenance, prepared.provenance, { codeVersion: fixture().report.provenance.codeVersion })
+    const { code, output } = replay(input, '--sealed-input')
+    expect(code).toBe(0)
+    expect(output.reasonCodes).toContain('no_observed_outcomes')
+    expect(primary(output)).toMatchObject({ observedValue: null, counts: { maturedEpisodes: 5, comparablePairs: 0 } })
   })
 
   it('reports an unfrozen non-admitted inventory through the reducer', async () => {
