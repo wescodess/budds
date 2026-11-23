@@ -47,7 +47,7 @@ Indexes below omit the common `userId` prefix. Dotted fields use underscores in 
 | `learnScoringExecutions` | Submission/opportunity/job/dispatch, intended binding, observed identity, verdict/usage/commit | Submission; opportunity; job + dispatch ordinal; Void | M | Void-owned private scoring history; requested identity never substitutes for observed identity |
 | `learnMeasurementReportFacts` | Append-only owner sequence, immutable scalar source snapshots, separate Independent claim/check sequences | Sequence; epoch + sequence; Void; assignment; opportunity; submission; claim key + claim sequence | M | Void-owned source history; no attempt-only denominator discovery |
 | `learnMeasurementSourceWatermarks` | Owner source sequence, due-work coverage, history coverage | Owner + sequence | M | Owner read-model guard; no growing watermark array |
-| `learnMeasurementReportRuns` | Requester, approved scope/epoch/protocol, cutoff/roster/input digests, extraction/cursor/counters/version/precision | Status + creation; epoch + cutoff | M | Snapshot retained with owner; source-owner invalidation marks dependent runs stale |
+| `learnMeasurementReportRuns` | Requester, approved scope/epoch/protocol, cutoff/roster/input digests, extraction/cursor/counters/version/precision, continuation/progress lease | Status + creation; epoch + cutoff | M | Snapshot retained with owner; source-owner invalidation marks dependent runs stale |
 | `learnMeasurementReportRows` | Source owner, run/sequence/watermark, typed scalar episode/claim snapshot | Run + sequence; owner + run + sequence; Void; assignment + horizon; invalidation | M | Source-owner and requester-run descendants; no response/item/scorer payloads |
 | `learnMeasurementReportCells` | Requester/run, report v3, complete typed metric cell including weighting, stratum and aggregate breakdowns | Run + sequence; owner + run + sequence; run + cell key | M | Requester/run descendants; all run/owner indexes and cleanup remain unchanged |
 | `learnMeasurementReportViewerGrants` | Verified principal binding, approved cohort/epoch, grant/revocation/expiry | Cohort + epoch; expiry | W | Server-managed, default deny; no provisioning or public self-grant |
@@ -184,6 +184,30 @@ Cells separate frozen flow/entry/depth/response-kind/scorer configuration/family
 C6.2 and C6.3 must run full reconciliation, fingerprinting and report computation as **action or offline work**, never inside a Convex query or mutation, at the documented 10,000-episode/64 MiB maximums. The algorithms retain the whole normalized run and serialized indexes in memory; publication/persistence remains bounded work owned by C6.2. C6.3 replays the same source version, normalized digest, query and seed from authorized retained inputs. No refresh, writer, production enrollment or baseline capture is implemented here.
 
 The provisional 95% interval uses 10,000 whole-learner cluster resamples, retaining every eligible row and its weighting. Clusters sort by opaque learner key. Mulberry32 is seeded with FNV-1a of `bootstrapSeed + ':' + JSON.stringify([metric,horizon,stratum,policy]) + ':' + band + ':' + weighting + ':' + estimateKind`, where kinds are `primary`, `replacement`, `excluding_flags`; the group stratum has startingBand=all and observed scorer labels. The interval uses linearly interpolated 2.5th/97.5th percentiles (index p×9999). Fewer than 20 contributing learners gives `insufficient_clusters`; equal contributing cluster means, an empty contributing resample or equal percentile endpoints gives `insufficient_variation`. Unknown population/source or quarantine gives null precision. Counts, descriptive points and missingness bounds remain separate; no sample adequacy, causal conclusion or reliable individual gain follows.
+
+## 524 report continuation recovery
+
+Report runs retain optional `continuationId` (`_scheduled_functions`) and
+`progressDeadlineAt` metadata. Each pinning, extraction or finalization step is
+scheduled in the same mutation that saves its ID and a 15-minute progress lease.
+Committed source pages, the first computed-input manifest and new cell pages
+renew the lease. Duplicate pages and coalescing requests do not renew it.
+
+Before coalescing onto a building run, a request reads that exact continuation
+through `ctx.db.system.get('_scheduled_functions', continuationId)`. A missing
+record or a `success`, `failed` or `canceled` job without a terminal run status
+fails the run as `continuation_lost`. A pending or in-progress job whose lease
+has expired fails as `progress_deadline_exceeded`. Failure and replacement-run
+creation commit in the request's transaction. Recovery retains the existing
+bounded candidate lookup and uses direct system-record reads, with no sweep or
+cron. Old building rows without continuation metadata are rebuilt on request;
+no migration or backfill is needed.
+
+Terminal status and its original reason are preserved: late source, computation,
+cell and seal writes are ignored, and failure recording cannot overwrite a
+sealed, stale or failed run. Continuation IDs and lease timestamps stay internal;
+report DTOs and personal-export allowlists remain fixed. Capability defaults,
+the empty approval catalogue and responses-off learner paths are unchanged.
 
 ## 524 publication policy and pin conflicts
 

@@ -367,6 +367,7 @@ export const reportRunFields = {
   adapterVersion: v.string(), codeVersion: v.string(), rosterDigest: v.string(), cutoff: v.number(),
   enrollmentStartAt: v.number(), enrollmentEndAt: v.number(), status: v.union(v.literal('building'), v.literal('sealed'), v.literal('failed'), v.literal('stale')),
   inputDigest: v.optional(v.string()), extractionStartedAt: v.number(), extractionEndedAt: v.optional(v.number()),
+  continuationId: v.optional(v.id('_scheduled_functions')), progressDeadlineAt: v.optional(v.number()),
   sourceCoverage: v.union(v.literal('complete'), v.literal('unknown')), rowCount: v.number(), inputBytes: v.number(),
   cursor: v.optional(v.string()), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000), reasonCode: v.optional(v.string()),
 }

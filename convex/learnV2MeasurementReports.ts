@@ -31,6 +31,7 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 
 const unavailable = (status: 'disabled' | 'unavailable' | 'building' | 'failed' | 'stale', reason: string) => ({ version, status, reasonCodes: status === 'disabled' ? [reason, 'protocol_not_frozen'] : [reason] })
 const runArgs = { reportRunId: v.id('learnMeasurementReportRuns') }
+const REPORT_PROGRESS_LEASE_MS = 15 * 60 * 1000
 const sourceRow = v.object({ userId: v.string(), sourceWatermark: v.number(), snapshot: learnReportInputSnapshotValidator })
 const runValidator = v.object({ ...reportRunFields, _id: v.id('learnMeasurementReportRuns'), _creationTime: v.number() })
 const controlJson = (value: ReportControl) => {
@@ -64,6 +65,12 @@ async function internalRun(ctx: QueryCtx | MutationCtx, id: Id<'learnMeasurement
   }
   throw new Error('Learn access denied')
 }
+async function scheduleReportStep(ctx: MutationCtx, reportRunId: Id<'learnMeasurementReportRuns'>, phase: 'pinning' | 'extracting' | 'computing'): Promise<void> {
+  const step = phase === 'pinning' ? internal.learnV2MeasurementReports.pinReportOwners
+    : phase === 'extracting' ? internal.learnV2MeasurementReports.buildReportBatch : internal.learnV2MeasurementReports.finalizeReport
+  const continuationId = await ctx.scheduler.runAfter(0, step, { reportRunId })
+  await ctx.db.patch(reportRunId, { continuationId, progressDeadlineAt: Date.now() + REPORT_PROGRESS_LEASE_MS })
+}
 async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportSchema.parse>, authenticated: boolean): Promise<LearnV2ReportRequest> {
   let grant: Doc<'learnMeasurementReportViewerGrants'>
   if (authenticated) grant = (await requireReportGrant(ctx, request.viewerGrantId)).grant
@@ -88,6 +95,12 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
     if (control.requestKeys.includes(requestKey) && control.requestDigest !== requestDigest) return unavailable('unavailable', 'idempotency_conflict')
     if (candidate.status !== 'failed' && candidate.status !== 'stale' && control.requestDigest === requestDigest
       && (control.requestKeys.includes(requestKey) || candidate.status === 'building')) {
+      if (candidate.status === 'building') {
+        const continuation = candidate.continuationId ? await ctx.db.system.get('_scheduled_functions', candidate.continuationId) : null
+        const reason = !continuation || (continuation.state.kind !== 'pending' && continuation.state.kind !== 'inProgress') ? 'continuation_lost'
+          : candidate.progressDeadlineAt === undefined || candidate.progressDeadlineAt <= Date.now() ? 'progress_deadline_exceeded' : null
+        if (reason) { await recordReportFailure(ctx, candidate._id, reason); continue }
+      }
       if (!control.requestKeys.includes(requestKey)) {
         if (control.requestKeys.length === 64) return unavailable('unavailable', 'refresh_inventory_overflow')
         control.requestKeys.push(requestKey)
@@ -106,7 +119,7 @@ async function begin(ctx: MutationCtx, request: ReturnType<typeof requestReportS
     bootstrapSeed: await privacyDigest([requestDigest, now]), bootstrapReplicates: 10000,
     cursor: controlJson({ version: 'learn-v2.report-build.v1', scopeDigest: await approvalDigest(approval), requestDigest, requestKeys: [requestKey],
       phase: 'pinning', pinnedOwners: 0, sourcePages: [], cellPages: [], episodeCount: 0, claimCount: 0, ownerIndex: 0, afterSequence: 0, scannedBytes: 0, emittedBytes: 0 }) })
-  await ctx.scheduler.runAfter(0, internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })
+  await scheduleReportStep(ctx, reportRunId, 'pinning')
   return { version, status: 'requested', reportRunId }
 }
 export const requestReport = mutation({
@@ -161,7 +174,7 @@ async function writeSources(ctx: MutationCtx, run: Doc<'learnMeasurementReportRu
         admitted: snapshot.kind === 'episode' && snapshot.assignment.status === 'admitted', matured: false, valid: false } })
   }
   control.sourcePages.push({ sequence, count: rows.length, digest })
-  await ctx.db.patch(run._id, { rowCount: run.rowCount + rows.length, cursor: controlJson(control) })
+  await ctx.db.patch(run._id, { rowCount: run.rowCount + rows.length, cursor: controlJson(control), progressDeadlineAt: Date.now() + REPORT_PROGRESS_LEASE_MS })
 }
 async function recordReportFailure(ctx: MutationCtx, reportRunId: Id<'learnMeasurementReportRuns'>, reason: string, stale = false) {
   const reasonCode = reason === 'Learn access denied' ? 'report_access_revoked'
@@ -192,7 +205,7 @@ export const pinReportOwners = internalMutation({
       next.pinnedOwners += rows.length
       if (next.pinnedOwners === owners.length) next.phase = 'extracting'
       await ctx.db.patch(run._id, { cursor: controlJson(next) })
-      await ctx.scheduler.runAfter(0, next.phase === 'pinning' ? internal.learnV2MeasurementReports.pinReportOwners : internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: run._id })
+      await scheduleReportStep(ctx, run._id, next.phase === 'pinning' ? 'pinning' : 'extracting')
       return null
     } catch (error) {
       return recordReportFailure(ctx, args.reportRunId, error instanceof Error ? error.message : 'source_incomplete')
@@ -287,7 +300,7 @@ export const commitBuildBatch = internalMutation({
     else control.afterSequence = args.next
     if (control.ownerIndex === control.pinnedOwners) control.phase = 'computing'
     await ctx.db.patch(run._id, { cursor: controlJson(control), ...(control.phase === 'computing' ? { extractionEndedAt: Date.now() } : {}) })
-    await ctx.scheduler.runAfter(0, control.phase === 'computing' ? internal.learnV2MeasurementReports.finalizeReport : internal.learnV2MeasurementReports.buildReportBatch, { reportRunId: run._id })
+    await scheduleReportStep(ctx, run._id, control.phase === 'computing' ? 'computing' : 'extracting')
     return null
   },
 })
@@ -317,13 +330,15 @@ export const prepareComputedReport = internalMutation({
   args: { ...runArgs, inputDigest: v.string(), rosterDigest: v.string(), bootstrapSeed: v.string(), inputBytes: v.number(), episodeCount: v.number(), sourceCoverage: v.union(v.literal('complete'), v.literal('unknown')) },
   returns: v.null(), handler: async (ctx, args) => {
     const { run } = await internalRun(ctx, args.reportRunId)
-    if (run.status !== 'building' || reportControl(run).phase !== 'computing') throw new Error('invalid_report_phase')
+    if (run.status !== 'building') return null
+    if (reportControl(run).phase !== 'computing') throw new Error('invalid_report_phase')
     if (run.inputDigest && run.inputDigest !== args.inputDigest) throw new Error('conflicting_input_digest')
     if (args.inputBytes > limits.maxReportInputBytes || args.episodeCount > limits.maxReportEpisodes) throw new Error('source_input_overflow')
     const control = reportControl(run)
     control.episodeCount = args.episodeCount
     await ctx.db.patch(run._id, { inputDigest: args.inputDigest, rosterDigest: args.rosterDigest, bootstrapSeed: args.bootstrapSeed,
-      inputBytes: args.inputBytes, sourceCoverage: args.sourceCoverage, cursor: controlJson(control) })
+      inputBytes: args.inputBytes, sourceCoverage: args.sourceCoverage, cursor: controlJson(control),
+      ...(run.inputDigest === undefined ? { progressDeadlineAt: Date.now() + REPORT_PROGRESS_LEASE_MS } : {}) })
     return null
   },
 })
@@ -344,16 +359,16 @@ export const saveCellPage = internalMutation({
     for (const [index, cell] of args.cells.entries()) await ctx.db.insert('learnMeasurementReportCells', { userId: run.userId, storageVersion,
       createdAt: Date.now(), reportRunId: run._id, sequence: args.sequence + index, cellKey: String(args.sequence + index), reportVersion: version, ...cell })
     control.cellPages.push({ sequence: args.sequence, count: args.cells.length, digest })
-    await ctx.db.patch(run._id, { cursor: controlJson(control) })
+    await ctx.db.patch(run._id, { cursor: controlJson(control), progressDeadlineAt: Date.now() + REPORT_PROGRESS_LEASE_MS })
     return null
   },
 })
 export const sealReport = internalMutation({
   args: { ...runArgs, cellCount: v.number(), inputDigest: v.string() }, returns: v.null(), handler: async (ctx, args) => {
     const { run, approval } = await internalRun(ctx, args.reportRunId)
-    if (run.status === 'sealed') return null
+    if (run.status !== 'building') return null
     const control = reportControl(run)
-    if (run.status !== 'building' || control.phase !== 'computing' || run.inputDigest !== args.inputDigest
+    if (control.phase !== 'computing' || run.inputDigest !== args.inputDigest
       || args.cellCount === 0 || control.cellPages.reduce((sum, page) => sum + page.count, 0) !== args.cellCount
       || control.sourcePages.reduce((sum, page) => sum + page.count, 0) !== run.rowCount) throw new Error('incomplete_report_manifest')
     const reason = await reportRevocationReason(ctx, run, approval)
@@ -397,6 +412,7 @@ export const finalizeReport = internalAction({
         && row.dueWorkThrough !== null && row.dueWorkThrough >= run.cutoff)
       await ctx.runMutation(internal.learnV2MeasurementReports.prepareComputedReport, { ...args, ...fingerprint, sourceCoverage: covered ? 'complete' : 'unknown' })
       run = await ctx.runQuery(internal.learnV2MeasurementReports.readBuildState, args)
+      if (run.status !== 'building') return null
       const result = await buildPublishedLearningMeasurementReport({ reportRunId: run._id, query: runQueryValue(run), provenance: provenance(run), roster, rows })
       if (result.report.status !== 'sealed') throw new Error(result.report.reasonCodes[0] ?? 'computation_incomplete')
       let sequence = 1

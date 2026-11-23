@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
+import { v } from 'convex/values'
+import { makeFunctionReference, type FunctionArgs } from 'convex/server'
+import { internalAction, internalMutation } from './_generated/server'
+import * as reportFunctions from './learnV2MeasurementReports'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
@@ -24,10 +28,14 @@ const VIEWER = { tokenIdentifier: 'https://report.example|project-owner', subjec
 const FOREIGN = { tokenIdentifier: 'https://elsewhere.example|project-owner', subject: 'project-owner' }
 const OWNER = 'https://learner.example|learner-1'
 const modules = import.meta.glob('./**/*.ts')
+const originalSealReport = makeFunctionReference<'mutation', FunctionArgs<typeof internal.learnV2MeasurementReports.sealReport>, null>('measurementReportRecoveryOriginals:sealReport')
 beforeEach(() => { capabilities.reports = true; capabilities.maxInputBytes = 64 * 1024 * 1024; capabilities.maxEpisodes = 10_000; LEARN_REPORT_APPROVALS.splice(0); vi.useFakeTimers(); vi.setSystemTime(REPORT_NOW) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); LEARN_REPORT_APPROVALS.splice(0) })
-async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'scored') {
-  const t = convexTest(schema, modules)
+async function fixture(count = 1, mode: 'scored' | 'missing' | 'unscored' = 'scored', overrides: Partial<typeof reportFunctions> = {}) {
+  const t = convexTest(schema, { ...modules,
+    './learnV2MeasurementReports.ts': async () => ({ ...reportFunctions, ...overrides }),
+    './measurementReportRecoveryOriginals.ts': async () => ({ sealReport: reportFunctions.sealReport }),
+  })
   const sources: Awaited<ReturnType<typeof seedReportSource>>[] = []
   for (let index = 0; index < count; index++) sources.push(await t.run(ctx => seedReportSource(ctx, index === 0 ? OWNER : `https://learner.example|learner-${index + 1}`, mode)))
   if (count > 8) await t.run(async ctx => {
@@ -356,6 +364,131 @@ describe('viewer grants and current revocation', () => {
     })
     const jobs = await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').collect())
     expect(jobs.some(job => job.name === 'learnV2MeasurementReports:dailyRefresh' && job.scheduledTime > REPORT_NOW + 86_400_000)).toBe(true)
+  })
+})
+
+async function continuation(f: Awaited<ReturnType<typeof fixture>>, reportRunId: Id<'learnMeasurementReportRuns'>) {
+  const run = (await f.t.run(ctx => ctx.db.get(reportRunId)))!
+  if (!run.continuationId) throw new Error('Missing persisted report continuation')
+  const job = await f.t.run(ctx => ctx.db.system.get('_scheduled_functions', run.continuationId!))
+  return { run, job }
+}
+
+describe('report continuation recovery', () => {
+  test.each(['success', 'failed', 'canceled'] as const)('recovers a building run whose current continuation is %s', async state => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = await fixture(1, 'scored', { finalizeReport: internalAction({
+      args: { reportRunId: v.id('learnMeasurementReportRuns') }, returns: v.null(),
+      handler: async () => { if (state === 'failed') throw new Error('report_worker_interrupted'); return null },
+    }) })
+    const reportRunId = await f.begin()
+    if (state === 'canceled') {
+      const current = await continuation(f, reportRunId)
+      await f.t.run(ctx => ctx.scheduler.cancel(current.run.continuationId!))
+    } else await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const before = await continuation(f, reportRunId)
+    expect(before.run.status).toBe('building')
+    expect(before.job?.state.kind).toBe(state)
+    expect(errors).toHaveBeenCalledTimes(state === 'failed' ? 1 : 0)
+    const replacement = await f.begin()
+    expect(replacement).not.toBe(reportRunId)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+    expect((await continuation(f, replacement)).job).toMatchObject({ name: 'learnV2MeasurementReports:pinReportOwners', state: { kind: 'pending' } })
+    expect(await f.begin()).toBe(replacement)
+  })
+
+  test('recovers when the failure-recording RPC itself fails', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const f = await fixture(1, 'scored', { failReport: internalMutation({
+      args: { reportRunId: v.id('learnMeasurementReportRuns'), reason: v.string(), stale: v.optional(v.boolean()) }, returns: v.null(),
+      handler: async () => { throw new Error('failure_recorder_unavailable') },
+    }) })
+    vi.spyOn(source, 'readLearnReportFactPage').mockRejectedValueOnce(new Error('source_read_interrupted'))
+    const reportRunId = await f.begin()
+    await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const before = await continuation(f, reportRunId)
+    expect(before.run.status).toBe('building')
+    expect(before.job).toMatchObject({ name: 'learnV2MeasurementReports:buildReportBatch', state: { kind: 'failed' } })
+    expect(errors).toHaveBeenCalledOnce()
+    expect(await f.begin()).not.toBe(reportRunId)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+  })
+
+  test.each(['pending', 'inProgress'] as const)('expires a progress lease with a %s job without letting requests renew it', async state => {
+    let started: () => void = () => {}
+    let release: () => void = () => {}
+    const running = new Promise<void>(resolve => { started = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const f = await fixture(1, 'scored', state === 'pending' ? {} : { buildReportBatch: internalAction({
+      args: { reportRunId: v.id('learnMeasurementReportRuns') }, returns: v.null(),
+      handler: async () => { started(); await gate; return null },
+    }) })
+    const reportRunId = await f.begin()
+    await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })
+    if (state === 'inProgress') { vi.runOnlyPendingTimers(); await running }
+    const before = await continuation(f, reportRunId)
+    expect(before.job?.state.kind).toBe(state)
+    expect(before.run.progressDeadlineAt).toBe(REPORT_NOW + 15 * 60 * 1000)
+    vi.setSystemTime(before.run.progressDeadlineAt! - 1)
+    expect(await f.begin()).toBe(reportRunId)
+    expect((await continuation(f, reportRunId)).run.progressDeadlineAt).toBe(before.run.progressDeadlineAt)
+    vi.setSystemTime(before.run.progressDeadlineAt!)
+    const replacement = await f.begin()
+    expect(replacement).not.toBe(reportRunId)
+    if (state === 'inProgress') { release(); await f.t.finishInProgressScheduledFunctions() }
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['progress_deadline_exceeded'] })
+    expect((await continuation(f, replacement)).job?.state.kind).toBe('pending')
+  })
+
+  test('ignores a late valid seal after recovery and keeps the original terminal reason', async () => {
+    let allowSeal = false
+    const f = await fixture(1, 'scored', { sealReport: internalMutation({
+      args: { reportRunId: v.id('learnMeasurementReportRuns'), cellCount: v.number(), inputDigest: v.string() }, returns: v.null(),
+      handler: async (ctx, args) => allowSeal ? ctx.runMutation(originalSealReport, args) : null,
+    }) })
+    const reportRunId = await f.begin()
+    await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const before = await continuation(f, reportRunId)
+    expect(before.job?.state.kind).toBe('success')
+    expect(before.run.status).toBe('building')
+    const seal = { reportRunId, inputDigest: before.run.inputDigest!, cellCount: reportControl(before.run).cellPages.reduce((sum, page) => sum + page.count, 0) }
+    expect(seal.cellCount).toBeGreaterThan(0)
+    expect(await f.begin()).not.toBe(reportRunId)
+    allowSeal = true
+    await f.t.mutation(internal.learnV2MeasurementReports.sealReport, seal)
+    await f.t.action(internal.learnV2MeasurementReports.finalizeReport, { reportRunId })
+    await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_worker_failure', stale: true })
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
+  })
+
+  test('tracks new steps, renews only on progress, and preserves a normally sealed run', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    const initial = await continuation(f, reportRunId)
+    expect(initial.job).toMatchObject({ name: 'learnV2MeasurementReports:pinReportOwners', state: { kind: 'pending' } })
+    vi.setSystemTime(REPORT_NOW + 14 * 60 * 1000)
+    await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId })
+    const progressed = await continuation(f, reportRunId)
+    expect(progressed.run.continuationId).not.toBe(initial.run.continuationId)
+    expect(progressed.job).toMatchObject({ name: 'learnV2MeasurementReports:buildReportBatch', state: { kind: 'pending' } })
+    expect(progressed.run.progressDeadlineAt).toBe(Date.now() + 15 * 60 * 1000)
+    vi.setSystemTime(initial.run.progressDeadlineAt! + 1)
+    expect(await f.begin()).toBe(reportRunId)
+    await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+    const sealed = await continuation(f, reportRunId)
+    expect(sealed.run.status).toBe('sealed')
+    expect(sealed.job).toMatchObject({ name: 'learnV2MeasurementReports:finalizeReport', state: { kind: 'success' } })
+    await f.t.mutation(internal.learnV2MeasurementReports.failReport, { reportRunId, reason: 'late_worker_failure' })
+    expect(await f.begin()).toBe(reportRunId)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'sealed' })
+  })
+
+  test('rebuilds a legacy building run without persisted continuation metadata', async () => {
+    const f = await fixture()
+    const reportRunId = await f.begin()
+    await f.t.run(ctx => ctx.db.patch(reportRunId, { continuationId: undefined, progressDeadlineAt: undefined }))
+    expect(await f.begin()).not.toBe(reportRunId)
+    expect(await f.viewer.query(api.learnV2MeasurementReports.getReport, { version, reportRunId })).toMatchObject({ status: 'failed', reasonCodes: ['continuation_lost'] })
   })
 })
 
