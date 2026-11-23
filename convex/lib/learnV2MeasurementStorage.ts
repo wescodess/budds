@@ -235,6 +235,7 @@ export const assessmentOpportunityFields = {
   deliveryGrantId: v.optional(v.id('learnAssessmentExposures')), submissionId: v.optional(v.id('learnResponses')),
   scoringJobId: v.optional(v.id('learnJobs')), authoritativeAttemptId: v.optional(v.id('masteryAttempts')),
   replacesOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), replacementReason: v.optional(v.string()),
+  replacementBinding: v.optional(v.object({ assessmentOpportunityId: v.id('learnAssessmentOpportunities'), itemPinsDigest: v.string() })),
   firstCheckClaim: v.optional(firstCheckClaim), checkSequence: v.number(), originalSlot: v.boolean(),
   firstSlotEpoch: v.optional(v.string()),
   deliveryPins: v.optional(v.object({ version: v.literal(LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION), confidenceRequested: v.boolean() })),

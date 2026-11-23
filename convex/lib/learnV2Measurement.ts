@@ -4,6 +4,7 @@ import { hasLearnV2Access } from './learnV2Access'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { findCurrentAdaptiveActivityForSessionContent } from './learnAdaptiveEvents'
@@ -32,6 +33,7 @@ export type EnrollmentRequest = {
 export type AdmittedAssignment = Extract<Doc<'learnMeasurementAssignments'>, { status: 'admitted' }>
 export type MeasurementScope = Pick<Doc<'learnAssessmentOpportunities'>,
   'learningVoidId' | 'blueprintRevisionId' | 'objectiveId' | 'blueprintRecordRevision' | 'assessmentContractVersion' | 'assessmentContractDigest' | 'depth' | 'contextPins'>
+  & Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'purpose'>>
 
 export async function requireMeasurementSession(ctx: ReadCtx, userId: string, request: EnrollmentRequest) {
   if (!await hasLearnV2Access(ctx, userId)) throw new Error('Learn V2 access denied')
@@ -65,12 +67,14 @@ export async function measurementScopeReason(ctx: ReadCtx, userId: string, scope
   const pins = scope.contextPins
   if (pins.kind === 'calibration') return 'pins_mismatch'
   const [plan, revision] = await Promise.all([ctx.db.get(pins.studyPlanId), ctx.db.get(pins.studyPlanRevisionId)])
+  const frozenPlan = revision && (scope.purpose?.kind === 'measurement_cold' || scope.purpose?.kind === 'measurement_delayed')
+    && await hasLearnReflowPlanAuthority(ctx, userId, revision, pins.planRecordRevision)
   if (!plan || !revision || plan.userId !== userId || revision.userId !== userId
     || plan.learningVoidId !== learningVoid._id || revision.learningVoidId !== learningVoid._id
-    || revision.studyPlanId !== plan._id || plan.activeRevisionId !== revision._id
-    || !['accepted', 'active'].includes(revision.status) || revision.acceptedAt === undefined
+    || revision.studyPlanId !== plan._id || !frozenPlan && (plan.activeRevisionId !== revision._id
+      || !['accepted', 'active'].includes(revision.status) || revision.recordRevision !== pins.planRecordRevision) || revision.acceptedAt === undefined
     || revision.blueprintRevisionId !== blueprint._id || revision.blueprintRecordRevision !== blueprint.recordRevision
-    || revision.revision !== pins.planRevision || revision.recordRevision !== pins.planRecordRevision) return 'pins_mismatch'
+    || revision.revision !== pins.planRevision) return 'pins_mismatch'
   return null
 }
 

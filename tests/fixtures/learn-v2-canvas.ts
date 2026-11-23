@@ -6,6 +6,7 @@ import { api, internal } from '../../convex/_generated/api'
 import schema from '../../convex/schema'
 import { MEASUREMENT_HARNESS_VERSION, measurementDigest, measurementItemAdapters } from '../../convex/lib/learnV2MeasurementItems'
 import type { LearnScorerBinding } from '../../shared/learn-v2-measurement'
+import { measurementReplacementModules } from './learn-v2-measurement-replacement'
 
 const modules = import.meta.glob('../../convex/**/*.ts')
 const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('../../convex/learnV2MeasurementItems') }>).learnV2MeasurementItems
@@ -23,7 +24,7 @@ const privateRubric = { kind: 'bounded_rubric' as const, keyInsufficientReason: 
 // Publication adapters supply synthetic validation evidence; grant, acceptance and scoring authority stay real.
 export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean } = { rubric: true }) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
-  const t = convexTest(schema, modules)
+  const t = convexTest(schema, { ...modules, ...measurementReplacementModules })
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })

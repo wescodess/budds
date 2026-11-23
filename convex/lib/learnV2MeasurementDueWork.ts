@@ -17,9 +17,10 @@ import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
 import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
 
 async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
-  patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode'>>) {
+  patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode' | 'replacementBinding'>>) {
   if (Object.entries(patch).every(([key, value]) => row[key as keyof typeof row] === value)) return
   await ctx.db.patch(row._id, { ...patch, revision: row.revision + 1 })
   if (patch.phase && ['invalid', 'cancelled', 'abandoned'].includes(patch.phase))
@@ -94,6 +95,7 @@ export async function replaceLearnMeasurementOpportunityForOwner(ctx: MutationCt
   const previous = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_delayedCheckId', q => q.eq('userId', userId).eq('delayedCheckId', delayedCheckId)).unique()
   if (previous) {
     if (previous.replacementReason !== input.reason) throw new Error('Learn replacement reason conflicts')
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !await measurementAllocationMatches(ctx, userId, previous, assignment)) return { status: 'replacement_not_allowed' as const }
     return { status: 'replaced' as const, assessmentOpportunityId: previous._id }
   }
   if (!original.originalSlot || original.submissionId || original.authoritativeAttemptId
@@ -118,11 +120,12 @@ export async function replaceLearnMeasurementOpportunityForOwner(ctx: MutationCt
     if (assigned.length > 8) return { status: 'novel_item_unavailable' as const }
     if (assigned.some(row => row.assessmentPins.kind === 'measurement' && row.assessmentPins.itemPins.caseId === item.caseId)) continue
     const { _id, _creationTime, deliveryGrantId: _grant, submissionId: _submission, scoringJobId: _job,
-      authoritativeAttemptId: _attempt, firstCheckClaim: _claim, eligibleAt: _eligible, ...fields } = original
+      authoritativeAttemptId: _attempt, firstCheckClaim: _claim, eligibleAt: _eligible, replacementBinding: _replacement, ...fields } = original
     const id = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, createdAt: Date.now(), delayedCheckId,
       assessmentPins: { kind: 'measurement', itemPins: parsed.data }, phase: 'ready', revision: 1, operationalEligibility: 'eligible', eligibleAt: Date.now(),
       reasonCode: undefined, replacesOpportunityId: original._id, replacementReason: input.reason, originalSlot: false, checkSequence: 0 })
-    await updateOpportunity(ctx, assignment, original, { phase: original.phase === 'abandoned' ? 'abandoned' : 'invalid', operationalEligibility: 'blocked', reasonCode: input.reason })
+    await updateOpportunity(ctx, assignment, original, { phase: original.phase === 'abandoned' ? 'abandoned' : 'invalid', operationalEligibility: 'blocked', reasonCode: input.reason,
+      ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { replacementBinding: { assessmentOpportunityId: id, itemPinsDigest: await privacyDigest(parsed.data) } } : {}) })
     const replacement = (await ctx.db.get(id))!
     await writeMeasurementOpportunityFact(ctx, assignment, replacement)
     await emitEligibility(ctx, assignment, replacement)

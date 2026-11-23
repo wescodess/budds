@@ -52,6 +52,7 @@ import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementD
 import { parseLearnContract } from '../shared/learn-v2-responses';
 import { bindSessionApplication } from './lib/learnV2SessionApplication';
 import { readLearnDelayedCheckBinding } from './lib/learnV2DelayedDelivery';
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -1404,7 +1405,8 @@ export const startStudySession = mutation({
     if (!plan || plan.userId !== userId)
       throw new Error("Study session is not ready");
     const stable = await ctx.db.get(plan.studyPlanId);
-    if (!stable || stable.activeRevisionId !== plan._id || plan.status !== "accepted")
+    if (!stable || (stable.activeRevisionId !== plan._id || plan.status !== "accepted")
+      && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan)))
       throw new Error("Study session is not current");
     const learningVoid = await ctx.db.get(plan.learningVoidId);
     const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);

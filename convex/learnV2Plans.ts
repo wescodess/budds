@@ -1,5 +1,6 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks } from './lib/learnV2FixedChecks'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -248,7 +249,9 @@ export const markExpiredSessionsMissed = mutation({
     const missedSessionIds: Id<'studySessions'>[] = []
     const revision = await ctx.db.get(activeRevisionId)
     if (!revision || revision.userId !== userId || revision.studyPlanId !== plans[0]!._id) throw new Error('Current active Study Plan revision not found')
-    const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
+    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, revision, MAX_SESSIONS) : []
+    const sessions = [...new Map([...currentSessions, ...fixed].map(row => [row._id, row])).values()]
     if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
     for (const session of sessions) {
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId
@@ -283,13 +286,19 @@ export const markStudySessionMissed = mutation({
     const session = await ctx.db.get(args.studySessionId); if (!session || session.userId !== userId) throw new Error('Study Session not found')
     const plan = await ctx.db.get(session.studyPlanRevisionId); if (!plan || plan.userId !== userId) throw new Error('Study-plan revision not found')
     const planRoot = await ctx.db.get(plan.studyPlanId)
-    if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
+    if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id
+      && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))) throw new Error('Study-plan revision is not current')
     const prior = await replay(ctx, userId, args.idempotencyKey, requestFingerprint); if (prior) return prior
     const learningVoid = await requireLiveVoid(ctx, userId, plan.learningVoidId); const now = Date.now()
     if (session.revision !== args.expectedSessionRevision || !['planned', 'ready'].includes(session.status)) throw new Error('Study Session revision conflict')
     if ((session.scheduledEndAt ?? session.scheduledStartAt) >= now) throw new Error('Future Study Session cannot be marked missed')
-    await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' })
-    const response = { _id: session._id, status: 'missed' as const, revision: session.revision + 1 }
+    let revision = session.revision + 1
+    if (isDedicatedLearnCheck(session)) {
+      const opportunity = await ctx.db.get(session.assessmentOpportunityId!)
+      if (!opportunity || await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session) !== 'missed') throw new Error('Fixed check window is unavailable')
+      revision = session.revision
+    } else await ctx.db.patch(session._id, { status: 'missed', revision, missedAt: now, auditReasonCode: 'session_expired' })
+    const response = { _id: session._id, status: 'missed' as const, revision }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: plan._id, studySessionId: session._id, reasonCode: 'session_expired', details: { scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'markStudySessionMissed', requestFingerprint, response, nowUtcMs: now })
     return response
@@ -309,8 +318,10 @@ export const reflowFutureIncomplete = mutation({
     if (plan.recordRevision !== args.expectedPlanRecordRevision || !['accepted', 'active'].includes(plan.status)) throw new Error('Study-plan revision conflict')
     const planRoot = await ctx.db.get(plan.studyPlanId)
     if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
-    const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
-    if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
+    if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan, MAX_SESSIONS) : []
+    const sessions = currentSessions.filter(row => !isDedicatedLearnCheck(row))
     const storedInput = JSON.parse(plan.inputSnapshot ?? '{}') as StudyPlanSchedulingInput
     const validPriorities = new Set<SchedulingPriority>(['overdue_retained_review', 'prerequisite_remediation', 'due_review', 'new_learning', 'optional_enrichment'])
     const reflow = rescheduleStudySessions({
@@ -357,7 +368,8 @@ export const reflowFutureIncomplete = mutation({
     }
     await ctx.db.patch(plan._id, { status: 'superseded', recordRevision: (plan.recordRevision ?? 0) + 1, updatedAt: now })
     await ctx.db.patch(planRoot._id, { activeRevisionId: successorId, updatedAt: now })
-    const response = { successorPlanRevisionId: successorId, changedSessionIds: reflow.replacedSessionIds, preservedSessionIds: reflow.preservedSessionIds, recordRevision: 1 }
+    const response = { successorPlanRevisionId: successorId, changedSessionIds: reflow.replacedSessionIds,
+      preservedSessionIds: [...reflow.preservedSessionIds, ...fixed.map(row => String(row._id))], recordRevision: 1 }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: successorId, reasonCode: 'future_incomplete_reflow_accepted', details: { ...response, parentRevisionId: plan._id }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'reflowFutureIncomplete', requestFingerprint, response, nowUtcMs: now })
     return response

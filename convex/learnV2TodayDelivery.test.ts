@@ -11,6 +11,8 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '../shared/learn-v2-responses'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
+import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
@@ -39,7 +41,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
-async function fixture(options: { reserve?: boolean } = {}) {
+async function fixture(options: { reserve?: boolean, reserveCount?: number } = {}) {
   const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -100,22 +102,22 @@ function ordinaryScorer() {
   return network
 }
 
-async function openDay7(f: Awaited<ReturnType<typeof fixture>>) {
+async function openDelayedCheck(f: Awaited<ReturnType<typeof fixture>>, horizon: 7 | 30 = 7, start = true) {
   const cold = await f.seal()
   await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
     submissionId: cold.accepted.submissionId, idempotencyKey: 'terminal_cold_score_1234567890' })
-  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === horizon)!
   vi.setSystemTime(day7.openAt + 1000)
   await f.t.mutation(due, { userId, through: Date.now() })
   const today = await f.owner.query(api.learnV2Today.getToday, {})
   if (today.status !== 'ready') throw new Error('Expected day 7')
-  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
+  if (start) await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
     expectedSessionRevision: today.sessionRevision, expectedContentRevision: today.content.revision, idempotencyKey: 'terminal_day7_start_1234567890' })
   const before = (await f.opportunities()).find(row => row._id === day7._id)!
   return { today, before }
 }
 
-async function sealDay7(f: Awaited<ReturnType<typeof fixture>>, check: Awaited<ReturnType<typeof openDay7>>, value = 0) {
+async function sealDay7(f: Awaited<ReturnType<typeof fixture>>, check: Awaited<ReturnType<typeof openDelayedCheck>>, value = 0) {
   const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
     idempotencyKey: 'terminal_day7_seal_1234567890', response: { target: { assessmentOpportunityId: check.before._id }, expectedRevision: check.before.revision,
       payload: { kind: 'numeric', value, unit: 'members' } } } })
@@ -124,7 +126,7 @@ async function sealDay7(f: Awaited<ReturnType<typeof fixture>>, check: Awaited<R
 }
 
 async function sealedDay7(f: Awaited<ReturnType<typeof fixture>>) {
-  return await sealDay7(f, await openDay7(f))
+  return await sealDay7(f, await openDelayedCheck(f))
 }
 
 function responseContextPins(response: Doc<'learnResponses'> | null) {
@@ -213,7 +215,7 @@ test('scoring replays preserve the closure established by sealing', async () => 
 test.each(['sealed', 'scored_pass', 'scored_fail', 'expired', 'missed', 'cancelled', 'abandoned', 'scoring_limit'] as const)(
   '%s transition closes its check beside a ready day-30 check', async transition => {
     const f = await fixture()
-    const check = await openDay7(f)
+    const check = await openDelayedCheck(f)
     if (['sealed', 'scored_pass', 'scored_fail', 'scoring_limit'].includes(transition)) {
       const pins = check.before.assessmentPins
       if (pins.kind !== 'measurement') throw new Error('Expected measurement')
@@ -261,7 +263,7 @@ test.each(['sealed', 'scored_pass', 'scored_fail', 'expired', 'missed', 'cancell
 
 test.each(['void', 'account'] as const)('%s deletion closes a bound check before removing its opportunity', async scope => {
   const f = await fixture()
-  const check = await openDay7(f)
+  const check = await openDelayedCheck(f)
   const learningVoid = (await f.t.run(ctx => ctx.db.get(f.graph.learningVoidId)))!
   if (scope === 'account') await f.t.mutation(internal.accountDeletion.deleteAccountCascade, { userId })
   for (let batch = 0; batch < 250; batch++) {
@@ -277,7 +279,7 @@ test.each(['void', 'account'] as const)('%s deletion closes a bound check before
 
 test('replacement invalidation closes the original delivery binding without moving its first slot', async () => {
   const f = await fixture({ reserve: true })
-  const check = await openDay7(f)
+  const check = await openDelayedCheck(f)
   const request = { assessmentOpportunityId: check.before._id, reason: 'contaminated' as const }
   await f.t.run(ctx => ctx.db.patch(check.before._id, { reasonCode: request.reason }))
   expect(await f.t.run(ctx => replaceLearnMeasurementOpportunityForOwner(ctx, userId, request))).toMatchObject({ status: 'replaced' })
@@ -287,9 +289,384 @@ test('replacement invalidation closes the original delivery binding without movi
   expect((await f.opportunities()).find(row => row.replacesOpportunityId === check.before._id)).toMatchObject({ originalSlot: false, checkSequence: 0 })
 })
 
+test.each([7, 30] as const)('Today delivers and scores the recorded day-%s reserve without changing original allocation', async horizon => {
+  const f = await fixture({ reserve: true })
+  const check = await openDelayedCheck(f, horizon)
+  const assignment = (await f.t.run(ctx => ctx.db.get(check.before.assignmentId!)))!
+  if (assignment.status !== 'admitted') throw new Error('Expected admitted assignment')
+  await f.t.run(ctx => ctx.db.patch(check.before._id, { reasonCode: 'contaminated' }))
+  const request = { assessmentOpportunityId: check.before._id, reason: 'contaminated' as const }
+  const result = await f.owner.mutation(replaceMeasurementOpportunity, request)
+  if (result.status !== 'replaced') throw new Error('Expected reserve')
+  expect(await f.owner.mutation(replaceMeasurementOpportunity, request)).toEqual(result)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  expect(today).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: result.assessmentOpportunityId } } })
+  if (today.status !== 'ready') throw new Error('Expected reserve discovery')
+  const started = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
+    expectedSessionRevision: today.sessionRevision, expectedContentRevision: today.content.revision, idempotencyKey: 'reserve_today_start_1234567890' })
+  expect(started).toMatchObject({ status: 'assessment', deliveryGrant: { status: 'granted' } })
+  const opportunity = (await f.opportunities()).find(row => row._id === result.assessmentOpportunityId)!
+  const pins = opportunity.assessmentPins
+  if (pins.kind !== 'measurement') throw new Error('Expected reserve pins')
+  const item = (await f.t.run(ctx => ctx.db.get(pins.itemPins.itemId)))!
+  const envelope = await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: today.sessionId })
+  expect(envelope).toMatchObject({ delivered: { prompt: item.prompt, declaredStimulus: item.declaredStimulus } })
+  const numbers = /groups=(\d+), size=(\d+)/u.exec(item.declaredStimulus!)!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'reserve_today_seal_1234567890', response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+      payload: { kind: 'numeric', value: Number(numbers[1]) * Number(numbers[2]), unit: 'members' } } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected reserve seal')
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: 'reserve_today_score_1234567890' })).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
+  expect(await f.t.run(ctx => ctx.db.get(assignment._id))).toMatchObject({ status: 'admitted', allocation: assignment.allocation })
+  expect((await f.opportunities()).find(row => row._id === check.before._id)).toMatchObject({ originalSlot: true, contextPins: check.before.contextPins })
+  expect((await f.opportunities()).find(row => row._id === opportunity._id)).toMatchObject({ originalSlot: false, checkSequence: 0, phase: 'scored_pass' })
+})
+
+test.each(['unrecorded', 'wrong_record', 'wrong_parent', 'foreign_parent', 'changed_item', 'promoted', 'clock'] as const)(
+  'replacement authority rejects %s provenance in disclosure, grant and acceptance', async forgery => {
+    const f = await fixture({ reserve: true, reserveCount: 2 })
+    const check = await openDelayedCheck(f)
+    await f.t.run(ctx => ctx.db.patch(check.before._id, { reasonCode: 'contaminated' }))
+    const replacement = await f.owner.mutation(replaceMeasurementOpportunity, { assessmentOpportunityId: check.before._id, reason: 'contaminated' })
+    if (replacement.status !== 'replaced') throw new Error('Expected recorded reserve')
+    await f.t.mutation(due, { userId, through: Date.now() })
+    const today = await f.owner.query(api.learnV2Today.getToday, {})
+    if (today.status !== 'ready') throw new Error('Expected reserve')
+    await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: today.sessionId,
+      expectedSessionRevision: today.sessionRevision, expectedContentRevision: today.content.revision, idempotencyKey: 'forgery_reserve_start_1234567890' })
+    const row = (await f.opportunities()).find(value => value._id === replacement.assessmentOpportunityId)!
+    const day30 = (await f.opportunities()).find(value => value.horizonDays === 30)!
+    await f.t.run(async ctx => {
+      const parent = (await ctx.db.get(check.before._id))!
+      if (forgery === 'unrecorded') await ctx.db.patch(parent._id, { replacementBinding: undefined })
+      if (forgery === 'wrong_record') await ctx.db.patch(parent._id, { replacementBinding: { ...parent.replacementBinding!, assessmentOpportunityId: day30._id } })
+      if (forgery === 'wrong_parent') await ctx.db.patch(row._id, { replacesOpportunityId: day30._id })
+      if (forgery === 'foreign_parent') {
+        const { _id, _creationTime, ...fields } = parent
+        const foreignId = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, userId: 'https://auth.example|foreign-parent' })
+        await ctx.db.patch(row._id, { replacesOpportunityId: foreignId })
+      }
+      if (forgery === 'promoted') await ctx.db.patch(row._id, { originalSlot: true })
+      if (forgery === 'clock') await ctx.db.patch(row._id, { closeAt: row.closeAt + 60_000 })
+      if (forgery === 'changed_item') {
+        if (row.assessmentPins.kind !== 'measurement') throw new Error('Expected item')
+        const pins = row.assessmentPins.itemPins
+        const items = await ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q =>
+          q.eq('userId', userId).eq('familyId', pins.familyId).eq('familyRevision', pins.familyRevision)).take(7)
+        const item = items.find(value => value.reserve && value._id !== pins.itemId)!
+        if (!item.scoringSpecId || !item.publicationValidationId) throw new Error('Expected published reserve')
+        await ctx.db.patch(row._id, { assessmentPins: { kind: 'measurement', itemPins: { ...pins, itemId: item._id, itemRevision: item.revision,
+          caseId: item.caseId, formLabel: item.formLabel, promptDigest: item.promptDigest, scoringSpecId: item.scoringSpecId,
+          scoringSpecRevision: item.scoringSpecRevision, scoringSpecDigest: item.scoringSpecDigest,
+          supportManifestDigest: item.supportManifestDigest, publicationValidationId: item.publicationValidationId } } })
+      }
+    })
+    expect(await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: row._id })).toMatchObject({ status: 'unavailable', reasonCodes: ['pins_mismatch'] })
+    expect(await f.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: row._id, expectedRevision: row.revision, idempotencyKey: 'forged_reserve_grant_1234567890' }))
+      .toMatchObject({ status: 'unavailable', reasonCodes: ['pins_mismatch'] })
+    expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'forged_reserve_seal_1234567890', response: { target: { assessmentOpportunityId: row._id }, expectedRevision: row.revision,
+        payload: { kind: 'numeric', value: 0, unit: 'members' } } } })).toMatchObject({ kind: 'rejected', reasonCode: 'pins_mismatch' })
+  })
+
+test.each(['ready', 'in_progress', 'completed', 'mixed', 'placed'] as const)('plan reflow preserves %s fixed checks and their recovery', async state => {
+  const f = await fixture()
+  const first = await openDelayedCheck(f, 7, state !== 'ready')
+  if (state === 'placed') await f.t.run(ctx => ctx.db.patch(first.today.sessionId, { placementId: 'retained-placement', placementKind: 'retained_review' }))
+  if (state === 'completed' || state === 'mixed') {
+    const sealed = await sealDay7(f, first)
+    await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+      submissionId: sealed.accepted.submissionId, idempotencyKey: 'reflow_day7_score_1234567890' })
+  }
+  if (state === 'mixed') {
+    const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+    vi.setSystemTime(day30.openAt + 1000)
+    await f.t.mutation(due, { userId, through: Date.now() })
+  }
+  const fixed = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const checks = fixed.filter(row => row.assessmentPurpose === 'measurement_delayed')
+  const pins = (await f.opportunities()).map(row => ({ id: row._id, contextPins: row.contextPins }))
+  const { futureId } = await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  const command = { studyPlanRevisionId: f.graph.studyPlanRevisionId, expectedPlanRecordRevision: 1, idempotencyKey: 'fixed_check_reflow_1234567890' }
+  const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, command)
+  if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+  expect(reflow.changedSessionIds).toContain(futureId)
+  expect(reflow.preservedSessionIds).toEqual(expect.arrayContaining(checks.map(row => row._id)))
+  expect(await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, command)).toEqual(reflow)
+  for (const check of checks) {
+    expect(await f.t.run(ctx => ctx.db.get(check._id))).toEqual(check)
+    expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: check._id }))
+      .toMatchObject({ studySessionId: check._id, status: check.status })
+    expect(await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: check._id })).not.toBeNull()
+  }
+  expect((await f.opportunities()).map(row => ({ id: row._id, contextPins: row.contextPins }))).toEqual(pins)
+  const preview = await f.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: reflow.successorPlanRevisionId })
+  expect(preview).toMatchObject({ status: 'accepted' })
+  const planDelivery = await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'fixed_plan_view_1234567890' })
+  if (state === 'completed') expect(planDelivery.value?.plan.fixedChecks?.map(row => row._id)).toContain(first.today.sessionId)
+  else expect(planDelivery).toMatchObject({ admission: { status: 'denied' }, value: null })
+  if (state !== 'completed') expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'check' } })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt + 2000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const next = await f.owner.query(api.learnV2Today.getToday, {})
+  expect(next).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: day30._id } } })
+  if (next.status !== 'ready') throw new Error('Expected day 30 after reflow')
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: next.sessionId, expectedSessionRevision: next.sessionRevision,
+    expectedContentRevision: next.content.revision, idempotencyKey: 'fixed_reflow_day30_start_1234567890' })
+  const current = (await f.opportunities()).find(row => row._id === day30._id)!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'fixed_reflow_day30_seal_1234567890', response: { target: { assessmentOpportunityId: current._id }, expectedRevision: current.revision,
+      payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal after reflow')
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: 'fixed_reflow_day30_score_1234567890' })).toMatchObject({ status: 'scored' })
+  const projected = await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'fixed_plan_complete_view_1234567890' })
+  expect(projected.admission.status).not.toBe('denied')
+  expect(projected.value?.plan.sessions.every(row => row.schedulerVersion !== 'learn-v2.delayed-delivery.v1')).toBe(true)
+  expect(projected.value?.plan.fixedChecks?.map(row => row._id)).toEqual(expect.arrayContaining(checks.map(row => row._id)))
+})
+
+async function reflowWithMixedChecks() {
+  const f = await fixture()
+  const first = await sealedDay7(f)
+  await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: first.accepted.submissionId, idempotencyKey: 'consumer_day7_score_1234567890' })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  const before = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const checks = before.filter(row => row.assessmentPurpose === 'measurement_delayed')
+  expect(checks.map(row => row.status).sort()).toEqual(['completed', 'ready'])
+  const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'consumer_reflow_1234567890' })
+  if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+  for (const check of checks) expect(await f.t.run(ctx => ctx.db.get(check._id))).toEqual(check)
+  return { ...f, first, day30, checks, successorId: reflow.successorPlanRevisionId }
+}
+
+test('plan and session consumer sweep handles live and terminal fixed checks after reflow', async () => {
+  const f = await reflowWithMixedChecks()
+  const acceptedPins = await f.t.run(async ctx => responseContextPins(await ctx.db.get(f.first.accepted.submissionId)))
+  expect(await f.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: f.successorId })).toMatchObject({ status: 'accepted' })
+  expect(await f.owner.query(api.learnV2Plans.getPlanPreview, { studyPlanRevisionId: f.graph.studyPlanRevisionId })).toMatchObject({ status: 'superseded' })
+  expect((await f.owner.query(api.learnV2Journey.listHub, {})).items).toEqual([expect.objectContaining({ nextScheduledAt: f.day30.openAt })])
+  expect(await f.owner.mutation(api.learnV2Journey.getCurrentMissionDelivery, { idempotencyKey: 'consumer_current_view_1234567890' }))
+    .toMatchObject({ admission: { status: 'denied' }, value: null })
+  expect(await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'consumer_plan_view_1234567890' }))
+    .toMatchObject({ admission: { status: 'denied' }, value: null })
+  for (const check of f.checks) {
+    expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId, studySessionId: check._id }))
+      .toMatchObject({ studySessionId: check._id, status: check.status })
+    expect(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: check._id, idempotencyKey: `consumer_check_view_${check._id}` }))
+      .toMatchObject({ value: { assessment: { kind: 'check', state: { assessmentOpportunityId: check.assessmentOpportunityId } } } })
+  }
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { state: { assessmentOpportunityId: f.day30._id } } })
+  vi.stubEnv('LEARN_V2_CALENDAR_ENABLED', 'true')
+  const connectionId = await f.t.run(ctx => ctx.db.insert('calendarConnections', { userId, provider: 'google', accessToken: '', refreshToken: '',
+    expiresAt: Date.now() + 86_400_000, timezone: 'UTC', status: 'connected', connectedAt: Date.now(), learnV2ConsentVersion: 1,
+    grantedScopes: ['https://www.googleapis.com/auth/calendar.events.owned', 'https://www.googleapis.com/auth/calendar.events.freebusy'] }))
+  const network = vi.fn(async () => { throw new Error('Unexpected calendar dispatch') })
+  vi.stubGlobal('fetch', network)
+  expect(await f.owner.query(api.learnV2Calendar.getStatus, {})).toMatchObject({ enabled: true, connection: 'ready' })
+  for (const check of f.checks) {
+    const unavailable = { kind: 'unavailable', reasonCode: 'fixed_assessment_window', studySessionId: check._id }
+    expect(await f.owner.query(internal.learnV2Calendar.getProjectionInput, { userId, studySessionId: check._id })).toEqual(unavailable)
+    expect(await f.owner.mutation(internal.learnV2Calendar.reserveProjection, { userId, studySessionId: check._id, externalEventId: `b${'a'.repeat(32)}` })).toEqual(unavailable)
+    expect(await f.owner.action(api.learnV2Calendar.projectSession, { studySessionId: check._id })).toEqual(unavailable)
+  }
+  expect(network).not.toHaveBeenCalled()
+  expect(await f.owner.query(api.learnV2Calendar.listProjections, {})).toEqual([])
+  const ordinary = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', f.successorId)).take(8))).find(row => row.status === 'planned' && row.scheduledStartAt > Date.now())!
+  expect(await f.owner.query(internal.learnV2Calendar.getProjectionInput, { userId, studySessionId: ordinary._id })).toMatchObject({ session: { _id: ordinary._id }, plan: { _id: f.successorId } })
+  const fixed = f.checks[0]!
+  const projectionId = await f.t.run(ctx => ctx.db.insert('calendarProjections', { userId, calendarConnectionId: connectionId,
+    studySessionId: fixed._id, studyPlanRevisionId: fixed.studyPlanRevisionId, pinnedPlanRevision: 1, pinnedSessionRevision: fixed.revision,
+    provider: 'google', externalEventId: 'fixed-window-control', status: 'projected', privateMetadata: '{}', createdAt: Date.now(), updatedAt: Date.now() }))
+  expect(await f.owner.mutation(internal.learnV2CalendarReconciliation.recordExternalChange, { calendarConnectionId: connectionId,
+    externalEventId: 'fixed-window-control', kind: 'moved', proposedStartAt: fixed.scheduledStartAt + 60_000,
+    proposedEndAt: fixed.scheduledEndAt! + 60_000, providerUpdatedAt: Date.now() + 1000 })).toBeNull()
+  expect(await f.owner.query(api.learnV2CalendarReconciliation.listProposals, {})).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.get(projectionId))).toMatchObject({ status: 'projected' })
+  let authorization = await f.owner.mutation(api.dataExport.authorizePersonalExport, {})
+  for (let page = 0; page < 16 && !authorization.done; page++) authorization = await f.owner.mutation(api.dataExport.authorizePersonalExport,
+    { authorizationId: authorization.authorizationId, cursor: authorization.cursor! })
+  expect(authorization.done).toBe(true)
+  for (const collection of ['studySessions', 'studyPlanRevisions', 'sessionContent', 'masteryAttempts'] as const) {
+    const page = await f.owner.query(api.dataExport.getUserDataPage, { collection, paginationOpts: { numItems: 50, cursor: null }, authorizationId: authorization.authorizationId })
+    expect(page.page.length).toBeGreaterThan(0)
+    if (collection === 'studySessions') for (const check of f.checks) expect(page.page).toEqual(expect.arrayContaining([expect.objectContaining({
+      _id: check._id, assessmentPurpose: 'measurement_delayed', assessmentOpportunityId: check.assessmentOpportunityId,
+      scheduledStartAt: check.scheduledStartAt, scheduledEndAt: check.scheduledEndAt })]))
+  }
+  expect(await f.t.run(async ctx => responseContextPins(await ctx.db.get(f.first.accepted.submissionId)))).toEqual(acceptedPins)
+  for (const check of f.checks) expect(await f.t.run(ctx => ctx.db.get(check._id))).toMatchObject({
+    _id: check._id, studyPlanRevisionId: check.studyPlanRevisionId, assessmentOpportunityId: check.assessmentOpportunityId,
+    scheduledStartAt: check.scheduledStartAt, scheduledEndAt: check.scheduledEndAt })
+})
+
+test.each(['void', 'account'] as const)('%s deletion drains fixed checks retained across reflow revisions', async scope => {
+  const f = await reflowWithMixedChecks()
+  const next = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.successorId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'deletion_second_reflow_1234567890' })
+  expect(next.preservedSessionIds).toEqual(expect.arrayContaining(f.checks.map(row => row._id)))
+  const learningVoid = (await f.t.run(ctx => ctx.db.get(f.graph.learningVoidId)))!
+  if (scope === 'account') await f.t.mutation(internal.accountDeletion.deleteAccountCascade, { userId })
+  for (let batch = 0; batch < 250; batch++) {
+    if (scope === 'void') await f.t.mutation(internal.learnV2Retention.deleteFolderFoundation, { userId, folderId: learningVoid.folderId })
+    else await f.t.mutation(internal.accountDeletion.runDeletionBatch, { userId })
+    const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(1))
+    if (!sessions.length) {
+      expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(1))).toEqual([])
+      return
+    }
+  }
+  throw new Error('Deletion did not drain every reflow revision')
+})
+
+test('fixed checks do not change ordinary reflow placements, status transitions or generation', async () => {
+  const outcomes = []
+  for (const withCheck of [false, true]) {
+    vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+    policy.protocol = syntheticDeliveryProtocol()
+    const f = await fixture()
+    if (withCheck) await openDelayedCheck(f)
+    else {
+      const cold = await f.seal()
+      await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+        submissionId: cold.accepted.submissionId, idempotencyKey: 'ordinary_control_cold_1234567890' })
+      const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+      vi.setSystemTime(day7.openAt + 1000)
+    }
+    const setup = await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'ordinary_control_reflow_1234567890' })
+    if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+    outcomes.push(await f.t.run(async ctx => {
+      const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+        q.eq('userId', userId).eq('studyPlanRevisionId', reflow.successorPlanRevisionId!)).take(8)
+      const jobs = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(24)
+      return { placements: rows.map(row => ({ placementId: row.placementId, status: row.status, revision: row.revision,
+        start: row.scheduledStartAt, end: row.scheduledEndAt, kind: row.placementKind, priority: row.schedulingPriority,
+        scheduler: row.schedulerVersion, assessmentPurpose: row.assessmentPurpose })),
+      futureStatus: (await ctx.db.get(setup.futureId))!.status,
+      generations: jobs.filter(row => row.studyPlanRevisionId === reflow.successorPlanRevisionId).map(row => ({ status: row.status, type: row.type })) }
+    }))
+  }
+  expect(outcomes[1]).toEqual(outcomes[0])
+})
+
+test.each(['valid', 'wrong_reason', 'wrong_blueprint', 'record_revision', 'cycle'] as const)('fixed check authority after repeated reflow: %s', async change => {
+  const f = await fixture()
+  const check = await openDelayedCheck(f)
+  await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  const first = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'chain_first_reflow_1234567890' })
+  if (!first.successorPlanRevisionId) throw new Error('Expected first successor')
+  const second = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: first.successorPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'chain_second_reflow_1234567890' })
+  if (!second.successorPlanRevisionId) throw new Error('Expected second successor')
+  await f.t.run(async ctx => {
+    const current = (await ctx.db.get(second.successorPlanRevisionId!))!
+    if (change === 'wrong_reason') await ctx.db.patch(current._id, { changeReason: 'availability_changed' })
+    if (change === 'wrong_blueprint') await ctx.db.patch(current._id, { blueprintRecordRevision: current.blueprintRecordRevision! + 1 })
+    if (change === 'record_revision') {
+      const original = (await ctx.db.get(f.graph.studyPlanRevisionId))!
+      await ctx.db.patch(original._id, { recordRevision: original.recordRevision! + 1 })
+    }
+    if (change === 'cycle') await ctx.db.patch(current._id, { parentRevisionId: current._id })
+  })
+  const state = await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: check.before._id })
+  if (change === 'valid') {
+    expect(state).toMatchObject({ status: 'available', phase: 'test_open' })
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: check.today.sessionId })
+  } else {
+    expect(state).toMatchObject({ status: 'unavailable', reasonCodes: ['pins_mismatch'] })
+    expect(await f.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: check.before._id, expectedRevision: check.before.revision, idempotencyKey: 'chain_bad_grant_1234567890' }))
+      .toMatchObject({ status: 'unavailable', reasonCodes: ['pins_mismatch'] })
+    expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'chain_bad_seal_1234567890', response: { target: { assessmentOpportunityId: check.before._id }, expectedRevision: check.before.revision,
+        payload: { kind: 'numeric', value: 0, unit: 'members' } } } })).toMatchObject({ kind: 'rejected', reasonCode: 'pins_mismatch' })
+  }
+})
+
+test('fixed-check plan additions stay absent when responses are off', async () => {
+  const f = await reflowWithMixedChecks()
+  const before = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  policy.responses = false
+  const view = await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'fixed_off_view_1234567890' })
+  expect(view.value?.plan).not.toHaveProperty('fixedChecks')
+  for (const check of f.checks) expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, {
+    learningVoidId: f.graph.learningVoidId, studySessionId: check._id })).toBeNull()
+  expect(await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))).toEqual(before)
+})
+
+test('a retained follow-up after reflow binds the frozen original plan instead of blocking a valid item', async () => {
+  const f = await fixture()
+  const first = await sealedDay7(f)
+  await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: first.accepted.submissionId, idempotencyKey: 'retained_reflow_day7_score_1234567890' })
+  await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'retained_reflow_plan_1234567890' })
+  if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+  const planId = reflow.successorPlanRevisionId
+  const lesson = (await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(8))).find(row => row.status === 'planned')!
+  await publishDeliveryTeaching({ t: f.t, graph: { ...f.graph, studySessionId: lesson._id, studyPlanRevisionId: planId } })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: lesson._id, expectedSessionRevision: 2,
+    expectedContentRevision: 1, idempotencyKey: 'retained_reflow_lesson_start_1234567890' })).toMatchObject({ status: 'in_progress' })
+  ordinaryScorer()
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: lesson._id, expectedSessionRevision: 3,
+    expectedContentRevision: 1, expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1,
+    response: 'My separate-case application.', confidence: 3, idempotencyKey: 'retained_reflow_independent_1234567890' }))
+    .toMatchObject({ status: 'completed', state: 'independent', scorePercent: 100 })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId', q => q.eq('userId', userId)).take(32))
+  const bound = sessions.filter(row => row.assessmentOpportunityId === day30._id)
+  expect(bound).toEqual([expect.objectContaining({ studyPlanRevisionId: f.graph.studyPlanRevisionId, status: 'ready',
+    assessmentPurpose: 'measurement_delayed', schedulerVersion: 'learn-v2.delayed-delivery.v1', scheduledStartAt: day30.openAt, scheduledEndAt: day30.closeAt })])
+  expect(sessions.some(row => row.assessmentPurpose === 'retained_transfer' && row.status === 'blocked')).toBe(false)
+  const again = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: planId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'retained_reflow_again_1234567890' })
+  expect(again.preservedSessionIds).toContain(bound[0]!._id)
+  expect(await f.t.run(ctx => ctx.db.get(bound[0]!._id))).toEqual(bound[0])
+})
+
+test.each(['expiry', 'manual'] as const)('%s missed handling finds fixed checks on a reflow ancestor without changing their pins', async mode => {
+  const f = await fixture()
+  const check = await openDelayedCheck(f, 7, mode === 'expiry')
+  await f.t.run(ctx => seedFixedCheckPlan(ctx, userId, f.graph, Date.now()))
+  await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'missed_ancestor_reflow_1234567890' })
+  const session = (await f.t.run(ctx => ctx.db.get(check.today.sessionId)))!
+  vi.setSystemTime(check.before.closeAt + (mode === 'manual' ? 1 : 0))
+  if (mode === 'expiry') expect(await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed,
+    { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'missed_ancestor_expire_1234567890' })).toMatchObject({ missedSessionIds: expect.arrayContaining([session._id]) })
+  else expect(await f.owner.mutation(api.learnV2Plans.markStudySessionMissed, { studySessionId: session._id,
+    expectedSessionRevision: session.revision, idempotencyKey: 'missed_ancestor_manual_1234567890' })).toMatchObject({ status: 'missed', revision: session.revision })
+  expect(await f.t.run(ctx => ctx.db.get(session._id))).toMatchObject({ status: 'missed', revision: session.revision,
+    scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt })
+  expect((await f.opportunities()).find(row => row._id === check.before._id)!.contextPins).toEqual(check.before.contextPins)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.opportunities()).find(row => row._id === check.before._id)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { state: { assessmentOpportunityId: day30._id } } })
+})
+
 test('disabled lifecycle cleanup preserves an existing active check session', async () => {
   const f = await fixture()
-  const check = await openDay7(f)
+  const check = await openDelayedCheck(f)
   const before = await f.t.run(ctx => ctx.db.get(check.today.sessionId))
   vi.setSystemTime(check.before.closeAt + 1)
   policy.responses = false

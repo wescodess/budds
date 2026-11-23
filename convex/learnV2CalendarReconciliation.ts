@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 import { internalAction, internalMutation, internalQuery, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
 import type { Doc } from './_generated/dataModel'
@@ -160,6 +161,7 @@ export const recordExternalChange = internalMutation({ args: { calendarConnectio
   if ((projection.lastProviderUpdatedAt ?? 0) >= providerUpdatedAt) return null
   const session = await ctx.db.get(projection.studySessionId)
   if (!session || session.userId !== connection.userId) return null
+  if (isDedicatedLearnCheck(session)) return null
   if (args.kind === 'moved' && (args.proposedStartAt === undefined || args.proposedEndAt === undefined || args.proposedEndAt <= args.proposedStartAt)) return null
   const authoritativeEnd = session.scheduledEndAt ?? session.scheduledStartAt + 30 * 60_000
   if (args.kind === 'moved' && args.proposedStartAt === session.scheduledStartAt && args.proposedEndAt === authoritativeEnd) {

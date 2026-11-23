@@ -11,8 +11,10 @@ import { requireMeasurementCapability } from './learnV2MeasurementItems'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
+import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
+import { hasLearnReflowPlanAuthority, LEARN_DELAYED_DELIVERY_VERSION } from './learnV2FixedChecks'
 
-const VERSION = 'learn-v2.delayed-delivery.v1'
+const VERSION = LEARN_DELAYED_DELIVERY_VERSION
 type Binding = { kind: 'ready', sessionId: Id<'studySessions'>, scheduledStartAt: number } | { kind: 'blocked', reasonCode: string }
 
 export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
@@ -60,12 +62,8 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
     || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)) return blocked('protocol_not_frozen')
   if (row.userId !== assignment.userId || row.assignmentId !== assignment._id || row.purpose.kind !== 'measurement_delayed'
     || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
-  const allocated = assignment.allocation.kind === 'three_case'
-    ? row.purpose.horizonDays === 7 ? assignment.allocation.day7 : assignment.allocation.day30
-    : assignment.allocation.horizonDays === row.purpose.horizonDays ? assignment.allocation.delayed : null
   if (row.horizonDays !== row.purpose.horizonDays || row.openAt !== row.purpose.clock.openAt || row.closeAt !== row.purpose.clock.closeAt
-    || row.dueAt !== row.purpose.clock.dueAt || row.originalSlot && (!allocated
-      || await privacyDigest(allocated) !== await privacyDigest(row.assessmentPins.itemPins))) return blocked('pins_mismatch')
+    || row.dueAt !== row.purpose.clock.dueAt || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return blocked('pins_mismatch')
   const userId = assignment.userId
   try { await requireMeasurementCapability(ctx, userId) } catch { return blocked('unknown_history') }
   const reason = await measurementScopeReason(ctx, userId, row)
@@ -92,8 +90,16 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
         activityContractVersion: 'learn-adaptive.activity-contract.v1', evaluationContractVersion: 'learn-adaptive.evaluation.v1',
         learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) return blocked('canvas_not_admitted')
   }
-  if (target && (target.userId !== userId || target.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId
-    || target.primaryObjectiveId !== row.objectiveId || target.placementKind !== 'retained_review' || !['planned', 'blocked'].includes(target.status))) return blocked('pins_mismatch')
+  if (target && (target.userId !== userId || target.primaryObjectiveId !== row.objectiveId
+    || target.placementKind !== 'retained_review' || !['planned', 'blocked'].includes(target.status))) return blocked('pins_mismatch')
+  if (target && target.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId) {
+    const [sourcePlan, targetPlan] = await Promise.all([ctx.db.get(row.contextPins.studyPlanRevisionId), ctx.db.get(target.studyPlanRevisionId)])
+    const root = targetPlan && await ctx.db.get(targetPlan.studyPlanId)
+    if (!sourcePlan || !targetPlan || targetPlan.userId !== userId || targetPlan.status !== 'accepted'
+      || sourcePlan.studyPlanId !== targetPlan.studyPlanId || root?.activeRevisionId !== targetPlan._id
+      || !await hasLearnReflowPlanAuthority(ctx, userId, sourcePlan, row.contextPins.planRecordRevision)) return blocked('pins_mismatch')
+    target = undefined
+  }
   const now = Date.now()
   const sessionId = target?._id ?? await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: row.contextPins.studyPlanRevisionId,
     primaryObjectiveId: row.objectiveId, status: 'ready', revision: 1, scheduledStartAt: row.openAt, scheduledEndAt: row.closeAt,
@@ -133,7 +139,8 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
       pilotConfigurationVersion: row.contextPins.kind === 'session' ? row.contextPins.canvas!.pilotConfigurationVersion : '' }
   }
   await ctx.db.patch(sessionId, { status: 'ready', revision: sessionRevision, scheduledStartAt: row.openAt, scheduledEndAt: row.closeAt,
-    timezone: row.purpose.clock.timezone, assistanceRevision: 0, assessmentOpportunityId: row._id, assessmentPurpose: 'measurement_delayed', auditReasonCode: undefined })
+    timezone: row.purpose.clock.timezone, assistanceRevision: 0, assessmentOpportunityId: row._id, assessmentPurpose: 'measurement_delayed',
+    schedulerVersion: VERSION, auditReasonCode: undefined })
   await ctx.db.patch(row._id, { contextPins: { ...contextPins, ...(canvasPins ? { canvas: canvasPins } : {}) }, revision: row.revision + 1 })
   await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(row._id))!)
   return { kind: 'ready', sessionId, scheduledStartAt: row.openAt }

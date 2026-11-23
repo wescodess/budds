@@ -1,4 +1,6 @@
 import { v, type PropertyValidators, type ObjectType } from 'convex/values'
+import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
+import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -190,10 +192,12 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   const contextPins = row.contextPins
   if (contextPins.kind !== 'calibration') {
     const [root, plan] = await Promise.all([ctx.db.get(contextPins.studyPlanId), ctx.db.get(contextPins.studyPlanRevisionId)])
+    const frozenPlan = plan && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
+      && await hasLearnReflowPlanAuthority(ctx, userId, plan, contextPins.planRecordRevision)
     pinsMatch &&= Boolean(root?.userId === userId && plan?.userId === userId && plan.studyPlanId === root._id
       && root.learningVoidId === row.learningVoidId && plan.learningVoidId === row.learningVoidId
       && plan.blueprintRevisionId === row.blueprintRevisionId && plan.revision === contextPins.planRevision
-      && plan.recordRevision === contextPins.planRecordRevision && plan.blueprintRecordRevision === row.blueprintRecordRevision)
+      && (plan.recordRevision === contextPins.planRecordRevision || frozenPlan) && plan.blueprintRecordRevision === row.blueprintRecordRevision)
     if (contextPins.kind === 'session') {
       const [session, content] = await Promise.all([ctx.db.get(contextPins.studySessionId), ctx.db.get(contextPins.sessionContentId)])
       pinsMatch &&= Boolean(session?.userId === userId && content?.userId === userId
@@ -240,7 +244,8 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
       const assigned = measurementPurpose.kind === 'measurement_cold' ? allocation.cold
         : allocation.kind === 'three_case' ? measurementPurpose.horizonDays === 7 ? allocation.day7 : allocation.day30
           : allocation.horizonDays === measurementPurpose.horizonDays ? allocation.delayed : null
-      pinsMatch &&= Boolean(assigned && JSON.stringify(assigned) === JSON.stringify(p))
+      pinsMatch &&= LEARN_MEASUREMENT_CAPABILITIES.responses ? await measurementAllocationMatches(ctx, userId, row, assignment)
+        : Boolean(assigned && JSON.stringify(assigned) === JSON.stringify(p))
       evidenceAvailable &&= assignment.evidenceStatus === 'available' && assignment.invalidatedAt === undefined
     }
     const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', p.itemId)).take(65)

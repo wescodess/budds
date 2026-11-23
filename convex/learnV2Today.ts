@@ -12,6 +12,7 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import type { LearnV2AssessmentState } from './lib/learnV2PublicContract'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
@@ -130,7 +131,9 @@ export const getToday = query({
       const plan = await ctx.db.get(session.studyPlanRevisionId); const root = plan && await ctx.db.get(plan.studyPlanId)
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
-      if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
+      const currentPlan = plan && root && (root.activeRevisionId === plan._id && plan.status === 'accepted'
+        || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))
+      if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || !currentPlan || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
       try { await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id) }
       catch { continue }
       const record = (await getScopedMasteryRecord(ctx, userId, blueprint._id, objective._id)).record

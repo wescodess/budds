@@ -8,6 +8,7 @@ import { MEASUREMENT_HARNESS_VERSION, measurementDigest, measurementItemAdapters
 import { learnMeasurementProtocolSchema } from '../../convex/lib/learnV2MeasurementAssignment'
 import { LEARN_V2_MASTERY_LOOP_BLOCKS } from '../../shared/learn-v2-session-content'
 import type { LearnScorerBinding } from '../../shared/learn-v2-measurement'
+import { measurementReplacementModules } from './learn-v2-measurement-replacement'
 
 const modules = import.meta.glob('../../convex/**/*.ts')
 const commands = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('../../convex/learnV2MeasurementItems') }>).learnV2MeasurementItems
@@ -39,7 +40,7 @@ export function syntheticDeliveryProtocol(now = Date.now(), model = false) {
 
 export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding } = {}) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
-  const t = convexTest(schema, modules)
+  const t = convexTest(schema, { ...modules, ...measurementReplacementModules })
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })

@@ -31,6 +31,8 @@ import {
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } from '../../shared/learn-v2-assessment-disclosure'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
+import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import {
   appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
 } from './learnV2MeasurementFacts'
@@ -108,9 +110,12 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const context = pins.contextPins
   if (context.kind === 'calibration') return { pins, session: null, content: null }
   const [plan, revision] = await Promise.all([ctx.db.get(context.studyPlanId), ctx.db.get(context.studyPlanRevisionId)])
-  if (!plan || !revision || plan.activeRevisionId !== revision._id || revision.status !== 'accepted'
+  const frozenPlan = revision && 'purpose' in row && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
+    && await hasLearnReflowPlanAuthority(ctx, userId, revision, context.planRecordRevision)
+  if (!plan || !revision || !frozenPlan && (plan.activeRevisionId !== revision._id || revision.status !== 'accepted'
+      || revision.recordRevision !== context.planRecordRevision)
     || revision.blueprintRevisionId !== blueprint._id || revision.blueprintRecordRevision !== blueprint.recordRevision
-    || revision.revision !== context.planRevision || revision.recordRevision !== context.planRecordRevision) reject('pins_mismatch')
+    || revision.revision !== context.planRevision) reject('pins_mismatch')
   if (context.kind === 'planned_measurement') return { pins, session: null, content: null }
   const [session, content] = await Promise.all([ctx.db.get(context.studySessionId), ctx.db.get(context.sessionContentId)])
   if (!session || !content || session.status !== 'in_progress' || session.revision !== context.sessionRevision
@@ -274,8 +279,7 @@ async function matchingAssignment(ctx: ReadCtx, userId: string, row: Doc<'learnA
           ? allocation.kind === 'three_case' ? (purpose.horizonDays === 7 ? allocation.day7 : allocation.day30)
             : allocation.horizonDays === purpose.horizonDays ? allocation.delayed : null
           : null
-      if (!assigned || canonical(assigned) !== canonical(row.assessmentPins.itemPins)
-        || canonical(row.scoringBinding) !== canonical(assignment.scoringBinding)) reject('pins_mismatch')
+      if (!assigned || !await measurementAllocationMatches(ctx, userId, row, assignment)) reject('pins_mismatch')
     }
   }
   return assignment

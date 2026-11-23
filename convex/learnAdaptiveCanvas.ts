@@ -20,6 +20,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 import { adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner, readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
@@ -393,9 +394,11 @@ export const attachReadySession = mutation({
     const learningVoid = plan && await ctx.db.get(plan.learningVoidId)
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId)
     const objective = await ctx.db.get(session.primaryObjectiveId)
+    const currentPlan = plan && stablePlan && (stablePlan.activeRevisionId === plan._id && plan.status === 'accepted'
+      || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))
     if (!plan || !stablePlan || !learningVoid || !blueprint || !objective
       || plan.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || objective.userId !== userId
-      || stablePlan.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted'
+      || !currentPlan || blueprint.status !== 'accepted'
       || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) throw new Error('Ready study session is not current')
     const folder = await ctx.db.get(learningVoid.folderId)
     if (!folder || folder.userId !== userId || typeof objective.assessmentContract !== 'object') throw new Error('Ready study session is not current')
@@ -584,7 +587,9 @@ async function loadLegacyReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string
       && scoredAttempt.sessionContentId === content._id && scoredAttempt.blueprintRevisionId === blueprint._id
       && scoredAttempt.objectiveId === objective._id && scoredAttempt.contentRevision === content.revision
       && session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision
-    const current = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id && blueprint.status === 'accepted' && content.status === 'published'
+    const planCurrent = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id
+      || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan)
+    const current = planCurrent && blueprint.status === 'accepted' && content.status === 'published'
       && bodyAuthority
       && activity.sessionContentId === content._id && activity.objectiveId === objective._id
       && activity.blueprintRevisionId === blueprint._id && plan.blueprintRecordRevision === blueprint.recordRevision

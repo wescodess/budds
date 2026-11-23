@@ -18,6 +18,8 @@ import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { localDateAt } from '../shared/learn-v2-mastery'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION } from '../shared/learn-v2-assessment-disclosure'
+import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
+import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 
 const policy = vi.hoisted(() => ({ responses: true, delivery: true, scoring: true, enrollment: true, scorer: null as unknown, protocol: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
@@ -52,7 +54,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
 })
 
-async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
+async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, reserve?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
   const definition = { configurationId: 'canvas.synthetic.v2', configurationVersion: 'canvas.synthetic.v2', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -67,7 +69,7 @@ async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v
     modelPolicies: [{ model: 'synthetic/model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
     productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
     rollback: { ...originalManifest.rollback, ownerSubjectHash: await privacyDigest(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier]) } })
-  const family = await canvasFamilyFixture(saved.binding, { rubric: options.rubric !== false, keyed: options.format === 'keyed', ordered: options.format === 'ordered' })
+  const family = await canvasFamilyFixture(saved.binding, { reserve: options.reserve, rubric: options.rubric !== false, keyed: options.format === 'keyed', ordered: options.format === 'ordered' })
   const { t, owner, graph } = family
   await t.run(async ctx => {
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', OWNER.tokenIdentifier)).unique())!
@@ -160,6 +162,63 @@ test.each([7, 30] as const)('Canvas discovers and plays its original day-%s item
     expect(await ctx.db.get(opportunity.authoritativeAttemptId!)).toMatchObject({ kind: 'measurement_delayed', horizonDays: horizon, masteryStateAfter: 'unseen' })
     if (horizon === 30) expect((await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })
   })
+})
+
+test.each([7, 30] as const)('Canvas delivers and scores the recorded day-%s reserve in its own flow', async horizon => {
+  const s = await fixture({ reserve: true })
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { endsAt: new Date(NOW + 40 * 86_400_000).toISOString() })
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const cold = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (cold.kind !== 'accepted') throw new Error('Expected cold seal')
+  await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: cold.submissionId, idempotencyKey: 'reserve_cold_score_1234567890' })
+  const slots = () => s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(12))
+  const original = (await slots()).find(row => row.horizonDays === horizon)!
+  const assignment = (await s.t.run(ctx => ctx.db.get(original.assignmentId!)))!
+  if (assignment.status !== 'admitted') throw new Error('Expected admitted assignment')
+  vi.setSystemTime(original.openAt + 1000)
+  await s.t.mutation(materializeDue, { userId: OWNER.tokenIdentifier, through: Date.now() })
+  const prior = await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})
+  if (prior.status !== 'available' || !prior.checks[0]) throw new Error('Expected original')
+  await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: prior.checks[0].studySessionId,
+    expectedSessionRevision: prior.checks[0].sessionRevision, idempotencyKey: 'reserve_original_attach_1234567890' })
+  await s.t.run(ctx => seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, s.f, Date.now()))
+  const reflow = await s.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: s.f.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'canvas_reserve_reflow_1234567890' })
+  expect(reflow.preservedSessionIds).toContain(prior.checks[0].studySessionId)
+  await s.t.run(ctx => ctx.db.patch(original._id, { reasonCode: 'contaminated' }))
+  const replaced = await s.owner.mutation(replaceMeasurementOpportunity, { assessmentOpportunityId: original._id, reason: 'contaminated' })
+  if (replaced.status !== 'replaced') throw new Error('Expected reserve')
+  await s.t.mutation(materializeDue, { userId: OWNER.tokenIdentifier, through: Date.now() })
+  const due = await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})
+  expect(due).toMatchObject({ status: 'available', checks: [{ assessmentOpportunityId: replaced.assessmentOpportunityId }] })
+  if (due.status !== 'available' || !due.checks[0]) throw new Error('Expected reserve discovery')
+  const check = due.checks[0]
+  expect(await s.owner.mutation(api.learnV2Assessments.grantAssessmentDelivery, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: replaced.assessmentOpportunityId, expectedRevision: 1, idempotencyKey: 'reserve_canvas_flow_bypass_1234567890' }))
+    .toMatchObject({ status: 'unavailable', reasonCodes: ['flow_mismatch'] })
+  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: check.studySessionId,
+    expectedSessionRevision: check.sessionRevision, idempotencyKey: 'reserve_attach_1234567890' })
+  if (attached.kind !== 'attached') throw new Error('Expected attached reserve')
+  const opportunity = (await slots()).find(row => row._id === replaced.assessmentOpportunityId)!
+  const pins = opportunity.assessmentPins
+  if (pins.kind !== 'measurement') throw new Error('Expected reserve pins')
+  const item = (await s.t.run(ctx => ctx.db.get(pins.itemPins.itemId)))!
+  const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  expect(canvas).toMatchObject({ status: 'started', responsePrompt: item.prompt, declaredStimulus: item.declaredStimulus })
+  const siblings = await s.t.run(ctx => ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q =>
+    q.eq('userId', OWNER.tokenIdentifier).eq('familyId', item.familyId).eq('familyRevision', item.familyRevision)).take(7))
+  for (const sibling of siblings.filter(row => row._id !== item._id)) expect(JSON.stringify(canvas)).not.toContain(sibling.prompt)
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    studySessionId: check.studySessionId, expectedRevision: canvas.activity.planRevision!, expectedSessionRevision: canvas.session.revision,
+    response: answer, confidence: 3, idempotencyKey: 'reserve_canvas_seal_1234567890' })
+  if (sealed.kind !== 'accepted') throw new Error('Expected reserve seal')
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'reserve_canvas_score_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({ status: 'feedback', assessment: { phase: 'scored_pass' } })
+  expect(await s.t.run(ctx => ctx.db.get(assignment._id))).toMatchObject({ status: 'admitted', allocation: assignment.allocation })
+  expect((await slots()).find(row => row._id === original._id)).toMatchObject({ originalSlot: true })
+  expect((await slots()).find(row => row._id === opportunity._id)).toMatchObject({ originalSlot: false, checkSequence: 0, phase: 'scored_pass' })
 })
 
 function modelReply(awarded = true, key = 'private-criterion') {

@@ -5,6 +5,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import { requireAuth } from './lib/auth'
 import { hasLearnV2Access, requireLearnV2QueryAccess } from './lib/learnV2Access'
 import { getCalendarAccessToken } from './lib/calendarTokenRuntime'
+import { isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 
 const GOOGLE_EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events'
 const GOOGLE_FREE_BUSY = 'https://www.googleapis.com/calendar/v3/freeBusy'
@@ -78,6 +79,7 @@ export const getProjectionInput = internalQuery({
     if (!connection || !hasRequiredConsent(connection)) throw new Error('Google Calendar re-consent is required')
     const session = await ctx.db.get(args.studySessionId)
     if (!session || session.userId !== args.userId) throw new Error('Study session not found')
+    if (isDedicatedLearnCheck(session)) return { kind: 'unavailable' as const, reasonCode: 'fixed_assessment_window', studySessionId: session._id }
     if (!['planned', 'ready'].includes(session.status) || session.scheduledStartAt <= Date.now()) throw new Error('Study session is not eligible for calendar projection')
     const plan = await ctx.db.get(session.studyPlanRevisionId)
     if (!plan || plan.userId !== args.userId || !['accepted', 'active'].includes(plan.status)) throw new Error('Accepted Study Plan revision not found')
@@ -93,6 +95,8 @@ export const reserveProjection = internalMutation({
     const connection = await ctx.db.query('calendarConnections').withIndex('by_userId', q => q.eq('userId', args.userId)).first()
     if (!connection || !hasRequiredConsent(connection)) throw new Error('Google Calendar re-consent is required')
     const session = await ctx.db.get(args.studySessionId)
+    if (session?.userId === args.userId && isDedicatedLearnCheck(session))
+      return { kind: 'unavailable' as const, reasonCode: 'fixed_assessment_window', studySessionId: session._id }
     if (!session || session.userId !== args.userId || !['planned', 'ready'].includes(session.status) || session.scheduledStartAt <= Date.now()) throw new Error('Study session is not eligible for calendar projection')
     const plan = await ctx.db.get(session.studyPlanRevisionId)
     if (!plan || plan.userId !== args.userId || !['accepted', 'active'].includes(plan.status)) throw new Error('Accepted Study Plan revision not found')
@@ -213,13 +217,15 @@ export const markProjectionReconciliationNeeded = internalMutation({
 export const projectSession = action({
   args: { studySessionId: v.id('studySessions') },
   handler: async (ctx, args): Promise<{
-    kind: 'projected' | 'already_projected' | 'busy' | 'conflict'
+    kind: 'projected' | 'already_projected' | 'busy' | 'conflict' | 'unavailable'
     studySessionId: Id<'studySessions'>
+    reasonCode?: string
     scheduledStartAt?: number
     scheduledEndAt?: number
   }> => {
     const userId = await requireAuth(ctx)
     const input = await ctx.runQuery(internal.learnV2Calendar.getProjectionInput, { userId, studySessionId: args.studySessionId })
+    if (input.kind === 'unavailable') return { kind: input.kind, reasonCode: input.reasonCode, studySessionId: args.studySessionId }
     if (input.existing?.status === 'projected') return { kind: 'already_projected', studySessionId: args.studySessionId }
     if (input.existing?.status === 'reconciliation_needed') return { kind: 'conflict', studySessionId: args.studySessionId }
     if ((input.existing?.status === 'reserving'
@@ -248,6 +254,7 @@ export const projectSession = action({
     if ((busyBody.calendars?.primary?.busy?.length ?? 0) > 0) return { kind: 'busy' as const, studySessionId: args.studySessionId }
     const externalEventId = await deterministicGoogleProjectionId(`${input.connection._id}:${input.session._id}:${input.plan.revision}:${input.session.revision}`)
     const reservation = await ctx.runMutation(internal.learnV2Calendar.reserveProjection, { userId, studySessionId: args.studySessionId, externalEventId })
+    if (reservation.kind === 'unavailable') return reservation
     if (reservation.kind !== 'reserved' || !reservation.projection) return { kind: reservation.kind === 'reserved' ? 'busy' as const : reservation.kind, studySessionId: args.studySessionId }
     const projection = reservation.projection
     const createLeaseToken = crypto.randomUUID()
