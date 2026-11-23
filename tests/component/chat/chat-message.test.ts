@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { createAssistantMessage, createUserMessage, createSources } from '../../support/factories/chat.factory'
 
 const chatMessagePath = ['~', 'components', 'chat', 'Message.vue'].join('/')
+
+// Load the component graph in the hook budget rather than the first test's 5s.
+beforeAll(async () => { await import(chatMessagePath) })
 
 describe('ChatMessage — AC #1, #2', () => {
   it('[P0] should render user message with bg-muted and right-aligned', async () => {
