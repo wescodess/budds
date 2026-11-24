@@ -7,6 +7,9 @@ import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, s
 import { canvasFamilyFixture } from '../tests/fixtures/learn-v2-canvas'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
+import { measurementItemAdapters } from './lib/learnV2MeasurementItems'
+import { measurementCaseExposed } from './lib/learnV2Measurement'
+import * as casePrompt from '../shared/learn-v2-case-prompt'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION as version } from '../shared/learn-v2-assessment-disclosure'
@@ -37,7 +40,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
 })
 
-async function fixture(canvas = false) {
+async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown') {
   const definition = { configurationId: 'post-seal.synthetic', configurationVersion: 'post-seal.synthetic.v1',
     kind: canvas ? 'measurement_rubric' as const : 'legacy_baseline' as const, requestedModel: 'synthetic/model', endpoint: null,
     identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model', family: 'synthetic',
@@ -49,16 +52,30 @@ async function fixture(canvas = false) {
   if (canvas) policy.protocol = { ...syntheticDeliveryProtocol(Date.now(), true), scoringBinding: saved.binding }
   const f = canvas ? await canvasFamilyFixture(saved.binding, { rubric: true, transactionLimits: true })
     : await assessmentDeliveryFixture({ transactionLimits: true })
-  const contentId = await publishDeliveryTeaching(f)
+  const legacyPrompt = 'TEACHING-CANARY-independent_application: Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
+  const legacyPractice = collision === 'identical' ? legacyPrompt : collision === 'normalized'
+    ? `  ${legacyPrompt.toUpperCase().replaceAll(' ', '  \n')}  ` : legacyPrompt.replace('inventory', 'stock')
+  const guard = collision ? vi.spyOn(casePrompt, 'learnCasePromptsOverlap').mockReturnValue(false) : null
+  let contentId: Id<'sessionContent'>
+  try { contentId = await publishDeliveryTeaching(f, collision ? { claims: 1, supports: 1, blockContents: { faded_example: legacyPractice } } : undefined) }
+  finally { guard?.mockRestore() }
   const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', contentId)).take(16))
-  await f.owner.run(ctx => prepareAndRegisterInstructionalArtifactsForOwner(ctx, deliveryIdentity.tokenIdentifier, {
-    artifacts: blocks.map(block => ({
+  const registered = await f.owner.run(ctx => prepareAndRegisterInstructionalArtifactsForOwner(ctx, deliveryIdentity.tokenIdentifier, {
+    artifacts: blocks.filter(block => !lineage || block.kind !== 'faded_example').map(block => ({
       artifact: { kind: 'session_block', id: block._id }, key: 'whole', origins: [], sources: [{ kind: 'excerpt',
         sourceSnapshotId: f.graph.sourceSnapshotId, sourceExcerptId: f.graph.sourceExcerptId, revision: 1, recordRevision: 1,
         contentHash: f.graph.support.sourceContentHash }],
     })),
   }))
+  if (lineage === 'sibling') {
+    const check = blocks.find(block => block.kind === 'independent_application')!
+    const origin = registered.references.find(reference => reference.artifact.id === check._id)!
+    await f.owner.run(ctx => prepareAndRegisterInstructionalArtifactsForOwner(ctx, deliveryIdentity.tokenIdentifier, { artifacts: [{
+      artifact: { kind: 'session_block', id: blocks.find(block => block.kind === 'faded_example')!._id }, key: 'whole',
+      origins: [{ reference: origin, transformation: 'rewrite' }], sources: [],
+    }] }))
+  }
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'post-seal-synthetic-execution', model: 'synthetic/model',
     choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
@@ -84,8 +101,8 @@ async function cold(f: Awaited<ReturnType<typeof fixture>>) {
   return row
 }
 
-async function ordinary(assisted = false) {
-  const f = await fixture()
+async function ordinary(assisted = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown') {
+  const f = await fixture(false, collision, lineage)
   const first = await cold(f)
   const coldSubmissionId = (await f.t.run(ctx => ctx.db.get(first._id)))!.submissionId!
   expect(await f.score(coldSubmissionId)).toMatchObject({ status: 'scored' })
@@ -101,6 +118,63 @@ async function ordinary(assisted = false) {
   if (receipt.kind !== 'accepted') throw new Error('Expected ordinary acceptance')
   return { ...f, row, receipt }
 }
+
+test.each(['identical', 'normalized', 'near'] as const)('legacy publication cannot expose a %s ordinary check as practice', async collision => {
+  const f = await ordinary(false, collision)
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.query('learnResponseSlots').take(2))).toEqual([])
+})
+
+test.each(['sibling', 'unknown'] as const)('ordinary practice rejects %s lineage', async lineage => {
+  const f = await ordinary(false, undefined, lineage)
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})
+
+test.each([
+  { label: 'sibling', decision: 'reject', coverage: 'complete' },
+  { label: 'unknown relationship', decision: 'unknown', coverage: 'unknown' },
+  { label: 'incomplete comparison', decision: 'pass', coverage: 'unknown' },
+] as const)('ordinary practice denies a %s verdict for the exact sealed pair', async verdict => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const compare = vi.spyOn(measurementItemAdapters, 'compare').mockResolvedValue(verdict)
+  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  if (f.row.assessmentPins.kind !== 'session_application') throw new Error('Expected ordinary check')
+  expect(compare).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'instructional',
+    corpus: [expect.objectContaining({ _id: f.row.assessmentPins.caseId, usageClass: 'instructional' })],
+    content: expect.objectContaining({ check: expect.objectContaining({ caseId: f.row.assessmentPins.caseId, pins: f.row.assessmentPins }) }) }))
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})
+
+test('a separate ordinary practice case is proved once and its prompt case owns both exposures', async () => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const compare = vi.spyOn(measurementItemAdapters, 'compare')
+  compare.mockClear()
+  const opened = await f.open(f.row._id)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+  expect(compare).toHaveBeenCalledOnce()
+  expect(await f.open(f.row._id)).toEqual(opened)
+  await f.read(f.row._id)
+  expect(compare).toHaveBeenCalledOnce()
+  expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'hint', idempotencyKey: 'separate_prompt_help_12345' })).toMatchObject({ status: 'authorized' })
+  const binding = (await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2)))[0]!
+  const promptCase = (await f.t.run(ctx => ctx.db.get(binding.practiceCaseId)))!
+  const { normalizedInstructionalCaseFingerprints } = await import('./lib/learnV2ArtifactLineage')
+  expect(promptCase).toMatchObject(await normalizedInstructionalCaseFingerprints(opened.practice.prompt, opened.practice.prompt))
+  const exposures = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_caseId_and_serverTime', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('caseId', binding.practiceCaseId)).take(8))
+  expect(exposures).toHaveLength(2)
+  expect(exposures.filter(row => row.practiceHelp)).toHaveLength(1)
+  expect(exposures.every(row => row.caseId === binding.practiceCaseId && row.assessmentOpportunityId === undefined)).toBe(true)
+  expect(await f.t.run(ctx => measurementCaseExposed(ctx, deliveryIdentity.tokenIdentifier, binding.practiceCaseId))).toBe(true)
+  expect(await f.t.run(ctx => measurementCaseExposed(ctx, deliveryIdentity.tokenIdentifier, binding.practiceCaseId, f.row._id))).toBe(true)
+})
 
 test.each([false, true])('ordinary scoring preserves teaching and immutable acceptance pins, assisted=%s', async assisted => {
   const f = await ordinary(assisted)

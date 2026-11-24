@@ -154,7 +154,8 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
   return { t, owner, graph, begun, args, generated, descriptor }
 }
 
-export type DeliveryTeachingShape = { claims: number, supports: number, sources?: number, extraSupports?: number, excerpt?: string }
+export type DeliveryTeachingShape = { claims: number, supports: number, sources?: number, extraSupports?: number, excerpt?: string,
+  blockContents?: Partial<Record<(typeof LEARN_V2_MASTERY_LOOP_BLOCKS)[number], string>> }
 
 export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof assessmentDeliveryFixture>>, 't' | 'graph'>, shape?: DeliveryTeachingShape) {
   const session = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
@@ -184,7 +185,12 @@ export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof 
     expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 1,
     leaseToken: 'synthetic-teaching-lease', leaseExpiresAt: Date.now() + 60_000, dispatchSupportingSourceSnapshotIds: sources.map(row => row.sourceSnapshotId) }))
   const candidate = { version: 'learn-v2.session-content.v1', generatorVersion: 'synthetic.teaching.v1', assessmentRubric: rubric,
-    blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: `TEACHING-CANARY-${kind}: a separate practice case.`, claimOrders: [0] })),
+    blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind,
+      content: shape?.blockContents?.[kind] ?? (kind === 'faded_example'
+        ? 'TEACHING-CANARY-faded_example: A workshop has four rows with eight chairs each. Calculate the seating capacity.'
+        : kind === 'independent_application'
+          ? 'TEACHING-CANARY-independent_application: Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
+          : `TEACHING-CANARY-${kind}: a separate practice case.`), claimOrders: [0] })),
     claims: [{ order: 0, claim: 'TEACHING-CLAIM-CANARY: the source supports the separate practice case.', supportSourceSnapshotIds: [String(f.graph.sourceSnapshotId)] }] }
   if (shape) {
     candidate.claims = Array.from({ length: shape.claims }, (_, order) => ({ ...candidate.claims[0]!, order,

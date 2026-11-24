@@ -18,6 +18,14 @@ normalized dependencies and prompt delivery exposure together. Retries preserve
 that slot and case. Unsupported, same-case, sibling, reserved or unknown input
 remains unavailable. No candidate content is generated here.
 
+Practice uses the same normalized prompt identity as the sealed check, alongside
+its registered artifact lineage. Equal prompts, case/whitespace variants and
+high token overlap are rejected before comparison. Preparation also requires a
+complete passing comparison against that exact check, including an ordinary
+check outside the reserved corpus. The immutable binding seals this pair proof;
+reads verify it without invoking a validator. Instructional publication rejects
+overlapping practice and application prompts before writing content.
+
 `commitSealedMasteryAttempt` stamps the source with the canonical attempt in its
 score transaction. A missing source becomes pending with zero dependencies and
 no links. A null stamp on a purged source can be filled without restoring bytes.
@@ -90,6 +98,10 @@ Both exposure kinds carry the binding's practice case and omit
 purge dependencies. It changes neither the sealed check nor its assistance
 snapshot, session counters, score or report facts.
 
+Both exposures use the canonical prompt case, so enrollment and replacement
+selection count prior practice. Novelty excludes the current opportunity's own
+exposures only when the caller explicitly supplies that opportunity ID.
+
 Every content copy uses the #570 reverse-source purge registration. Entitlement
 revocation also schedules eight-row redaction pages; renewed access cannot
 restore purged copies. Void/account deletion and direct/ZIP owner exports use
@@ -115,6 +127,10 @@ and without assistance, a Canvas check with live instructional publications,
 dedicated sealing/expiry/due-work closure and unrelated stale revisions. It
 also rejects missing transition evidence, an unconsumed execution and changed
 assistance after acceptance, without changing frozen acceptance records.
+It also covers colliding historical publications, sibling and unknown lineage,
+incomplete pair decisions, separate-case retries and canonical practice exposures.
+The measurement suite exercises enrollment and replacement selection with
+persisted practice exposures that have no assessment opportunity.
 
 These checks do not establish frontend integration, human provenance labels,
 production enrollment, provider/scorer accuracy, empirical form equivalence or

@@ -85,6 +85,26 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
   return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help, prepare, score }
 }
 
+test.each(['identical', 'normalized', 'near'] as const)('publication atomically rejects %s practice/application content', async variant => {
+  const f = await assessmentDeliveryFixture({ transactionLimits: true })
+  const prompt = 'Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
+  const practice = variant === 'identical' ? prompt : variant === 'normalized' ? ` ${prompt.toUpperCase().replaceAll(' ', '\n  ')} `
+    : prompt.replace('inventory', 'stock')
+  const cases = await f.t.run(ctx => ctx.db.query('learnAssessmentCases').take(64))
+  await expect(publishDeliveryTeaching(f, { claims: 1, supports: 1,
+    blockContents: { faded_example: practice, independent_application: prompt } })).rejects.toThrow('instructional_case_overlap')
+  expect(await f.t.run(ctx => ctx.db.query('sessionContent').take(2))).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.query('sessionContentBlocks').take(16))).toEqual([])
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentCases').take(64))).toEqual(cases)
+})
+
+test('capability-off publication preserves the existing acceptance of identical instructional blocks', async () => {
+  const f = await assessmentDeliveryFixture({ transactionLimits: true })
+  policy.responses = false
+  expect(await publishDeliveryTeaching(f, { claims: 1, supports: 1,
+    blockContents: { faded_example: 'The same prompt.', independent_application: 'The same prompt.' } })).toBeTruthy()
+})
+
 test.each(['score_first', 'practice_first', 'concurrent'] as const)('public seal, score and practice opening publish once: %s', async order => {
   const f = await fixture({ prepare: false })
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])

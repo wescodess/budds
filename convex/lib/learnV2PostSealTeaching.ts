@@ -4,7 +4,9 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { resolveAssessmentDisclosureContext, canReadSourceEvidence } from './learnV2AssessmentDisclosure'
 import { relevantOpenLearnCheck } from './learnV2HelpAdmission'
-import { resolveArtifactLineageForOwner } from './learnV2ArtifactLineage'
+import { normalizedInstructionalCaseFingerprints, resolveArtifactLineageForOwner } from './learnV2ArtifactLineage'
+import { measurementItemAdapters } from './learnV2MeasurementItems'
+import { learnCasePromptsOverlap } from '../../shared/learn-v2-case-prompt'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { privacyDigest, canonicalPrivacyJson, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { documentHasCurrentRevision } from './learnV2BackingSource'
@@ -34,6 +36,7 @@ type Reason = Parameters<typeof unavailableLearnPostSealTeaching>[0]
 type SourceTarget = Doc<'learnPostSealSourceLinks'>['target']
 const policy = 'learn-v2.post-seal-publication.v1'
 const assistancePolicy = 'learn-v2.practice-assistance.v1'
+const separationPolicy = 'learn-v2.post-seal-case-separation.v1'
 export const POST_SEAL_HELP_HISTORY_LIMIT = 64
 class PostSealUnavailable extends Error {
   constructor(readonly reason: Reason) { super(reason) }
@@ -214,6 +217,60 @@ async function blockAuthority(ctx: ReadCtx, userId: string, authority: Authority
   return { block, content, bound, checkCaseId, caseId: candidate.caseId, dependencies: complete,
     validationDigest: await privacyDigest({ policy, checkCaseId, validation: bound.validation, cases: bound.cases }) }
 }
+async function practiceCaseProof(ctx: ReadCtx, userId: string, authority: Authority, proof: Awaited<ReturnType<typeof blockAuthority>>, validate: boolean) {
+  const pins = authority.row.assessmentPins
+  let prompt: string
+  let stimulus: string | null = null
+  let artifact: { kind: 'measurement_item' | 'session_block', id: string }
+  if (pins.kind === 'measurement') {
+    const item = await ctx.db.get(pins.itemPins.itemId)
+    if (!item || item.userId !== userId || !item.prompt || item.promptDigest !== pins.itemPins.promptDigest || item.caseId !== proof.checkCaseId) deny()
+    prompt = item.prompt
+    stimulus = item.declaredStimulus ?? null
+    artifact = { kind: 'measurement_item', id: item._id }
+  } else {
+    if (pins.kind !== 'session_application' || authority.row.contextPins.kind !== 'session') deny()
+    const contentId = authority.row.contextPins.sessionContentId
+    const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
+      q.eq('userId', userId).eq('sessionContentId', contentId)).take(17)
+    const matches = blocks.filter(block => block.kind === 'independent_application' || block.kind === 'transfer_challenge')
+    if (blocks.length > 16 || matches.length !== 1 || !matches[0]!.content || await privacyDigest(matches[0]!.content) !== pins.promptDigest) deny()
+    prompt = matches[0]!.content!
+    artifact = { kind: 'session_block', id: matches[0]!._id }
+  }
+  parseLearnContract(learnTextSchema(), prompt)
+  const practicePrompt = proof.block.content!
+  if (learnCasePromptsOverlap(prompt, practicePrompt) || stimulus && learnCasePromptsOverlap(`${stimulus}\n${prompt}`, practicePrompt)) deny()
+  const checkCase = await ctx.db.get(proof.checkCaseId)
+  const checkIdentity = await normalizedInstructionalCaseFingerprints(prompt, prompt)
+  const practiceIdentity = await normalizedInstructionalCaseFingerprints(practicePrompt, practicePrompt)
+  if (!checkCase || checkCase.userId !== userId || checkCase.scenarioFingerprint !== checkIdentity.scenarioFingerprint
+    || [checkCase.scenarioFingerprint, checkCase.solutionFingerprint].includes(practiceIdentity.scenarioFingerprint)) deny()
+  const cases = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q =>
+    q.eq('userId', userId).eq('scenarioFingerprint', practiceIdentity.scenarioFingerprint)).take(2)
+  if (cases.length !== 1) deny()
+  const candidate = cases[0]!
+  const validation = candidate.identityValidationId ? await ctx.db.get(candidate.identityValidationId) : null
+  if (candidate._id === checkCase._id || candidate.usageClass !== 'instructional' || candidate.reservedAt !== undefined
+    || candidate.solutionFingerprint !== practiceIdentity.solutionFingerprint || candidate.identityPolicyVersion !== checkCase.identityPolicyVersion
+    || !validation || validation.userId !== userId || validation.subject.kind !== 'case' || validation.subject.caseId !== candidate._id
+    || validation.check !== 'same_case_novelty' || validation.decision !== 'pass' || validation.evidenceStatus !== 'available'
+    || validation.invalidatedAt !== undefined || validation.comparedCatalogRevision > proof.bound.catalogRevision) deny()
+  for (const id of proof.bound.originLineageIds) {
+    const origin = await ctx.db.get(id)
+    if (!origin || origin.userId !== userId || origin.artifact.kind === artifact.kind && origin.artifact.id === artifact.id) deny()
+  }
+  const comparison = { policy: separationPolicy, check: { caseId: checkCase._id, ...checkIdentity, prompt, stimulus, pins },
+    practice: { caseId: candidate._id, ...practiceIdentity, prompt: practicePrompt, lineageId: proof.bound.lineageId },
+    artifactValidationDigest: proof.validationDigest, promptValidation: validation, validatorVersion: measurementItemAdapters.version }
+  const corpusDigest = await privacyDigest(comparison)
+  if (validate) {
+    const decision = await measurementItemAdapters.compare({ purpose: 'instructional', content: comparison, corpus: [checkCase], sources: [], corpusDigest })
+    if (decision.decision !== 'pass' || decision.coverage !== 'complete') deny()
+  }
+  return { ...proof, caseId: candidate._id,
+    validationDigest: await privacyDigest({ policy: separationPolicy, corpusDigest, decision: 'pass', coverage: 'complete' }) }
+}
 async function publication(payload: unknown, dependencies: Dependency[], validationDigest: string, publishedAt = Date.now()) {
   return { policyVersion: policy, payloadDigest: await privacyDigest(payload), sourceManifestDigest: await privacyDigest(dependencies), validationDigest, publishedAt }
 }
@@ -264,7 +321,7 @@ async function practiceAuthority(ctx: ReadCtx, userId: string, authority: Author
   parseLearnContract(learnRevisionSchema, slot.revision)
   const blockId = ctx.db.normalizeId('sessionContentBlocks', slot.blockId)
   if (!blockId) deny()
-  const proof = await blockAuthority(ctx, userId, authority, blockId, 'faded_example')
+  const proof = await practiceCaseProof(ctx, userId, authority, await blockAuthority(ctx, userId, authority, blockId, 'faded_example'), false)
   if (binding.practiceCaseId !== proof.caseId || binding.checkCaseId !== proof.checkCaseId
     || binding.identityPolicyVersion !== proof.bound.cases[0]!.identityPolicyVersion || binding.caseValidationDigest !== proof.validationDigest
     || binding.catalogRevision > proof.bound.catalogRevision || binding.content.payload.tier !== 'T0'
@@ -345,7 +402,8 @@ export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: 
       return { status: 'prepared' as const, responseSlotId: existing.slot._id }
     }
     if (!authority.context.capabilities.canTeachSeparateCase) deny('unavailable')
-    const proof = await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'faded_example')
+    const proof = await practiceCaseProof(ctx, userId, authority,
+      await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'faded_example'), true)
     const blockId = proof.block._id
     const now = Date.now()
     const payload = { tier: 'T0' as const, prompt: proof.block.content! }
