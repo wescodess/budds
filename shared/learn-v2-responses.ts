@@ -122,11 +122,21 @@ export const learnResponseTerminalizedResultSchema = z.strictObject({
   kind: z.literal('terminalized'), target: learnResponseTargetSchema, revision: learnRevisionSchema,
   reasonCode: z.enum(['cancelled', 'abandoned']), terminalizedAt: learnTimestampSchema,
 })
-export const learnResponseSlotPinsSchema = z.strictObject({
-  stage: learnResponseStageSchema, slotKey: learnVersionSchema, blockId: learnVersionSchema,
+export const learnPracticeSlotAssistanceStorageSchema = z.strictObject({
+  policyVersion: learnVersionSchema, revision: learnSequenceSchema, deliveryCount: learnSequenceSchema,
+  hintCount: learnSequenceSchema, workedExampleCount: learnSequenceSchema,
+  lastDeliveredAt: learnTimestampSchema, lastAuthorizationId: learnIdSchema<'learnAssessmentExposures'>(),
+}).refine(row => row.revision === row.deliveryCount && row.deliveryCount === row.hintCount + row.workedExampleCount
+  && row.deliveryCount > 0, 'Slot assistance counters disagree')
+const responseSlotPins = {
+  slotKey: learnVersionSchema, blockId: learnVersionSchema,
   promptDigest: learnDigestSchema, promptRevision: learnRevisionSchema, responseFormatVersion: learnVersionSchema,
   deliveryExposureId: learnIdSchema<'learnAssessmentExposures'>(), revision: learnRevisionSchema, confidenceRequested: z.boolean().default(false),
-})
+}
+export const learnResponseSlotPinsSchema = z.discriminatedUnion('stage', [
+  z.strictObject({ ...responseSlotPins, stage: z.enum(['retrieval', 'prediction', 'teach_back', 'diagnostic']) }),
+  z.strictObject({ ...responseSlotPins, stage: z.literal('practice'), practiceAssistance: learnPracticeSlotAssistanceStorageSchema.optional() }),
+])
 export const learnResponsePayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('text'), text: learnTextSchema() }),
   z.strictObject({ kind: z.literal('keyed'), keys: z.array(learnTextSchema(200)).min(1).max(32).refine(values => new Set(values).size === values.length) }),

@@ -6,6 +6,10 @@ type ExportRow = Record<string, unknown> & { _id: Id<LearnMeasurementCollection>
 
 const metadataFields = {
   learnMeasurementDueWork: [],
+  learnPostSealTeachingSources: ['assessmentOpportunityId', 'submissionId', 'attemptId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealPracticeBindings: ['assessmentOpportunityId', 'submissionId', 'responseSlotId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealHelpReceipts: ['submissionId', 'responseSlotId', 'expectedRevision', 'kind', 'authorizationId', 'deliveredAt', 'assistanceSequence', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealSourceLinks: ['evidenceStatus', 'invalidatedAt'],
   // nextId is private lineage linkage and is intentionally withheld.
   learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
   learnArtifactLineageOrigins: ['transformation'],

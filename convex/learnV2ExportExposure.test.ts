@@ -26,9 +26,9 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs() })
 
 test('every audited content projection is in the inventory and every classified collection has a direct page', async () => {
-  expect(PERSONAL_EXPORT_COLLECTIONS).toHaveLength(127)
+  expect(PERSONAL_EXPORT_COLLECTIONS).toHaveLength(131)
   expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
-  expect(LEARN_MEASUREMENT_COLLECTIONS).toHaveLength(30)
+  expect(LEARN_MEASUREMENT_COLLECTIONS).toHaveLength(34)
   expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
   expect(PERSONAL_EXPORT_CHILD_CONTENT_PARENTS).toEqual({ attemptAnswers: 'quizAttempts' })
   expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toContain(PERSONAL_EXPORT_CHILD_CONTENT_PARENTS.attemptAnswers)

@@ -5,7 +5,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
-import { seedMeasurementStorage as seedBaseMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
+import { seedCompleteMeasurementStorage as seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, type LearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from './lib/learnV2MeasurementRetention'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
@@ -21,14 +21,6 @@ const modules = import.meta.glob('./**/*.ts')
 const owner = { tokenIdentifier: 'https://auth.example.com|measurement-owner', subject: 'same-subject' }
 const foreign = { tokenIdentifier: 'https://other-issuer.example.com|measurement-owner', subject: 'same-subject' }
 type Page = { page: Array<Record<string, unknown>>, isDone: boolean, continueCursor: string }
-
-async function seedMeasurementStorage(ctx: Parameters<typeof seedBaseMeasurementStorage>[0], userId: string) {
-  const f = await seedBaseMeasurementStorage(ctx, userId)
-  const dueWorkId = await ctx.db.insert('learnMeasurementDueWork', { ...f.base, learningVoidId: f.learningVoidId,
-    assignmentId: f.rows.learnMeasurementAssignments, key: 'fixture', kind: 'assignment', state: 'pending',
-    dueAt: f.base.createdAt, nextAttemptAt: f.base.createdAt, attempts: 0, generation: 0, updatedAt: f.base.createdAt })
-  return { ...f, rows: { ...f.rows, learnMeasurementDueWork: dueWorkId } }
-}
 
 async function insertTerminalizationFixture(t: ReturnType<typeof convexTest>, f: Awaited<ReturnType<typeof seedMeasurementStorage>>) {
   const target = { responseSlotId: f.rows.learnResponseSlots }
@@ -100,7 +92,7 @@ describe('inactive Phase C storage boundaries', () => {
       await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
       await ctx.db.patch(f.rows.learnAssessmentOpportunities, { deliveryPins })
     })
-    expect(await readAll(t, owner, 'learnResponseSlots')).toMatchObject([{ confidenceRequested: false }])
+    expect((await readAll(t, owner, 'learnResponseSlots')).find(row => row._id === slot?._id)).toMatchObject({ confidenceRequested: false })
     expect(await readAll(t, owner, 'learnAssessmentOpportunities')).toMatchObject([{ deliveryPins }])
     expect(resolveLearnResponseConfidenceRequested((await t.run(ctx => ctx.db.get(f.rows.learnAssessmentOpportunities))) ?? {})).toBe(true)
   })

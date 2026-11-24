@@ -101,6 +101,11 @@ Practice help rows in `learnAssessmentExposures` must leave `assessmentOpportuni
 
 ## Runtime follow-up
 
+The serial [#570 storage amendment](learn-v2-c1-storage-contract.md#570-post-seal-storage-amendment)
+defines the inactive persisted sources, practice bindings, help receipts,
+assistance counters, source links and lifecycle registration for this follow-up.
+It specifies the future writer transactions without enabling either endpoint.
+
 The runtime ticket must implement the following before the Canvas replaces its temporary teaching binding and #532 leaves draft:
 
 - Resolve ownership, canonical acceptance/sealing, authoritative score validity/current eligibility, capabilities, grant/pins and current evidence/access through Convex. Recheck revocation and account deletion on every read and replay; a query must not mint a grant.

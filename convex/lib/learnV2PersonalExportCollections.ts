@@ -10,6 +10,10 @@ type ContentKind = 'metadata' | 'content' | 'response_body' | 'legacy_response'
 // its optional body is absent, so later updates cannot escape an earlier grant.
 // Metadata projections expose only names/joins, closed state, timing or counts.
 export const PERSONAL_EXPORT_COLLECTION_POLICY = {
+  learnPostSealTeachingSources: 'metadata',
+  learnPostSealPracticeBindings: 'metadata',
+  learnPostSealHelpReceipts: 'metadata',
+  learnPostSealSourceLinks: 'metadata',
   learningThreadContributions: 'metadata',
   learningThreads: 'content',
   learningThreadActivities: 'content',

@@ -6,7 +6,8 @@ import { unzipSync, strFromU8 } from 'fflate'
 import { convexTest } from 'convex-test'
 import { api, internal } from '../../../convex/_generated/api'
 import schema from '../../../convex/schema'
-import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { LINEAGE_EXPORT_FIELDS, seedMeasurementStorage, seedCompleteMeasurementStorage, STORAGE_CANARIES } from '../../../tests/fixtures/learn-v2-measurement-storage'
+import { POST_SEAL_CANARIES } from '../../../tests/fixtures/learn-v2-post-seal-storage'
 import { authorizeExport, folderBackedExportFixture } from '../../../tests/fixtures/learn-v2-personal-export'
 import { ADAPTIVE_LEARN_EXPORT_COLLECTIONS } from '../../../shared/adaptive-learn-storage-manifest'
 import { LEARN_MEASUREMENT_STORAGE_MANIFEST, LEARN_MEASUREMENT_COLLECTIONS } from '../../../shared/learn-v2-measurement-storage-manifest'
@@ -524,7 +525,7 @@ describe('GET /api/export/me', () => {
 
   test('ZIP and Convex share the classified collection inventory and preserve permitted work and withhold copies without source authority', async () => {
     expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
-    expect(EXPORT_COLLECTIONS).toHaveLength(127)
+    expect(EXPORT_COLLECTIONS).toHaveLength(131)
     expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
     expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
     vi.stubEnv('LEARN_V2_ENABLED', 'false')
@@ -560,8 +561,8 @@ describe('GET /api/export/me', () => {
     vi.stubEnv('LEARN_V2_ENABLED', 'false')
     const identity = { tokenIdentifier: 'https://auth.example.com|zip-owner' }
     const t = convexTest(schema, import.meta.glob('../../../convex/**/*.ts'))
-    const f = await t.run(ctx => seedMeasurementStorage(ctx, identity.tokenIdentifier))
-    const other = await t.run(ctx => seedMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
+    const f = await t.run(ctx => seedCompleteMeasurementStorage(ctx, identity.tokenIdentifier))
+    const other = await t.run(ctx => seedCompleteMeasurementStorage(ctx, 'https://other.example.com|zip-owner'))
     await t.run(async ctx => {
       await ctx.db.patch(f.rows.learnArtifactLineages, { nextId: f.rows.learnArtifactLineages, invalidatedAt: 0 })
       await ctx.db.patch(f.rows.learnArtifactValidations, { invalidatedAt: 0 })
@@ -628,6 +629,7 @@ describe('GET /api/export/me', () => {
         if (name === 'answer' && entry.export === 'owner_response') expect(serialized).toContain(canary)
         else expect(serialized).not.toContain(canary)
       }
+      for (const canary of Object.values(POST_SEAL_CANARIES)) expect(serialized).not.toContain(canary)
     }
     const answers = strFromU8(entries['learnResponseBodies.json']!)
     expect(answers).toContain(STORAGE_CANARIES.answer)
@@ -646,7 +648,8 @@ describe('GET /api/export/me', () => {
     expect(responseRows.find(row => row._id === f.rows.learnResponses)).toMatchObject({ flow: 'today',
       measurementContext: { status: 'admitted', assignmentId: f.rows.learnMeasurementAssignments, baselineEpoch: 'fixture-epoch' } })
     expect(responseRows.find(row => row.responseSlotId === f.rows.learnResponseSlots)).toMatchObject({ currentEligibility: 'excluded', validity: { measurementEligible: false, exclusionReasons: ['formative'] } })
-    expect(JSON.parse(strFromU8(entries['learnResponseSlots.json']!))).toMatchObject([{ confidenceRequested: false }])
+    const slotRows = JSON.parse(strFromU8(entries['learnResponseSlots.json']!)) as Array<Record<string, unknown>>
+    expect(slotRows.find(row => row._id === f.rows.learnResponseSlots)).toMatchObject({ confidenceRequested: false })
     expect(JSON.parse(strFromU8(entries['learnAssessmentOpportunities.json']!))).toMatchObject([{ deliveryPins: { confidenceRequested: true } }])
     const terminalized = JSON.parse(strFromU8(entries['learnResponseCommandReceipts.json']!)).find((row: { commandVersion: string }) => row.commandVersion === LEARN_V2_RESPONSE_TERMINALIZATION_VERSION)
     expect(terminalized.result).toEqual({ kind: 'terminalized', target: { responseSlotId: f.rows.learnResponseSlots }, revision: 2, reasonCode: 'cancelled', terminalizedAt: f.base.createdAt })
