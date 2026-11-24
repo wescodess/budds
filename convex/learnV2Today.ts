@@ -108,7 +108,21 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
   const assignment = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_assignmentKey', q => q.eq('userId', userId).eq('assignmentKey', assignmentKey)).unique()
   if (!assignment) return session.status === 'in_progress' ? { kind: 'ordinary' } : { kind: 'unprepared' }
   if (assignment.status !== 'admitted') return { kind: 'ordinary' }
-  const opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
+  const canvasChecks = (assignment.checkSurface?.surface === 'canvas' || assignment.flow === 'v2_canvas')
+    && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))
+  let opportunity: Doc<'learnAssessmentOpportunities'> | null
+  if (canvasChecks) {
+    const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
+      q.eq('userId', userId).eq('assignmentId', assignment._id)).take(8)
+    if (checks.length === 8) return blocked('assessment_inventory_limit')
+    const cold = checks.filter(row => row.purpose.kind === 'measurement_cold' && row.horizonDays === undefined)
+    if (cold.length !== 1 || checks.some(row => row.objectiveId !== session.primaryObjectiveId)) return blocked('pins_mismatch')
+    opportunity = cold[0]!
+    const open = checks.find(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind)
+      && coldOpen(row, Date.now()) && row.openAt <= Date.now())
+    if (open) return await assessmentState(ctx, userId, open)
+  } else opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
+    q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!opportunity || opportunity.purpose.kind !== 'measurement_cold' || opportunity.objectiveId !== session.primaryObjectiveId) return blocked('assessment_unavailable')
   if (!coldOpen(opportunity, Date.now())) return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
   if (assignment.flow !== 'v2_today' && !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return blocked('flow_mismatch')

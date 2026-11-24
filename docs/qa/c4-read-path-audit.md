@@ -4,7 +4,7 @@
 
 The [serial API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas) keeps Today as `summary_or_own_work`: an opaque check reference, safe state and owned Canvas destination, without question, answer, rubric, score or feedback. Its default-off capability selects Canvas check delivery for new Today enrollment. Measurement flow remains the Today teaching treatment; frozen surface bindings retain Canvas delivery through rollback. C6 keeps entry point separate from treatment. The destination now addresses its receipt with `?check=<reference>`; #442 forwards that value as `checkReference` to the Canvas read/delivery argument envelope. The server binds it to the exact owned thread.
 
-The lesson and check have separate C5 session identities. Today keeps its planned lesson locked behind a dedicated cold-check session, then opens the same teaching content after saving, including when the check fails. Later Today instruction remains `v2_today` and cannot add `mixed_flow` to that assignment. Assignment/context surface bindings must agree with each other, their frozen teaching flow and current Canvas authority. Generic canonical response fields still record the actual Canvas surface; the C6 v9 source reducer uses the frozen teaching binding. Dev v8's operational-blocker precedence is retained.
+The lesson and check have separate C5 session identities. Today keeps its planned lesson locked behind a dedicated cold-check session, then opens the same teaching content after saving, including when the check fails. A due unanswered delayed check also locks the associated later lesson until saving; selection reads at most eight assignment rows and ignores future placeholders. Later Today instruction remains `v2_today` and cannot add `mixed_flow` to that assignment. Assignment/context surface bindings must agree with each other, their frozen teaching flow and current Canvas authority. Generic canonical response fields still record the actual Canvas surface; the C6 v9 source reducer uses the frozen teaching binding. Dev v8's operational-blocker precedence is retained.
 
 Only optional stored fields are added: `checkSurface` on assignments and non-calibration contexts, and `learnTodayCheckSurfaceVersion` on the owner profile for bounded rollback discovery. Binding version fields accept historical labels. The marker grants no row or content authority. Dedicated cold checks use the existing fixed-check binder, completion and reflow lineage; no due-work scheduler file or new table/index is introduced.
 
@@ -22,11 +22,11 @@ The registered maximum has six forms per family, 32 claims, 64 evidence rows and
 
 | Checks on first page | Database ranges | Documents | Read bytes |
 | --- | ---: | ---: | ---: |
-| 1 ready | 733 | 1,210 | 1,048,115 |
-| 2 ready | 1,425 | 2,412 | 2,082,712 |
-| 4 ready | 2,809 | 4,816 | 4,151,906 |
-| 4 mixed states | 2,060 | 2,921 | 2,056,381 |
-| 4 closed | 1,404 | 1,627 | 764,859 |
+| 1 ready | 733 | 1,212 | 1,055,595 |
+| 2 ready | 1,425 | 2,414 | 2,090,192 |
+| 4 ready | 2,809 | 4,818 | 4,159,386 |
+| 4 mixed states | 2,060 | 2,923 | 2,063,861 |
+| 4 closed | 1,404 | 1,629 | 772,339 |
 | 4 ready with retired historical labels | 2,827 | 4,828 | 4,188,133 |
 
 The state matrix covers losses before/after scoring, actual lost provider response without redispatch, canonical answer authority, both Canvas read/delivery paths, thread ownership/deletion, routing changes, historical versions, terminal recency, 12 later deleted checks, overflow and resource propagation. These are synthetic registered fixtures; deployed contention, live providers and #442 rendering remain separate proof boundaries.

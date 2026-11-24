@@ -171,6 +171,36 @@ test('Today preserves its planned lesson behind a dedicated Canvas check and ope
   expect(JSON.stringify(teaching)).not.toMatch(/Hypothetical|PRIVATE|A saved learner answer/)
 })
 
+test('a due delayed Canvas check locks the later Today lesson until its answer is saved', async () => {
+  const f = await fixture()
+  await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { scheduledEndAt: NOW + 30 * 60_000 }))
+  await f.start()
+  const cold = await coldFor(f)
+  const opening = await attach(f, cold)
+  expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opening.stage)).kind).toBe('accepted')
+  const delayed = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(delayed.openAt + 1000)
+  await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId,
+    idempotencyKey: 'prior_today_lesson_expired_1234567890' })
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const later = await anotherTodayLesson(f)
+  await f.t.run(ctx => ctx.db.patch(later, { scheduledStartAt: Date.now() }))
+  const lesson = (await f.t.run(ctx => ctx.db.get(later)))!
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: later,
+    assessment: { kind: 'check', check: { reference: delayed.delayedCheckId, state: 'ready' } } })
+  const start = () => f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: later,
+    expectedSessionRevision: 2, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'due_check_today_lesson_1234567890' })
+  expect(await start()).toMatchObject({ status: 'assessment', deliveryGrant: null,
+    assessment: { check: { reference: delayed.delayedCheckId } } })
+  expect(await f.t.run(ctx => ctx.db.get(later))).toEqual(lesson)
+  const opened = await attach(f, (await f.opportunities()).find(row => row._id === delayed._id)!)
+  expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  expect(await start()).toMatchObject({ status: 'in_progress' })
+  const teaching = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: later,
+    idempotencyKey: 'after_delayed_save_lesson_1234567890' })
+  expect(teaching.value?.blocks.length).toBeGreaterThan(0)
+})
+
 test('dedicated cold checks retain their frozen binding through repeated lesson reflows and rollback', async () => {
   vi.setSystemTime(NOW - 8 * 60 * 60_000)
   const f = await fixture()
