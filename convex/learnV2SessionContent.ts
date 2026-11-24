@@ -41,7 +41,7 @@ import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePr
 import { isTestOnlyMeasurementSession, measurementCanonical, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
 import { isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled } from "../shared/learn-v2-today-check";
-import { prepareTodayAssessment, resolveTodayAssessment, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
+import { prepareTodayAssessment, resolveTodayAssessment, settleUnplayableTodayChecks, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
 import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses';
@@ -1503,6 +1503,7 @@ export const startStudySession = mutation({
       if (assessment.kind === 'teach') {
         if (!await separateTeachingReady(ctx, userId, content, assessment)) return receipt(assessment, 'instructional_holdout_unknown');
         await settleMissedCold(ctx, assessment);
+        await settleUnplayableTodayChecks(ctx, userId, assessment.assignment);
         await recordTodayInstruction(ctx, userId, content, assessment);
       }
     }

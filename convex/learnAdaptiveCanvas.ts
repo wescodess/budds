@@ -108,7 +108,7 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
   if (!scorer.saved || await privacyDigest((await scorer.registry.verifySaved(scorer.saved)).binding) !== await privacyDigest(protocol.scoringBinding)) return canvasUnavailable('scorer_unavailable')
   if (entryPoint !== 'canvas') {
     const enrolled = await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, familyId: manifest.familyId, entryPoint,
-      checkSurface: { version: LEARN_CHECK_SURFACE_VERSION, surface: 'canvas', measurementFlow: 'v2_today' }, persistNonAdmission: false })
+      checkSurface: { version: LEARN_CHECK_SURFACE_VERSION, surface: 'canvas', measurementFlow: 'v2_today' } })
     if (enrolled.status !== 'admitted' || !enrolled.assignmentId) return canvasUnavailable(enrolled.reasonCodes[0] ?? 'not_admitted')
     const assignment = (await ctx.db.get(enrolled.assignmentId))!
     const opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>

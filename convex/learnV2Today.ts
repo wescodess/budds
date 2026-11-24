@@ -10,6 +10,8 @@ import { getScopedMasteryRecord, masteryScopeKey } from './lib/learnV2MasterySco
 import { isTestOnlyMeasurementSession } from './lib/learnV2MeasurementItems'
 import { enrollLearnMeasurementForOwner, type AdmittedAssignment } from './lib/learnV2Measurement'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
+import { closeUnplayableLearnCheck } from './lib/learnV2MeasurementDueWork'
+import { learnCheckUsesCanvasSurface, learnDelayedCheckBindingBlock } from './lib/learnV2DelayedDelivery'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import type { LearnV2AssessmentState } from './lib/learnV2PublicContract'
@@ -34,6 +36,10 @@ const POINTER_CURSOR_PREFIX = 'today-checks-v2:'
 const POINTER_DISCOVERY_RESERVE = 48
 const POINTER_SAVED_PAGE = 32
 const POINTER_VERSION_PAGE = 4
+const TODAY_CANVAS_CHECK_SURFACE = { version: LEARN_CHECK_SURFACE_VERSION, surface: 'canvas' as const, measurementFlow: 'v2_today' as const }
+// Temporary system states retry on a later start; every other preparation outcome is an honest non-admission.
+const TRANSIENT_TODAY_CHECK_REASONS: ReadonlySet<string> = new Set(['disabled', 'protocol_not_frozen', 'session_unavailable',
+  'outside_window', 'evidence_unavailable', 'scorer_unavailable'])
 const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['in_progress', 'ready', 'blocked', 'generation_failed', 'planned']
 
 function rank(session: { assessmentPurpose?: string, placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
@@ -62,7 +68,7 @@ async function measurementCatalogEnabled(ctx: QueryCtx | MutationCtx, userId: st
 
 async function assessmentState(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>): Promise<TodayAssessment> {
   const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
-  const canvas = assignment?.status === 'admitted' ? assignment.checkSurface?.surface === 'canvas' || assignment.flow === 'v2_canvas'
+  const canvas = assignment?.status === 'admitted' ? learnCheckUsesCanvasSurface(assignment)
     : opportunity.contextPins.kind === 'session' && !!opportunity.contextPins.canvas
   if (canvas && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))) {
     if (opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas) return { kind: 'blocked', reasonCode: 'flow_mismatch', opportunity, state: null }
@@ -78,6 +84,22 @@ async function assessmentState(ctx: QueryCtx | MutationCtx, userId: string, oppo
 function coldOpen(opportunity: Doc<'learnAssessmentOpportunities'>, now: number) {
   return opportunity.submissionId === undefined && ['ready', 'test_open'].includes(opportunity.phase)
     && opportunity.operationalEligibility === 'eligible' && now < opportunity.closeAt
+}
+
+function dueTodayChecks(checks: Doc<'learnAssessmentOpportunities'>[], now: number) {
+  return checks.filter(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind) && coldOpen(row, now) && row.openAt <= now)
+}
+
+export async function settleUnplayableTodayChecks(ctx: MutationCtx, userId: string, assignment: AdmittedAssignment) {
+  if (assignment.flow !== 'v2_today' || !learnCheckUsesCanvasSurface(assignment)
+    || !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return
+  const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
+    q.eq('userId', userId).eq('assignmentId', assignment._id)).take(8)
+  for (const row of dueTodayChecks(checks, Date.now())) {
+    if (row.purpose.kind === 'retained_transfer' || await readCanvasCheckPointerForOwner(ctx, userId, row)) continue
+    const reasonCode = await learnDelayedCheckBindingBlock(ctx, assignment, row) ?? 'assessment_unavailable'
+    await closeUnplayableLearnCheck(ctx, assignment, row, reasonCode)
+  }
 }
 
 export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>): Promise<TodayAssessment> {
@@ -108,7 +130,7 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
   const assignment = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_assignmentKey', q => q.eq('userId', userId).eq('assignmentKey', assignmentKey)).unique()
   if (!assignment) return session.status === 'in_progress' ? { kind: 'ordinary' } : { kind: 'unprepared' }
   if (assignment.status !== 'admitted') return { kind: 'ordinary' }
-  const canvasChecks = (assignment.checkSurface?.surface === 'canvas' || assignment.flow === 'v2_canvas')
+  const canvasChecks = learnCheckUsesCanvasSurface(assignment)
     && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))
   let opportunity: Doc<'learnAssessmentOpportunities'> | null
   if (canvasChecks) {
@@ -118,9 +140,11 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
     const cold = checks.filter(row => row.purpose.kind === 'measurement_cold' && row.horizonDays === undefined)
     if (cold.length !== 1 || checks.some(row => row.objectiveId !== session.primaryObjectiveId)) return blocked('pins_mismatch')
     opportunity = cold[0]!
-    const open = checks.find(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind)
-      && coldOpen(row, Date.now()) && row.openAt <= Date.now())
-    if (open) return await assessmentState(ctx, userId, open)
+    for (const row of dueTodayChecks(checks, Date.now())) {
+      const state = await assessmentState(ctx, userId, row)
+      if (state.kind === 'check' || assignment.flow !== 'v2_today') return state
+    }
+    return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
   } else opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
     q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!opportunity || opportunity.purpose.kind !== 'measurement_cold' || opportunity.objectiveId !== session.primaryObjectiveId) return blocked('assessment_unavailable')
@@ -136,17 +160,22 @@ export async function prepareTodayAssessment(ctx: MutationCtx, userId: string, s
   if (!plan?.blueprintRevisionId) return current
   const families = await ctx.db.query('learnMeasurementFamilies').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', userId).eq('blueprintRevisionId', plan.blueprintRevisionId!).eq('objectiveId', session.primaryObjectiveId)).take(7)
   const available = families.filter(row => ['provisional_equivalent', 'empirically_supported'].includes(row.status) && row.evidenceStatus === 'available' && row.invalidatedAt === undefined)
+  const familyId = families.length <= 6 && available.length === 1 ? { familyId: available[0]!._id } : {}
+  const checkSurface = todayCanvasChecksEnabled() ? { checkSurface: TODAY_CANVAS_CHECK_SURFACE } : {}
   if (todayCanvasChecksEnabled() && await hasAdaptiveExperienceAccess(ctx, userId)) {
     const prepared = await prepareCanvasSessionForOwner(ctx, { studySessionId: session._id, expectedSessionRevision: session.revision,
       idempotencyKey: `today_canvas_${(await privacyDigest([session._id, entryPoint])).slice(7)}` }, entryPoint)
     if (prepared.kind === 'prepared') return await resolveTodayAssessment(ctx, userId, (await ctx.db.get(session._id))!)
-    return { kind: 'blocked' as const, reasonCode: prepared.reasonCode, opportunity: null, state: null }
-  }
-  await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, entryPoint,
-    ...(todayCanvasChecksEnabled() ? { checkSurface: { version: LEARN_CHECK_SURFACE_VERSION, surface: 'canvas' as const, measurementFlow: 'v2_today' as const } } : {}),
-    ...(families.length <= 6 && available.length === 1 ? { familyId: available[0]!._id } : {}) })
+    const current = await resolveTodayAssessment(ctx, userId, session)
+    if (current.kind !== 'unprepared') return current
+    if (TRANSIENT_TODAY_CHECK_REASONS.has(prepared.reasonCode)) return { kind: 'ordinary' as const }
+    await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, entryPoint, ...checkSurface, ...familyId,
+      exclusionReason: prepared.reasonCode })
+  } else await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, entryPoint, ...checkSurface, ...familyId })
   const prepared = await resolveTodayAssessment(ctx, userId, session)
-  return prepared.kind === 'unprepared' ? { kind: 'blocked' as const, reasonCode: 'assessment_not_prepared', opportunity: null, state: null } : prepared
+  if (prepared.kind !== 'unprepared') return prepared
+  return todayCanvasChecksEnabled() ? { kind: 'ordinary' as const }
+    : { kind: 'blocked' as const, reasonCode: 'assessment_not_prepared', opportunity: null, state: null }
 }
 
 export function todayAssessmentSummary(assessment: Exclude<TodayAssessment, { kind: 'ordinary' }>, reasonCode?: string) {

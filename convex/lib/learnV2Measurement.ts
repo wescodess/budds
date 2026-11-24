@@ -35,7 +35,7 @@ export type MeasurementFlow = 'v2_today' | 'v2_canvas'
 export type EnrollmentRequest = {
   studySessionId: Id<'studySessions'>, familyId?: Id<'learnMeasurementFamilies'>,
   entryPoint: 'today' | 'session_deep_link' | 'canvas', canvasActivityId?: Id<'learningThreadActivities'>,
-  checkSurface?: LearnCheckSurfaceBinding, persistNonAdmission?: boolean,
+  checkSurface?: LearnCheckSurfaceBinding, exclusionReason?: string,
 }
 export type AdmittedAssignment = Extract<Doc<'learnMeasurementAssignments'>, { status: 'admitted' }>
 export type MeasurementScope = Pick<Doc<'learnAssessmentOpportunities'>,
@@ -201,6 +201,30 @@ export async function measurementCaseExposed(ctx: ReadCtx, userId: string, caseI
   return exposures.length > 64 || exposures.some(row => row.status !== 'requested_denied' && row.assessmentOpportunityId !== opportunityId)
 }
 
+const PRIOR_TEACHING_SESSION_LIMIT = 128
+const PRIOR_TEACHING_PLAN_LIMIT = 32
+
+async function priorObjectiveTeaching(ctx: ReadCtx, userId: string, session: Doc<'studySessions'>) {
+  let remaining = PRIOR_TEACHING_SESSION_LIMIT
+  const seen = new Set<string>()
+  let plan = await ctx.db.get(session.studyPlanRevisionId)
+  while (plan) {
+    if (plan.userId !== userId || seen.has(plan._id) || seen.size === PRIOR_TEACHING_PLAN_LIMIT) return 'unknown' as const
+    seen.add(plan._id)
+    const planId = plan._id
+    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+      q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(remaining + 1)
+    if (rows.length > remaining) return 'unknown' as const
+    remaining -= rows.length
+    if (rows.some(row => row._id !== session._id && row.primaryObjectiveId === session.primaryObjectiveId
+      && row.assessmentOpportunityId === undefined && row.assessmentPurpose === undefined
+      && (row.startedSessionContentId !== undefined || ['in_progress', 'completed'].includes(row.status)))) return 'returning' as const
+    if (plan.changeReason !== 'future_incomplete_reflow' || !plan.parentRevisionId) return null
+    plan = await ctx.db.get(plan.parentRevisionId)
+  }
+  return null
+}
+
 async function enrollmentHistory(ctx: ReadCtx, userId: string, scope: MeasurementScope, session: Doc<'studySessions'>) {
   const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique()
   if (!catalog || catalog.historyCompleteness !== 'prospective_complete' || !catalog.historyBasisVersion || !catalog.historyCoverageWatermark || !catalog.instrumentationEpoch) return { status: 'unknown' as const, catalog }
@@ -305,13 +329,17 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const canvasActivityId = request.canvasActivityId
   scope = await withMeasurementCanvasScope(ctx, userId, scope, session, canvasActivityId)
   const flow = request.entryPoint === 'canvas' || canvasActivityId && !checkSurface ? 'v2_canvas' as const : 'v2_today' as const
-  const history = await enrollmentHistory(ctx, userId, scope, session)
+  let history = await enrollmentHistory(ctx, userId, scope, session)
+  if (checkSurface && history.status === 'prospectively_unexposed') {
+    const prior = await priorObjectiveTeaching(ctx, userId, session)
+    if (prior) history = { ...history, status: prior }
+  }
   const family = request.familyId ? await ctx.db.get(request.familyId) : null
   if (family && (family.userId !== userId || family.learningVoidId !== learningVoid._id || family.objectiveId !== objective._id || family.blueprintRevisionId !== blueprint._id)) throw new Error('Learn measurement family unavailable')
   const items = family ? await ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q => q.eq('userId', userId).eq('familyId', family._id).eq('familyRevision', family.revision)).take(7) : []
   const core = items.filter(item => !item.reserve)
   const pins: LearnMeasurementItemPins[] = []
-  const reasons = new Set<string>()
+  const reasons = new Set<string>(request.exclusionReason ? [request.exclusionReason] : [])
   const scopeReason = await measurementScopeReason(ctx, userId, scope)
   const flowReason = checkSurface?.surface === 'canvas' && !await hasAdaptiveExperienceAccess(ctx, userId) ? 'canvas_not_admitted'
     : await measurementFlowReason(ctx, userId, flow, scope, protocol)
@@ -352,7 +380,6 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const timezone = learnTimezoneSchema.safeParse(revision.timezone)
   if (!timezone.success) reasons.add('timezone_unavailable')
   if (reasons.size || !family || !timezone.success) {
-    if (request.persistNonAdmission === false) return { status: 'not_admitted' as const, assignmentId: null, reasonCodes: [...reasons] }
     const assignmentId = await ctx.db.insert('learnMeasurementAssignments', { ...common, exclusionReasons: [...reasons], status: 'not_admitted', protocolStatus: 'blocked', reasonCode: [...reasons][0] ?? 'not_admitted' })
     await writeLearnMeasurementEnrollmentFact(ctx, userId, (await ctx.db.get(assignmentId))!)
     return { status: 'not_admitted' as const, assignmentId, reasonCodes: [...reasons] }
@@ -458,7 +485,8 @@ export async function freezeFirstIndependentClaimForOwner(ctx: MutationCtx, user
     firstIndependentTimezone: basis.attemptTimezone, transitionVersion: basis.masteryTransitionVersion, claimFactSequence: sequence,
     blueprintRevisionId, objectiveId,
     stratum: { epoch: protocol.epoch, baselineSha: protocol.baselineSha, cohortVersion: protocol.cohortVersion,
-      flow: assignment?.flow ?? (basisResponse && 'flow' in basisResponse && basisResponse.flow === 'canvas' ? 'v2_canvas' : 'v2_today'), entryPoint: assignment?.entryPoint ?? 'retained_check', depth: objective?.depth },
+      flow: assignment?.flow ?? (basisResponse && 'flow' in basisResponse && basisResponse.flow === 'canvas' ? 'v2_canvas' : 'v2_today'),
+      ...(assignment?.checkSurface ? { checkSurface: assignment.checkSurface.surface } : {}), entryPoint: assignment?.entryPoint ?? 'retained_check', depth: objective?.depth },
     policyPins: { assistancePolicyVersion: basis.assistanceSnapshot.policyVersion, validityPolicyVersion: basis.validitySnapshot.policyVersion,
       thresholdVersion: basis.scoringBinding?.thresholdVersion ?? 'learn-v2.mastery-threshold.v1', thresholdPercent: 80 },
     firstSlot: { kind: 'unresolved', reason: 'no_qualifying_delayed_slot' },
