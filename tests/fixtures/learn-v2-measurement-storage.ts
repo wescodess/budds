@@ -1,4 +1,5 @@
 import { privacyDigest } from '../../convex/lib/learnV2ResponsePrivacy'
+import { seedPostSealStorage } from './learn-v2-post-seal-storage'
 import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
 import { composeAdaptiveActivityPlan } from '../../shared/learn-adaptive-activity-plan'
 import type { MutationCtx } from '../../convex/_generated/server'
@@ -133,8 +134,19 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
     learnResponseEvidenceLinks: linkId, learnResponseIntegrityEvents: integrityId, learnResponseCommandReceipts: receiptId,
     learnScoringExecutions: executionId, learnMeasurementReportFacts: factId, learnMeasurementSourceWatermarks: watermarkId,
     learnMeasurementReportRuns: runId, learnMeasurementReportRows: rowId, learnMeasurementReportCells: cellId, learnMeasurementReportViewerGrants: viewerGrantId,
-  } satisfies { [Table in LearnMeasurementCollection]: Id<Table> }
+  } satisfies { [Table in Exclude<LearnMeasurementCollection, `learnPostSeal${string}`>]: Id<Table> }
   return { rows, folderId, documentId, learningVoidId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, threadId, activityId, studySessionId, scope, itemPins, scoringBinding, assistanceSnapshot, validitySnapshot, base, reportKeys }
+}
+
+export async function seedCompleteMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userId: string) {
+  const f = await seedMeasurementStorage(ctx, userId)
+  const postSeal = await seedPostSealStorage(ctx, { base: f.base, learningVoidId: f.learningVoidId,
+    assessmentOpportunityId: f.rows.learnAssessmentOpportunities, submissionId: f.rows.learnResponses,
+    sourceSnapshotId: f.sourceSnapshotId, checkCaseId: f.itemPins.caseId, slotId: f.rows.learnResponseSlots })
+  const rows = { ...f.rows, learnPostSealTeachingSources: postSeal.teachingSourceId, learnPostSealPracticeBindings: postSeal.practiceBindingId,
+    learnPostSealHelpReceipts: postSeal.helpReceiptId, learnPostSealSourceLinks: postSeal.sourceLinkIds[0]!,
+  } satisfies { [Table in LearnMeasurementCollection]: Id<Table> }
+  return { ...f, rows, postSeal }
 }
 
 // Independently audited personal-export contract for #516. The direct-page

@@ -6,7 +6,7 @@ The accepted resolutions on [responses](https://github.com/wescodess/budds/issue
 
 ## Ownership and pins
 
-All 29 collections require `userId`, `storageVersion`, `createdAt`, and `by_userId`. Enumeration and cleanup use pages/batches of at most eight. The registry is `shared/learn-v2-measurement-storage-manifest.ts`; storage validators live under `convex/lib/learnV2MeasurementStorage.ts` and `convex/lib/learnV2ArtifactLineageContract.ts`, with tables/indexes in `convex/schema.ts`. The #516 lookup has its separate finite graph bounds below.
+All 33 registered owner collections require `userId`, `storageVersion`, `createdAt`, and `by_userId`. Enumeration and cleanup use pages/batches of at most eight. The registry is `shared/learn-v2-measurement-storage-manifest.ts`; storage validators live under `convex/lib/learnV2MeasurementStorage.ts` and `convex/lib/learnV2ArtifactLineageContract.ts`, with tables/indexes in `convex/schema.ts`. The #516 lookup has its separate finite graph bounds below.
 
 V2 scope requires the Void, Blueprint revision, objective, Blueprint record revision, assessment-contract version/digest and depth. Context is discriminated: calibration, a planned measurement with complete plan pins, or a session with complete plan/session/content/generator pins and optional complete Canvas attribution. Standalone diagnostics require their owned thread/activity and revisions, with no invented V2 anchors. Child rows repeat their aggregate anchor for indexed cleanup.
 
@@ -430,6 +430,193 @@ Both export enumerations include all new tables, the HTTP list now includes the 
 Existing retention entry points invoke the new bounded source, excerpt, document, folder, Void and standalone-thread registrations. Account deletion invalidates source-owner report snapshots and drains requester-run descendants before deleting the run. Removing a Canvas wrapper preserves V2-owned response history; removing a Void retains only the separate owner case/exposure inventory needed to prevent reuse. No owner exposure row survives completed account deletion.
 
 This slice supplies storage/enumeration and conservative cleanup of the introduced payloads. Full runtime disclosure, integrity-event/fact emission during purge, legacy aliases/fingerprints, export exposure authorization, scoring/read races and privacy completion remain required before new admission. It supplies no collection/enrollment/scoring commands, migration/backfill, principal grant, provider invocation or UI. Protocol, rollout, live scorer validation and real cold/day-7/day-30 learning evidence remain owner-controlled and unproven.
+
+## #570 post-seal storage amendment
+
+The additive contract `learn-v2.post-seal-storage.v1` supplies persistence for
+[#535](https://github.com/wescodess/budds/issues/535), under the frozen
+[`learn-v2.post-seal-teaching.v1`](learn-v2-post-seal-teaching-contract.md).
+The measurement storage version remains v1: existing shapes are preserved and
+new tables carry a separate `postSealStorageVersion`. New stored version and
+policy fields use strings, including command and fingerprint versions, so a
+later label cannot invalidate historical rows.
+The reused measurement base also accepts string storage labels for the new
+practice exposure variant, preserving the existing v1 rows. Public commands
+remain strict current-version contracts; accepting a stored label grants no replay authority.
+No content writer, generator, selector, endpoint behavior, capability, flag,
+migration, backfill or deployment is enabled by this amendment.
+
+All four new tables repeat the owner and owning Void. They have `by_userId`,
+`by_userId_and_learningVoidId`, and the exact manifest indexes below. Optional
+Canvas attribution is not their aggregate owner; removing a Canvas thread
+preserves this V2 history. They are not standalone diagnostic storage.
+
+| Collection | Persisted shape and exact additional index fields after `userId` |
+| --- | --- |
+| `learnPostSealTeachingSources` | One row per sealed check submission: `assessmentOpportunityId`, `submissionId`, nullable source `attemptId`, `sourceDependencyCount`, evidence state and `content`. Content is pending, available cited feedback/lesson with publication pins, or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `attemptId`. |
+| `learnPostSealPracticeBindings` | One immutable binding per sealed submission: check and practice case IDs, `caseRelation: separate_case`, `reservedCase: no`, identity policy, case-validation digest, catalogue revision, exact `responseSlotId`, dependency count and available prompt/publication pins or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `responseSlotId`; `practiceCaseId`. |
+| `learnPostSealHelpReceipts` | One immutable delivered authorization per owner/key hash: check/submission context, practice binding/slot, expected slot revision, help kind, command/fingerprint versions and hashes, exposure authorization ID, server delivery time, separate assistance sequence, dependency count and actual content/publication pins or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `responseSlotId, assistanceSequence`; `practiceBindingId`; `idempotencyKeyHash`; `authorizationId`. |
+| `learnPostSealSourceLinks` | One normalized dependency per content target. `target` contains exactly one teaching-source, practice-binding or help-receipt ID. A live dependency pins a snapshot, excerpt plus snapshot, document revision, or folder. Purged links retain the target but remove the entire dependency. Indexes: `target.teachingSourceId`; `target.practiceBindingId`; `target.helpReceiptId`; each `dependency.{sourceSnapshotId,sourceExcerptId,documentId,folderId}, invalidatedAt`. |
+
+Each available payload carries `publication`: policy version, canonical payload
+digest, complete source-manifest digest, validation digest and publication time.
+These pins commit the actual content and its validation; they are not a
+substitute for renewed server publication, lineage, evidence and access checks.
+The payload digest follows the existing `privacyDigest` canonical JSON/SHA-256
+encoding. No prompt, private rubric, reserved solution or provider trace is
+stored in a fingerprint. Citation `sourceRef` values remain public opaque
+references; all private source dependencies live in normalized links.
+
+### Bounds, immutability and idempotency
+
+`shared/learn-v2-post-seal-storage.ts` contains strict zod storage schemas and
+the canonical request fingerprint. `convex/lib/learnV2PostSealStorageContract.ts`
+supplies closed Convex validators through `learnV2MeasurementStorage.ts`.
+Convex checks structure; #535 must also parse the complete storage row and the
+public projection, without truncation, before writing or returning content.
+Database validators alone cannot establish ownership, uniqueness, semantic
+novelty, safe prose, time ordering or immutability.
+
+- Each row's serialized application fields are at most 64 KiB; each complete
+  available content payload is at most 48 KiB UTF-8, including JSON escaping.
+  Public return envelopes retain their independent 64 KiB ceiling. Text is
+  nonblank and at most 12,000 JavaScript code units; feedback/lessons require
+  1–16 citations, with source references at most 200 and labels at most 300;
+  lessons contain 1–8 paragraphs. Feedback/lessons admit T0/T1, practice prompts
+  and worked examples T0/T2, and hints T0 only. Whole-object validation also
+  covers content withheld from a particular return.
+- Each content target declares 1–64 normalized source dependencies, including
+  the sealed check's evidence and every content/citation dependency. Count and
+  complete manifest must match the indexed links. No embedded history array
+  or owner-history scan is permitted. History/export/purge pages contain at
+  most eight rows; uniqueness reads take two and fail on duplicates.
+- Case identities must differ. Distinct IDs/digests alone do not prove
+  separate cases: #535 must verify the pinned complete case/publication
+  decision, reservation history and current catalogue authority. Same-case,
+  sibling, reserved, unknown and unavailable bindings fail closed.
+- Bindings never rotate to a second case or slot for the same submission.
+  A binding does not duplicate the slot's changing response revision: read
+  and replay use `learnResponseSlots.revision`. Content/identity and receipts
+  are immutable after publication, except irreversible privacy redaction.
+  A purged payload cannot be regenerated or restored on the same row.
+- `learnResponseSlots.practiceAssistance` is optional for existing rows.
+  It stores policy, separate assistance revision/delivery count, hint/worked
+  example counts, and last delivery time/authorization. Counts are nonnegative
+  safe integers, revision equals delivery count and kind counts sum to it;
+  a present projection has at least one delivery. Absence is legacy/unknown,
+  not proof of zero help. The first new practice slot may omit it until its
+  first delivery. Help increments these counters, never the slot's response
+  `revision` or the sealed response/session's assistance facts.
+- `fingerprintLearnPracticeHelpRequest` validates the frozen public request
+  and returns lowercase SHA-256 hex, without retaining its raw key. With
+  `V = learn-v2.practice-help-fingerprint.v1`, key hash is
+  `SHA256(UTF8(JSON.stringify([V, 'key', idempotencyKey])))`; request digest is
+  `SHA256(UTF8(JSON.stringify([V, 'request', version, assessmentOpportunityId,
+  responseSlotId, expectedRevision, kind, idempotencyKey])))`. Object-key order
+  is irrelevant; no text normalization, trimming or payload omission occurs.
+  Owner/key uniqueness is transactional through the exact key-hash index.
+  Same key and digest replay the saved exposure ID, time and content after
+  current authorization. Changed payload conflicts. A changed key cannot reuse
+  an existing receipt. Different authorized keys represent distinct deliveries
+  with strictly increasing slot assistance sequences, not new response slots.
+  `createdAt = deliveredAt >=` canonical check `acceptedAt`; #535 verifies the
+  cross-record time and exact check/submission/binding/slot relationships.
+
+### Exactly what #535 may write
+
+These are future transaction obligations; this amendment installs none of the
+following writers:
+
+1. The check score-commit mutation is
+   `convex/learnV2Mastery.ts::commitSealedMasteryAttempt`. In the **same
+   transaction** that inserts the canonical attempt and sets
+   `learnAssessmentOpportunities.authoritativeAttemptId`, it must create or
+   stamp `learnPostSealTeachingSources.attemptId` with that exact ID. If absent,
+   insert a pending source with that ID; if a pending source has null, stamp it
+   once. A conflicting ID fails the commit. This is not a later scheduled
+   patch, client receipt, legacy scorer result or a second attempt. A source
+   created after a score must read and stamp the existing authoritative ID in
+   its creation transaction. Pending practice needs no valid score and can
+   exist while the source's attempt is null.
+2. A server-authorized teaching publication mutation may transition a pending
+   source to available once, writing only its validated cited feedback and
+   lesson/publication pins and complete normalized source links. It must
+   reread the exact sealed submission, authoritative valid score and current
+   access/evidence/pins, then require scored pass/fail for feedback and valid
+   scored failure for a lesson. It cannot replace the attempt stamp or publish
+   score-driven teaching for pending/invalid scoring.
+3. A server-authorized practice preparation mutation may select one proven
+   different nonreserved case, create its V2 `stage: practice` response slot,
+   persist the binding/prompt/publication pins and complete source links
+   atomically. It must serialize its owner-scoped relevant-open-check lookup
+   with check acceptance. A retry returns that same binding and slot. The
+   query `learnV2Assessments.getPostSealTeaching` reads existing authority; it
+   cannot select/persist a case, mint a grant or repair missing storage.
+4. `convex/learnV2Assistance.ts::authorizePracticeAssistance` may commit one
+   delivered exposure, content-bearing help receipt, receipt source links and
+   the slot's assistance projection in one transaction. First delivery uses
+   `learnPostSealTeachingDenial` **and** the exact live practice binding; replay
+   uses `projectPracticeAssistanceAuthorization` before disclosing receipt
+   content. Both reread account deletion, ownership, evidence, pins, grant,
+   capability, slot revision and server-derived relevant open checks. This
+   transaction serializes with practice acceptance and other check acceptance;
+   a denied/stale/conflicting request writes no delivered receipt or counters.
+   No legacy `recordAssistanceUse` call or slot-revision bump is authorized.
+
+The new exposure variant is `purpose: practice`, `status: granted`, with
+`practiceHelp: { responseSlotId, practiceBindingId, kind, assistanceSequence }`.
+Its Convex shape forbids `assessmentOpportunityId`. Owner-prefixed indexes on
+`practiceHelp.responseSlotId` and `practiceHelp.practiceBindingId` support exact
+practice-parent discovery without querying a check's assistance. The sealed check appears
+only as authorization context in the receipt/binding. Prior teaching/case
+exposure, actual assistance to a current check before sealing, and later
+practice exposure remain separate facts under #363. Denied help is not used
+assistance. Later evidence of pre-seal contamination still appends an integrity
+event; none of these rows rewrites a frozen acceptance snapshot or report fact.
+
+### Purge, retention, export and deletion
+
+Every published content copy, including help receipts and citation-only
+dependencies, registers its own full source links in its publication transaction.
+Existing snapshot/excerpt/document/folder retention entry points drain these
+indexes in batches of eight. They replace the entire dependent content object,
+including citations and publication pins, with an evidence-unavailable reason
+and purge time, invalidate the practice slot when its binding loses evidence,
+and remove each private dependency from its link. Safe attempt, check, slot,
+delivery, count and digest history remains. Other owners and unrelated sources
+are preserved. Reimporting a source never restores a tombstone. Immediate
+read/replay denial on access loss precedes physical cleanup; the future #535
+writers must recheck source/access state in every content commit so a race
+cannot restore withdrawn bytes. An access-revocation writer must schedule the
+same indexed purge continuation, not only hide a read.
+
+These rows follow owning Void/account learning history, including delivered
+receipts; there is no 90-day success/help expiry. Explicit Void/folder deletion
+deletes all four tables child-first. Practice exposure consumption survives
+aggregate deletion under the existing detached owner-inventory policy; no
+check attribution is added. Account deletion deletes every new row, practice
+slot counter and owner exposure with the existing tombstone/provider-first
+ordering. The shared deletion order places these four tables before responses,
+slots and opportunities. Canvas-wrapper deletion preserves V2 ownership.
+
+All four tables are **metadata-only** in the common direct/HTTP ZIP export
+inventory. Teaching exports contain safe check/submission/attempt and evidence
+metadata; bindings contain safe check/submission/slot and evidence metadata;
+help exports contain submission/slot/revision, kind, exposure ID, server time,
+assistance sequence and evidence metadata; source-link exports contain only
+evidence metadata. Common row identity/creation metadata is retained. Content,
+citation text, case IDs, source dependencies, publication/validation pins,
+key/request hashes and raw command keys are withheld. This amendment adds no
+teaching/export content permission. Telemetry and operational logs omit all
+four rows and every content, key and fingerprint copy. No new event writer or
+analytics field is introduced.
+
+Storage fixtures and lifecycle tests establish shape, inventory, export and
+cleanup behavior. They do not establish #535's generation/publication safety,
+transactional uniqueness, score-commit stamp integration, renewed replay
+authority, acceptance/revocation race behavior or runtime endpoint/alias matrix.
+Those remain #535 acceptance work and the orchestrator's independent review
+gate remains required before readiness or merge.
 
 ## Verification scope
 

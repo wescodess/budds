@@ -5,6 +5,10 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } fro
 type ExportRow = Record<string, unknown> & { _id: Id<LearnMeasurementCollection>, _creationTime: number }
 
 const metadataFields = {
+  learnPostSealTeachingSources: ['assessmentOpportunityId', 'submissionId', 'attemptId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealPracticeBindings: ['assessmentOpportunityId', 'submissionId', 'responseSlotId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealHelpReceipts: ['submissionId', 'responseSlotId', 'expectedRevision', 'kind', 'authorizationId', 'deliveredAt', 'assistanceSequence', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealSourceLinks: ['evidenceStatus', 'invalidatedAt'],
   // nextId is private lineage linkage and is intentionally withheld.
   learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
   learnArtifactLineageOrigins: ['transformation'],
