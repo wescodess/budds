@@ -40,6 +40,7 @@ import { loadAdaptiveClaimProjection } from "./lib/adaptiveClaimProjection";
 import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePrivacy";
 import { isTestOnlyMeasurementSession, measurementCanonical, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
+import { isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled } from "../shared/learn-v2-today-check";
 import { prepareTodayAssessment, resolveTodayAssessment, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
 import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
@@ -257,7 +258,9 @@ async function todayAssessmentEnvelope(ctx: QueryCtx | MutationCtx, userId: stri
   const content = await todaySessionContentRow(ctx, userId, session);
   if (!content) return null;
   const opportunity = assessment.kind === 'check' || assessment.kind === 'teach' ? assessment.opportunity : null;
-  const today = assessment.kind === 'check' ? assessment.flow === 'today' : assessment.kind === 'teach' && assessment.assignment.flow === 'v2_today';
+  const today = assessment.kind === 'check' ? assessment.flow === 'today' : assessment.kind === 'teach'
+    && (assessment.assignment.flow === 'v2_today' && !assessment.assignment.checkSurface
+      || !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assessment.assignment));
   const delivered = opportunity && today ? await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'today') : null;
   const response = opportunity?.submissionId && today ? await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id }) : null;
   return { _id: content._id, studySessionId: session._id, studyPlanRevisionId: content.studyPlanRevisionId,

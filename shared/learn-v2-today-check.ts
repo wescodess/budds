@@ -33,7 +33,9 @@ export function todayCanvasChecksEnabled() {
   return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.todayCanvasChecks
 }
 
-export function isFrozenTodayCanvasAssignment(assignment: { status: string, flow: string, entryPoint: string } | null) {
-  return assignment?.status === 'admitted' && assignment.flow === 'v2_canvas'
+export function isFrozenTodayCanvasAssignment(assignment: { status: string, flow: string, entryPoint: string,
+  checkSurface?: { surface: string, measurementFlow: string } } | null) {
+  return assignment?.status === 'admitted'
+    && (assignment.checkSurface ? assignment.checkSurface.surface === 'canvas' && assignment.checkSurface.measurementFlow === assignment.flow : assignment.flow === 'v2_canvas')
     && (assignment.entryPoint === 'today' || assignment.entryPoint === 'session_deep_link')
 }

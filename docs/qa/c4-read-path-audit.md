@@ -2,7 +2,11 @@
 
 ## #573 Today pointer amendment
 
-The [serial API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas) keeps Today as `summary_or_own_work`: an opaque check reference, safe state and owned Canvas destination, without question, answer, rubric, score or feedback. Its default-off capability selects new enrollment; frozen Today/Canvas execution and C6 entry/flow strata remain unchanged. The destination now addresses its receipt with `?check=<reference>`; #442 forwards that value as `checkReference` to the Canvas read/delivery argument envelope. The server binds it to the exact owned thread.
+The [serial API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas) keeps Today as `summary_or_own_work`: an opaque check reference, safe state and owned Canvas destination, without question, answer, rubric, score or feedback. Its default-off capability selects Canvas check delivery for new Today enrollment. Measurement flow remains the Today teaching treatment; frozen surface bindings retain Canvas delivery through rollback. C6 keeps entry point separate from treatment. The destination now addresses its receipt with `?check=<reference>`; #442 forwards that value as `checkReference` to the Canvas read/delivery argument envelope. The server binds it to the exact owned thread.
+
+The lesson and check have separate C5 session identities. Today keeps its planned lesson locked behind a dedicated cold-check session, then opens the same teaching content after saving, including when the check fails. Later Today instruction remains `v2_today` and cannot add `mixed_flow` to that assignment. Assignment/context surface bindings must agree with each other, their frozen teaching flow and current Canvas authority. Generic canonical response fields still record the actual Canvas surface; the C6 v9 source reducer uses the frozen teaching binding. Dev v8's operational-blocker precedence is retained.
+
+Only optional stored fields are added: `checkSurface` on assignments and non-calibration contexts, and `learnTodayCheckSurfaceVersion` on the owner profile for bounded rollback discovery. Binding version fields accept historical labels. The marker grants no row or content authority. Dedicated cold checks use the existing fixed-check binder, completion and reflow lineage; no due-work scheduler file or new table/index is introduced.
 
 The shared saved-check reader checks the existing dispatch allowance as well as the phase. Exhausted scoring without a running execution or validated uncommitted receipt is `closed` on Today and Canvas. A remaining attempt, a running final dispatch and a validated receipt awaiting commit remain recoverable. The bounded owner/job execution lookup propagates resource errors; it introduces no dispatch, write or C5/off-state lifecycle change.
 
@@ -10,20 +14,20 @@ Before acceptance, the pointer requires current Canvas playability. Missing ques
 
 Closed/unconfirmed receipts forbid a result and disclose no question, source references, activity primitive, score, feedback or raw pass/fail phase. Their own-answer body is exactly the current `getLearnResponseStateForOwner` body union, or unavailable after access denial. Metadata remains available to the authenticated owner even when the answer or adaptive admission is revoked. Saved answers are never copied from legacy activity fields. Addressed recovery survives current-activity changes and does not invent missing schedule metadata. Completed-work storage/transport bounds remain independent of current publication limits. Responses off and ordinary capability-off projections retain their original branches.
 
-The existing opportunity index pages potentially visible phases for the current Canvas label and bounded historical-label batches. Historical saved work has no lifetime candidate cap. An additive owner/flow/measurement-kind/acceptance index reads one native metadata page of at most 32 recent saved measurements, admitting terminal receipts from the last 90 days. Unanswered terminal shells and ordinary practice responses are excluded. Direct addressed receipt recovery has no age expiry. A separate additive owner/Canvas-thread/acceptance index supports default lookup. Continuations preserve unreturned references, native saved progress and version progress without exposing outcomes. Their one-hour window keeps the accepted-time range stable.
+The existing opportunity index pages potentially visible phases for the current Canvas label and bounded historical-label batches. Historical saved work has no lifetime candidate cap. An additive owner/flow/measurement-kind/acceptance index reads one native metadata page of at most 32 recent saved measurements, admitting terminal receipts from the last 90 days. Unanswered terminal shells and ordinary practice responses are excluded. Direct addressed receipt recovery has no age expiry. A separate additive owner/Canvas-thread/acceptance index supports default lookup. Continuations preserve unreturned references, native saved progress and version progress without exposing outcomes. Their one-hour window keeps the accepted-time range stable. Expiration returns `restart_required / cursor_expired`, with no checks and no cursor; #441 discards its accumulated pages and requests a new first page. Malformed inputs and resource errors remain errors.
 
 Each page returns at most four pointers. Today projects its session first, then reserves full-candidate and metadata headroom inside the unchanged strict 3,072-read scope. `pointer_page_budget` proactively defers discovery; actual exhaustion propagates. All read caches are invocation-local, owner-scoped and invalidated after writes. Today preparation still validates the full published lesson, preserves 17/32-claim support and creates no Today grant. C4 goldens, anonymous denial shapes and frozen flow controls are unchanged. Historical purpose buckets without saved phases are skipped before full candidate reads, and saved metadata discovery has its own headroom check.
 
-The registered maximum has six forms per family, 32 claims, 64 evidence rows and 64 document-backed sources. Native limits cover the complete Today query:
+The registered maximum has six forms per family, 32 claims, 64 evidence rows and 64 document-backed sources. Native limits cover the complete Today query with the ordinary planned lesson preserved:
 
 | Checks on first page | Database ranges | Documents | Read bytes |
 | --- | ---: | ---: | ---: |
-| 1 ready | 728 | 1,205 | 1,037,881 |
-| 2 ready | 1,419 | 2,406 | 2,071,658 |
-| 4 ready | 2,801 | 4,808 | 4,139,212 |
-| 4 mixed states | 2,052 | 2,916 | 2,044,182 |
-| 4 closed | 1,393 | 1,620 | 751,743 |
-| 4 ready with retired historical labels | 2,813 | 4,811 | 4,150,098 |
+| 1 ready | 733 | 1,210 | 1,048,115 |
+| 2 ready | 1,425 | 2,412 | 2,082,712 |
+| 4 ready | 2,809 | 4,816 | 4,151,906 |
+| 4 mixed states | 2,060 | 2,921 | 2,056,381 |
+| 4 closed | 1,404 | 1,627 | 764,859 |
+| 4 ready with retired historical labels | 2,827 | 4,828 | 4,188,133 |
 
 The state matrix covers losses before/after scoring, actual lost provider response without redispatch, canonical answer authority, both Canvas read/delivery paths, thread ownership/deletion, routing changes, historical versions, terminal recency, 12 later deleted checks, overflow and resource propagation. These are synthetic registered fixtures; deployed contention, live providers and #442 rendering remain separate proof boundaries.
 

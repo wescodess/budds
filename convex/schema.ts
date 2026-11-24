@@ -33,6 +33,7 @@ export default defineSchema({
       enabled: v.boolean(),
       updatedAt: v.number(),
     })),
+    learnTodayCheckSurfaceVersion: v.optional(v.string()),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({

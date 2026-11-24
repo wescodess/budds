@@ -16,8 +16,8 @@ import {
   measurementWindowPolicyDigest, LEARN_MEASUREMENT_ELIGIBILITY_VERSION, type LearnMeasurementProtocol,
 } from './learnV2MeasurementAssignment'
 import {
-  evaluateLearnMeasurementAdmission, learnMeasurementItemPinsSchema,
-  type LearnMeasurementItemPins,
+  evaluateLearnMeasurementAdmission, learnMeasurementItemPinsSchema, learnCheckSurfaceBindingSchema,
+  type LearnMeasurementItemPins, type LearnCheckSurfaceBinding,
 } from '../../shared/learn-v2-measurement'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, learnTimezoneSchema, parseLearnContract } from '../../shared/learn-v2-responses'
@@ -32,6 +32,7 @@ export type MeasurementFlow = 'v2_today' | 'v2_canvas'
 export type EnrollmentRequest = {
   studySessionId: Id<'studySessions'>, familyId?: Id<'learnMeasurementFamilies'>,
   entryPoint: 'today' | 'session_deep_link' | 'canvas', canvasActivityId?: Id<'learningThreadActivities'>,
+  checkSurface?: LearnCheckSurfaceBinding, persistNonAdmission?: boolean,
 }
 export type AdmittedAssignment = Extract<Doc<'learnMeasurementAssignments'>, { status: 'admitted' }>
 export type MeasurementScope = Pick<Doc<'learnAssessmentOpportunities'>,
@@ -236,20 +237,26 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const assignmentKey = await privacyDigest(['learn-v2.measurement-episode.v1', await masteryScopeKey(userId, blueprint._id, objective._id), protocol.epoch])
   const existing = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_assignmentKey', q => q.eq('userId', userId).eq('assignmentKey', assignmentKey)).unique()
   if (existing) {
+    if (existing.checkSurface && request.entryPoint === 'canvas' && existing.flow !== 'v2_canvas')
+      return { status: 'not_admitted' as const, assignmentId: existing._id, reasonCodes: ['flow_mismatch'] }
     if (existing.status === 'admitted' && (existing.flow === 'v2_canvas' || request.entryPoint === 'canvas' || request.canvasActivityId)) {
       const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', existing._id).eq('horizonDays', undefined)).unique()
       if (!cold || await measurementFlowReason(ctx, userId, 'v2_canvas', cold, protocol)) return { status: 'not_admitted' as const, assignmentId: existing._id, reasonCodes: ['canvas_not_admitted'] }
     }
     return { status: existing.status, assignmentId: existing._id, reasonCodes: existing.exclusionReasons }
   }
+  if (todayCanvasChecksEnabled() && request.entryPoint !== 'canvas' && !request.checkSurface)
+    return { status: 'not_admitted' as const, assignmentId: null, reasonCodes: ['canvas_preparation_required'] }
   if (!objective.depth || !objective.assessmentContract || typeof objective.assessmentContract === 'string') return { status: 'not_admitted' as const, assignmentId: null, reasonCodes: ['pins_mismatch'] }
-  const contextPins: MeasurementScope['contextPins'] = { kind: 'planned_measurement', studyPlanId: plan._id, studyPlanRevisionId: revision._id, planRevision: revision.revision, planRecordRevision: revision.recordRevision ?? 1 }
+  const checkSurface = request.checkSurface && parseLearnContract(learnCheckSurfaceBindingSchema, request.checkSurface)
+  const contextPins: MeasurementScope['contextPins'] = { kind: 'planned_measurement', studyPlanId: plan._id, studyPlanRevisionId: revision._id,
+    planRevision: revision.revision, planRecordRevision: revision.recordRevision ?? 1, ...(checkSurface ? { checkSurface } : {}) }
   let scope: MeasurementScope = { learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, objectiveId: objective._id,
     blueprintRecordRevision: blueprint.recordRevision, assessmentContractVersion: objective.assessmentContract.version,
     assessmentContractDigest: await privacyDigest(objective.assessmentContract), depth: objective.depth, contextPins }
   const canvasActivityId = request.canvasActivityId
   scope = await withMeasurementCanvasScope(ctx, userId, scope, session, canvasActivityId)
-  const flow = todayCanvasChecksEnabled() || request.entryPoint === 'canvas' || canvasActivityId ? 'v2_canvas' as const : 'v2_today' as const
+  const flow = request.entryPoint === 'canvas' || canvasActivityId && !checkSurface ? 'v2_canvas' as const : 'v2_today' as const
   const history = await enrollmentHistory(ctx, userId, scope, session)
   const family = request.familyId ? await ctx.db.get(request.familyId) : null
   if (family && (family.userId !== userId || family.learningVoidId !== learningVoid._id || family.objectiveId !== objective._id || family.blueprintRevisionId !== blueprint._id)) throw new Error('Learn measurement family unavailable')
@@ -258,7 +265,9 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const pins: LearnMeasurementItemPins[] = []
   const reasons = new Set<string>()
   const scopeReason = await measurementScopeReason(ctx, userId, scope)
-  const flowReason = await measurementFlowReason(ctx, userId, flow, scope, protocol)
+  const flowReason = checkSurface?.surface === 'canvas' && !await hasAdaptiveExperienceAccess(ctx, userId) ? 'canvas_not_admitted'
+    : await measurementFlowReason(ctx, userId, flow, scope, protocol)
+  if (checkSurface && checkSurface.measurementFlow !== flow) reasons.add('pins_mismatch')
   if (scopeReason) reasons.add(scopeReason)
   if (flowReason) reasons.add(flowReason)
   if (Date.now() < protocol.enrollmentStartAt || Date.now() >= protocol.enrollmentEndAt) reasons.add('outside_enrollment_window')
@@ -291,10 +300,11 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
     baselineSha: protocol.baselineSha, flow, entryPoint: request.entryPoint, cohortVersion: protocol.cohortVersion,
     historyStatus: history.status, historyBasisVersion: history.catalog?.historyBasisVersion ?? 'unknown',
     instrumentationEpoch: history.catalog?.instrumentationEpoch ?? 'unknown', exclusionReasons: [...reasons],
-    ...(family ? { familyId: family._id, familyRevision: family.revision } : {}) }
+    ...(family ? { familyId: family._id, familyRevision: family.revision } : {}), ...(checkSurface ? { checkSurface } : {}) }
   const timezone = learnTimezoneSchema.safeParse(revision.timezone)
   if (!timezone.success) reasons.add('timezone_unavailable')
   if (reasons.size || !family || !timezone.success) {
+    if (request.persistNonAdmission === false) return { status: 'not_admitted' as const, assignmentId: null, reasonCodes: [...reasons] }
     const assignmentId = await ctx.db.insert('learnMeasurementAssignments', { ...common, exclusionReasons: [...reasons], status: 'not_admitted', protocolStatus: 'blocked', reasonCode: [...reasons][0] ?? 'not_admitted' })
     await writeLearnMeasurementEnrollmentFact(ctx, userId, (await ctx.db.get(assignmentId))!)
     return { status: 'not_admitted' as const, assignmentId, reasonCodes: [...reasons] }
@@ -322,6 +332,7 @@ export async function recordLearnMeasurementInstructionForOwner(ctx: MutationCtx
 }) {
   const assignment = await ctx.db.get(input.assignmentId)
   if (!assignment || assignment.userId !== userId || assignment.status !== 'admitted') throw new Error('Learn measurement assignment unavailable')
+  if (assignment.checkSurface && assignment.flow !== input.flow) throw new Error('Learn measurement teaching flow mismatch')
   if (!LEARN_MEASUREMENT_CAPABILITIES.enrollment) throw new Error('Learn measurement is disabled')
   const authority = await requireMeasurementSession(ctx, userId, { studySessionId: input.studySessionId, entryPoint: input.flow === 'v2_today' ? 'today' : 'canvas' })
   if (authority.objective._id !== assignment.objectiveId || authority.blueprint._id !== assignment.blueprintRevisionId) throw new Error('Learn measurement instruction scope conflicts')

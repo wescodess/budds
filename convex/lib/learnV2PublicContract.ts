@@ -41,7 +41,7 @@ export const todayCheckPointerValidator = v.object({
   destination: v.object({ kind: v.literal('canvas'), threadId: v.id('learningThreads'), route: v.string() }),
 })
 export const todayCheckPointersValidator = v.object({
-  status: literals(['available', 'unavailable', 'disabled']), reasonCode: nullableString, checks: v.array(todayCheckPointerValidator),
+  status: literals(['available', 'unavailable', 'disabled', 'restart_required']), reasonCode: nullableString, checks: v.array(todayCheckPointerValidator),
   isDone: v.boolean(), continueCursor: nullableString,
 })
 export const canvasCheckReadArgs = { threadId: v.id('learningThreads'), checkReference: v.optional(v.string()) }
