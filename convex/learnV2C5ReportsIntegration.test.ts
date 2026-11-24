@@ -174,8 +174,9 @@ test('system-late undelivered checks remain missing outcomes in a sealed C6 repo
   expect(claims).toHaveLength(5)
   for (const claim of claims) expect(claim).toMatchObject({ firstSlot: { kind: 'linked', unresolvedReason: 'system_due_work_late', acceptance: null, result: null } })
   const published = await buildPublishedLearningMeasurementReport(input)
-  for (const pages of [built.pages, published.pages]) {
-    const falseMastery = pages.flatMap(page => page.cells).filter(cell => cell.metric === 'false_mastery_next_delayed.v1' && cell.stratum.startingBand === 'all')
+  const cellSets = [built.pages.flatMap(page => page.cells), published.pages.flatMap(page => page.cells)]
+  for (const set of cellSets) {
+    const falseMastery = set.filter(cell => cell.metric === 'false_mastery_next_delayed.v1' && cell.stratum.startingBand === 'all')
     expect(falseMastery.length).toBeGreaterThan(0)
     for (const cell of falseMastery) {
       expect(cell.counts).toMatchObject({ maturedClaims: 5, checkedClaims: 0, failedClaims: 0, dispositions: { missing_delayed: 5,
