@@ -1,6 +1,8 @@
 import { internalQuery, type MutationCtx, type QueryCtx } from '../_generated/server'
 import { ConvexError, v } from 'convex/values'
 import { hasLearnV2Access } from './learnV2Access'
+import { hasMeasurementReadContext } from './learnV2MeasurementReadContext'
+import { privacyRead } from './learnV2PrivacyReadContext'
 
 export type AdaptiveLearnFallbackRoute =
   | { name: 'app-learn', href: '/app/learn?legacy=v2', label: 'Open V2 learning plans' }
@@ -25,6 +27,12 @@ async function fallbackRoute(ctx: QueryCtx | MutationCtx, tokenIdentifier?: stri
 }
 
 export async function hasAdaptiveExperienceAccess(ctx: QueryCtx | MutationCtx, tokenIdentifier: string): Promise<boolean> {
+  if (hasMeasurementReadContext(ctx, tokenIdentifier)) return await privacyRead(ctx, tokenIdentifier, ['learn-adaptive-access'], false,
+    async scoped => await currentAdaptiveExperienceAccess(scoped, tokenIdentifier))
+  return await currentAdaptiveExperienceAccess(ctx, tokenIdentifier)
+}
+
+async function currentAdaptiveExperienceAccess(ctx: QueryCtx | MutationCtx, tokenIdentifier: string) {
   if (!(await hasLearnV2Access(ctx, tokenIdentifier))) return false
   const user = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', tokenIdentifier)).unique()
   return user?.learnAdaptiveExperienceEntitlement?.enabled === true

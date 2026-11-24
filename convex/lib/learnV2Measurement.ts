@@ -1,3 +1,4 @@
+import { readMeasurementClaims, readMeasurementSupports } from './learnV2MeasurementEvidenceReads'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -144,13 +145,13 @@ export async function measurementItemReason(ctx: ReadCtx, userId: string, pins: 
     || await privacyDigest(spec.scoringBinding) !== await privacyDigest(scoringBinding) || item.responseSpec.kind !== spec.payload.kind) return 'pins_mismatch'
   const claimLimit = scope.submissionId ? storageLimits.maxClaims : itemLimits.claims
   const supportLimit = scope.submissionId ? storageLimits.maxSupportsPerClaim : itemLimits.supportsPerClaim
-  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(claimLimit + 1)
+  const claims = await readMeasurementClaims(ctx, userId, item._id, claimLimit)
   if (!claims.length || claims.length > claimLimit) return 'unmeasurable_no_t0'
   let evidenceRows = 0
   const sources = new Set<string>()
   for (const claim of claims) {
     if (claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined || claim.scoringSpecId !== spec._id) return 'evidence_unavailable'
-    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(supportLimit + 1)
+    const supports = await readMeasurementSupports(ctx, userId, claim._id, supportLimit)
     evidenceRows += supports.length
     if (!scope.submissionId && evidenceRows > itemLimits.evidenceRows) return 'item_evidence_limit'
     if (!supports.length || supports.length > supportLimit) return 'unmeasurable_no_t0'

@@ -1,3 +1,4 @@
+import { readMeasurementClaims, readMeasurementSupports } from './learnV2MeasurementEvidenceReads'
 import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, assertMeasurementEvidenceRows, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
@@ -121,7 +122,7 @@ export async function sessionMeasurementScope(ctx: QueryCtx | MutationCtx, userI
   await requireLearnActiveWorkPlan(ctx, userId, plan)
   return { scope, plan }
 }
-async function liveSupport(ctx: ReadCtx, userId: string, scope: Capability, pin: Support) {
+async function liveSupport(ctx: ReadCtx, userId: string, scope: Capability, pin: Support, links: Doc<'learnObjectiveSources'>[] | null = null) {
   const [source, excerpt] = await Promise.all([ctx.db.get(pin.sourceSnapshotId), ctx.db.get(pin.sourceExcerptId)])
   if (!source || !excerpt || source.userId !== userId || excerpt.userId !== userId || source.learningVoidId !== scope.learningVoidId
     || excerpt.sourceSnapshotId !== source._id || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted'
@@ -132,7 +133,9 @@ async function liveSupport(ctx: ReadCtx, userId: string, scope: Capability, pin:
     || await measurementDigest(excerpt.excerpt) !== pin.excerptDigest || await measurementDigest(excerpt.locator) !== pin.locatorDigest) fail('evidence_unavailable')
   const identity = await ctx.db.get(source.sourceIdentityId)
   const latest = await ctx.db.query('learnSourceSnapshots').withIndex('by_userId_and_sourceIdentityId_and_revision', q => q.eq('userId', userId).eq('sourceIdentityId', source.sourceIdentityId)).order('desc').first()
-  const link = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', scope.objectiveId).eq('sourceSnapshotId', source._id)).unique()
+  const matching = links?.filter(link => link.sourceSnapshotId === source._id)
+  if (matching && matching.length > 1) throw new Error('Duplicate measurement source link')
+  const link = matching ? matching[0] ?? null : await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', scope.objectiveId).eq('sourceSnapshotId', source._id)).unique()
   if (!identity || identity.userId !== userId || identity.learningVoidId !== scope.learningVoidId || identity.tombstonedAt !== undefined
     || latest?._id !== source._id || !link || link.coverage === 'gap') fail('evidence_unavailable')
   if (identity.origin === 'folder_document') {
@@ -256,18 +259,20 @@ async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasure
   const members: Array<{ item: Doc<'learnMeasurementItems'>, spec: Doc<'learnMeasurementScoringSpecs'>, member: Member, caseRow: Case }> = []
   const excerpts = new Map<Id<'learnSourceExcerpts'>, Doc<'learnSourceExcerpts'>>()
   const evidenceChecks = new Map<string, Doc<'learnSourceExcerpts'>>()
+  const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q =>
+    q.eq('userId', userId).eq('objectiveId', family.objectiveId)).take(itemLimits.sources + 1)
   for (const item of items) {
     const spec = item.scoringSpecId && await ctx.db.get(item.scoringSpecId)
     const caseRow = await ctx.db.get(item.caseId)
     if (!spec || !caseRow || caseRow.userId !== userId || spec.userId !== userId || spec.itemId !== item._id
       || [family, item, spec].some(row => row.evidenceStatus !== 'available' || row.invalidatedAt !== undefined || measurementCanonical(capability(row)) !== measurementCanonical(capability(family)))
       || spec.revision !== item.scoringSpecRevision || !item.prompt || !spec.payload || !spec.referenceSolution || !spec.derivation) fail('evidence_unavailable')
-    const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(itemLimits.claims + 1)
+    const claims = await readMeasurementClaims(ctx, userId, item._id, itemLimits.claims)
     const claimManifest = []
     for (const claim of claims) {
       if (claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined || !claim.claim || claim.scoringSpecId !== spec._id
         || await measurementDigest(claim.claim) !== claim.claimDigest) fail('claim_pins_mismatch')
-      const rows = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
+      const rows = await readMeasurementSupports(ctx, userId, claim._id, itemLimits.supportsPerClaim)
       const supports: Support[] = []
       for (const row of rows) {
         if (row.evidenceStatus !== 'available' || row.invalidatedAt !== undefined || row.itemId !== item._id || row.scoringSpecId !== spec._id) fail('evidence_unavailable')
@@ -280,7 +285,7 @@ async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasure
         const { supportDigest: _digest, ...supportFields } = pin
         if (await measurementDigest(supportFields) !== supportDigest) fail('support_pins_mismatch')
         const evidenceKey = measurementCanonical(evidencePins)
-        const excerpt = evidenceChecks.get(evidenceKey) ?? await liveSupport(ctx, userId, family, pin)
+        const excerpt = evidenceChecks.get(evidenceKey) ?? await liveSupport(ctx, userId, family, pin, links.length <= itemLimits.sources ? links : null)
         evidenceChecks.set(evidenceKey, excerpt)
         excerpts.set(excerpt._id, excerpt)
         if (excerpts.size > itemLimits.sources) fail('comparison_coverage_unknown')

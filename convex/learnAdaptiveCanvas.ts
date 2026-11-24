@@ -1,4 +1,5 @@
 import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits'
+import { LearnScoringInputError } from '../shared/learn-v2-errors'
 import { ZodError } from 'zod'
 import { MeasurementValidationError, getValidatedMeasurementFamily } from './lib/learnV2MeasurementItems'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
@@ -35,6 +36,8 @@ import { enrollLearnMeasurementForOwner, measurementFlowReason, measurementItemR
 import { learnMeasurementItemPinsSchema } from '../shared/learn-v2-measurement'
 import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } from './lib/learnV2MeasurementAssignment'
 import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInventory'
+import { readSavedLearnScoringState } from './lib/learnV2MeasurementScoring'
+import { readMeasurementClaims } from './lib/learnV2MeasurementEvidenceReads'
 import { LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnTodayCheckPointerSchema, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
@@ -699,7 +702,7 @@ async function canvasAssessmentScope(ctx: QueryCtx | MutationCtx, userId: string
       || reference.item.promptDigest !== itemPins.promptDigest || !item || item.userId !== userId
       || await privacyDigest(reference.responseSpec) !== await privacyDigest(item.responseSpec)) return null
     if (!validateClaims) return { thread, activity, content, session, opportunity }
-    const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemPins.itemId)).take(33)
+    const claims = await readMeasurementClaims(ctx, userId, itemPins.itemId, 32)
     if (!claims.length || claims.length > 32 || reference.claims.length !== claims.length
       || claims.some((claim, index) => claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined
         || reference.claims[index]?.claimId !== claim._id || reference.claims[index]?.revision !== claim.revision
@@ -758,7 +761,7 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
   const resultReady = attempt?.userId === userId && attempt.submissionId === opportunity.submissionId
     && typeof attempt.scoreCommittedAt === 'number' && typeof attempt.serverScorePercent === 'number'
     && Number.isFinite(attempt.serverScorePercent) && attempt.serverScorePercent >= 0 && attempt.serverScorePercent <= 100
-  const phase: LearnTodayCheckPointer['state'] = closed ? 'closed'
+  let phase: LearnTodayCheckPointer['state'] = closed ? 'closed'
     : !available || opportunity.phase === 'reconciliation_required'
       || ['scored_pass', 'scored_fail'].includes(opportunity.phase) && !resultReady ? 'result_unconfirmed'
       : resultReady ? 'result_ready'
@@ -781,6 +784,20 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
       return state.status === 'available' && (opportunity.deliveryGrantId ? state.capabilities.canSubmit : state.capabilities.canDeliver)
     })
     if (!playable) return null
+  } else {
+    if (!opportunity.submissionId) return null
+    const canvas = await loadAssessmentCanvas(ctx, userId, scope.thread._id, {})
+    if (!canvas || canvas.status === 'blocked' || canvas.assessment?.bodyAvailability !== 'available') return null
+    let saved
+    try { saved = await readSavedLearnScoringState(ctx, userId, opportunity.submissionId) }
+    catch (error) {
+      if (!(error instanceof LearnScoringInputError) && !(error instanceof MeasurementItemBoundsError)) throw error
+      return null
+    }
+    if (canvas.status === 'feedback' && saved.status === 'scored') phase = 'result_ready'
+    else if (canvas.status === 'reconciling' && saved.status === 'reconciliation_required') phase = 'result_unconfirmed'
+    else if (['submitted', 'scoring'].includes(canvas.status) && ['scoring_pending', 'retryable_failure'].includes(saved.status)) phase = 'saved_scoring'
+    else return null
   }
   const threadId = scope.thread._id
   return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,

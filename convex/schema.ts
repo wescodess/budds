@@ -1841,6 +1841,7 @@ export default defineSchema({
     .index('by_userId_and_threadId', ['userId', 'threadId'])
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
+    .index('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', ['userId', 'contextPins.canvas.planVersion', 'purpose.kind', 'phase', 'closeAt', 'delayedCheckId'])
     .index('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_phase', ['userId', 'phase'])

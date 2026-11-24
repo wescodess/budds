@@ -2,7 +2,7 @@ import { LearnAccessError, LearnInputValidationError, LearnScoringInputError } f
 import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
-import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { hasMeasurementReadContext, measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -594,7 +594,7 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
 }
 
 export async function getLearnResponseStateForOwner(ctx: ReadCtx, userId: string, target: LearnResponseTarget): Promise<LearnV2ResponseState> {
-  ctx = createResponsePrivacyReadContext(ctx, userId).ctx
+  ctx = hasMeasurementReadContext(ctx, userId) ? ctx : createResponsePrivacyReadContext(ctx, userId).ctx
   const row = await requireOwnedResponseTarget(ctx, userId, target)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return disabledLearnV2Result()
   let work = null

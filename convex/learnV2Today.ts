@@ -21,11 +21,15 @@ import { LEARN_TODAY_CHECK_LIMIT, isFrozenTodayCanvasAssignment, todayCanvasChec
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { remainingPrivacyReadBudget } from './lib/learnV2PrivacyReadContext'
 import { todayCheckPointersValidator } from './lib/learnV2PublicContract'
+import { ADAPTIVE_ACTIVITY_PLAN_VERSION } from '../shared/learn-adaptive-activity-plan'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
-// Includes full ready-check authority and bounded reflow ancestry.
-const POINTER_READ_RESERVE = 2048
+const POINTER_READ_RESERVE = 896
+const POINTER_CANDIDATE_LIMIT = 8
+const POINTER_PHASES = ['ready', 'test_open', 'submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required', 'scored_pass', 'scored_fail'] as const
+const POINTER_PURPOSES = ['measurement_cold', 'measurement_delayed', 'retained_transfer'] as const
+const POINTER_CURSOR_PREFIX = 'today-checks-v1:'
 const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['in_progress', 'ready', 'blocked', 'generation_failed', 'planned']
 
 function rank(session: { assessmentPurpose?: string, placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
@@ -131,16 +135,62 @@ export function todayAssessmentSummary(assessment: Exclude<TodayAssessment, { ki
     state: assessment.kind === 'check' || assessment.kind === 'blocked' ? assessment.state : null }
 }
 
-async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null, limit = LEARN_TODAY_CHECK_LIMIT) {
-  const page = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId))
-    .order('desc').paginate({ cursor, numItems: limit })
+function pointerCursorReference(cursor: string | null) {
+  if (cursor === null) return null
+  if (!cursor.startsWith(POINTER_CURSOR_PREFIX) || cursor.length > 4096) throw new Error('Invalid Today check continuation')
+  const parts = cursor.slice(POINTER_CURSOR_PREFIX.length).split(':')
+  const closeAt = Number(parts[0])
+  if (parts.length !== 2 || !Number.isFinite(closeAt) || closeAt < 0) throw new Error('Invalid Today check continuation')
+  let reference: string
+  try { reference = decodeURIComponent(parts[1]!) }
+  catch (error) {
+    if (!(error instanceof URIError)) throw error
+    throw new Error('Invalid Today check continuation', { cause: error })
+  }
+  if (!reference.length || reference.length > 256) throw new Error('Invalid Today check continuation')
+  return { closeAt, delayedCheckId: reference }
+}
+
+type PointerPosition = Pick<Doc<'learnAssessmentOpportunities'>, 'closeAt' | 'delayedCheckId'>
+function pointerOrder(left: PointerPosition, right: PointerPosition) {
+  return left.closeAt !== right.closeAt ? left.closeAt > right.closeAt ? -1 : 1
+    : left.delayedCheckId === right.delayedCheckId ? 0 : left.delayedCheckId > right.delayedCheckId ? -1 : 1
+}
+
+async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null) {
+  const reference = pointerCursorReference(cursor)
+  const now = Date.now()
+  const sources = await Promise.all(POINTER_PURPOSES.flatMap(purpose => POINTER_PHASES.flatMap(phase => {
+    const live = phase === 'ready' || phase === 'test_open'
+    const segments = reference === null ? [false] : [false, true]
+    return segments.map(async sameTime => {
+      if (live && reference !== null && reference.closeAt <= now) return []
+      return await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', q => {
+        const range = q.eq('userId', userId).eq('contextPins.canvas.planVersion', ADAPTIVE_ACTIVITY_PLAN_VERSION).eq('purpose.kind', purpose).eq('phase', phase)
+        if (sameTime && reference !== null) return range.eq('closeAt', reference.closeAt).lt('delayedCheckId', reference.delayedCheckId)
+        if (reference !== null) return live ? range.gt('closeAt', now).lt('closeAt', reference.closeAt) : range.lt('closeAt', reference.closeAt)
+        return live ? range.gt('closeAt', now) : range
+      }).order('desc').take(POINTER_CANDIDATE_LIMIT + 1)
+    })
+  })))
+  const full = sources.filter(rows => rows.length === POINTER_CANDIDATE_LIMIT + 1)
+  const boundary = full.map(rows => rows.at(-1)!).sort(pointerOrder)[0]
+  // Do not advance past unseen rows in a full source.
+  const candidates = sources.flat().filter(row => boundary === undefined || pointerOrder(row, boundary) <= 0).sort(pointerOrder)
   const checks: LearnTodayCheckPointer[] = []
-  for (const row of page.page) {
+  let visited = 0
+  let last: PointerPosition | null = reference
+  for (const row of candidates) {
+    if (checks.length === LEARN_TODAY_CHECK_LIMIT || visited === POINTER_CANDIDATE_LIMIT
+      || visited > 0 && remainingPrivacyReadBudget(ctx) < POINTER_READ_RESERVE) break
     const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row)
     if (pointer) checks.push(pointer)
+    last = row
+    visited++
   }
-  return { status: 'available' as const, reasonCode: null, checks, isDone: page.isDone,
-    continueCursor: page.isDone ? null : page.continueCursor }
+  const more = visited < candidates.length || full.length > 0
+  return { status: 'available' as const, reasonCode: null, checks, isDone: !more,
+    continueCursor: more && last !== null ? `${POINTER_CURSOR_PREFIX}${last.closeAt}:${encodeURIComponent(last.delayedCheckId)}` : null }
 }
 
 async function surfaceCanvasPointers(ctx: QueryCtx, userId: string) {
@@ -274,8 +324,7 @@ export const getToday = query({
     if (!await surfaceCanvasPointers(ctx, userId)) return await projectToday(ctx, userId)
     ctx = measurementReadContext(ctx, userId)
     const today = await projectToday(ctx, userId)
-    const limit = Math.min(LEARN_TODAY_CHECK_LIMIT, Math.floor((remainingPrivacyReadBudget(ctx) - 1) / POINTER_READ_RESERVE))
-    const checks = limit > 0 ? await readTodayCheckPointers(ctx, userId, null, limit)
+    const checks = remainingPrivacyReadBudget(ctx) >= POINTER_READ_RESERVE + POINTER_PHASES.length * POINTER_PURPOSES.length ? await readTodayCheckPointers(ctx, userId)
       : { status: 'unavailable' as const, reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null }
     return { ...today, checkPointers: checks }
   },
