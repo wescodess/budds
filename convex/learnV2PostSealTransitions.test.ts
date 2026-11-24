@@ -1,0 +1,235 @@
+/// <reference types="vite/client" />
+import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { api } from './_generated/api'
+import { makeFunctionReference } from 'convex/server'
+import type { Id } from './_generated/dataModel'
+import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+import { canvasFamilyFixture } from '../tests/fixtures/learn-v2-canvas'
+import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
+import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
+import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
+import { LEARN_V2_POST_SEAL_TEACHING_VERSION as version } from '../shared/learn-v2-assessment-disclosure'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
+import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
+
+const policy = vi.hoisted(() => ({ protocol: null as unknown, scorer: null as unknown }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES,
+    responses: true, enrollment: true, delivery: true, scoring: true } }
+})
+vi.mock('./lib/learnV2MeasurementAssignment', async original => {
+  const value = await original<typeof import('./lib/learnV2MeasurementAssignment')>()
+  return { ...value, getFrozenLearnMeasurementProtocol: () => policy.protocol }
+})
+vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementScorer: async () => policy.scorer }))
+
+const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+const materializeDue = makeFunctionReference<'mutation', { userId: string, through: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
+beforeEach(() => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+  policy.protocol = syntheticDeliveryProtocol(); policy.scorer = null
+  vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'complete' })
+})
+afterEach(() => {
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
+  vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
+})
+
+async function fixture(canvas = false) {
+  const definition = { configurationId: 'post-seal.synthetic', configurationVersion: 'post-seal.synthetic.v1',
+    kind: canvas ? 'measurement_rubric' as const : 'legacy_baseline' as const, requestedModel: 'synthetic/model', endpoint: null,
+    identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model', family: 'synthetic',
+      snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
+  const saved = await sealLearnScorerConfiguration(definition)
+  const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1', configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }],
+    legacyAllowlist: canvas ? [] : [definition.configurationId], prospectiveConfigurationId: null })
+  policy.scorer = { registry, saved }
+  if (canvas) policy.protocol = { ...syntheticDeliveryProtocol(Date.now(), true), scoringBinding: saved.binding }
+  const f = canvas ? await canvasFamilyFixture(saved.binding, { rubric: true, transactionLimits: true })
+    : await assessmentDeliveryFixture({ transactionLimits: true })
+  const contentId = await publishDeliveryTeaching(f)
+  const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', contentId)).take(16))
+  await f.owner.run(ctx => prepareAndRegisterInstructionalArtifactsForOwner(ctx, deliveryIdentity.tokenIdentifier, {
+    artifacts: blocks.map(block => ({
+      artifact: { kind: 'session_block', id: block._id }, key: 'whole', origins: [], sources: [{ kind: 'excerpt',
+        sourceSnapshotId: f.graph.sourceSnapshotId, sourceExcerptId: f.graph.sourceExcerptId, revision: 1, recordRevision: 1,
+        contentHash: f.graph.support.sourceContentHash }],
+    })),
+  }))
+  for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'post-seal-synthetic-execution', model: 'synthetic/model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+      criterionResults: [{ key: canvas ? 'private-criterion' : 'accuracy', awarded: true }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } }))))
+  const reference = (id: Id<'learnAssessmentOpportunities'>) => ({ version, assessmentOpportunityId: id })
+  const read = (id: Id<'learnAssessmentOpportunities'>) => f.owner.query(api.learnV2Assessments.getPostSealTeaching, reference(id))
+  const open = (id: Id<'learnAssessmentOpportunities'>) => f.owner.mutation(api.learnV2PostSealTeaching.openPractice, reference(id))
+  const score = (submissionId: Id<'learnResponses'>) => f.owner.action(api.learnV2Mastery.scoreMasterySubmission, {
+    version: LEARN_V2_PUBLIC_API_VERSION, submissionId, idempotencyKey: 'post_seal_transition_score_12345' })
+  return { ...f, contentId, read, open, score }
+}
+
+async function cold(f: Awaited<ReturnType<typeof fixture>>) {
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'post_seal_transition_cold_12345', entryPoint: 'today' })).toMatchObject({ status: 'assessment' })
+  const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.purpose.kind === 'measurement_cold')!
+  const receipt = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'post_seal_transition_seal_12345', response: {
+      target: { assessmentOpportunityId: row._id }, expectedRevision: row.revision, payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+  if (receipt.kind !== 'accepted') throw new Error('Expected cold acceptance')
+  return row
+}
+
+async function ordinary(assisted = false) {
+  const f = await fixture()
+  const first = await cold(f)
+  const coldSubmissionId = (await f.t.run(ctx => ctx.db.get(first._id)))!.submissionId!
+  expect(await f.score(coldSubmissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'post_seal_transition_teach_12345', entryPoint: 'today' })).toMatchObject({ status: 'in_progress' })
+  const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.purpose.kind === 'independent_application')!
+  if (assisted) expect(await f.owner.mutation(api.learnV2Assistance.authorizeAssistance, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: row._id, kind: 'hint', idempotencyKey: 'post_seal_ordinary_hint_12345' })).toMatchObject({ status: 'authorized' })
+  const receipt = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'post_seal_transition_ordinary_12345', response: {
+      target: { assessmentOpportunityId: row._id }, expectedRevision: row.revision,
+      payload: { kind: 'text', text: 'A supported ordinary application.' }, confidence: 3 } } })
+  if (receipt.kind !== 'accepted') throw new Error('Expected ordinary acceptance')
+  return { ...f, row, receipt }
+}
+
+test.each([false, true])('ordinary scoring preserves teaching and immutable acceptance pins, assisted=%s', async assisted => {
+  const f = await ordinary(assisted)
+  const accepted = (await f.t.run(ctx => ctx.db.get(f.receipt.submissionId)))!
+  if (accepted.scopeKind !== 'v2' || accepted.contextPins.kind !== 'session') throw new Error('Expected session pins')
+  expect(accepted.assistanceSnapshot).toMatchObject({ state: assisted ? 'assisted' : 'unassisted' })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: 'completed', revision: accepted.contextPins.sessionRevision + 1 })
+  expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: null })
+  const opened = await f.open(f.row._id)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice opening')
+  expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'hint', idempotencyKey: 'completed_session_practice_hint_12345' }))
+    .toMatchObject({ status: 'authorized' })
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'completed_session_practice_answer_12345', response: { target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1,
+      payload: { kind: 'text', text: 'A separate supported practice response.' } } })).toMatchObject({ kind: 'accepted' })
+  expect(await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION,
+    assessmentOpportunityId: f.row._id })).toMatchObject({ status: 'unavailable' })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.t.run(ctx => ctx.db.get(f.receipt.submissionId))).toEqual(accepted)
+  expect((await f.t.run(ctx => ctx.db.get(f.row._id)))!.contextPins).toEqual(accepted.contextPins)
+})
+
+test('an unrelated post-seal revision cannot impersonate scoring completion', async () => {
+  const f = await ordinary()
+  await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { revision: 4 }))
+  for (const result of [await f.read(f.row._id), await f.open(f.row._id)]) expect(result).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+})
+
+test.each(['extra_revision', 'missing_transition', 'unconsumed_execution', 'assistance_changed'] as const)('post-seal completion proof rejects %s', async change => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.open(f.row._id)).toMatchObject({ status: 'available', practice: { revision: 1 } })
+  await f.t.run(async ctx => {
+    const row = (await ctx.db.get(f.row._id))!
+    const attempt = (await ctx.db.get(row.authoritativeAttemptId!))!
+    const session = (await ctx.db.get(f.graph.studySessionId))!
+    if (change === 'extra_revision') await ctx.db.patch(session._id, { revision: session.revision + 1 })
+    else if (change === 'missing_transition') await ctx.db.patch(attempt._id, { masteryTransitionReason: undefined })
+    else if (change === 'unconsumed_execution') await ctx.db.patch(attempt.scoringExecutionId!, { authoritativeAttemptId: undefined })
+    else await ctx.db.patch(session._id, { substantiveHintUsedAt: Date.now(), assistanceRevision: 1 })
+  })
+  expect(await f.read(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+})
+
+test('Canvas scoring preserves its sealed check and teaching authority', async () => {
+  const f = await fixture(true)
+  const studySessionId = await f.t.run(ctx => ctx.db.insert('studySessions', { userId: deliveryIdentity.tokenIdentifier,
+    studyPlanRevisionId: f.graph.studyPlanRevisionId, primaryObjectiveId: f.graph.objectiveId, status: 'planned', revision: 1, scheduledStartAt: Date.now() }))
+  await publishDeliveryTeaching({ t: f.t, graph: { ...f.graph, studySessionId } })
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true, startsAt: new Date(Date.now() - 86_400_000).toISOString(),
+    endsAt: new Date(Date.now() + 86_400_000).toISOString(),
+    cohort: { ...originalManifest.cohort, subjectHashes: [await privacyDigest(['adaptive-v2-pilot-cohort.v1', deliveryIdentity.tokenIdentifier])] },
+    modelPolicies: [{ model: 'synthetic/model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
+    productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
+    rollback: { ...originalManifest.rollback, ownerSubjectHash: await privacyDigest(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', deliveryIdentity.tokenIdentifier]) } })
+  vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
+  await f.t.run(async ctx => {
+    const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', deliveryIdentity.tokenIdentifier)).unique())!
+    await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: Date.now() } })
+  })
+  const prepared = await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, { studySessionId,
+    expectedSessionRevision: 2, idempotencyKey: 'post_seal_canvas_prepare_12345' })
+  if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+  const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId,
+    expectedSessionRevision: 2, idempotencyKey: 'post_seal_canvas_attach_12345' })
+  if (attached.kind !== 'attached') throw new Error('Expected Canvas attachment')
+  const receipt = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    studySessionId, expectedRevision: 1, expectedSessionRevision: 3, response: 'A supported Canvas response.',
+    confidence: 3, idempotencyKey: 'post_seal_canvas_seal_12345' })
+  if (receipt.kind !== 'accepted') throw new Error('Expected Canvas acceptance')
+  const response = (await f.t.run(ctx => ctx.db.get(receipt.submissionId)))!
+  if (!('assessmentOpportunityId' in response)) throw new Error('Expected assessment response')
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    submissionId: receipt.submissionId, idempotencyKey: 'post_seal_canvas_score_12345' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await f.read(response.assessmentOpportunityId)).toMatchObject({ status: 'available', feedback: { tier: 'T0' } })
+  expect(await f.open(response.assessmentOpportunityId)).toMatchObject({ status: 'available', practice: { revision: 1 } })
+  expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(response)
+})
+
+test('dedicated sealing, expiry and due-work closure preserve their exact revision', async () => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(row.openAt)
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  const ready = (await f.t.run(ctx => ctx.db.get(row._id)))!
+  if (ready.contextPins.kind !== 'session') throw new Error('Expected dedicated check')
+  const opened = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ready.contextPins.studySessionId,
+    expectedSessionRevision: ready.contextPins.sessionRevision, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'post_seal_dedicated_start_12345' })
+  if (opened.status !== 'assessment' || opened.deliveryGrant?.status !== 'granted') throw new Error('Expected check grant')
+  const receipt = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'post_seal_dedicated_seal_12345', response: {
+      target: { assessmentOpportunityId: row._id }, expectedRevision: opened.deliveryGrant.revision, payload: { kind: 'numeric', value: 0, unit: 'members' } } } })
+  if (receipt.kind !== 'accepted') throw new Error('Expected dedicated acceptance')
+  const response = (await f.t.run(ctx => ctx.db.get(receipt.submissionId)))!
+  if (response.scopeKind !== 'v2' || response.contextPins.kind !== 'session') throw new Error('Expected session pins')
+  expect(await f.t.run(ctx => ctx.db.get(ready.contextPins.kind === 'session' ? ready.contextPins.studySessionId : f.graph.studySessionId)))
+    .toMatchObject({ status: 'completed', revision: response.contextPins.sessionRevision })
+  expect(await f.open(row._id)).toMatchObject({ status: 'available', practice: { revision: 1 } })
+  expect(await f.score(receipt.submissionId)).toMatchObject({ status: 'scored' })
+  vi.setSystemTime(row.closeAt + 1)
+  await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId, idempotencyKey: 'post_seal_dedicated_expiry_12345' })
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  expect(await f.read(row._id)).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, practice: { revision: 1 } })
+  expect(await f.t.run(ctx => ctx.db.get(response.contextPins.kind === 'session' ? response.contextPins.studySessionId : f.graph.studySessionId)))
+    .toMatchObject({ status: 'completed', revision: response.contextPins.sessionRevision })
+  expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(response)
+})
+
+test('expiry and due-work closure never admit an unsubmitted dedicated check or bump its revision', async () => {
+  const f = await fixture()
+  await cold(f)
+  const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(row.openAt)
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  const ready = (await f.t.run(ctx => ctx.db.get(row._id)))!
+  if (ready.contextPins.kind !== 'session') throw new Error('Expected dedicated session')
+  const pins = ready.contextPins
+  vi.setSystemTime(row.closeAt + 1)
+  expect(await f.owner.mutation(api.learnV2Plans.markStudySessionMissed, { studySessionId: pins.studySessionId,
+    expectedSessionRevision: pins.sessionRevision, idempotencyKey: 'unsubmitted_check_expiry_12345' }))
+    .toMatchObject({ status: 'missed', revision: pins.sessionRevision })
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  expect(await f.t.run(ctx => ctx.db.get(pins.studySessionId))).toMatchObject({ status: 'missed', revision: pins.sessionRevision })
+  expect((await f.t.run(ctx => ctx.db.get(row._id)))!.contextPins).toEqual(pins)
+  expect(await f.read(row._id)).toMatchObject({ status: 'unavailable' })
+  expect(await f.open(row._id)).toMatchObject({ status: 'unavailable' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})

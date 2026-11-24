@@ -53,6 +53,23 @@ open-phase index ranges serialize with check acceptance. A second relevant
 check, including another horizon on the same assignment, closes teaching and
 help. Overflow or unresolved scope remains unknown.
 
+Post-seal session admission uses the response's immutable acceptance pins.
+Ordinary scoring may complete an `independent_application` or `retained_transfer`
+session at exactly the accepted revision plus one. Admission verifies the exact
+session/check/submission, unchanged assistance, canonical transition, succeeded
+scoring job and consumed execution. Canvas may also advance the opportunity's
+delivery anchor to that completed revision; the accepted response stays frozen.
+Practice slots retain acceptance pins and tolerate only that proven delivery
+anchor. Other disclosure callers keep their strict revision equality.
+
+Dedicated C5 sealing completes its session without advancing its revision.
+Dedicated expiry and due-work closure, including `system_due_work_late`, also
+preserve it. Closed checks without a submission never acquire post-seal
+authority. Ordinary expiry only changes planned/ready sessions, so it supplies
+no revision allowance for an accepted in-progress application. Generation,
+reflow, retention and post-seal legacy assistance do not acquire a completion
+allowance. Any extra revision or mismatched completion proof closes admission.
+
 `authorizePracticeAssistance` checks both the public check gate and the exact
 live practice binding before first delivery. Hint content comes from its
 verified explanation; worked examples use the corresponding verified
@@ -92,6 +109,12 @@ revocation, citation-only dependencies, pending/failure/reconciliation/invalid
 states, score stamps, invalid teaching state, issuer isolation, deletion guards,
 owner export and Canvas aliases. Existing contract, storage, delivery, response
 and C4 parity suites remain separate evidence.
+
+`convex/learnV2PostSealTransitions.test.ts` covers public ordinary scoring with
+and without assistance, a Canvas check with live instructional publications,
+dedicated sealing/expiry/due-work closure and unrelated stale revisions. It
+also rejects missing transition evidence, an unconsumed execution and changed
+assistance after acceptance, without changing frozen acceptance records.
 
 These checks do not establish frontend integration, human provenance labels,
 production enrollment, provider/scorer accuracy, empirical form equivalence or

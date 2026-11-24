@@ -151,7 +151,7 @@ async function checkAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAssessm
       evidenceAvailable: disclosure.evidenceAvailable, pinsMatch: disclosure.pinsMatch, validScore: scoreValid }) }
   const reason = learnPostSealTeachingDenial(context)
   if (reason) deny(reason)
-  if (!response || response.userId !== userId || !row.submissionId) deny('not_sealed')
+  if (!response || response.userId !== userId || response.scopeKind !== 'v2' || !row.submissionId) deny('not_sealed')
   return { row, response, context, dependencies: await checkDependencies(ctx, userId, response._id) }
 }
 type Authority = Awaited<ReturnType<typeof checkAuthority>>
@@ -258,7 +258,8 @@ async function practiceAuthority(ctx: ReadCtx, userId: string, authority: Author
     || slot.learningVoidId !== binding.learningVoidId || slot.blueprintRevisionId !== authority.row.blueprintRevisionId
     || slot.objectiveId !== authority.row.objectiveId || slot.blueprintRecordRevision !== authority.row.blueprintRecordRevision
     || slot.assessmentContractDigest !== authority.row.assessmentContractDigest || slot.assessmentContractVersion !== authority.row.assessmentContractVersion
-    || slot.depth !== authority.row.depth || canonicalPrivacyJson(slot.contextPins) !== canonicalPrivacyJson(authority.row.contextPins)
+    || slot.depth !== authority.row.depth || canonicalPrivacyJson(slot.contextPins) !== canonicalPrivacyJson(authority.response.contextPins)
+      && canonicalPrivacyJson(slot.contextPins) !== canonicalPrivacyJson(authority.row.contextPins)
     || slot.evidenceStatus !== 'available' || slot.invalidatedAt !== undefined) deny()
   parseLearnContract(learnRevisionSchema, slot.revision)
   const blockId = ctx.db.normalizeId('sessionContentBlocks', slot.blockId)
@@ -367,7 +368,7 @@ export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: 
     const responseSlotId = await ctx.db.insert('learnResponseSlots', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
       scopeKind: 'v2', learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId,
       blueprintRecordRevision: row.blueprintRecordRevision, assessmentContractVersion: row.assessmentContractVersion, assessmentContractDigest: row.assessmentContractDigest,
-      depth: row.depth, contextPins: row.contextPins, stage: 'practice', slotKey: `post-seal:${authority.response._id}`, blockId,
+      depth: row.depth, contextPins: authority.response.contextPins, stage: 'practice', slotKey: `post-seal:${authority.response._id}`, blockId,
       promptDigest, promptRevision: proof.content.revision, responseFormatVersion: 'learn-v2.text-response.v1', confidenceRequested: false,
       deliveryExposureId: exposureId, revision: 1, status: 'open', evidenceStatus: 'available' })
     const fields = { ...base(userId, row.learningVoidId, now), assessmentOpportunityId: id, submissionId: authority.response._id, responseSlotId,
