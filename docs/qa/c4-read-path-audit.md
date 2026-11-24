@@ -171,6 +171,7 @@ The original C4 inventory below lists 128 public query names. C5 and C6 addition
 | `learnV2Assessments.getFeatureReadiness` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getPostSealTeaching` | `post_seal_teaching` | Owned sealed submission, current grant, pins, evidence, publication and relevant open checks; fixed unavailable result while responses are off |
 | `learnV2Assistance.authorizePracticeAssistance` | `post_seal_practice_authorization` | Same check authority plus the immutable separate-case binding, live practice revision and renewed help receipt authority; atomic practice exposure and accounting |
+| `learnV2PostSealTeaching.openPractice` | `post_seal_practice_preparation` | Authenticated opening selects the proven separate instructional case and atomically binds its slot, source links and prompt exposure; retries preserve the binding and serialize with relevant check acceptance |
 | `learnV2Blueprints.getBlueprintGenerationJob` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Blueprints.getBlueprintMap` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Calendar.getStatus` | `summary_or_own_work` | Always on original access and fixed projection |
@@ -323,7 +324,7 @@ The frozen baseline payload builder, request builder, parser v1 and mastery arit
 | Due-window expiry and replacement invalidation | The shared due-work opportunity update closes the binding when the phase becomes terminal. `markExpiredSessionsMissed` also closes unanswered started checks at the window boundary; the existing explicit missed-session command already leaves a terminal session. |
 | Void/account deletion | Each bounded opportunity-deletion transaction closes its owned dedicated binding before deleting the opportunity. The existing deletion fences and child-before-parent order remain in force. |
 
-The [C5.6 runtime](c5-post-seal-runtime.md) supplies `getPostSealTeaching`, `authorizePracticeAssistance` and the separate-case practice binding behind unchanged default-off capabilities. Canvas integration and collection admission remain separate gates. No UI or collection is enabled by the runtime.
+The [C5.6 runtime](c5-post-seal-runtime.md) supplies `getPostSealTeaching`, `openPractice`, `authorizePracticeAssistance` and the separate-case practice binding behind unchanged default-off capabilities. Scoring requests publication after its authoritative commit. Canvas integration and collection admission remain separate gates. No UI or collection is enabled by the runtime.
 
 | Entry point | Handling | Capability |
 | --- | --- | --- |

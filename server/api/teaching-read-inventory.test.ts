@@ -23,4 +23,5 @@ test('each public Convex query has an explicit C4 read audit entry', () => {
   expect(queries.sort()).toEqual(inventory.map(entry => entry.path).sort())
   expect(inventory.every(entry => entry.handling.length > 0)).toBe(true)
   expect(inventory).toContainEqual({ path: 'learnV2Assistance.authorizePracticeAssistance', functionType: 'mutation', handling: 'post_seal_practice_authorization' })
+  expect(inventory).toContainEqual({ path: 'learnV2PostSealTeaching.openPractice', functionType: 'mutation', handling: 'post_seal_practice_preparation' })
 })

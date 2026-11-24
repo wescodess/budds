@@ -349,6 +349,11 @@
     "handling": "post_seal_practice_authorization"
   },
   {
+    "path": "learnV2PostSealTeaching.openPractice",
+    "functionType": "mutation",
+    "handling": "post_seal_practice_preparation"
+  },
+  {
     "path": "learnV2Blueprints.getBlueprintGenerationJob",
     "handling": "summary_or_own_work"
   },

@@ -1169,7 +1169,11 @@ export async function scoreMasterySubmissionForOwner(
       await ctx.runMutation(internal.learnV2Mastery.failSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId, leaseToken: reservation.leaseToken })
     }
   }
-  return await ctx.runQuery(internal.learnV2Mastery.getMasterySubmissionScoringState, request)
+  const result = await ctx.runQuery(internal.learnV2Mastery.getMasterySubmissionScoringState, request)
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && result.status === 'scored') {
+    await ctx.runMutation(internal.learnV2PostSealTeaching.publishTeaching, { submissionId: request.submissionId })
+  }
+  return result
 }
 
 export const scoreMasterySubmission = action({

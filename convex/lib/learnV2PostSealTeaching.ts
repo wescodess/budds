@@ -34,6 +34,7 @@ type Reason = Parameters<typeof unavailableLearnPostSealTeaching>[0]
 type SourceTarget = Doc<'learnPostSealSourceLinks'>['target']
 const policy = 'learn-v2.post-seal-publication.v1'
 const assistancePolicy = 'learn-v2.practice-assistance.v1'
+export const POST_SEAL_HELP_HISTORY_LIMIT = 64
 class PostSealUnavailable extends Error {
   constructor(readonly reason: Reason) { super(reason) }
 }
@@ -286,20 +287,39 @@ async function practiceAuthority(ctx: ReadCtx, userId: string, authority: Author
 type PracticeAuthority = Awaited<ReturnType<typeof practiceAuthority>>
 
 async function relatedBlock(ctx: ReadCtx, userId: string, authority: Authority, practice: PracticeAuthority, kind: 'explanation' | 'worked_example') {
+  return await instructionalBlock(ctx, userId, authority, practice.proof.content._id, kind)
+}
+
+async function instructionalContent(ctx: ReadCtx, userId: string, authority: Authority) {
+  const row = authority.row
+  const content = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
+  if (content && (!content.assessmentPurpose || content.assessmentPurpose === 'independent_application')) return content._id
+  if (row.assessmentPins.kind !== 'measurement') deny()
+  const item = await ctx.db.get(row.assessmentPins.itemPins.itemId)
+  const job = item ? await ctx.db.get(item.generationJobId) : null
+  if (!job || job.userId !== userId || job.type !== 'measurement_family_generation' || job.status !== 'succeeded'
+    || job.learningVoidId !== row.learningVoidId || job.blueprintRevisionId !== row.blueprintRevisionId || !job.studySessionId) deny()
+  const publications = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q =>
+    q.eq('userId', userId).eq('studySessionId', job.studySessionId!)).take(2)
+  if (publications.length !== 1) deny()
+  return publications[0]!._id
+}
+
+async function instructionalBlock(ctx: ReadCtx, userId: string, authority: Authority, contentId: Id<'sessionContent'>, kind: 'explanation' | 'worked_example' | 'faded_example') {
   const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
-    q.eq('userId', userId).eq('sessionContentId', practice.proof.content._id)).take(17)
+    q.eq('userId', userId).eq('sessionContentId', contentId)).take(17)
   const matches = blocks.filter(block => block.kind === kind)
   if (blocks.length > 16 || matches.length !== 1) deny()
   return await blockAuthority(ctx, userId, authority, matches[0]!._id, kind)
 }
-async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority, practice: PracticeAuthority) {
+async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority) {
   const attempt = authority.row.authoritativeAttemptId ? await ctx.db.get(authority.row.authoritativeAttemptId) : null
   if (!attempt || attempt.userId !== userId || attempt.submissionId !== authority.response._id
     || attempt.assessmentOpportunityId !== authority.row._id || attempt.serverScorePercent === undefined
     || !Number.isFinite(attempt.serverScorePercent) || attempt.serverScorePercent < 0 || attempt.serverScorePercent > 100) deny()
   const passed = attempt.serverScorePercent >= 80
-  const explanation = await relatedBlock(ctx, userId, authority, practice, 'explanation')
-  const dependencies = normalizeDependencies([...practice.proof.dependencies, ...explanation.dependencies])
+  const explanation = await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'explanation')
+  const dependencies = explanation.dependencies
   const citations = []
   const sources = [...new Set(explanation.dependencies.flatMap(dependency => dependency.kind === 'snapshot' || dependency.kind === 'excerpt' ? [dependency.sourceSnapshotId] : []))]
   if (!sources.length || sources.length > 16) deny()
@@ -308,10 +328,10 @@ async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authorit
     ? 'Your response met the check requirements. Use the cited explanation to connect the idea to a separate practice case.'
     : 'Your response needs more practice. Review the cited explanation before trying the separate practice case.', citations },
   lesson: !passed ? { tier: 'T0' as const, paragraphs: [explanation.block.content!], citations } : null }
-  return { payload, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, practice.proof.validationDigest, explanation.validationDigest]) }
+  return { payload, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, explanation.validationDigest]) }
 }
 
-export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, blockId: Id<'sessionContentBlocks'>) {
+export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: string, id: Id<'learnAssessmentOpportunities'>) {
   ctx = measurementReadContext(ctx, userId)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return unavailableLearnPostSealTeaching('disabled')
   let writing = false
@@ -321,11 +341,11 @@ export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: 
       q.eq('userId', userId).eq('submissionId', authority.response._id)).take(2)
     if (previous.length) {
       const existing = await practiceAuthority(ctx, userId, authority)
-      if (existing.slot.blockId !== blockId) deny()
       return { status: 'prepared' as const, responseSlotId: existing.slot._id }
     }
     if (!authority.context.capabilities.canTeachSeparateCase) deny('unavailable')
-    const proof = await blockAuthority(ctx, userId, authority, blockId, 'faded_example')
+    const proof = await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'faded_example')
+    const blockId = proof.block._id
     const now = Date.now()
     const payload = { tier: 'T0' as const, prompt: proof.block.content! }
     const promptDigest = await privacyDigest(payload.prompt)
@@ -378,8 +398,7 @@ export async function publishPostSealTeachingForOwner(ctx: MutationCtx, userId: 
   try {
     const authority = await checkAuthority(ctx, userId, id)
     if (!authority.context.validScore || !authority.context.capabilities.canReadFeedback) deny('unavailable')
-    const practice = await practiceAuthority(ctx, userId, authority)
-    const teaching = await teachingPayload(ctx, userId, authority, practice)
+    const teaching = await teachingPayload(ctx, userId, authority)
     const rows = await ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
       q.eq('userId', userId).eq('submissionId', authority.response._id)).take(2)
     if (rows.length !== 1) deny()
@@ -428,8 +447,7 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
     if (source.content.status === 'pending') {
       if ((await sourceLinks(ctx, userId, { teachingSourceId: source._id })).length) deny()
     } else {
-      if (!practice) deny()
-      const teaching = await teachingPayload(ctx, userId, authority, practice)
+      const teaching = await teachingPayload(ctx, userId, authority)
       if (canonicalPrivacyJson(source.content.payload) !== canonicalPrivacyJson(teaching.payload)) deny()
       await verifyPublication(ctx, userId, { ...source, content: source.content }, { teachingSourceId: source._id }, teaching.dependencies, teaching.validationDigest)
     }
@@ -531,6 +549,7 @@ export async function authorizePostSealPracticeForOwner(ctx: MutationCtx, userId
     const reason = learnPostSealTeachingDenial(authority.context)
     if (reason) deny(reason)
     const sequence = (previous?.deliveryCount ?? 0) + 1
+    if (sequence > POST_SEAL_HELP_HISTORY_LIMIT) deny('unavailable')
     parseLearnContract(learnRevisionSchema, sequence)
     const now = Date.now()
     const publicationPins = await publication(payload, dependencies, validationDigest, now)

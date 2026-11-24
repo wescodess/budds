@@ -7,9 +7,10 @@ migration or deployment.
 
 ## Preparation and publication
 
-An authenticated backend caller can invoke
-`internal.learnV2PostSealTeaching.preparePractice` with the sealed opportunity
-and an existing instructional `faded_example` block. The transaction verifies
+The authenticated mutation `learnV2PostSealTeaching.openPractice` opens practice
+for a sealed opportunity. It resolves the pinned instructional session content,
+or the original session from a measurement item's generation job, and selects
+its single `faded_example` block. The transaction verifies
 the block's complete, registered publication and current source graph, including
 the case catalogue and its complete reservation decision. It selects the proven
 separate case and creates one practice slot, immutable submission binding,
@@ -23,8 +24,13 @@ no links. A null stamp on a purged source can be filled without restoring bytes.
 Duplicate, malformed and conflicting optional teaching state cannot reject the
 canonical score commit.
 
-`internal.learnV2PostSealTeaching.publishTeaching` publishes once after an
-authoritative valid score. Feedback gives a bounded outcome statement with
+The scoring action calls `internal.learnV2PostSealTeaching.publishTeaching`
+after the authoritative score commits, including on a score retry. Practice
+opening also retries publication when a valid score already exists. These
+publication transactions remain separate from the canonical score commit;
+unexpected publication errors propagate without undoing that score. Feedback
+and lessons resolve the same pinned instructional publication independently of
+practice preparation. Feedback gives a bounded outcome statement with
 opaque citations. A valid failure additionally receives the source-verified
 explanation from the practice content's registered instructional session.
 Publication seals the exact payload, complete dependency manifest and validation
@@ -57,6 +63,11 @@ passes through `projectPracticeAssistanceAuthorization` after renewed authority
 and returns the saved ID, time and content.
 
 Help preserves the response revision and original prompt delivery exposure.
+Acceptance checks the complete owner/slot exposure history against the slot's
+sequence, counters and latest authorization, and freezes the first delivered
+timestamp of each assistance kind. Distinct deliveries are limited to 64 per
+slot so that this verification stays bounded; saved requests still replay at
+the limit and the response remains acceptable.
 Both exposure kinds carry the binding's practice case and omit
 `assessmentOpportunityId`. Practice acceptance freezes its own assistance and
 purge dependencies. It changes neither the sealed check nor its assistance
@@ -73,7 +84,9 @@ are omitted from telemetry.
 `convex/learnV2PostSealRuntime.test.ts` invokes registered endpoints with real
 persisted opportunities, grants, submissions, executions, attempts, case
 publications, bindings, slots, receipts and source links. Native transaction
-limits are enabled. Coverage includes same-key and changed-key retries,
+limits are enabled. A public seal/score/open/read regression covers both trigger
+orders, concurrent triggers and retries without invoking the internal writers.
+Coverage also includes mixed and repeated help, same-key and changed-key retries,
 practice acceptance and competing-check acceptance, source and entitlement
 revocation, citation-only dependencies, pending/failure/reconciliation/invalid
 states, score stamps, invalid teaching state, issuer isolation, deletion guards,

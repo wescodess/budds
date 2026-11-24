@@ -1,11 +1,12 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
-import { makeFunctionReference } from 'convex/server'
+import { getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Doc } from './_generated/dataModel'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
 import * as helpAdmission from './lib/learnV2HelpAdmission'
+import * as postSealTeaching from './lib/learnV2PostSealTeaching'
 import { postSealApplicationFields } from './lib/learnV2PostSealStamp'
 import { learnV2CanvasMeasurementApi, learnV2TodayMeasurementApi } from './learnV2ApiAdapters'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION as version } from '../shared/learn-v2-assessment-disclosure'
@@ -34,21 +35,6 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers() }
 async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boolean, citationSource?: boolean } = {}) {
   const f = await assessmentDeliveryFixture({ transactionLimits: true })
   const contentId = await publishDeliveryTeaching(f)
-  const start = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
-    expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'post_seal_start_12345', entryPoint: 'today' })
-  expect(start).toMatchObject({ status: 'assessment' })
-  const opportunity = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.purpose.kind === 'measurement_cold')!
-  const correct = await f.t.run(async ctx => {
-    if (opportunity.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement')
-    const spec = await ctx.db.get(opportunity.assessmentPins.itemPins.scoringSpecId)
-    if (spec?.payload?.kind !== 'numeric') throw new Error('Expected numeric key')
-    return spec.payload.expected
-  })
-  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
-    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'post_seal_accept_12345',
-    response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
-      payload: { kind: 'numeric', value: options.pass ? correct : 0, unit: 'members' } } } })
-  if (accepted.kind !== 'accepted') throw new Error(`Expected acceptance: ${JSON.stringify(accepted)}`)
   const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', contentId)).take(16))
   const practiceBlock = blocks.find(block => block.kind === 'faded_example')!
@@ -68,14 +54,29 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
     sources: [{ kind: 'excerpt', sourceSnapshotId: f.graph.sourceSnapshotId, sourceExcerptId: f.graph.sourceExcerptId,
       revision: 1, recordRevision: 1, contentHash: f.graph.support.sourceContentHash }, ...(citationSource && block.kind !== 'faded_example' ? [citationSource] : [])],
   })) }))
+  const start = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'post_seal_start_12345', entryPoint: 'today' })
+  expect(start).toMatchObject({ status: 'assessment' })
+  const opportunity = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.purpose.kind === 'measurement_cold')!
+  const correct = await f.t.run(async ctx => {
+    if (opportunity.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement')
+    const spec = await ctx.db.get(opportunity.assessmentPins.itemPins.scoringSpecId)
+    if (spec?.payload?.kind !== 'numeric') throw new Error('Expected numeric key')
+    return spec.payload.expected
+  })
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'post_seal_accept_12345',
+    response: { target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+      payload: { kind: 'numeric', value: options.pass ? correct : 0, unit: 'members' } } } })
+  if (accepted.kind !== 'accepted') throw new Error(`Expected acceptance: ${JSON.stringify(accepted)}`)
   const reference = { version, assessmentOpportunityId: opportunity._id }
-  const prepare = () => f.owner.mutation(internal.learnV2PostSealTeaching.preparePractice, { assessmentOpportunityId: opportunity._id, practiceBlockId: practiceBlock._id })
+  const prepare = () => f.owner.mutation(api.learnV2PostSealTeaching.openPractice, reference)
   const score = () => f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
     submissionId: accepted.submissionId, idempotencyKey: 'post_seal_score_12345' })
   if (options.score) expect(await score()).toMatchObject({ status: 'scored' })
-  if (options.prepare !== false) expect(await prepare()).toMatchObject({ status: 'prepared' })
+  if (options.prepare !== false) expect(await prepare()).toMatchObject({ status: 'available', practice: { revision: 1 } })
   const read = () => f.owner.query(api.learnV2Assessments.getPostSealTeaching, reference)
-  const publish = () => f.owner.mutation(internal.learnV2PostSealTeaching.publishTeaching, { assessmentOpportunityId: opportunity._id })
+  const publish = () => f.owner.mutation(internal.learnV2PostSealTeaching.publishTeaching, { submissionId: accepted.submissionId })
   const binding = async () => (await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2)))[0]!
   const source = async () => (await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2)))[0]!
   const request = async (key = 'practice_help_runtime_123', kind: 'hint' | 'worked_example' = 'hint') => ({ ...reference,
@@ -83,6 +84,106 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
   const help = async (key?: string, kind?: 'hint' | 'worked_example') => f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, await request(key, kind))
   return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help, prepare, score }
 }
+
+test.each(['score_first', 'practice_first', 'concurrent'] as const)('public seal, score and practice opening publish once: %s', async order => {
+  const f = await fixture({ prepare: false })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+  await f.read()
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+  if (order === 'score_first') {
+    expect(await f.score()).toMatchObject({ status: 'scored' })
+    expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: null })
+    expect(await f.prepare()).toMatchObject({ status: 'available', practice: { revision: 1 } })
+  } else if (order === 'practice_first') {
+    expect(await f.prepare()).toMatchObject({ status: 'available', feedback: null, lesson: null, practice: { revision: 1 } })
+    expect(await f.score()).toMatchObject({ status: 'scored' })
+  } else await Promise.all([f.prepare(), f.score()])
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: { revision: 1 } })
+  const published = await f.source()
+  vi.setSystemTime(Date.now() + 1000)
+  await Promise.all([f.prepare(), f.prepare(), f.score(), f.score()])
+  expect(await f.source()).toEqual(published)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2))).toHaveLength(1)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toHaveLength(1)
+  const slots = await f.t.run(ctx => ctx.db.query('learnResponseSlots').withIndex('by_userId_and_slotKey', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('slotKey', `post-seal:${f.accepted.submissionId}`)).take(2))
+  expect(slots).toHaveLength(1)
+  const sourceLinks = await f.t.run(ctx => ctx.db.query('learnPostSealSourceLinks').withIndex('by_userId_and_target_teachingSourceId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('target.teachingSourceId', published._id)).take(65))
+  expect(sourceLinks).toHaveLength(published.sourceDependencyCount)
+})
+
+test('publication failure propagates without undoing a canonical score; a public retry publishes once', async () => {
+  const f = await fixture({ prepare: false })
+  vi.spyOn(postSealTeaching, 'publishPostSealTeachingForOwner').mockRejectedValueOnce(new Error('Read limit exceeded'))
+  await expect(f.score()).rejects.toThrow('Read limit exceeded')
+  const row = (await f.t.run(ctx => ctx.db.get(f.opportunity._id)))!
+  expect(row).toMatchObject({ phase: 'scored_fail' })
+  expect(await f.source()).toMatchObject({ attemptId: row.authoritativeAttemptId, content: { status: 'pending' } })
+  expect(await f.score()).toMatchObject({ status: 'scored', result: { attemptId: row.authoritativeAttemptId } })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' } })
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').take(2))).toHaveLength(1)
+})
+
+test.each([
+  ['worked_example', 'hint'], ['hint', 'worked_example'], ['hint', 'hint'], ['worked_example', 'worked_example'],
+  ['hint', 'worked_example', 'hint'], ['worked_example', 'hint', 'worked_example'],
+] as const)('acceptance preserves every delivered help kind in order %j', async (...kinds) => {
+  const f = await fixture()
+  const first = new Map<string, number>()
+  for (const [index, kind] of kinds.entries()) {
+    vi.setSystemTime(Date.now() + 1000)
+    const delivered = await f.help(`mixed_help_delivery_${index}_12345`, kind)
+    if (delivered.status !== 'authorized') throw new Error('Expected delivered help')
+    if (!first.has(kind)) first.set(kind, delivered.deliveredAt)
+    expect(await f.help(`mixed_help_delivery_${index}_12345`, kind)).toEqual(delivered)
+  }
+  const binding = await f.binding()
+  const command = { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'mixed_help_acceptance_12345', response: {
+    target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1, payload: { kind: 'text' as const, text: 'A supported practice response.' } } }
+  const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, command)
+  if (accepted.kind !== 'accepted') throw new Error('Expected practice acceptance')
+  const snapshot = (await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot
+  expect(snapshot).toMatchObject({ state: 'assisted', assistanceRevision: kinds.length,
+    substantiveHintUsedAt: first.get('hint') ?? null, answerRevealedAt: first.get('worked_example') ?? null })
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, command)).toEqual(accepted)
+  expect((await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot).toEqual(snapshot)
+})
+
+test('bounded help history preserves acceptance and replays at the delivery limit', async () => {
+  const f = await fixture()
+  let firstDeliveredAt = 0
+  for (let index = 0; index < 64; index++) {
+    vi.setSystemTime(Date.now() + 1000)
+    const result = await f.help(`bounded_help_delivery_${index}_12345`)
+    if (result.status !== 'authorized') throw new Error('Expected delivered help')
+    if (index === 0) firstDeliveredAt = result.deliveredAt
+  }
+  const binding = await f.binding()
+  const slot = await f.t.run(ctx => ctx.db.get(binding.responseSlotId))
+  expect(await f.help('bounded_help_delivery_64_12345')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.help('bounded_help_delivery_0_12345')).toMatchObject({ status: 'authorized', deliveredAt: firstDeliveredAt })
+  expect(await f.t.run(ctx => ctx.db.get(binding.responseSlotId))).toEqual(slot)
+  const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'bounded_help_acceptance_12345', response: { target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1,
+      payload: { kind: 'text', text: 'A supported practice response.' } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected practice acceptance')
+  expect((await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot).toMatchObject({
+    assistanceRevision: 64, substantiveHintUsedAt: firstDeliveredAt, answerRevealedAt: null })
+})
+
+test('acceptance rejects an incomplete delivered-help history instead of freezing missing timestamps', async () => {
+  const f = await fixture()
+  const first = await f.help('incomplete_help_first_12345', 'worked_example')
+  if (first.status !== 'authorized') throw new Error('Expected delivered help')
+  expect(await f.help('incomplete_help_second_12345', 'hint')).toMatchObject({ status: 'authorized' })
+  await f.t.run(ctx => ctx.db.delete(first.authorizationId))
+  const binding = await f.binding()
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'incomplete_help_accept_12345', response: { target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1,
+      payload: { kind: 'text', text: 'A supported practice response.' } } })).toMatchObject({ kind: 'rejected', reasonCode: 'pins_mismatch' })
+  expect(await f.t.run(ctx => ctx.db.get(binding.responseSlotId))).toMatchObject({ status: 'open', revision: 1 })
+})
 
 test('publishes persisted feedback and a failure-only lesson; pending practice has no source links', async () => {
   const f = await fixture()
@@ -233,11 +334,19 @@ test('endpoint aliases keep the read content-free for help and preserve the disa
   expect(await f.owner.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance, await f.request())).toEqual(await f.help())
   expect(learnV2TodayMeasurementApi).not.toHaveProperty('getPostSealTeaching')
   expect(learnV2TodayMeasurementApi).not.toHaveProperty('authorizePracticeAssistance')
+  expect(getFunctionName(learnV2CanvasMeasurementApi.openPostSealPractice)).toBe(getFunctionName(api.learnV2PostSealTeaching.openPractice))
+  expect(await f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, f.reference)).toEqual(await f.read())
+  expect(learnV2TodayMeasurementApi).not.toHaveProperty('openPostSealPractice')
   expect(await f.read()).not.toHaveProperty('hint')
   expect(await f.read()).not.toHaveProperty('workedExample')
   policy.responses = false
   expect(await f.read()).toEqual({ version, status: 'unavailable', reasonCode: 'disabled' })
   expect(await f.help()).toEqual({ version, status: 'denied', reasonCode: 'disabled' })
+  const binding = await f.binding()
+  const source = await f.source()
+  expect(await f.prepare()).toEqual({ version, status: 'unavailable', reasonCode: 'disabled' })
+  expect(await f.binding()).toEqual(binding)
+  expect(await f.source()).toEqual(source)
 })
 
 test('feedback and help citation-only source dependencies revoke independently of the practice prompt', async () => {
@@ -426,9 +535,11 @@ test('issuer isolation, unauthenticated calls and account deletion guard both en
   for (const actor of [foreign, f.t]) {
     await expect(actor.query(learnV2CanvasMeasurementApi.getPostSealTeaching, f.reference)).rejects.toThrow()
     await expect(actor.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance, request)).rejects.toThrow()
+    await expect(actor.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, f.reference)).rejects.toThrow()
   }
   await f.t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: deliveryIdentity.tokenIdentifier, status: 'active', phase: 'learnV2',
     startedAt: Date.now(), updatedAt: Date.now() }))
   await expect(f.read()).rejects.toThrow(/deletion/)
   await expect(f.help()).rejects.toThrow(/deletion/)
+  await expect(f.prepare()).rejects.toThrow(/deletion/)
 })

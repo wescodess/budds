@@ -1,20 +1,35 @@
 import { v } from 'convex/values'
-import { internalMutation } from './_generated/server'
+import { internalMutation, mutation } from './_generated/server'
 import { internal } from './_generated/api'
 import { requireAuth } from './lib/auth'
-import { preparePostSealPracticeForOwner, publishPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
+import { preparePostSealPracticeForOwner, publishPostSealTeachingForOwner, readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
 import { purgePostSealSourceLink } from './lib/learnV2PostSealRetention'
+import { postSealTeachingArgs, postSealTeachingReferenceSchema, postSealTeachingValidator, parsePublicLearnRequest, type LearnV2PostSealTeaching } from './lib/learnV2PublicContract'
+import { requireOwnedSubmission, requireOwnedResponseTarget } from './lib/learnV2PublicAccess'
 
 const accessPurgeTables = ['learnPostSealTeachingSources', 'learnPostSealPracticeBindings', 'learnPostSealHelpReceipts', 'learnPostSealSourceLinks'] as const
 
-export const preparePractice = internalMutation({
-  args: { assessmentOpportunityId: v.id('learnAssessmentOpportunities'), practiceBlockId: v.id('sessionContentBlocks') },
-  handler: async (ctx, args) => await preparePostSealPracticeForOwner(ctx, await requireAuth(ctx), args.assessmentOpportunityId, args.practiceBlockId),
+export const openPractice = mutation({
+  args: postSealTeachingArgs, returns: postSealTeachingValidator,
+  handler: async (ctx, args): Promise<LearnV2PostSealTeaching> => {
+    const userId = await requireAuth(ctx)
+    const request = parsePublicLearnRequest(postSealTeachingReferenceSchema, args)
+    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
+    const prepared = await preparePostSealPracticeForOwner(ctx, userId, request.assessmentOpportunityId)
+    if (prepared.status !== 'prepared') return prepared
+    await publishPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
+    return await readPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
+  },
 })
 
 export const publishTeaching = internalMutation({
-  args: { assessmentOpportunityId: v.id('learnAssessmentOpportunities') },
-  handler: async (ctx, args) => await publishPostSealTeachingForOwner(ctx, await requireAuth(ctx), args.assessmentOpportunityId),
+  args: { submissionId: v.id('learnResponses') },
+  handler: async (ctx, args) => {
+    await requireOwnedSubmission(ctx, args.submissionId)
+    const submission = (await ctx.db.get(args.submissionId))!
+    if (!('assessmentOpportunityId' in submission)) throw new Error('Assessment submission required')
+    return await publishPostSealTeachingForOwner(ctx, await requireAuth(ctx), submission.assessmentOpportunityId)
+  },
 })
 
 export const purgeAccess = internalMutation({
