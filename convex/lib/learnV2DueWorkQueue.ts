@@ -1,0 +1,44 @@
+import type { Doc } from '../_generated/dataModel'
+import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { getFrozenLearnMeasurementProtocol } from './learnV2MeasurementAssignment'
+
+export const LEARN_DUE_WORK_MAX_ATTEMPTS = 8
+export const LEARN_DUE_WORK_LEASE_MS = 5 * 60_000
+export const learnDueWorkBackoff = (attempts: number) => Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 3_600_000)
+
+export function learnDueWorkEnabled() {
+  return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.enrollment
+    && LEARN_MEASUREMENT_CAPABILITIES.delivery && process.env.LEARN_V2_ENABLED === 'true' && getFrozenLearnMeasurementProtocol() !== null
+}
+
+type WorkInput = Pick<Doc<'learnMeasurementDueWork'>, 'userId' | 'key' | 'kind' | 'dueAt'>
+  & Partial<Pick<Doc<'learnMeasurementDueWork'>, 'assignmentId' | 'assessmentOpportunityId' | 'learningVoidId'>>
+
+export async function enqueueLearnDueWork(ctx: MutationCtx, input: WorkInput) {
+  if (!learnDueWorkEnabled()) return
+  const previous = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+    q.eq('userId', input.userId).eq('key', input.key)).unique()
+  if (previous) return
+  const now = Date.now()
+  await ctx.db.insert('learnMeasurementDueWork', { ...input, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION,
+    createdAt: now, updatedAt: now, state: input.dueAt <= now ? 'pending' : 'scheduled', nextAttemptAt: input.dueAt, attempts: 0, generation: 0 })
+}
+
+export async function enqueueLearnOpportunityEdges(ctx: MutationCtx, row: Doc<'learnAssessmentOpportunities'>) {
+  if (!learnDueWorkEnabled() || !row.assignmentId) return
+  for (const kind of ['open', 'close'] as const) await enqueueLearnDueWork(ctx, {
+    userId: row.userId, learningVoidId: row.learningVoidId, assignmentId: row.assignmentId,
+    assessmentOpportunityId: row._id, key: `${row._id}:${kind}`, kind, dueAt: kind === 'open' ? row.openAt : row.closeAt,
+  })
+}
+
+export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {
+  if (!learnDueWorkEnabled()) return false
+  for (const state of ['pending', 'terminal'] as const) {
+    if (await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
+      q.eq('userId', userId).eq('state', state)).first()) return true
+  }
+  return await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
+    q.eq('userId', userId).eq('state', 'scheduled').lte('dueAt', cutoff)).first() !== null
+}

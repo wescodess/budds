@@ -5,6 +5,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasLearnV2Access } from './learnV2Access'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
+import { enqueueLearnOpportunityEdges } from './learnV2DueWorkQueue'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
@@ -311,6 +312,7 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
     phase: 'ready', revision: 1, eligibilityPolicyVersion: LEARN_MEASUREMENT_ELIGIBILITY_VERSION, operationalEligibility: 'eligible',
     dueAt: Date.now(), openAt: Date.now(), closeAt: Date.now() + protocol.coldWindowMs, checkSequence: 0, originalSlot: true })
   await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(id))!)
+  await enqueueLearnOpportunityEdges(ctx, (await ctx.db.get(id))!)
   return { status: 'admitted' as const, assignmentId, reasonCodes: [] }
 }
 

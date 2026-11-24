@@ -50,6 +50,7 @@ export const PERSONAL_EXPORT_COLLECTION_POLICY = {
   learnMeasurementValidations: 'metadata',
   learnMeasurementReportFacts: 'metadata',
   learnMeasurementSourceWatermarks: 'metadata',
+  learnMeasurementDueWork: 'metadata',
   learnAssessmentExposures: 'metadata',
   learnAssessmentCases: 'metadata',
   learnAssessmentCatalogs: 'metadata',
