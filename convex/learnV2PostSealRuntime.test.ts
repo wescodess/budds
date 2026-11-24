@@ -397,6 +397,16 @@ test('authoritative score validity and attempt bindings are rechecked instead of
   expect(await f.read()).toMatchObject({ status: 'unavailable', reasonCode: 'disclosure_unknown' })
 })
 
+test.each([false, true])('a published source keeps immutable content when an accepted check becomes invalid: pass=%s', async pass => {
+  const f = await fixture({ score: true, pass })
+  expect(await f.publish()).toEqual({ status: 'published' })
+  const source = await f.source()
+  await f.t.run(ctx => ctx.db.patch(f.opportunity._id, { phase: 'invalid' }))
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: null, lesson: null, practice: { revision: 1 } })
+  expect(await f.help()).toMatchObject({ status: 'authorized' })
+  expect(await f.source()).toEqual(source)
+})
+
 test('owner export omits runtime teaching, help, keys and dependency copies while keeping canonical work', async () => {
   const f = await fixture({ score: true })
   await f.publish(); await f.help()

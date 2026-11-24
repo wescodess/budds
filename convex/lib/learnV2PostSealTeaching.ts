@@ -293,16 +293,21 @@ async function relatedBlock(ctx: ReadCtx, userId: string, authority: Authority, 
   return await blockAuthority(ctx, userId, authority, matches[0]!._id, kind)
 }
 async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority, practice: PracticeAuthority) {
+  const attempt = authority.row.authoritativeAttemptId ? await ctx.db.get(authority.row.authoritativeAttemptId) : null
+  if (!attempt || attempt.userId !== userId || attempt.submissionId !== authority.response._id
+    || attempt.assessmentOpportunityId !== authority.row._id || attempt.serverScorePercent === undefined
+    || !Number.isFinite(attempt.serverScorePercent) || attempt.serverScorePercent < 0 || attempt.serverScorePercent > 100) deny()
+  const passed = attempt.serverScorePercent >= 80
   const explanation = await relatedBlock(ctx, userId, authority, practice, 'explanation')
   const dependencies = normalizeDependencies([...practice.proof.dependencies, ...explanation.dependencies])
   const citations = []
   const sources = [...new Set(explanation.dependencies.flatMap(dependency => dependency.kind === 'snapshot' || dependency.kind === 'excerpt' ? [dependency.sourceSnapshotId] : []))]
   if (!sources.length || sources.length > 16) deny()
   for (const [index, id] of sources.entries()) citations.push({ sourceRef: `source_${(await privacyDigest([policy, id])).slice(7)}`, label: `Accepted source ${index + 1}` })
-  const payload = { feedback: { tier: 'T0' as const, text: authority.row.phase === 'scored_pass'
+  const payload = { feedback: { tier: 'T0' as const, text: passed
     ? 'Your response met the check requirements. Use the cited explanation to connect the idea to a separate practice case.'
     : 'Your response needs more practice. Review the cited explanation before trying the separate practice case.', citations },
-  lesson: authority.row.phase === 'scored_fail' ? { tier: 'T0' as const, paragraphs: [explanation.block.content!], citations } : null }
+  lesson: !passed ? { tier: 'T0' as const, paragraphs: [explanation.block.content!], citations } : null }
   return { payload, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, practice.proof.validationDigest, explanation.validationDigest]) }
 }
 
