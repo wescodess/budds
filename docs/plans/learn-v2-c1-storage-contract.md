@@ -441,27 +441,12 @@ The measurement storage version remains v1: existing shapes are preserved and
 new tables carry a separate `postSealStorageVersion`. New stored version and
 policy fields use strings, including command and fingerprint versions, so a
 later label cannot invalidate historical rows.
-The reused `learnV2MeasurementStorage.ts` base widens only `storageVersion`
-from the v1 literal to a string across **24 existing collections**:
-`learnMeasurementReportCells`, `learnMeasurementReportRows`,
-`learnMeasurementReportRuns`, `learnMeasurementReportViewerGrants`,
-`learnResponseBodies`, `learnResponseEvidenceLinks`,
-`learnResponseIntegrityEvents`, `learnResponseCommandReceipts`,
-`learnScoringExecutions`, `learnResponses`, `learnResponseSlots`,
-`learnAssessmentOpportunities`, `learnMeasurementAssignments`,
-`learnMeasurementSupports`, `learnMeasurementClaims`,
-`learnMeasurementScoringSpecs`, `learnMeasurementItems`,
-`learnMeasurementFamilies`, `learnMeasurementValidations`,
-`learnMeasurementReportFacts`, `learnMeasurementSourceWatermarks`,
-`learnAssessmentExposures`, `learnAssessmentCases` and `learnAssessmentCatalogs`.
-Both exposure variants inherit that base. The four new post-seal tables have
-their own string-valued storage labels. This does not change the artifact-lineage
-or due-work validators, nested attempt-version pins, or report/source versions.
-Existing v1 rows remain valid, and the strings already accepted at the reviewed
-head remain storable; no closed historical catalogue is asserted here. Future
-version changes must retain every historical stored label. Current writers and
-public commands keep their current-version contracts; accepting a stored label
-grants no replay, publication or scoring authority.
+The shared `learnV2MeasurementStorage.ts` base keeps `storageVersion` as the
+closed `learn-v2.measurement-storage.v1` literal across its 24 collections,
+including both exposure variants. A future label is added as a union member
+alongside v1, never as a replacement, so historical rows stay valid. The four
+new post-seal tables carry their own string-valued labels. Accepting a stored
+label grants no replay, publication or scoring authority.
 No content writer, generator, selector, endpoint behavior, capability, flag,
 migration, backfill or deployment is enabled by this amendment.
 
@@ -592,7 +577,9 @@ following writers:
    `projectionDigest` exactly equal to the slot's `promptDigest`, and no
    `assessmentOpportunityId`. Its ID is the slot's required `deliveryExposureId`.
    Later help retains that prompt delivery ID; each help authorization has its
-   own exposure ID and content digest. It must serialize its owner-scoped
+   own exposure ID and content digest. Both practice exposures carry `caseId`
+   equal to the binding's `practiceCaseId`, so case-novelty checks see the
+   practice case as prior exposure. It must serialize its owner-scoped
    relevant-open-check lookup with check acceptance. A retry returns that same binding and slot. The
    query `learnV2Assessments.getPostSealTeaching` reads existing authority; it
    cannot select/persist a case, mint a grant or repair missing storage.

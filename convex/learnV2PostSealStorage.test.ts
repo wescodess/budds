@@ -173,16 +173,15 @@ describe('inactive post-seal storage contract', () => {
     expect(await t.run(ctx => ctx.db.get(id))).not.toHaveProperty('dependency')
   })
 
-  test('preserves string storage labels across every collection using the shared measurement base', async () => {
+  test('keeps the v1 storage label closed across every collection using the shared measurement base', async () => {
     const { t, f } = await fixture()
     const collections = LEARN_MEASUREMENT_STORAGE_MANIFEST.filter(entry => !entry.table.startsWith('learnPostSeal')
       && !entry.table.startsWith('learnArtifact') && entry.table !== 'learnMeasurementDueWork')
     expect(collections).toHaveLength(24)
     for (const entry of collections) {
-      for (const storageVersion of ['learn-v2.measurement-storage.v1', 'learn-v2.measurement-storage.v99']) {
-        await t.run(ctx => ctx.db.patch(f.rows[entry.table], { storageVersion }))
-        expect(await t.run(ctx => ctx.db.get(f.rows[entry.table]))).toMatchObject({ storageVersion })
-      }
+      await t.run(ctx => ctx.db.patch(f.rows[entry.table], { storageVersion: 'learn-v2.measurement-storage.v1' }))
+      expect(await t.run(ctx => ctx.db.get(f.rows[entry.table]))).toMatchObject({ storageVersion: 'learn-v2.measurement-storage.v1' })
+      await expect(t.run(ctx => ctx.db.patch(f.rows[entry.table], { storageVersion: 'learn-v2.measurement-storage.v99' } as never))).rejects.toThrow()
     }
   })
 
@@ -225,10 +224,9 @@ describe('inactive post-seal storage contract', () => {
       const receipt = (await t.run(ctx => ctx.db.get(f.postSeal.helpReceiptId)))!
       expect(learnPostSealHelpReceiptStorageSchema.parse(fields(receipt))).toMatchObject({ commandVersion: version, fingerprintVersion: version })
     }
-    for (const version of ['learn-v2.measurement-storage.v1', 'learn-v2.measurement-storage.v99']) {
-      await t.run(ctx => ctx.db.patch(f.postSeal.authorizationId, { storageVersion: version }))
-      expect(await t.run(ctx => ctx.db.get(f.postSeal.authorizationId))).toMatchObject({ storageVersion: version })
-    }
+    await t.run(ctx => ctx.db.patch(f.postSeal.authorizationId, { storageVersion: 'learn-v2.measurement-storage.v1' }))
+    expect(await t.run(ctx => ctx.db.get(f.postSeal.authorizationId))).toMatchObject({ storageVersion: 'learn-v2.measurement-storage.v1' })
+    await expect(t.run(ctx => ctx.db.patch(f.postSeal.authorizationId, { storageVersion: 'learn-v2.measurement-storage.v99' } as never))).rejects.toThrow()
   })
 
   test('requires an authoritative attempt stamp before content and rejects foreign storage fields', async () => {

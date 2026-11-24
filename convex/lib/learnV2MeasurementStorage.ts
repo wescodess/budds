@@ -13,7 +13,7 @@ export { postSealTeachingSourceValidator, postSealPracticeBindingFields, postSea
 
 // Storage shapes only. Admission, payload limits and command validators are
 // supplied by the following serial contracts; no current player writes these.
-const base = { userId: v.string(), storageVersion: v.string(), createdAt: v.number() }
+const base = { userId: v.string(), storageVersion: v.literal('learn-v2.measurement-storage.v1'), createdAt: v.number() }
 const evidenceState = {
   evidenceStatus: v.union(v.literal('available'), v.literal('evidence_unavailable')),
   invalidatedAt: v.optional(v.number()),
