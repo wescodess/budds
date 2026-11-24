@@ -4,6 +4,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } fro
 import { getFrozenLearnMeasurementProtocol } from './learnV2MeasurementAssignment'
 
 export const LEARN_DUE_WORK_MAX_ATTEMPTS = 8
+export const LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS = 3
 export const LEARN_DUE_WORK_LEASE_MS = 5 * 60_000
 export const learnDueWorkBackoff = (attempts: number) => Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 3_600_000)
 
@@ -33,9 +34,31 @@ export async function enqueueLearnOpportunityEdges(ctx: MutationCtx, row: Doc<'l
   })
 }
 
+export async function retireLearnOpportunityDueWork(ctx: MutationCtx, row: Doc<'learnAssessmentOpportunities'>) {
+  if (!learnDueWorkEnabled() || !row.submissionId && !['invalid', 'cancelled', 'abandoned', 'scored_pass', 'scored_fail'].includes(row.phase)) return
+  for (const kind of ['open', 'close'] as const) {
+    const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+      q.eq('userId', row.userId).eq('key', `${row._id}:${kind}`)).unique()
+    if (work) await ctx.db.delete(work._id)
+  }
+}
+
+export async function retireLearnAssignmentFault(ctx: MutationCtx, assignment: Doc<'learnMeasurementAssignments'>) {
+  if (!learnDueWorkEnabled()) return
+  const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+    q.eq('userId', assignment.userId).eq('key', `assignment:${assignment._id}`)).unique()
+  if (work && ['parked', 'terminal'].includes(work.state)) await ctx.db.delete(work._id)
+}
+
+export async function retireLearnOwnerFault(ctx: MutationCtx, userId: string) {
+  if (!learnDueWorkEnabled()) return
+  const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q => q.eq('userId', userId).eq('key', 'owner')).unique()
+  if (work && ['parked', 'terminal'].includes(work.state)) await ctx.db.delete(work._id)
+}
+
 export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {
   if (!learnDueWorkEnabled() && !LEARN_MEASUREMENT_CAPABILITIES.reports) return false
-  for (const state of ['pending', 'terminal'] as const) {
+  for (const state of ['pending', 'parked', 'terminal'] as const) {
     if (await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
       q.eq('userId', userId).eq('state', state)).first()) return true
   }

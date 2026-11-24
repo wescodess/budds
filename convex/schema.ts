@@ -1926,15 +1926,19 @@ export default defineSchema({
     learningVoidId: v.optional(v.id('learningVoids')), assignmentId: v.optional(v.id('learnMeasurementAssignments')),
     assessmentOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), key: v.string(),
     kind: v.union(v.literal('owner'), v.literal('assignment'), v.literal('open'), v.literal('close')),
-    state: v.union(v.literal('scheduled'), v.literal('pending'), v.literal('terminal')),
+    state: v.union(v.literal('scheduled'), v.literal('pending'), v.literal('parked'), v.literal('terminal')),
     dueAt: v.number(), nextAttemptAt: v.number(), attempts: v.number(), generation: v.number(),
+    domainChecks: v.optional(v.number()), recoveryAttempts: v.optional(v.number()), inFlight: v.optional(v.boolean()),
+    previousScheduledFunctionId: v.optional(v.id('_scheduled_functions')),
     scheduledFunctionId: v.optional(v.id('_scheduled_functions')), reasonCode: v.optional(v.literal('retries_exhausted')),
     cursor: v.optional(v.string()), through: v.optional(v.number()), expectedSequence: v.optional(v.number()), coverageComplete: v.optional(v.boolean()),
   }).index('by_userId', ['userId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_key', ['userId', 'key'])
     .index('by_userId_and_state_and_dueAt', ['userId', 'state', 'dueAt'])
-    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt']),
+    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt'])
+    .index('by_nextAttemptAt', ['nextAttemptAt'])
+    .index('by_inFlight', ['inFlight']),
   learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_caseId_and_serverTime', ['userId', 'caseId', 'serverTime'])

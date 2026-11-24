@@ -20,7 +20,7 @@ import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
 import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession, readLearnDelayedCheckBinding } from './learnV2DelayedDelivery'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
-import { enqueueLearnDueWork, enqueueLearnOpportunityEdges, hasUnresolvedLearnDueWork, learnDueWorkEnabled } from './learnV2DueWorkQueue'
+import { enqueueLearnDueWork, enqueueLearnOpportunityEdges, hasUnresolvedLearnDueWork, learnDueWorkEnabled, retireLearnAssignmentFault, retireLearnOwnerFault } from './learnV2DueWorkQueue'
 
 export { learnDueWorkEnabled } from './learnV2DueWorkQueue'
 
@@ -73,10 +73,14 @@ async function emitEligibility(ctx: MutationCtx, assignment: AdmittedAssignment,
   await ctx.db.insert('learnActivityEvents', { userId: assignment.userId, ...fields, dedupeKeyHash })
 }
 
-async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol,
+export async function processLearnMeasurementDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol,
   row: Doc<'learnAssessmentOpportunities'>, through: number) {
+  ctx = measurementReadContext(ctx, assignment.userId)
   const observedAt = Date.now()
-  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) return
+  if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) {
+    if (learnDueWorkEnabled()) await writeMeasurementOpportunityFact(ctx, assignment, row)
+    return
+  }
   if (through < row.openAt || observedAt < row.openAt) return
   if (observedAt >= row.closeAt) {
     const playable = !LEARN_MEASUREMENT_CAPABILITIES.responses || row.deliveryGrantId !== undefined || row.eligibleAt !== undefined && row.eligibleAt < row.closeAt
@@ -86,7 +90,10 @@ async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssig
     await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode })
     return
   }
-  const reason = assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
+  const catalogs = learnDueWorkEnabled()
+    ? await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', assignment.userId)).take(2) : null
+  const reason = catalogs && (catalogs.length !== 1 || catalogs[0]?.measurementCapability?.enabled !== true) ? 'not_admitted'
+    : assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
     : await measurementScopeReason(ctx, assignment.userId, row)
       ?? await measurementFlowReason(ctx, assignment.userId, assignment.flow, row, protocol)
       ?? (row.assessmentPins.kind !== 'measurement' ? 'pins_mismatch'
@@ -170,11 +177,6 @@ export async function replaceLearnMeasurementOpportunityForOwner(ctx: MutationCt
 
 export async function materializeLearnMeasurementAssignment(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol, through: number) {
   ctx = measurementReadContext(ctx, assignment.userId)
-  if (learnDueWorkEnabled()) {
-    const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
-      q.eq('userId', assignment.userId).eq('key', `assignment:${assignment._id}`)).unique()
-    if (work?.state === 'terminal') return 'due_work_exhausted'
-  }
   const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', assignment.userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!cold || cold.purpose.kind !== 'measurement_cold') return 'missing_cold_opportunity'
   if (!await liveResponseAggregate(ctx, assignment.userId, cold)) return 'aggregate_unavailable'
@@ -224,12 +226,13 @@ export async function materializeLearnMeasurementAssignment(ctx: MutationCtx, as
     if (row.assignmentId !== assignment._id || row.assessmentPins.kind !== 'measurement'
       || row.assessmentPins.itemPins.itemId !== slot.pins.itemId || row.horizonDays !== slot.horizonDays || !row.originalSlot) throw new Error('Learn original opportunity identity conflicts')
     await registerLearnFirstSlotForOwner(ctx, row, assignment.epoch, false)
-    await processDueOpportunity(ctx, assignment, protocol, row, through)
+    await processLearnMeasurementDueOpportunity(ctx, assignment, protocol, row, through)
     const replacementKey = await privacyDigest([row._id, 'reserve'])
     const replacement = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_delayedCheckId', q => q.eq('userId', assignment.userId).eq('delayedCheckId', replacementKey)).unique()
-    if (replacement) await processDueOpportunity(ctx, assignment, protocol, replacement, through)
+    if (replacement) await processLearnMeasurementDueOpportunity(ctx, assignment, protocol, replacement, through)
   }
   await linkFirstIndependentClaimForOwner(ctx, assignment.userId, assignment.blueprintRevisionId, assignment.objectiveId, assignment.epoch)
+  await retireLearnAssignmentFault(ctx, assignment)
   return 'processed'
 }
 
@@ -251,12 +254,13 @@ export async function materializeLearnMeasurementDueBatch(ctx: MutationCtx, user
   for (const assignment of page.page) {
     if (assignment.status !== 'admitted') continue
     const result = await materializeLearnMeasurementAssignment(ctx, assignment, protocol, input.through)
-    if (['protocol_pins_mismatch', 'missing_cold_opportunity', 'aggregate_unavailable', 'due_work_exhausted'].includes(result)) complete = false
+    if (['protocol_pins_mismatch', 'missing_cold_opportunity', 'aggregate_unavailable'].includes(result)) complete = false
   }
   const { watermark, sequence } = await nextLearnMeasurementSourceSequence(ctx, userId)
   // Completeness is established only by a full sweep. Unknown history stays unknown.
   if (page.isDone && complete && watermark && (!LEARN_MEASUREMENT_CAPABILITIES.responses || watermark.dueWorkThrough === null || watermark.dueWorkThrough < input.through))
     await ctx.db.patch(watermark._id, { dueWorkThrough: Math.max(watermark.dueWorkThrough ?? 0, input.through), updatedAt: Date.now() })
+  if (page.isDone && complete) await retireLearnOwnerFault(ctx, userId)
   return { status: 'processed' as const, cursor: page.isDone ? null : page.continueCursor, processed: page.page.length,
     sequence: sequence - 1, complete: page.isDone && complete, coverageComplete: complete }
 }

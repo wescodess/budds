@@ -19,7 +19,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v7' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v8' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [

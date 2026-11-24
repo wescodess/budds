@@ -392,3 +392,75 @@ test('responses-off due work keeps its original opportunity-fact shape without c
   expect(facts.some(row => row.fact.kind === 'opportunity' && row.fact.status === 'eligible')).toBe(true)
   for (const row of facts) expect(row.fact).not.toHaveProperty('stateAtEligibility')
 })
+
+test.each(['parked', 'terminal'] as const)('C6 coverage resolves a %s opening fault after its closed outcome is recorded', async state => {
+  const cohort = await cohortJourney(false, 5)
+  const f = cohort[0]!
+  await runLearnDueCron(f.t)
+  vi.setSystemTime(f.original.openAt - 1)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(f.original._id))).toMatchObject({ phase: 'preparing', operationalEligibility: 'pending' })
+  const dueHelpers = await import('./lib/learnV2MeasurementDueWork')
+  const original = dueHelpers.processLearnMeasurementDueOpportunity
+  const failure = vi.spyOn(dueHelpers, 'processLearnMeasurementDueOpportunity').mockImplementation((ctx, assignment, protocol, row, through) => {
+    if (row._id === f.original._id) throw new Error('synthetic_opening_fault')
+    return original(ctx, assignment, protocol, row, through)
+  })
+  vi.setSystemTime(f.original.openAt)
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    await runLearnDueCron(f.t)
+    const work = (await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+      q.eq('userId', f.learnerId).eq('key', `${f.original._id}:open`)).unique()))!
+    expect(work.attempts).toBe(attempt)
+    if (attempt < 8) vi.setSystemTime(work.nextAttemptAt)
+  }
+  const parked = (await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+    q.eq('userId', f.learnerId).eq('key', `${f.original._id}:open`)).unique()))!
+  expect(parked).toMatchObject({ state: 'parked', nextAttemptAt: f.original.closeAt })
+  if (state === 'terminal') await f.t.run(ctx => ctx.db.patch(parked._id, { state, recoveryAttempts: 3, nextAttemptAt: Number.MAX_SAFE_INTEGER }))
+  const before = await beginReport(f, cohort, `${state}_opening_fault_report`, true)
+  const pins = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q =>
+    q.eq('reportRunId', before.reportRunId)).take(8))
+  expect(pins.find(row => row.userId === f.learnerId)?.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+  failure.mockRestore()
+  vi.setSystemTime(f.original.closeAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(parked._id))).toBeNull()
+  expect(await f.t.run(ctx => ctx.db.get(f.original._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  const after = await beginReport(f, cohort, `${state}_closed_fault_report`)
+  expect(await f.t.run(ctx => ctx.db.get(after.reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+}, 30_000)
+
+test('C6 preserves a recorded access block ahead of a legacy system-late label', async () => {
+  const cohort = await cohortJourney(false, 10)
+  const f = cohort[0]!
+  const blocked = cohort.slice(0, 5)
+  for (const learner of blocked) await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: learner.learnerId, enabled: false })
+  vi.setSystemTime(f.original.openAt)
+  await runLearnDueCron(f.t)
+  for (const learner of blocked) expect(await f.t.run(ctx => ctx.db.get(learner.original._id))).toMatchObject({ reasonCode: 'not_admitted' })
+  vi.setSystemTime(f.original.closeAt)
+  await runLearnDueCron(f.t)
+  const { writeMeasurementOpportunityFact } = await import('./lib/learnV2Measurement')
+  await f.t.run(async ctx => {
+    for (const learner of blocked) {
+      const row = (await ctx.db.get(learner.original._id))!
+      expect(row).toMatchObject({ phase: 'abandoned', reasonCode: 'not_admitted' })
+      await ctx.db.patch(row._id, { reasonCode: 'system_due_work_late', revision: row.revision + 1 })
+      const assignment = (await ctx.db.get(row.assignmentId!))!
+      await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(row._id))!)
+    }
+  })
+  const report = await beginReport(f, cohort, 'legacy_blocked_slot_report')
+  const input = await sealedMeasurementReportInput(f.t, report.reportRunId)
+  const ids = new Set(blocked.map(learner => String(learner.original._id)))
+  const episodes = input.rows.filter(row => row.kind === 'episode' && ids.has(String(row.originalOpportunityId)))
+  expect(episodes).toHaveLength(5)
+  for (const row of episodes) {
+    expect(row).toMatchObject({ disposition: 'access_provider_blocked' })
+    if (row.kind === 'episode') expect(row.reasonCodes).not.toContain('system_due_work_late')
+  }
+  const claims = input.rows.filter(row => row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'linked' && ids.has(String(row.firstSlot.firstCheckOpportunityId)))
+  expect(claims).toHaveLength(5)
+  for (const row of claims) expect(row).toMatchObject({ firstSlot: { unresolvedReason: 'access_provider_blocked' } })
+}, 30_000)

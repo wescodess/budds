@@ -2,80 +2,51 @@ import { v } from 'convex/values'
 import { makeFunctionReference } from 'convex/server'
 import { internalMutation, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
-import { materializeLearnMeasurementAssignment, materializeLearnMeasurementDueBatch, extendLearnDueWorkCoverage } from './lib/learnV2MeasurementDueWork'
-import { learnDueWorkEnabled, learnDueWorkBackoff, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { materializeLearnMeasurementAssignment, materializeLearnMeasurementDueBatch, extendLearnDueWorkCoverage, processLearnMeasurementDueOpportunity } from './lib/learnV2MeasurementDueWork'
+import { learnDueWorkEnabled, learnDueWorkBackoff, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
-import { writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
-import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
-import { LEARN_SYSTEM_DUE_WORK_LATE } from '../shared/learn-v2-delayed-check'
 
 export { LEARN_DUE_WORK_LEASE_MS } from './lib/learnV2DueWorkQueue'
 export const LEARN_DUE_WORK_PAGE_SIZE = 16
-type Chain = { leaseId: string, target: number }
+export const LEARN_DUE_WORK_IDLE_PASSES = 8
+type Chain = { leaseId: string, target: number, idlePasses?: number }
+type WorkArgs = { userId: string, workId: Id<'learnMeasurementDueWork'>, generation: number, recovering?: boolean }
 type SweepResult = { status: 'disabled' | 'busy' | 'stale' | 'scheduled' | 'complete', visited: number, scheduledLearners: number, continued: boolean }
+const workArgs = { userId: v.string(), workId: v.id('learnMeasurementDueWork'), generation: v.number(), recovering: v.optional(v.boolean()) }
 const step = makeFunctionReference<'mutation', Chain, SweepResult>('learnV2MeasurementDueWork:continueDelayedCheckSweep')
-const ownerWork = makeFunctionReference<'mutation', { userId: string, workId: Id<'learnMeasurementDueWork'>, generation: number }>('learnV2MeasurementDueWork:processDelayedCheckWork')
+const ownerWork = makeFunctionReference<'mutation', WorkArgs, null>('learnV2MeasurementDueWork:processDelayedCheckWork')
+const applyWork = makeFunctionReference<'mutation', WorkArgs, null>('learnV2MeasurementDueWork:applyDelayedCheckWork')
 const continuation = makeFunctionReference<'mutation', { userId: string, cursor?: string, through: number, expectedSequence?: number, coverageComplete?: boolean, fromCron?: boolean }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
 const sweepResult = v.object({ status: v.union(v.literal('disabled'), v.literal('busy'), v.literal('stale'), v.literal('scheduled'), v.literal('complete')),
   visited: v.number(), scheduledLearners: v.number(), continued: v.boolean() })
 const idle = (status: SweepResult['status']): SweepResult => ({ status, visited: 0, scheduledLearners: 0, continued: false })
 const readCursor = (ctx: MutationCtx) => ctx.db.query('learnMeasurementDueWorkCursors').withIndex('by_key', q => q.eq('key', 'delayed_checks')).unique()
-const dueRange = (ctx: MutationCtx, state: 'scheduled' | 'pending', target: number) => ctx.db.query('learnMeasurementDueWork')
-  .withIndex('by_state_and_nextAttemptAt', q => q.eq('state', state).lte('nextAttemptAt', target))
-
-async function resumeDrain(ctx: MutationCtx) {
-  const now = Date.now()
-  if (await dueRange(ctx, 'pending', now).first() === null && await dueRange(ctx, 'scheduled', now).first() === null) return
-  const cursor = await readCursor(ctx)
-  if (cursor?.leaseId && cursor.leaseExpiresAt > now) return
-  const leaseId = crypto.randomUUID()
-  const lease = { leaseId, leaseExpiresAt: now + LEARN_DUE_WORK_LEASE_MS, updatedAt: now }
-  if (cursor) await ctx.db.patch(cursor._id, lease)
-  else await ctx.db.insert('learnMeasurementDueWorkCursors', { key: 'delayed_checks', through: null, ...lease })
-  await ctx.scheduler.runAfter(0, step, { leaseId, target: now })
-}
-
-async function exhaustWork(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>) {
-  await ctx.db.patch(work._id, { state: 'terminal', reasonCode: 'retries_exhausted', updatedAt: Date.now() })
-  const assignment = work.assignmentId ? await ctx.db.get(work.assignmentId) : null
-  if (!assignment || assignment.userId !== work.userId || assignment.status !== 'admitted') return
-  const rows = work.assessmentOpportunityId ? [await ctx.db.get(work.assessmentOpportunityId)]
-    : await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
-      q.eq('userId', work.userId).eq('assignmentId', assignment._id)).take(9)
-  if (rows.length > 8) throw new Error('Learn due-work opportunity inventory exceeds its bound')
-  for (const row of rows) {
-    if (!row || row.userId !== work.userId || row.assignmentId !== assignment._id || row.purpose.kind !== 'measurement_delayed'
-      || row.submissionId || !['preparing', 'ready', 'test_open'].includes(row.phase)) continue
-    const patch = { phase: 'abandoned' as const, operationalEligibility: 'blocked' as const, reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
-    await ctx.db.patch(row._id, patch)
-    await finalizeLearnDelayedCheckSession(ctx, work.userId, { ...row, ...patch })
-    await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(row._id))!)
-  }
-}
+const dueRange = (ctx: MutationCtx, target: number) => ctx.db.query('learnMeasurementDueWork')
+  .withIndex('by_nextAttemptAt', q => q.lte('nextAttemptAt', target))
 
 async function runSweepStep(ctx: MutationCtx, chain: Chain): Promise<SweepResult> {
   const cursor = await readCursor(ctx)
   if (!cursor || cursor.leaseId !== chain.leaseId) return idle('stale')
-  const rows = [...await dueRange(ctx, 'pending', chain.target).take(LEARN_DUE_WORK_PAGE_SIZE),
-    ...await dueRange(ctx, 'scheduled', chain.target).take(LEARN_DUE_WORK_PAGE_SIZE)]
-    .sort((a, b) => a.nextAttemptAt - b.nextAttemptAt || a._creationTime - b._creationTime || a._id.localeCompare(b._id)).slice(0, LEARN_DUE_WORK_PAGE_SIZE)
-  let scheduledLearners = 0
+  const rows = await dueRange(ctx, chain.target).take(LEARN_DUE_WORK_PAGE_SIZE)
   for (const work of rows) {
-    if (work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS) { await exhaustWork(ctx, work); continue }
     const generation = work.generation + 1
-    const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation })
-    await ctx.db.patch(work._id, { state: 'pending', attempts: work.attempts + 1, generation, scheduledFunctionId,
-      nextAttemptAt: Date.now() + Math.max(LEARN_DUE_WORK_LEASE_MS, learnDueWorkBackoff(work.attempts + 1)), updatedAt: Date.now() })
-    scheduledLearners++
+    const recovering = work.state === 'parked' || work.state === 'terminal' || work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
+    const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation, recovering })
+    await ctx.db.patch(work._id, { state: recovering ? 'parked' : 'pending', generation, scheduledFunctionId, inFlight: true,
+      previousScheduledFunctionId: work.inFlight ? work.scheduledFunctionId : undefined,
+      nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
   }
-  const continued = await dueRange(ctx, 'pending', chain.target).first() !== null || await dueRange(ctx, 'scheduled', chain.target).first() !== null
+  const moreDue = await dueRange(ctx, chain.target).first() !== null
+  const inFlight = await ctx.db.query('learnMeasurementDueWork').withIndex('by_inFlight', q => q.eq('inFlight', true)).first() !== null
+  const idlePasses = rows.length ? 0 : (chain.idlePasses ?? 0) + 1
+  const continued = moreDue || inFlight && idlePasses < LEARN_DUE_WORK_IDLE_PASSES
   if (continued) {
     const leaseId = crypto.randomUUID()
     await ctx.db.patch(cursor._id, { leaseId, leaseExpiresAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
-    await ctx.scheduler.runAfter(0, step, { ...chain, leaseId })
+    await ctx.scheduler.runAfter(0, step, { leaseId, target: Date.now(), idlePasses })
   } else await ctx.db.patch(cursor._id, { through: chain.target, leaseId: null, leaseExpiresAt: 0, updatedAt: Date.now() })
-  return rows.length ? { status: 'scheduled', visited: rows.length, scheduledLearners, continued } : idle('complete')
+  return { status: rows.length ? 'scheduled' : continued ? 'busy' : 'complete', visited: rows.length, scheduledLearners: rows.length, continued }
 }
 
 export const sweepDelayedCheckEligibility = internalMutation({
@@ -94,53 +65,99 @@ export const sweepDelayedCheckEligibility = internalMutation({
 })
 
 export const continueDelayedCheckSweep = internalMutation({
-  args: { leaseId: v.string(), target: v.number() }, returns: sweepResult,
+  args: { leaseId: v.string(), target: v.number(), idlePasses: v.optional(v.number()) }, returns: sweepResult,
   handler: async (ctx, chain): Promise<SweepResult> => {
     if (!learnDueWorkEnabled()) return idle('disabled')
     return runSweepStep(ctx, chain)
   },
 })
 
+async function waitForDomain(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, closeAt?: number, restartOwner = false) {
+  const domainChecks = Math.min((work.domainChecks ?? 0) + 1, 7)
+  await ctx.db.patch(work._id, { state: 'pending', inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined,
+    domainChecks, nextAttemptAt: Math.min(Date.now() + learnDueWorkBackoff(domainChecks), closeAt ?? Number.MAX_SAFE_INTEGER), updatedAt: Date.now(),
+    ...(restartOwner ? { cursor: undefined, through: undefined, expectedSequence: undefined, coverageComplete: undefined } : {}) })
+}
+
+async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, recovering: boolean) {
+  const attempts = recovering ? work.attempts : Math.min(work.attempts + 1, LEARN_DUE_WORK_MAX_ATTEMPTS)
+  const recoveryAttempts = (work.recoveryAttempts ?? 0) + (recovering ? 1 : 0)
+  const parked = recovering || attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
+  const terminal = recoveryAttempts >= LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS
+  const row = work.assessmentOpportunityId ? await ctx.db.get(work.assessmentOpportunityId) : null
+  const closeAt = row?.userId === work.userId ? row.closeAt : null
+  const nextAttemptAt = terminal ? Number.MAX_SAFE_INTEGER : parked && !recovering
+    ? closeAt === null ? Date.now() + 3_600_000 : Math.max(Date.now(), closeAt)
+    : Date.now() + learnDueWorkBackoff(recovering ? recoveryAttempts : attempts)
+  await ctx.db.patch(work._id, { state: terminal ? 'terminal' : parked ? 'parked' : 'pending', attempts, recoveryAttempts,
+    inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined, nextAttemptAt,
+    reasonCode: parked ? 'retries_exhausted' : undefined, updatedAt: Date.now() })
+}
+
 export const processDelayedCheckWork = internalMutation({
-  args: { userId: v.string(), workId: v.id('learnMeasurementDueWork'), generation: v.number() },
-  handler: async (ctx, input) => {
+  args: workArgs, returns: v.null(),
+  handler: async (ctx, input): Promise<null> => {
     if (!learnDueWorkEnabled()) return null
     const work = await ctx.db.get(input.workId)
-    if (!work || work.userId !== input.userId || work.state !== 'pending' || work.generation !== input.generation) return null
-    if (await hasAccountDeletionTombstone(ctx, work.userId)) { await ctx.db.delete(work._id); return null }
-    const retry = async (restartOwner = false) => {
-      if (work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS) await exhaustWork(ctx, work)
-      else await ctx.db.patch(work._id, { nextAttemptAt: Date.now() + learnDueWorkBackoff(work.attempts), scheduledFunctionId: undefined, updatedAt: Date.now(),
-        ...(restartOwner ? { cursor: undefined, through: undefined, expectedSequence: undefined, coverageComplete: undefined } : {}) })
+    if (!work || work.userId !== input.userId || !work.inFlight || work.generation !== input.generation) return null
+    if (work.previousScheduledFunctionId) {
+      const previous = await ctx.db.system.get(work.previousScheduledFunctionId)
+      if (previous?.state.kind === 'failed') {
+        await recordFault(ctx, work, input.recovering === true)
+        return null
+      }
     }
-    const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', work.userId)).take(2)
-    if (catalog.length !== 1 || catalog[0]?.measurementCapability?.enabled !== true) { await retry(); return null }
+    try { await ctx.runMutation(applyWork, input) }
+    catch { await recordFault(ctx, work, input.recovering === true) }
+    return null
+  },
+})
+
+export const applyDelayedCheckWork = internalMutation({
+  args: workArgs, returns: v.null(),
+  handler: async (ctx, input): Promise<null> => {
+    if (!learnDueWorkEnabled()) return null
+    const work = await ctx.db.get(input.workId)
+    if (!work || work.userId !== input.userId || !work.inFlight || work.generation !== input.generation) return null
+    if (await hasAccountDeletionTombstone(ctx, work.userId)) { await ctx.db.delete(work._id); return null }
     if (work.kind === 'owner') {
       const through = work.through ?? Date.now()
       const result = await materializeLearnMeasurementDueBatch(ctx, work.userId, { cursor: work.cursor ?? null, through,
         expectedSequence: work.expectedSequence, coverageComplete: work.coverageComplete })
       if (result.cursor) {
         const generation = work.generation + 1
-        const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation })
+        const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation, recovering: input.recovering })
         await ctx.db.patch(work._id, { cursor: result.cursor, through, expectedSequence: result.sequence, coverageComplete: result.coverageComplete,
-          generation, scheduledFunctionId, nextAttemptAt: Date.now() + Math.max(LEARN_DUE_WORK_LEASE_MS, learnDueWorkBackoff(work.attempts)), updatedAt: Date.now() })
+          generation, scheduledFunctionId, previousScheduledFunctionId: undefined, nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
         return null
       }
-      if (!result.complete) { await retry(true); return null }
+      if (!result.complete) { await waitForDomain(ctx, work, undefined, true); return null }
     } else {
       const assignment = work.assignmentId ? await ctx.db.get(work.assignmentId) : null
-      if (assignment?.userId === work.userId && assignment.status === 'admitted') {
-        const result = await materializeLearnMeasurementAssignment(ctx, assignment, getFrozenLearnMeasurementProtocol()!, Date.now())
-        if (!['processed', 'anchor_not_started'].includes(result)) { await retry(); return null }
+      if (assignment && assignment.userId !== work.userId) throw new Error('Learn due-work assignment scope conflicts')
+      if (assignment?.status === 'admitted') {
         const opportunity = work.assessmentOpportunityId ? await ctx.db.get(work.assessmentOpportunityId) : null
-        if (opportunity && !opportunity.submissionId && ['preparing', 'ready', 'test_open'].includes(opportunity.phase)
-          && opportunity.operationalEligibility === 'blocked' && Date.now() < opportunity.closeAt) { await retry(); return null }
+        if (opportunity && (opportunity.userId !== work.userId || opportunity.assignmentId !== assignment._id)) throw new Error('Learn due-work opportunity scope conflicts')
+        if (input.recovering && opportunity && Date.now() < opportunity.closeAt && !opportunity.submissionId
+          && ['preparing', 'ready', 'test_open'].includes(opportunity.phase)) {
+          await ctx.db.patch(work._id, { state: 'parked', inFlight: false, scheduledFunctionId: undefined,
+            nextAttemptAt: opportunity.closeAt, updatedAt: Date.now() })
+          return null
+        }
+        if (opportunity?.purpose.kind === 'measurement_delayed') {
+          await processLearnMeasurementDueOpportunity(ctx, assignment, getFrozenLearnMeasurementProtocol()!, opportunity, Date.now())
+        } else {
+          const result = await materializeLearnMeasurementAssignment(ctx, assignment, getFrozenLearnMeasurementProtocol()!, Date.now())
+          if (!['processed', 'anchor_not_started'].includes(result)) { await waitForDomain(ctx, work); return null }
+        }
+        const current = opportunity ? await ctx.db.get(opportunity._id) : null
+        if (current && !current.submissionId && ['preparing', 'ready', 'test_open'].includes(current.phase)
+          && current.operationalEligibility === 'blocked' && Date.now() < current.closeAt) { await waitForDomain(ctx, work, current.closeAt); return null }
       }
     }
-    await ctx.db.delete(work._id)
+    if (await ctx.db.get(work._id)) await ctx.db.delete(work._id)
     const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', work.userId)).unique()
     if (watermark) await extendLearnDueWorkCoverage(ctx, watermark, Date.now())
-    await resumeDrain(ctx)
     return null
   },
 })
