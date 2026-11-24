@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { makeFunctionReference } from 'convex/server'
-import { api, internal } from './_generated/api'
+import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
+import { internal } from './_generated/api'
 import * as dueWork from './lib/learnV2MeasurementDueWork'
 import { enqueueLearnDueWork, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_LEASE_MS } from './lib/learnV2DueWorkQueue'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
@@ -18,13 +18,14 @@ vi.mock('./lib/learnV2MeasurementAssignment', async original => {
 })
 const START = Date.parse('2027-03-07T15:00:00Z')
 const userId = deliveryIdentity.tokenIdentifier
+const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(START); policy.protocol = syntheticDeliveryProtocol(START) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers() })
 
 async function fixture() {
   const f = await assessmentDeliveryFixture()
   await publishDeliveryTeaching(f)
-  const enroll = () => f.owner.mutation(api.learnV2Measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
+  const enroll = () => f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
   const opportunities = () => f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(8))
   const work = () => f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId', q => q.eq('userId', userId)).take(16))
   return { ...f, enroll, opportunities, work }
@@ -83,7 +84,7 @@ test('#569 finding 2: enrollment in the completed sweep millisecond retains its 
 test('enrollment and its due records roll back together when their mutation fails', async () => {
   const f = await fixture()
   await expect(f.owner.mutation(async ctx => {
-    const enrolled = await ctx.runMutation(api.learnV2Measurement.enrollProspect, { studySessionId: f.graph.studySessionId,
+    const enrolled = await ctx.runMutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId,
       familyId: f.begun.familyId, entryPoint: 'today' })
     expect(enrolled).toMatchObject({ status: 'admitted' })
     expect(await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId', q => q.eq('userId', userId)).take(8)).toHaveLength(4)

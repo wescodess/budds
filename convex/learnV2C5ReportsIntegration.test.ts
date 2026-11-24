@@ -159,6 +159,13 @@ test('C6 pin-time coverage stays unknown with pending retries and becomes comple
   expect(before).toHaveLength(5)
   for (const row of before) expect(row.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
   expect(await f.t.run(ctx => ctx.db.get(first.reportRunId))).toMatchObject({ sourceCoverage: 'unknown' })
+  policy.responses = false
+  vi.setSystemTime(Date.now() + 1)
+  const paused = await beginReport(f, cohort, 'paused_due_work_report_1234567890', true)
+  const pausedPins = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', paused.reportRunId)).take(8))
+  expect(pausedPins).toHaveLength(5)
+  for (const row of pausedPins) expect(row.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+  policy.responses = true
   vi.setSystemTime(Date.now() + 60_000)
   await runLearnDueCron(f.t)
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>

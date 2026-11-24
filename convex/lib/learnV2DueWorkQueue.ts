@@ -34,7 +34,7 @@ export async function enqueueLearnOpportunityEdges(ctx: MutationCtx, row: Doc<'l
 }
 
 export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {
-  if (!learnDueWorkEnabled()) return false
+  if (!learnDueWorkEnabled() && !LEARN_MEASUREMENT_CAPABILITIES.reports) return false
   for (const state of ['pending', 'terminal'] as const) {
     if (await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
       q.eq('userId', userId).eq('state', state)).first()) return true
