@@ -9,7 +9,6 @@ import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { getScopedMasteryRecord, masteryScopeKey } from './learnV2MasteryScope'
-import { findCurrentAdaptiveActivityForSessionContent } from './learnAdaptiveEvents'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readEarliestLearnFirstSlot, readLearnFirstSlotInventory, writeLearnMeasurementEnrollmentFact } from './learnV2MeasurementFacts'
 import {
   allocateLearnMeasurementItems, getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema,
@@ -220,6 +219,7 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
     fact: { kind: 'opportunity', assessmentOpportunityId: row._id, recordRevision: row.revision,
       status: ['cancelled', 'abandoned', 'invalid'].includes(row.phase) ? row.phase : row.operationalEligibility, dueAt: row.dueAt ?? null, closeAt: row.closeAt,
       clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot,
+      ...(LEARN_MEASUREMENT_CAPABILITIES.responses && row.reasonCode ? { reasonCode: row.reasonCode } : {}),
       ...(stateAtEligibility !== undefined ? { stateAtEligibility } : {}) } })
 }
 
@@ -245,9 +245,7 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   let scope: MeasurementScope = { learningVoidId: learningVoid._id, blueprintRevisionId: blueprint._id, objectiveId: objective._id,
     blueprintRecordRevision: blueprint.recordRevision, assessmentContractVersion: objective.assessmentContract.version,
     assessmentContractDigest: await privacyDigest(objective.assessmentContract), depth: objective.depth, contextPins }
-  const content = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first()
-  const attached = content && await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id)
-  const canvasActivityId = request.canvasActivityId ?? attached?.activity._id
+  const canvasActivityId = request.canvasActivityId
   scope = await withMeasurementCanvasScope(ctx, userId, scope, session, canvasActivityId)
   const flow = request.entryPoint === 'canvas' || canvasActivityId ? 'v2_canvas' as const : 'v2_today' as const
   const history = await enrollmentHistory(ctx, userId, scope, session)

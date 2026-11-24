@@ -81,7 +81,7 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`learn-v2.report-code.c6.2.v6`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v7`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
 manifest's code pin to bypass rejection does not constitute exact replay. Replay
 v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null

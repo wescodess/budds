@@ -4,6 +4,7 @@ import { api, internal } from './_generated/api'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
+import { runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
@@ -137,6 +138,43 @@ async function cohortJourney(reserve: boolean, count: number) {
     { subject: `integration-${index}`, tokenIdentifier: `https://auth.example|integration-${index}` }))
   return cohort
 }
+
+test('system-late undelivered checks remain missing outcomes in a sealed C6 report', async () => {
+  const cohort = await cohortJourney(false, 5)
+  const f = cohort[0]!
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.closeAt + 86_400_000)
+  await runLearnDueCron(f.t)
+  for (const learner of cohort) {
+    const originals = (await learner.opportunities()).filter(row => row.horizonDays)
+    expect(originals).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'abandoned', reasonCode: 'system_due_work_late' })]))
+    expect(originals.every(row => row.reasonCode === 'system_due_work_late')).toBe(true)
+    expect(originals.some(row => row.contextPins.kind === 'session' && row.contextPins.generatorVersion === 'learn-v2.delayed-delivery.v1')).toBe(true)
+    for (const row of originals) if (row.contextPins.kind === 'session' && row.contextPins.generatorVersion === 'learn-v2.delayed-delivery.v1') {
+      const session = await f.t.run(ctx => ctx.db.get(row.contextPins.kind === 'session' ? row.contextPins.studySessionId : learner.graph.studySessionId))
+      expect(session).toMatchObject({ status: 'cancelled', auditReasonCode: 'system_due_work_late' })
+      expect(session).not.toHaveProperty('missedAt')
+    }
+  }
+  const { reportRunId } = await beginReport(f, cohort, 'system_late_report_1234567890')
+  const input = await sealedMeasurementReportInput(f.t, reportRunId)
+  const episodes = input.rows.filter(row => row.kind === 'episode')
+  expect(episodes).toHaveLength(10)
+  for (const episode of episodes) expect(episode).toMatchObject({ disposition: 'missing_delayed', reasonCodes: ['system_due_work_late'], delayed: null })
+  const built = await buildLearningMeasurementReport(input)
+  expect(built.report.status).toBe('sealed')
+  const cells = built.pages.flatMap(page => page.cells).filter(cell => cell.metric === 'verified_learning_gain.v1' && cell.stratum.startingBand === 'all')
+  expect(cells.length).toBeGreaterThan(0)
+  for (const cell of cells) {
+    expect(cell.counts.dispositions.abandoned).toBe(0)
+    expect(cell.counts.dispositions.missing_delayed).toBe(5)
+    expect(cell.reasonCodes).toContain('system_due_work_late')
+  }
+  vi.setSystemTime(Date.now() + 86_400_000)
+  await runLearnDueCron(f.t)
+  const watermark = await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', f.learnerId)).unique())
+  expect(watermark?.dueWorkThrough).toBe(Date.now())
+}, 30_000)
 
 test.each([{ reserve: false, score: 100 }, { reserve: false, score: 0 }, { reserve: true, score: 100 }])(
   'C5 delivery feeds a sealed C6 report once: reserve=$reserve score=$score', async ({ reserve, score }) => {

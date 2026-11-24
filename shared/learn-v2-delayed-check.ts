@@ -165,3 +165,4 @@ export function evaluateLearnAssessmentEligibility(input: z.infer<typeof learnAs
     reasonCodes: reasons,
   })
 }
+export const LEARN_SYSTEM_DUE_WORK_LATE = 'system_due_work_late' as const

@@ -18,15 +18,16 @@ import * as scoringContract from '../server/utils/learn-v2-measurement-item-cont
 import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 
 const measurementItems = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
 const due = makeFunctionReference<'mutation', { userId: string, through?: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
-const policy = vi.hoisted(() => ({ responses: true, enrollment: true, protocol: null as unknown, scorer: null as unknown }))
+const policy = vi.hoisted(() => ({ responses: true, enrollment: true, delivery: true, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
-  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, scoring: true, delivery: true,
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, scoring: true, get delivery() { return policy.delivery },
     get responses() { return policy.responses }, get enrollment() { return policy.enrollment } } }
 })
 vi.mock('./lib/learnV2MeasurementAssignment', async original => {
@@ -43,7 +44,7 @@ type Entry = 'today' | 'session_deep_link'
 
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
-  policy.responses = true; policy.enrollment = true; policy.protocol = syntheticDeliveryProtocol()
+  policy.responses = true; policy.enrollment = true; policy.delivery = true; policy.protocol = syntheticDeliveryProtocol()
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
@@ -1027,8 +1028,13 @@ test.each([7, 30] as const)('Today discovers, grants, seals and scores its origi
   expect(JSON.stringify(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery,
     { studySessionId: f.graph.studySessionId, idempotencyKey: 'future_check_allows_lesson_1234567890' }))).toContain('TEACHING-CANARY-explanation')
   const original = (await f.opportunities()).find(row => row.horizonDays === horizon)!
+  if (horizon === 30) {
+    const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+    vi.setSystemTime(day7.openAt)
+    await runLearnDueCron(f.t)
+  }
   vi.setSystemTime(original.openAt + 1000)
-  await f.t.mutation(due, { userId, through: Date.now() })
+  await runLearnDueCron(f.t)
   await f.t.mutation(due, { userId, through: Date.now() })
   const today = await f.owner.query(api.learnV2Today.getToday, {})
   expect(today).toMatchObject({ status: 'ready', mastery: { state: 'unseen' }, assessment: { kind: 'check', state: { assessmentOpportunityId: original._id } } })
@@ -1112,6 +1118,10 @@ test.each([false, true])('Today enrolls, seals and scores cold, then scores a se
     expect(retained).toEqual([expect.objectContaining({ status: 'ready', assessmentOpportunityId: day7._id, assessmentPurpose: 'measurement_delayed' })])
   })
   if (!assisted) {
+    const retained = (await f.opportunities()).find(row => row.horizonDays === 7)!
+    vi.setSystemTime(retained.openAt)
+    await runLearnDueCron(f.t)
+    expect((await f.opportunities()).find(row => row._id === retained._id)).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', eligibleAt: retained.openAt })
     const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
     vi.setSystemTime(day30.openAt + 1000)
     await f.t.mutation(due, { userId, through: Date.now() })
@@ -1603,6 +1613,135 @@ test('publication revalidation rejects a validated family that grows to 65 suppo
 
 test('ordinary publication rejects 65 evidence rows before making content ready', async () => {
   await expect(fixture({ teaching: { claims: 32, supports: 2, extraSupports: 1 } })).rejects.toThrow('item_evidence_limit')
+})
+
+test('the registered cron alone closes stale windows and restores consistent Today teaching', async () => {
+  const f = await fixture()
+  await f.seal()
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.closeAt + 86_400_000)
+  await runLearnDueCron(f.t)
+  expect((await f.opportunities()).filter(row => row.horizonDays)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ horizonDays: 7, phase: 'abandoned', reasonCode: 'system_due_work_late' }),
+    expect.objectContaining({ horizonDays: 30, phase: 'abandoned', reasonCode: 'system_due_work_late' }),
+  ]))
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: f.graph.studySessionId })
+  const delivered = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, {
+    studySessionId: f.graph.studySessionId, idempotencyKey: 'cron_restores_teaching_1234567890' })
+  expect(delivered).toMatchObject({ admission: { status: 'ordinary' }, value: { _id: f.contentId } })
+  expect(JSON.stringify(delivered)).toContain('TEACHING-CANARY-explanation')
+  const watermark = await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique())
+  expect(watermark?.dueWorkThrough).toBe(Date.now())
+})
+
+test('the registered cron materializes and closes a non-returning learner on schedule', async () => {
+  const protocol = syntheticDeliveryProtocol()
+  policy.protocol = { ...protocol, windows: protocol.windows.map(window => ({ ...window, dueMinute: 720 })) }
+  const f = await fixture()
+  await f.seal()
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  expect(day7.dueAt).toBeGreaterThan(day7.openAt)
+  vi.setSystemTime(day7.openAt)
+  await runLearnDueCron(f.t)
+  const ready = (await f.opportunities()).find(row => row._id === day7._id)!
+  expect(ready).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', eligibleAt: Date.now(), contextPins: { kind: 'session' } })
+  expect(ready.deliveryGrantId).toBeUndefined()
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: day7._id } } })
+  expect(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId,
+    idempotencyKey: 'cron_open_window_denies_teaching_1234567890' })).toMatchObject({ admission: { status: 'denied', reasonCode: 'unavailable' } })
+  vi.setSystemTime(day7.closeAt)
+  await runLearnDueCron(f.t)
+  const closed = (await f.opportunities()).find(row => row._id === day7._id)!
+  expect(closed).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window' })
+  if (closed.contextPins.kind !== 'session') throw new Error('Expected dedicated binding')
+  expect(await f.t.run(ctx => ctx.db.get(closed.contextPins.kind === 'session' ? closed.contextPins.studySessionId : f.graph.studySessionId)))
+    .toMatchObject({ status: 'missed' })
+})
+
+test('expired preparing opportunities do not indefinitely deny teaching before late cleanup', async () => {
+  const f = await fixture()
+  await f.seal()
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.closeAt)
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: f.graph.studySessionId })
+  expect(await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId,
+    idempotencyKey: 'expired_preparing_teaching_1234567890' })).toMatchObject({ admission: { status: 'ordinary' }, value: { _id: f.contentId } })
+  expect((await f.opportunities()).find(row => row._id === day30._id)).toMatchObject({ phase: 'preparing', operationalEligibility: 'pending' })
+})
+
+test('the registered cron binds overlapping horizons at maximum published inventory within transaction limits', async () => {
+  const protocol = syntheticDeliveryProtocol()
+  policy.protocol = { ...protocol, windows: protocol.windows.map(window => ({ ...window, closeDayOffset: 31 })) }
+  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  await f.seal()
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt)
+  await runLearnDueCron(f.t)
+  const originals = (await f.opportunities()).filter(row => row.horizonDays)
+  expect(originals).toHaveLength(2)
+  for (const row of originals) expect(row).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', contextPins: { generatorVersion: 'learn-v2.delayed-delivery.v1' } })
+})
+
+test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as const)('the due-work cron is inert with %s off', async gate => {
+  const f = await fixture()
+  await f.seal()
+  const before = await f.opportunities()
+  const slot = before.find(row => row.horizonDays === 7)!
+  vi.setSystemTime(slot.openAt)
+  if (gate === 'protocol') policy.protocol = null
+  else if (gate === 'feature') vi.stubEnv('LEARN_V2_ENABLED', 'false')
+  else policy[gate] = false
+  const cron = learnDueCron()
+  const checked = await f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(cron.reference, cron.args)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(checked.value).toMatchObject({ status: 'disabled', scheduledLearners: 0 })
+  expect(checked.metrics.databaseQueries.used).toBe(0)
+  expect(checked.metrics.documentsWritten.used).toBe(0)
+  expect(checked.metrics.functionsScheduled.used).toBe(0)
+  expect(await f.opportunities()).toEqual(before)
+  const queued = makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
+  const stopped = await f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(queued, { userId, through: Date.now(), fromCron: true })
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(stopped.value).toMatchObject({ status: 'disabled', processed: 0 })
+  expect(stopped.metrics.databaseQueries.used).toBe(0)
+  expect(stopped.metrics.documentsWritten.used).toBe(0)
+  expect(stopped.metrics.functionsScheduled.used).toBe(0)
+})
+
+test('due-work fan-out is bounded, continues its index pages and is idempotent under duplicate ticks', async () => {
+  const f = await fixture()
+  await f.seal()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(slot.openAt)
+  await f.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...fields } = slot
+    for (let index = 0; index < 33; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...fields,
+      userId: `https://cron.example|bounded-${index}`, delayedCheckId: `bounded-${index}` })
+  })
+  const cron = learnDueCron()
+  const first = await f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(cron.reference, cron.args)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(first.value).toMatchObject({ visited: 16, scheduledLearners: 16, continued: true })
+  expect(first.metrics.databaseQueries.used).toBe(1)
+  expect(first.metrics.functionsScheduled.used).toBe(17)
+  await Promise.all([f.t.mutation(cron.reference, cron.args), f.t.mutation(cron.reference, cron.args)])
+  await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  const closed = await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').take(256))
+  expect(closed.filter(row => row.state.kind === 'pending' || row.state.kind === 'inProgress')).toEqual([])
+  const visited = new Set(closed.flatMap(row => row.args.flatMap(arg => arg && typeof arg === 'object' && 'userId' in arg ? [arg.userId] : [])))
+  expect(visited.has(userId)).toBe(true)
+  for (let index = 0; index < 33; index++) expect(visited.has(`https://cron.example|bounded-${index}`)).toBe(true)
+  const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', f.graph.studyPlanRevisionId).eq('assessmentPurpose', 'measurement_delayed')).take(4))
+  expect(sessions).toHaveLength(1)
+  const events = await f.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId)).take(16))
+  expect(events.filter(row => 'assessmentOpportunityId' in row && row.assessmentOpportunityId === slot._id)).toHaveLength(1)
 })
 
 test('ordinary publication rejects source evidence above the serialized scoring request budget', async () => {

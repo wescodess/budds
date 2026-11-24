@@ -4,6 +4,7 @@ import * as scoringContract from '../server/utils/learn-v2-measurement-item-cont
 import { convexTest } from 'convex-test'
 import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 import { api, internal } from './_generated/api'
 import schema from './schema'
 import { canvasFamilyFixture, canvasIdentity } from '../tests/fixtures/learn-v2-canvas'
@@ -129,8 +130,13 @@ test.each([7, 30] as const)('Canvas discovers and plays its original day-%s item
     submissionId: cold.submissionId, idempotencyKey: 'cold_before_delayed_canvas_1234567890' })
   const slots = () => s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(8))
   const original = (await slots()).find(row => row.horizonDays === horizon)!
+  if (horizon === 30) {
+    const day7 = (await slots()).find(row => row.horizonDays === 7)!
+    vi.setSystemTime(day7.openAt)
+    await runLearnDueCron(s.t)
+  }
   vi.setSystemTime(original.openAt + 1000)
-  await s.t.mutation(materializeDue, { userId: OWNER.tokenIdentifier, through: Date.now() })
+  await runLearnDueCron(s.t)
   const due = await s.owner.query(api.learnAdaptiveCanvas.listDueChecks, {})
   expect(due).toMatchObject({ status: 'available', checks: [{ assessmentOpportunityId: original._id, horizonDays: horizon }] })
   expect(JSON.stringify(due)).not.toMatch(/Hypothetical|PRIVATE|declaredStimulus|promptDigest/)
@@ -300,6 +306,20 @@ test('fresh Canvas preparation atomically binds its flow and enrollment without 
     assessmentOpportunityId: prepared.assessmentOpportunityId, expectedRevision: 1, idempotencyKey: 'prepared_today_bypass_1234567890' })).toMatchObject({ status: 'unavailable', reasonCodes: ['flow_mismatch'] })
   expect(await s.owner.query(api.learnV2Assessments.getAssessment, { version: LEARN_V2_PUBLIC_API_VERSION,
     assessmentOpportunityId: prepared.assessmentOpportunityId })).toMatchObject({ status: 'unavailable' })
+})
+
+test.each([false, true])('Today enrollment ignores an ordinary Canvas attachment with Canvas in protocol=%s', async canvasAllowed => {
+  const s = await fixture({ prepare: false, attach: false })
+  policy.responses = false
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)).toMatchObject({ kind: 'attached' })
+  policy.responses = true
+  policy.protocol = { ...policy.protocol as ReturnType<typeof learnMeasurementProtocolSchema.parse>,
+    flows: canvasAllowed ? ['v2_today', 'v2_canvas'] : ['v2_today'] }
+  const started = await s.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: s.f.studySessionId,
+    expectedSessionRevision: 2, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'explicit_today_flow_1234567890' })
+  expect(started).toMatchObject({ status: 'assessment', deliveryGrant: { status: 'granted' } })
+  const assignment = await s.t.run(ctx => ctx.db.query('learnMeasurementAssignments').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).unique())
+  expect(assignment).toMatchObject({ status: 'admitted', flow: 'v2_today', entryPoint: 'today' })
 })
 
 test.each(['responses', 'delivery', 'enrollment', 'protocol', 'pilot', 'entitlement', 'v2_entitlement', 'flow', 'history', 'source'] as const)('fresh Canvas preparation keeps %s admission conjunctive', async gate => {

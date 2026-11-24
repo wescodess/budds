@@ -4,7 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { ADAPTIVE_ASSESSMENT_PLAN_VERSION, composeAdaptiveActivityPlan } from '../../shared/learn-adaptive-activity-plan'
 import { adaptiveV2PilotDecision } from '../../shared/adaptive-v2-pilot-policy'
-import { isLearnRetainedPromotionTimeEligible } from '../../shared/learn-v2-delayed-check'
+import { isLearnRetainedPromotionTimeEligible, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
 import { learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { getFrozenLearnMeasurementProtocol, measurementWindowPolicyDigest } from './learnV2MeasurementAssignment'
 import { measurementCaseExposed, measurementFlowReason, measurementItemReason, measurementScopeReason, writeMeasurementOpportunityFact, type AdmittedAssignment } from './learnV2Measurement'
@@ -39,15 +39,16 @@ export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, 
 export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
   current?: Doc<'studySessions'>): Promise<'completed' | 'missed' | 'cancelled' | null> {
   const now = Date.now()
-  const status = row.submissionId ? 'completed' : ['invalid', 'cancelled'].includes(row.phase) ? 'cancelled'
+  const systemLate = row.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE
+  const status = row.submissionId ? 'completed' : systemLate || ['invalid', 'cancelled'].includes(row.phase) ? 'cancelled'
     : row.phase === 'abandoned' || now >= row.closeAt ? 'missed' : null
   if (!status) return null
   const binding = await readLearnDelayedCheckBinding(ctx, userId, row, current)
-  if (!binding || !['planned', 'ready', 'in_progress', 'blocked', 'generation_failed'].includes(binding.session.status)) return null
+  if (!binding || !['planned', 'ready', 'in_progress', 'blocked', 'generation_failed', ...(systemLate ? ['missed'] : [])].includes(binding.session.status)) return null
   const { session } = binding
   // Operational closure keeps the accepted content and assistance revision pinned.
   await ctx.db.patch(session._id, { status, ...(status === 'missed' ? { missedAt: now, auditReasonCode: 'session_expired' }
-    : status === 'cancelled' ? { auditReasonCode: row.reasonCode ?? 'assessment_unavailable' } : {}) })
+    : status === 'cancelled' ? { auditReasonCode: row.reasonCode ?? 'assessment_unavailable', ...(systemLate ? { missedAt: undefined } : {}) } : {}) })
   return status
 }
 

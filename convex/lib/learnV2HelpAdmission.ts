@@ -210,7 +210,8 @@ export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, i
 export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return false
   for (const phase of LEARN_HELP_OPEN_PHASES) {
-    if ((await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase)).take(1)).length) return true
+    if ((await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', Date.now())).take(1)).length) return true
   }
   return false
 }
@@ -243,7 +244,8 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   const future: Doc<'learnAssessmentOpportunities'>[] = []
   for (const phase of LEARN_HELP_OPEN_PHASES) {
     const limit = LEARN_HELP_LIMITS.openOpportunities + 1 - open.length + (phase === 'preparing' ? FUTURE_OPPORTUNITY_LIMIT - future.length : 0)
-    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase)).take(limit)
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
     if ((phase === 'preparing' || baselineSessionContent) && rows.length === limit) return deny('disclosure_unknown')
     for (const row of rows) {
       if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'

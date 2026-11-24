@@ -1,4 +1,5 @@
 import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import {
@@ -17,7 +18,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } fro
 import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
-import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession, readLearnDelayedCheckBinding } from './learnV2DelayedDelivery'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
 
 async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
@@ -56,7 +57,11 @@ async function processDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssig
   if (row.submissionId || ['cancelled', 'abandoned', 'invalid', 'scored_pass', 'scored_fail'].includes(row.phase)) return
   if (through < row.openAt || observedAt < row.openAt) return
   if (observedAt >= row.closeAt) {
-    await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: 'missed_window' })
+    const playable = !LEARN_MEASUREMENT_CAPABILITIES.responses || row.deliveryGrantId !== undefined || row.eligibleAt !== undefined && row.eligibleAt < row.closeAt
+      && await readLearnDelayedCheckBinding(ctx, assignment.userId, row) !== null
+    const reasonCode = LEARN_MEASUREMENT_CAPABILITIES.responses && row.operationalEligibility === 'blocked' && row.reasonCode ? row.reasonCode
+      : playable ? 'missed_window' : LEARN_SYSTEM_DUE_WORK_LATE
+    await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode })
     return
   }
   const reason = assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
@@ -217,7 +222,8 @@ export async function materializeLearnMeasurementDueBatch(ctx: MutationCtx, user
   }
   const { watermark, sequence } = await nextLearnMeasurementSourceSequence(ctx, userId)
   // Completeness is established only by a full sweep. Unknown history stays unknown.
-  if (page.isDone && complete && watermark) await ctx.db.patch(watermark._id, { dueWorkThrough: Math.max(watermark.dueWorkThrough ?? 0, input.through), updatedAt: Date.now() })
+  if (page.isDone && complete && watermark && (!LEARN_MEASUREMENT_CAPABILITIES.responses || watermark.dueWorkThrough === null || watermark.dueWorkThrough < input.through))
+    await ctx.db.patch(watermark._id, { dueWorkThrough: Math.max(watermark.dueWorkThrough ?? 0, input.through), updatedAt: Date.now() })
   return { status: 'processed' as const, cursor: page.isDone ? null : page.continueCursor, processed: page.page.length,
     sequence: sequence - 1, complete: page.isDone && complete, coverageComplete: complete }
 }

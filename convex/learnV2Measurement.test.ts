@@ -266,7 +266,7 @@ test.each([-1, 0] as const)('cold acceptance at closeAt offset %s respects the h
   if (offset === 0) expect(result).toMatchObject({ reasonCode: 'outside_window' })
 })
 
-test('non-returner misses day 7 and remains eligible day 30 below Independent; exact DST windows and replay', async () => {
+test('metadata-only eligibility cannot count an undelivered check as a learner miss; exact DST windows and replay', async () => {
   const f = await fixture()
   const assignment = await f.admitted()
   await f.work()
@@ -285,7 +285,7 @@ test('non-returner misses day 7 and remains eligible day 30 below Independent; e
   expect(await f.events()).toHaveLength(1)
   vi.setSystemTime(day7.closeAt)
   await f.work()
-  expect((await f.opportunities()).find(row => row._id === day7._id)).toMatchObject({ phase: 'abandoned', reasonCode: 'missed_window', eligibleAt: day7.openAt })
+  expect((await f.opportunities()).find(row => row._id === day7._id)).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late', eligibleAt: day7.openAt })
   vi.setSystemTime(day30.openAt)
   await f.work()
   await f.work()
@@ -426,7 +426,7 @@ test('fall DST window has 25 hours and a late worker cannot backdate eligibility
   vi.setSystemTime(day7.closeAt)
   await f.t.mutation(due, { userId: OWNER.tokenIdentifier, through: day7.openAt })
   expect(await f.events()).toHaveLength(0)
-  expect((await f.opportunities()).find(row => row._id === day7._id)).toMatchObject({ reasonCode: 'missed_window', phase: 'abandoned' })
+  expect((await f.opportunities()).find(row => row._id === day7._id)).toMatchObject({ reasonCode: 'system_due_work_late', phase: 'abandoned' })
 })
 
 test('day-7 failure does not gate the independently assigned day-30 case', async () => {

@@ -1291,16 +1291,25 @@ export const executeSessionContentGeneration = internalAction({
       return { status: outcomeUnknown ? "blocked" : "generation_failed" };
     }
 
-    return await ctx.runMutation(
-      internal.learnV2SessionContent.commitSessionContentCandidate,
-      {
-        ...args,
-        leaseToken: lease.leaseToken,
-        expectedRevision: begun.revision,
-        candidateJson: JSON.stringify(raw),
-        verifierDecisionsJson: verifier.choices[0]!.message.content,
-      },
-    );
+    try {
+      return await ctx.runMutation(
+        internal.learnV2SessionContent.commitSessionContentCandidate,
+        {
+          ...args,
+          leaseToken: lease.leaseToken,
+          expectedRevision: begun.revision,
+          candidateJson: JSON.stringify(raw),
+          verifierDecisionsJson: verifier.choices[0]!.message.content,
+        },
+      );
+    } catch (error) {
+      await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
+        ...args, leaseToken: lease.leaseToken, expectedRevision: begun.revision,
+        reason: 'session_content_commit_failed', sessionStatus: 'generation_failed',
+      });
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw error;
+      return { status: 'generation_failed' };
+    }
 
   },
 });
