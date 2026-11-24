@@ -14,6 +14,7 @@ import type { Doc } from './_generated/dataModel'
 import * as privacyContext from './lib/learnV2PrivacyReadContext'
 import { readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
+import { prepareSavedLearnModelScoring } from './lib/learnV2MeasurementScoring'
 
 const policy = vi.hoisted(() => ({ pointers: true, responses: true, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
@@ -180,6 +181,83 @@ test('a dedicated delayed check remains on Today after sealing and refresh', asy
   await f.owner.action(api.learnAdaptive.submitResponse, { threadId: check.stage.threadId, activityId: check.stage.activityId,
     submissionId: saved.submissionId, idempotencyKey: 'pointer_delayed_score_1234567890' })
   expect((await f.read()).find(row => row.reference === pointer.reference)).toEqual({ ...pointer, state: 'result_ready' })
+})
+
+test.each([1, 2])('saved scoring capacity after %s definitive failures agrees on Today and Canvas', async failures => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  const network = vi.fn(async () => new Response('Definitive synthetic failure', { status: 400 }))
+  vi.stubGlobal('fetch', network)
+  const score = () => f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'pointer_scoring_capacity_1234567890' })
+  for (let attempt = 0; attempt < failures; attempt++) await score()
+  const current = (await f.t.run(ctx => ctx.db.get(row._id)))!
+  const job = (await f.t.run(ctx => ctx.db.get(current.scoringJobId!)))!
+  expect(job).toMatchObject({ attempts: failures, status: 'queued' })
+  expect(current.phase).toBe('retryable_failure')
+  const expected = failures === 2 ? 'closed' : 'saved_scoring'
+  expect(await f.read()).toEqual([expect.objectContaining({ reference: row.delayedCheckId, state: expected })])
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(canvas).toMatchObject({ status: expected === 'closed' ? 'blocked' : 'submitted', checkReceipt: {
+    state: expected, submissionId: accepted.submissionId, body: { bodyAvailability: 'available' },
+  } })
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId,
+    idempotencyKey: 'capacity_delivery_1234567890' })).toEqual({ admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, value: canvas })
+  expect(JSON.stringify(canvas)).not.toMatch(/Hypothetical|PRIVATE|scorePercent|feedbackCodes/)
+  expect(await f.t.run(ctx => ctx.db.get(job._id))).toEqual(job)
+  expect(network).toHaveBeenCalledTimes(failures)
+  if (failures === 2) {
+    await score()
+    expect(network).toHaveBeenCalledTimes(2)
+    expect(await f.t.run(ctx => ctx.db.get(row._id))).toMatchObject({ phase: 'invalid', reasonCode: 'scoring_attempt_limit' })
+  } else {
+    network.mockImplementation(async () => modelReply())
+    await score()
+    expect(network).toHaveBeenCalledTimes(2)
+    expect(await f.read()).toEqual([expect.objectContaining({ state: 'result_ready' })])
+  }
+})
+
+test('a final validated scoring execution awaiting commit remains recoverable after its lease expires', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  const network = vi.fn(async () => new Response('Definitive synthetic failure', { status: 400 }))
+  vi.stubGlobal('fetch', network)
+  const score = () => f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'validated_capacity_recovery_1234567890' })
+  await score()
+  const args = { tokenIdentifier: userId, submissionId: accepted.submissionId }
+  const reservation = await f.owner.mutation(internal.learnV2Mastery.beginSealedMasteryScoring, args)
+  if (reservation.kind !== 'acquired') throw new Error('Expected final dispatch reservation')
+  const input = await f.owner.query(internal.learnV2Mastery.getSealedMasteryScoringInput, args)
+  const { service, prepared } = await prepareSavedLearnModelScoring(input, { dispatchedAt: NOW, dispatchOrdinal: 2,
+    leaseIdentityHash: await privacyDigest(reservation.leaseToken) })
+  const executionId = await f.owner.mutation(internal.learnV2Mastery.registerSealedMasteryScoring, { ...args, receiptJson: JSON.stringify(prepared.receipt) })
+  expect(await f.t.run(ctx => ctx.db.get(input.job._id))).toMatchObject({ attempts: 2, status: 'running' })
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'saved_scoring' })])
+  network.mockImplementation(async () => modelReply())
+  const result = await service.dispatch(prepared)
+  expect(await f.owner.mutation(internal.learnV2Mastery.recordMasteryScoringReceipt, { tokenIdentifier: userId, executionId,
+    resultJson: JSON.stringify(result) })).toBe(true)
+  expect(await f.t.run(ctx => ctx.db.get(executionId))).toMatchObject({ outcome: 'validated' })
+  vi.setSystemTime(NOW + ADAPTIVE_V2_PILOT_MANIFEST.limits.leaseMs + 1)
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'saved_scoring' })])
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .toMatchObject({ checkReceipt: { state: 'saved_scoring' } })
+  expect(network).toHaveBeenCalledTimes(2)
+  await score()
+  expect(network).toHaveBeenCalledTimes(2)
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'result_ready' })])
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .toMatchObject({ checkReceipt: { state: 'result_ready' } })
 })
 
 const recoveryChanges = ['none', 'claim_loss', 'source_purge', 'claim_revoked', 'assignment_revoked', 'validity_revoked', 'response_excluded', 'retryable_failure',

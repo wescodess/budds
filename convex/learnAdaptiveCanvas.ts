@@ -26,7 +26,7 @@ import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
-import { adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
+import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner, readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
@@ -777,6 +777,17 @@ async function savedCanvasCheckForOwner(ctx: QueryCtx | MutationCtx, userId: str
           : claimedResult ? 'result_unconfirmed'
             : saved?.status === 'reconciliation_required' ? 'result_unconfirmed'
               : saved?.status === 'scoring_pending' || saved?.status === 'retryable_failure' ? 'saved_scoring' : 'closed'
+      if (state === 'saved_scoring' && opportunity.scoringJobId) {
+        const job = await ctx.db.get(opportunity.scoringJobId)
+        const limit = ADAPTIVE_V2_PILOT_MANIFEST.limits.maxDispatchAttemptsPerJob
+        if (job && (job.attempts ?? 0) >= limit) {
+          const executions = await ctx.db.query('learnScoringExecutions').withIndex('by_userId_and_jobId_and_dispatchOrdinal', q =>
+            q.eq('userId', userId).eq('jobId', job._id)).take(limit + 1)
+          if (executions.length > limit) throw new LearnScoringInputError('Learn execution inventory exceeds its bound')
+          const verified = executions.some(row => row.outcome === 'validated' && !row.authoritativeAttemptId)
+          if (!verified && job.status !== 'running') state = 'closed'
+        }
+      }
       if (state === 'result_ready' && saved?.status === 'scored') result = saved.result
     }
     const receipt = learnCanvasCheckReceiptSchema.parse({ version: LEARN_CANVAS_CHECK_RECEIPT_VERSION,
