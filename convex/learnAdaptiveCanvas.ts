@@ -39,7 +39,7 @@ import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } fro
 import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInventory'
 import { readSavedLearnScoringState } from './lib/learnV2MeasurementScoring'
 import { readMeasurementClaims } from './lib/learnV2MeasurementEvidenceReads'
-import { requireAuth } from './lib/auth'
+import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema, learnTodayCheckRoute, todayCanvasChecksEnabled, type LearnCanvasCheckReceipt, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
@@ -1023,6 +1023,12 @@ export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: strin
   return await loadLegacyReadyCanvas(ctx, userId, threadId, options)
 }
 
+async function savedCanvasOwner(ctx: QueryCtx | MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity()
+  if (!identity || await hasAccountDeletionTombstone(ctx, identity.tokenIdentifier)) return null
+  return identity.tokenIdentifier
+}
+
 const getCanvasRead = defineTeachingRead({name:'learnAdaptiveCanvas.getCanvas',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'thread',id:args.threadId}]),
   args: canvasCheckReadArgs,
   handler: async (ctx, args) => {
@@ -1032,8 +1038,8 @@ const getCanvasRead = defineTeachingRead({name:'learnAdaptiveCanvas.getCanvas',s
 }, {hasContent:value=>Boolean(value?.activity.primitive)})
 export const getCanvas = query({ ...getCanvasRead.query, handler: async (ctx, args) => {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.query.handler(ctx, args)
-  const ownerId = await requireAuth(ctx)
-  const saved = await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args)
+  const ownerId = await savedCanvasOwner(ctx)
+  const saved = ownerId ? await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args) : null
   if (saved) return saved
   const userId = await requireAdaptiveQueryAccess(ctx)
   if (await hasCanvasAssessment(ctx, userId, args.threadId)) return await loadReadyCanvas(ctx, userId, args.threadId, args)
@@ -1041,8 +1047,8 @@ export const getCanvas = query({ ...getCanvasRead.query, handler: async (ctx, ar
 } })
 export const getCanvasDelivery = mutation({ ...getCanvasRead.delivery, handler: async (ctx, args) => {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.delivery.handler(ctx, args)
-  const ownerId = await requireAuth(ctx)
-  const saved = await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args)
+  const ownerId = await savedCanvasOwner(ctx)
+  const saved = ownerId ? await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args) : null
   if (saved) return { admission: { version: 'learn-v2.help-admission.v1' as const, status: 'ordinary' as const }, value: saved }
   const userId = await requireAdaptiveMutationAccess(ctx)
   if (await hasCanvasAssessment(ctx, userId, args.threadId)) return {

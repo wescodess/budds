@@ -10,7 +10,7 @@ Closed/unconfirmed receipts forbid a result and disclose no question, source ref
 
 The existing opportunity index pages potentially visible phases for the current Canvas label and bounded historical-label batches. Historical saved work has no lifetime candidate cap. An additive owner/flow/measurement-kind/acceptance index reads one native metadata page of at most 32 recent saved measurements, admitting terminal receipts from the last 90 days. Unanswered terminal shells and ordinary practice responses are excluded. Direct addressed receipt recovery has no age expiry. A separate additive owner/Canvas-thread/acceptance index supports default lookup. Continuations preserve unreturned references, native saved progress and version progress without exposing outcomes. Their one-hour window keeps the accepted-time range stable.
 
-Each page returns at most four pointers. Today projects its session first, then reserves full-candidate and metadata headroom inside the unchanged strict 3,072-read scope. `pointer_page_budget` proactively defers discovery; actual exhaustion propagates. All read caches are invocation-local, owner-scoped and invalidated after writes. Today preparation still validates the full published lesson, preserves 17/32-claim support and creates no Today grant. C4 goldens and frozen flow controls are unchanged.
+Each page returns at most four pointers. Today projects its session first, then reserves full-candidate and metadata headroom inside the unchanged strict 3,072-read scope. `pointer_page_budget` proactively defers discovery; actual exhaustion propagates. All read caches are invocation-local, owner-scoped and invalidated after writes. Today preparation still validates the full published lesson, preserves 17/32-claim support and creates no Today grant. C4 goldens, anonymous denial shapes and frozen flow controls are unchanged. Historical purpose buckets without saved phases are skipped before full candidate reads, and saved metadata discovery has its own headroom check.
 
 The registered maximum has six forms per family, 32 claims, 64 evidence rows and 64 document-backed sources. Native limits cover the complete Today query:
 
@@ -21,6 +21,7 @@ The registered maximum has six forms per family, 32 claims, 64 evidence rows and
 | 4 ready | 2,801 | 4,808 | 4,139,212 |
 | 4 mixed states | 2,052 | 2,916 | 2,044,182 |
 | 4 closed | 1,393 | 1,620 | 751,743 |
+| 4 ready with retired historical labels | 2,813 | 4,811 | 4,150,098 |
 
 The state matrix covers losses before/after scoring, actual lost provider response without redispatch, canonical answer authority, both Canvas read/delivery paths, thread ownership/deletion, routing changes, historical versions, terminal recency, 12 later deleted checks, overflow and resource propagation. These are synthetic registered fixtures; deployed contention, live providers and #442 rendering remain separate proof boundaries.
 

@@ -669,6 +669,18 @@ test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under com
   expect(await f.t.run(ctx => ctx.db.get(saved.submissionId))).toEqual(before)
 })
 
+test.each([false, true])('anonymous Canvas reads retain the existing denial shape, capability=%s', async enabled => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  if (row.contextPins.kind !== 'session' || !row.contextPins.canvas) throw new Error('Expected Canvas pins')
+  policy.pointers = enabled
+  await expect(f.t.query(api.learnAdaptiveCanvas.getCanvas, { threadId: row.contextPins.canvas.threadId }))
+    .rejects.toThrow('Adaptive Learn access denied')
+  await expect(f.t.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: row.contextPins.canvas.threadId,
+    idempotencyKey: 'anonymous_canvas_delivery_1234567890' })).rejects.toThrow('Adaptive Learn access denied')
+})
+
 test('responses off dominates the new capability and preserves the original Today projection', async () => {
   const f = await fixture()
   policy.responses = false
@@ -867,6 +879,31 @@ test('recent deleted checks cannot displace four owned closed receipts from the 
   expect('checkPointers' in today && today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
   expect('checkPointers' in today && today.checkPointers.checks.map(pointer => pointer.reference).sort()).toEqual(references.sort())
 })
+
+test('four maximum ready checks remain on the first page with retired historical Canvas labels', async () => {
+  const families: Awaited<ReturnType<typeof fixture>>[] = []
+  for (let index = 0; index < 7; index++) {
+    const historical = index < 3
+    const f = await fixture({ test: families[0]?.t, fixtureKey: `historical-headroom-${index}`,
+      ...(historical ? {} : { reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } }) })
+    await f.start()
+    if (historical) await f.t.run(async ctx => {
+      const row = (await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+        q.eq('userId', userId).eq('contextPins.studySessionId', f.graph.studySessionId)).unique())!
+      if (row.contextPins.kind !== 'session' || !row.contextPins.canvas) throw new Error('Expected Canvas pins')
+      await ctx.db.patch(row._id, { phase: 'invalid', contextPins: { ...row.contextPins,
+        canvas: { ...row.contextPins.canvas, planVersion: `historical-retired-${index}` } } })
+      await ctx.db.patch(f.graph.studySessionId, { status: 'completed' })
+    })
+    families.push(f)
+  }
+  const result = await families[0]!.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  console.info('today-pointer-read-budget', JSON.stringify({ checks: 'ready-4-historical', queries: result.metrics.databaseQueries.used,
+    documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
+  expect('checkPointers' in result.today && result.today.checkPointers.checks).toHaveLength(4)
+  expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
+  expect(result.metrics.databaseQueries.used).toBeLessThan(3072)
+}, 60_000)
 
 test('four maximum closed receipts appear on the first Today page', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []

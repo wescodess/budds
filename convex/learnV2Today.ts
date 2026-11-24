@@ -190,13 +190,28 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
       if (version !== ADAPTIVE_ACTIVITY_PLAN_VERSION) versions.push(version)
     }
     if (!versionsDone) {
-      const next = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', q =>
+      let next = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', q =>
         q.eq('userId', userId).gt('contextPins.canvas.planVersion', versionAfter ?? undefined)).first()
+      if (next?.contextPins.kind === 'session' && next.contextPins.canvas?.planVersion === ADAPTIVE_ACTIVITY_PLAN_VERSION) {
+        versionAfter = ADAPTIVE_ACTIVITY_PLAN_VERSION
+        next = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', q =>
+          q.eq('userId', userId).gt('contextPins.canvas.planVersion', versionAfter ?? undefined)).first()
+      }
       versionsDone = !next
     }
   }
+
   const now = Date.now()
-  const sources = batchDone ? [] : await Promise.all(versions.flatMap(version => POINTER_PURPOSES.flatMap(purpose => POINTER_PHASES.flatMap(phase => {
+  const buckets = batchDone ? [] : await Promise.all(versions.flatMap(version => POINTER_PURPOSES.map(async purpose => {
+    if (version === ADAPTIVE_ACTIVITY_PLAN_VERSION) return { version, purpose }
+    // This indexed range contains the six saved phases.
+    const saved = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', q =>
+      q.eq('userId', userId).eq('contextPins.canvas.planVersion', version).eq('purpose.kind', purpose)
+        .gte('phase', 'reconciliation_required').lte('phase', 'submitted_sealed')).first()
+    return saved ? { version, purpose } : null
+  })))
+  const sources = await Promise.all(buckets.flatMap(bucket => bucket === null ? [] : POINTER_PHASES.flatMap(phase => {
+    const { version, purpose } = bucket
     const live = phase === 'ready' || phase === 'test_open'
     const segments = reference === null ? [false] : [false, true]
     return segments.map(async sameTime => {
@@ -208,7 +223,8 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
         return live ? range.gt('closeAt', now) : range
       }).order('desc').take(POINTER_CANDIDATE_LIMIT + 1)
     })
-  }))))
+  })))
+
   const full = sources.filter(rows => rows.length === POINTER_CANDIDATE_LIMIT + 1)
   const boundary = full.map(rows => rows.at(-1)!).sort(pointerOrder)[0]
   // Do not advance past unseen rows in a full source.
@@ -218,7 +234,7 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
   let last: PointerPosition | null = reference
   for (const row of candidates) {
     if (checks.length === LEARN_TODAY_CHECK_LIMIT || visited === POINTER_CANDIDATE_LIMIT
-      || visited > 0 && remainingPrivacyReadBudget(ctx) < POINTER_READ_RESERVE + POINTER_DISCOVERY_RESERVE) break
+      || visited > 0 && remainingPrivacyReadBudget(ctx) < POINTER_READ_RESERVE) break
     const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row)
     if (pointer) checks.push(pointer)
     last = row
