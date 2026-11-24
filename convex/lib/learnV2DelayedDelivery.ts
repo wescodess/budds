@@ -78,7 +78,7 @@ export async function learnDelayedCheckBindingBlock(ctx: MutationCtx | QueryCtx,
   const userId = assignment.userId
   const canvasSurface = learnCheckUsesCanvasSurface(assignment)
   if (assignment.checkSurface && learnAssessmentBoundSurface(assignment, row.contextPins) !== assignment.checkSurface.surface) return 'flow_mismatch'
-  if (canvasSurface && !await hasAdaptiveExperienceAccess(ctx, userId)) return 'canvas_not_admitted'
+  if (assignment.checkSurface && canvasSurface && !await hasAdaptiveExperienceAccess(ctx, userId)) return 'canvas_not_admitted'
   try { await requireMeasurementCapability(ctx, userId) } catch (error) {
     if (!(error instanceof MeasurementValidationError)) throw error
     return 'unknown_history'
