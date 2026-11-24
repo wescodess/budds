@@ -108,9 +108,10 @@ export const processDelayedCheckWork = internalMutation({
     const work = await ctx.db.get(input.workId)
     if (!work || work.userId !== input.userId || work.state !== 'pending' || work.generation !== input.generation) return null
     if (await hasAccountDeletionTombstone(ctx, work.userId)) { await ctx.db.delete(work._id); return null }
-    const retry = async () => {
+    const retry = async (restartOwner = false) => {
       if (work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS) await exhaustWork(ctx, work)
-      else await ctx.db.patch(work._id, { nextAttemptAt: Date.now() + learnDueWorkBackoff(work.attempts), scheduledFunctionId: undefined, updatedAt: Date.now() })
+      else await ctx.db.patch(work._id, { nextAttemptAt: Date.now() + learnDueWorkBackoff(work.attempts), scheduledFunctionId: undefined, updatedAt: Date.now(),
+        ...(restartOwner ? { cursor: undefined, through: undefined, expectedSequence: undefined, coverageComplete: undefined } : {}) })
     }
     const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', work.userId)).take(2)
     if (catalog.length !== 1 || catalog[0]?.measurementCapability?.enabled !== true) { await retry(); return null }
@@ -122,10 +123,10 @@ export const processDelayedCheckWork = internalMutation({
         const generation = work.generation + 1
         const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation })
         await ctx.db.patch(work._id, { cursor: result.cursor, through, expectedSequence: result.sequence, coverageComplete: result.coverageComplete,
-          generation, scheduledFunctionId, attempts: 1, nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
+          generation, scheduledFunctionId, nextAttemptAt: Date.now() + Math.max(LEARN_DUE_WORK_LEASE_MS, learnDueWorkBackoff(work.attempts)), updatedAt: Date.now() })
         return null
       }
-      if (!result.complete) { await retry(); return null }
+      if (!result.complete) { await retry(true); return null }
     } else {
       const assignment = work.assignmentId ? await ctx.db.get(work.assignmentId) : null
       if (assignment?.userId === work.userId && assignment.status === 'admitted') {

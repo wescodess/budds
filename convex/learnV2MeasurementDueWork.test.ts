@@ -209,3 +209,34 @@ test('exhausted scheduled mutations leave a terminal record and cancel a check w
   vi.setSystemTime(Date.now() + 60_000)
   expect(await tick(f)).toMatchObject({ scheduledLearners: 0 })
 })
+
+test.each([false, true])('an incomplete owner scan restarts with a bounded retry count: repaired=%s', async repaired => {
+  const f = await materialized()
+  const assignment = (await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').withIndex('by_userId', q => q.eq('userId', userId)).first()))!
+  const incompleteIds = await f.t.run(async ctx => {
+    const { _id: _id, _creationTime: _time, ...fields } = assignment
+    const ids = []
+    for (let index = 0; index < 2; index++) ids.push(await ctx.db.insert('learnMeasurementAssignments', { ...fields, assignmentKey: `missing_cold_fixture:${index}` }))
+    await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: Date.now() })
+    return ids
+  })
+  await runLearnDueCron(f.t)
+  let pending = (await f.work()).find(row => row.kind === 'owner')!
+  expect(pending).toMatchObject({ state: 'pending', attempts: 1 })
+  if (repaired) {
+    await f.t.run(async ctx => { for (const id of incompleteIds) await ctx.db.delete(id) })
+    vi.setSystemTime(pending.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    expect((await f.work()).some(row => row.kind === 'owner')).toBe(false)
+  } else {
+    for (let attempt = 2; attempt <= LEARN_DUE_WORK_MAX_ATTEMPTS; attempt++) {
+      vi.setSystemTime(pending.nextAttemptAt)
+      await runLearnDueCron(f.t)
+      pending = (await f.work()).find(row => row.kind === 'owner')!
+      expect(pending.attempts).toBe(attempt)
+    }
+    expect(pending).toMatchObject({ state: 'terminal', reasonCode: 'retries_exhausted' })
+    vi.setSystemTime(Date.now() + 3_600_000)
+    expect(await tick(f)).toMatchObject({ scheduledLearners: 0 })
+  }
+})
