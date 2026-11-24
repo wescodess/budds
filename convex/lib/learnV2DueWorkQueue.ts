@@ -15,6 +15,23 @@ export function learnDueWorkEnabled() {
     && LEARN_MEASUREMENT_CAPABILITIES.delivery && process.env.LEARN_V2_ENABLED === 'true' && getFrozenLearnMeasurementProtocol() !== null
 }
 
+const executingJob = Symbol('learnDueWorkExecutingJob')
+export function learnDueWorkExecutionContext(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>): MutationCtx {
+  return new Proxy(ctx, { get: (target, property) => property === executingJob ? work.scheduledFunctionId : Reflect.get(target, property) })
+}
+
+async function openingWorkFaultedInWindow(ctx: QueryCtx | MutationCtx, work: Doc<'learnMeasurementDueWork'>, closeAt: number) {
+  if (work.windowFaultAt !== undefined && work.windowFaultAt <= closeAt) return true
+  for (const jobId of new Set([work.previousScheduledFunctionId, work.scheduledFunctionId])) {
+    if (!jobId) continue
+    const job = await ctx.db.system.get(jobId)
+    if (!job || job.scheduledTime > closeAt) continue
+    if (job.state.kind === 'failed' || jobId !== Reflect.get(ctx, executingJob)
+      && ['pending', 'inProgress'].includes(job.state.kind)) return true
+  }
+  return false
+}
+
 type WorkInput = Pick<Doc<'learnMeasurementDueWork'>, 'userId' | 'key' | 'kind' | 'dueAt'>
   & Partial<Pick<Doc<'learnMeasurementDueWork'>, 'assignmentId' | 'assessmentOpportunityId' | 'learningVoidId'>>
 
@@ -37,12 +54,17 @@ export async function enqueueLearnOpportunityEdges(ctx: MutationCtx, row: Doc<'l
 }
 
 export async function retireLearnOpportunityDueWork(ctx: MutationCtx, row: Doc<'learnAssessmentOpportunities'>) {
-  if (!learnDueWorkEnabled() || !row.submissionId && !['invalid', 'cancelled', 'abandoned', 'scored_pass', 'scored_fail'].includes(row.phase)) return
+  if (!learnDueWorkEnabled() || !row.submissionId && !['invalid', 'cancelled', 'abandoned', 'scored_pass', 'scored_fail'].includes(row.phase)) return false
+  let faulted = false
   for (const kind of ['open', 'close'] as const) {
     const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
       q.eq('userId', row.userId).eq('key', `${row._id}:${kind}`)).unique()
-    if (work) await ctx.db.delete(work._id)
+    if (work) {
+      if (kind === 'open') faulted = await openingWorkFaultedInWindow(ctx, work, row.closeAt)
+      await ctx.db.delete(work._id)
+    }
   }
+  return faulted
 }
 
 export async function retireLearnAssignmentFault(ctx: MutationCtx, assignment: Doc<'learnMeasurementAssignments'>) {
@@ -62,7 +84,7 @@ export async function learnOpportunityFaultedInWindow(ctx: QueryCtx | MutationCt
   if (!learnDueWorkEnabled()) return false
   const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
     q.eq('userId', row.userId).eq('key', `${row._id}:open`)).unique()
-  return work?.windowFaultAt !== undefined && work.windowFaultAt < row.closeAt
+  return work !== null && await openingWorkFaultedInWindow(ctx, work, row.closeAt)
 }
 
 export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {

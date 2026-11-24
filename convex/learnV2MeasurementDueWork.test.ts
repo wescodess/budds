@@ -41,8 +41,8 @@ const tick = async (f: Awaited<ReturnType<typeof fixture>>) => {
   return f.t.mutation(cron.reference, cron.args)
 }
 
-async function materialized() {
-  const f = await fixture()
+async function materialized(options: Parameters<typeof fixture>[0] = {}) {
+  const f = await fixture(options)
   expect(await f.enroll()).toMatchObject({ status: 'admitted' })
   await runLearnDueCron(f.t)
   expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(2)
@@ -599,4 +599,107 @@ test('an in-window fault is attributed to the scheduler even when a block is als
   vi.setSystemTime(slot.closeAt)
   await runLearnDueCron(f.t)
   expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+})
+
+test.each(['cron', 'owner', 'fact', 'takeover'] as const)('a wrapper failure before its handler survives %s retirement at close', async path => {
+  let failedWorkId = ''
+  const handler = Reflect.get(workFunctions.processDelayedCheckWork, '_handler')
+  if (typeof handler !== 'function') throw new Error('Mutation handler is unavailable')
+  const entered = vi.fn()
+  const modules = import.meta.glob('./**/*.ts')
+  const t = convexTest({ schema, transactionLimits: true, modules: { ...modules, './learnV2MeasurementDueWork.ts': async () => ({ ...workFunctions,
+    processDelayedCheckWork: internalMutation({
+      args: { userId: v.string(), workId: v.id('learnMeasurementDueWork'), generation: v.number(), recovering: v.optional(v.boolean()) },
+      handler: async (ctx, input) => {
+        if (input.workId === failedWorkId) throw new Error('synthetic_wrapper_failure_before_handler')
+        entered(input.workId)
+        return Reflect.apply(handler, undefined, [ctx, input])
+      },
+    }),
+  }) } })
+  const f = await materialized({ test: t })
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+  vi.setSystemTime(slot.openAt)
+  await runLearnDueCron(f.t)
+  const opening = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  failedWorkId = opening._id
+  entered.mockClear()
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  vi.setSystemTime(slot.closeAt - 60_000)
+  await f.t.run(ctx => ctx.db.patch(opening._id, { nextAttemptAt: Date.now() }))
+  await tick(f)
+  const dispatched = (await f.work()).find(row => row._id === opening._id)!
+  await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  expect(entered).not.toHaveBeenCalled()
+  expect(dispatched.nextAttemptAt).toBeGreaterThan(slot.closeAt)
+  expect(await f.t.run(ctx => ctx.db.system.get(dispatched.scheduledFunctionId!))).toMatchObject({
+    state: { kind: 'failed' }, completedTime: slot.closeAt - 60_000,
+  })
+  expect((await f.work()).find(row => row._id === opening._id)?.windowFaultAt).toBeUndefined()
+  vi.setSystemTime(path === 'takeover' ? dispatched.nextAttemptAt : slot.closeAt)
+  if (path === 'takeover') {
+    failedWorkId = ''
+    await tick(f)
+    const retry = (await f.work()).find(row => row._id === opening._id)!
+    await f.t.mutation(makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:processDelayedCheckWork'), {
+      userId, workId: retry._id, generation: retry.generation,
+    })
+    expect((await f.work()).find(row => row._id === opening._id)?.windowFaultAt).toBeLessThanOrEqual(slot.closeAt)
+    await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  }
+  else if (path === 'cron') await runLearnDueCron(f.t)
+  else if (path === 'owner') await f.t.mutation(makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility'), { userId })
+  else await f.t.mutation(async ctx => {
+    await ctx.db.patch(slot._id, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: 'not_admitted', revision: slot.revision + 2 })
+    const assignment = await ctx.db.get(slot.assignmentId!)
+    if (assignment?.status !== 'admitted') throw new Error('Expected admitted assignment')
+    const { writeMeasurementOpportunityFact } = await import('./lib/learnV2Measurement')
+    await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(slot._id))!)
+  })
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  expect((await slotFacts(f, slot._id)).at(-1)?.fact).toMatchObject({ status: 'abandoned', reasonCode: 'system_due_work_late' })
+  expect((await f.work()).filter(row => row.assessmentOpportunityId === slot._id)).toEqual([])
+})
+
+test('a successful wrapper job with a continuing block keeps its block reason at close', async () => {
+  const f = await materialized()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+  vi.setSystemTime(slot.openAt)
+  await runLearnDueCron(f.t)
+  const opening = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  vi.setSystemTime(slot.closeAt - 60_000)
+  await f.t.run(ctx => ctx.db.patch(opening._id, { nextAttemptAt: Date.now() }))
+  await tick(f)
+  const dispatched = (await f.work()).find(row => row._id === opening._id)!
+  await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  expect(await f.t.run(ctx => ctx.db.system.get(dispatched.scheduledFunctionId!))).toMatchObject({ state: { kind: 'success' } })
+  expect((await f.work()).find(row => row._id === opening._id)).toMatchObject({ attempts: 0, nextAttemptAt: slot.closeAt })
+  await f.t.run(ctx => ctx.db.patch(opening._id, { scheduledFunctionId: dispatched.scheduledFunctionId, nextAttemptAt: dispatched.nextAttemptAt }))
+  vi.setSystemTime(slot.closeAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'not_admitted' })
+  expect((await slotFacts(f, slot._id)).at(-1)?.fact).toMatchObject({ status: 'abandoned', reasonCode: 'not_admitted' })
+})
+
+test.each([60_000, 0])('an unresolved opening receipt scheduled %s ms before close is attributed before retirement', async beforeClose => {
+  const f = await materialized()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+  vi.setSystemTime(slot.openAt)
+  await runLearnDueCron(f.t)
+  const opening = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  vi.setSystemTime(slot.closeAt - beforeClose)
+  await f.t.run(ctx => ctx.db.patch(opening._id, { nextAttemptAt: Date.now() }))
+  await tick(f)
+  const dispatched = (await f.work()).find(row => row._id === opening._id)!
+  expect(await f.t.run(ctx => ctx.db.system.get(dispatched.scheduledFunctionId!))).toMatchObject({
+    state: { kind: 'pending' }, scheduledTime: slot.closeAt - beforeClose,
+  })
+  vi.setSystemTime(slot.closeAt)
+  await f.t.mutation(makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility'), { userId })
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  expect((await f.work()).filter(row => row.assessmentOpportunityId === slot._id)).toEqual([])
+  await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
 })

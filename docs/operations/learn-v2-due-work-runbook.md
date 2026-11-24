@@ -37,7 +37,7 @@ npx convex run --prod learnV2MeasurementDueWork:listDelayedCheckFaults '{"state"
 npx convex run --prod learnV2MeasurementDueWork:listDelayedCheckFaults '{"state":"parked","limit":50}'
 ```
 
-Each row has `workId`, `kind` (`owner`, `assignment`, `open`, `close`), `state`, `assignmentId`, `assessmentOpportunityId`, `attempts`, `recoveryAttempts`, `dueAt`, `nextAttemptAt`, `windowFaultAt` and `updatedAt`. `windowFaultAt` is set when an opening record faulted before its check closed. Such a check, if never offered, closes as `system_due_work_late`.
+Each row has `workId`, `kind` (`owner`, `assignment`, `open`, `close`), `state`, `assignmentId`, `assessmentOpportunityId`, `attempts`, `recoveryAttempts`, `dueAt`, `nextAttemptAt`, `windowFaultAt` and `updatedAt`. `windowFaultAt` is set when an opening record faulted before its check closed. Such a check, if never offered, closes as `system_due_work_late`. Closure also checks the opening record's scheduled-function receipts before retirement, so a failed or unresolved job scheduled no later than close cannot be hidden by an unexpired lease or an empty `windowFaultAt`. If takeover detects a failed receipt after close, it retains the receipt's scheduled time in `windowFaultAt` before clearing the receipt references.
 
 ## Requeue after an incident
 

@@ -6,6 +6,7 @@ import { hasLearnV2Access } from './learnV2Access'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
 import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, retireLearnOpportunityDueWork } from './learnV2DueWorkQueue'
+import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
@@ -21,7 +22,7 @@ import {
 } from '../../shared/learn-v2-measurement'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, learnTimezoneSchema, parseLearnContract } from '../../shared/learn-v2-responses'
-import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
+import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, resolveLearnReportFirstSlotV2, type LearnReportIndependentClaimV2 } from '../../shared/learn-v2-measurement-report'
 import { localDateAt } from '../../shared/learn-v2-mastery'
 import { adaptiveV2PilotDecision, validateAdaptiveProviderPayload } from '../../shared/adaptive-v2-pilot-policy'
@@ -212,9 +213,16 @@ function sameOpportunityFact(previous: Record<string, unknown>, next: Record<str
 }
 
 export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignment: Pick<AdmittedAssignment, 'userId' | 'epoch' | 'learningVoidId'>, row: Doc<'learnAssessmentOpportunities'>) {
+  const faulted = await retireLearnOpportunityDueWork(ctx, row)
+  if (faulted && row.purpose.kind === 'measurement_delayed' && row.phase === 'abandoned' && Date.now() >= row.closeAt
+    && !row.submissionId && !row.deliveryGrantId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
+    && row.reasonCode !== LEARN_SYSTEM_DUE_WORK_LATE) {
+    row = { ...row, reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
+    await ctx.db.patch(row._id, { reasonCode: row.reasonCode, revision: row.revision })
+    await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
+  }
   const previous = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', assignment.userId).eq('fact.assessmentOpportunityId', row._id)).order('desc').first()
   if (previous?.fact.kind === 'opportunity' && previous.fact.recordRevision === row.revision) {
-    await retireLearnOpportunityDueWork(ctx, row)
     return previous.sequence
   }
   let stateAtEligibility = LEARN_MEASUREMENT_CAPABILITIES.responses && previous?.fact.kind === 'opportunity' ? previous.fact.stateAtEligibility : undefined
@@ -232,11 +240,9 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
     ...(LEARN_MEASUREMENT_CAPABILITIES.responses && row.reasonCode ? { reasonCode: row.reasonCode } : {}),
     ...(stateAtEligibility !== undefined ? { stateAtEligibility } : {}) }
   if (previous?.fact.kind === 'opportunity' && learnDueWorkEnabled() && sameOpportunityFact(previous.fact, fact)) {
-    await retireLearnOpportunityDueWork(ctx, row)
     return previous.sequence
   }
   const sequence = await appendLearnMeasurementFact(ctx, assignment.userId, { epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId, fact })
-  await retireLearnOpportunityDueWork(ctx, row)
   return sequence
 }
 

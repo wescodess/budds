@@ -3,7 +3,7 @@ import { makeFunctionReference } from 'convex/server'
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { materializeLearnMeasurementAssignment, materializeLearnMeasurementDueBatch, extendLearnDueWorkCoverage, processLearnMeasurementDueOpportunity } from './lib/learnV2MeasurementDueWork'
-import { learnDueWorkEnabled, learnDueWorkBackoff, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_HOUR_MS, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { learnDueWorkEnabled, learnDueWorkExecutionContext, learnDueWorkBackoff, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_HOUR_MS, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 
@@ -84,7 +84,7 @@ const errorClass = (error: unknown) => {
   return error.name !== 'Error' ? error.name : /^(?:Uncaught )?([A-Z][A-Za-z]{0,63}Error):/u.exec(error.message)?.[1] ?? 'Error'
 }
 
-async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, recovering: boolean, cause: string) {
+async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, recovering: boolean, cause: string, faultAt = Date.now()) {
   const now = Date.now()
   const attempts = recovering ? work.attempts : Math.min(work.attempts + 1, LEARN_DUE_WORK_MAX_ATTEMPTS)
   const parked = recovering || attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
@@ -96,7 +96,8 @@ async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'
   const delay = !parked ? learnDueWorkBackoff(attempts) : inWindow ? LEARN_DUE_WORK_HOUR_MS : learnDueWorkRecoveryBackoff(recoveryAttempts + 1)
   const nextAttemptAt = inWindow ? Math.min(now + delay, closeAt) : now + delay
   await ctx.db.patch(work._id, { state, attempts, recoveryAttempts, inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined,
-    nextAttemptAt, reasonCode: parked ? 'retries_exhausted' : undefined, windowFaultAt: work.windowFaultAt ?? (inWindow ? now : undefined), updatedAt: now })
+    nextAttemptAt, reasonCode: parked ? 'retries_exhausted' : undefined,
+    windowFaultAt: work.windowFaultAt ?? (inWindow ? now : work.kind === 'open' && closeAt !== null && faultAt <= closeAt ? faultAt : undefined), updatedAt: now })
   console.error(`learn_due_work_fault ${JSON.stringify({ workId: work._id, kind: work.kind, assignmentId: work.assignmentId ?? null,
     assessmentOpportunityId: work.assessmentOpportunityId ?? null, errorClass: cause, state, attempts, recoveryAttempts, nextAttemptAt })}`)
 }
@@ -110,12 +111,15 @@ export const processDelayedCheckWork = internalMutation({
     if (work.previousScheduledFunctionId) {
       const previous = await ctx.db.system.get(work.previousScheduledFunctionId)
       if (previous?.state.kind === 'failed') {
-        await recordFault(ctx, work, input.recovering === true, 'scheduled_function_failed')
+        await recordFault(ctx, work, input.recovering === true, 'scheduled_function_failed', previous.scheduledTime)
         return null
       }
     }
     try { await ctx.runMutation(applyWork, input) }
-    catch (error) { await recordFault(ctx, work, input.recovering === true, errorClass(error)) }
+    catch (error) {
+      const job = work.kind === 'open' && work.scheduledFunctionId ? await ctx.db.system.get(work.scheduledFunctionId) : null
+      await recordFault(ctx, work, input.recovering === true, errorClass(error), job?.scheduledTime)
+    }
     return null
   },
 })
@@ -127,6 +131,7 @@ export const applyDelayedCheckWork = internalMutation({
     const work = await ctx.db.get(input.workId)
     if (!work || work.userId !== input.userId || !work.inFlight || work.generation !== input.generation) return null
     if (await hasAccountDeletionTombstone(ctx, work.userId)) { await ctx.db.delete(work._id); return null }
+    ctx = learnDueWorkExecutionContext(ctx, work)
     if (work.kind === 'owner') {
       const through = work.through ?? Date.now()
       const result = await materializeLearnMeasurementDueBatch(ctx, work.userId, { cursor: work.cursor ?? null, through,
