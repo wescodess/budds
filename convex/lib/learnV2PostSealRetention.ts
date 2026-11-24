@@ -22,14 +22,14 @@ export async function purgePostSealSourceLink(ctx: MutationCtx, userId: string, 
     : 'practiceBindingId' in link.target ? link.target.practiceBindingId : link.target.helpReceiptId
   const target = await ctx.db.get(targetId)
   const now = Date.now()
-  if (target?.userId === userId && target.learningVoidId === link.learningVoidId) {
+  if (target?.userId === userId) {
     if (target.content.status !== 'purged') await ctx.db.patch(targetId, {
       evidenceStatus: 'evidence_unavailable', invalidatedAt: now,
       content: { status: 'purged', reasonCode: 'evidence_unavailable', purgedAt: now },
     })
     if ('practiceCaseId' in target) {
       const slot = await ctx.db.get(target.responseSlotId)
-      if (slot?.userId === userId && slot.scopeKind === 'v2' && slot.learningVoidId === link.learningVoidId) {
+      if (slot?.userId === userId && slot.scopeKind === 'v2') {
         await ctx.db.patch(slot._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: now })
       }
     }

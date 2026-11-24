@@ -6,11 +6,12 @@ import {
   learnPracticeAssistanceContentSchema,
 } from './learn-v2-assessment-disclosure'
 import {
-  learnDigestSchema, learnIdSchema, learnRevisionSchema, learnSequenceSchema, learnSerializedBytes,
+  learnDigestSchema, learnIdSchema, learnRevisionSchema, learnSerializedBytes,
   learnTextSchema, learnTimestampSchema, learnVersionSchema, parseLearnContract,
 } from './learn-v2-responses'
 
 export { LEARN_V2_POST_SEAL_STORAGE_VERSION } from './learn-v2-measurement-storage-manifest'
+export { learnPracticeSlotAssistanceStorageSchema } from './learn-v2-responses'
 export const LEARN_V2_PRACTICE_HELP_FINGERPRINT_VERSION = 'learn-v2.practice-help-fingerprint.v1' as const
 
 const base = {
@@ -44,12 +45,12 @@ function boundedRow<T extends z.ZodType>(schema: T) {
 
 const teachingPayload = z.strictObject({ feedback: learnPostSealFeedbackSchema.nullable(), lesson: learnPostSealLessonSchema.nullable() })
   .refine(value => value.feedback !== null || value.lesson !== null, 'Published teaching requires content')
-const teachingBase = { ...base, ...check, sourceDependencyCount }
+const teachingBase = { ...base, ...check }
 export const learnPostSealTeachingSourceStorageSchema = boundedRow(z.union([
-  z.strictObject({ ...teachingBase, evidenceStatus: z.literal('available'), attemptId: learnIdSchema<'masteryAttempts'>().nullable(), content: pendingContent }),
-  z.strictObject({ ...teachingBase, evidenceStatus: z.literal('available'), attemptId: learnIdSchema<'masteryAttempts'>(),
+  z.strictObject({ ...teachingBase, sourceDependencyCount: z.literal(0), evidenceStatus: z.literal('available'), attemptId: learnIdSchema<'masteryAttempts'>().nullable(), content: pendingContent }),
+  z.strictObject({ ...teachingBase, sourceDependencyCount, evidenceStatus: z.literal('available'), attemptId: learnIdSchema<'masteryAttempts'>(),
     content: z.strictObject({ status: z.literal('available'), payload: teachingPayload, publication }) }),
-  z.strictObject({ ...teachingBase, evidenceStatus: z.literal('evidence_unavailable'), attemptId: learnIdSchema<'masteryAttempts'>().nullable(),
+  z.strictObject({ ...teachingBase, sourceDependencyCount: z.number().int().min(0).max(LEARN_MEASUREMENT_STORAGE_LIMITS.maxSourceDependencies), evidenceStatus: z.literal('evidence_unavailable'), attemptId: learnIdSchema<'masteryAttempts'>().nullable(),
     invalidatedAt: learnTimestampSchema, content: purgedContent }),
 ]))
 
@@ -64,13 +65,6 @@ export const learnPostSealPracticeBindingStorageSchema = boundedRow(z.strictObje
   .refine(row => row.content.status === 'available'
     ? row.evidenceStatus === 'available' && row.invalidatedAt === undefined
     : row.evidenceStatus === 'evidence_unavailable' && row.invalidatedAt !== undefined, 'Content and evidence state disagree'))
-
-export const learnPracticeSlotAssistanceStorageSchema = z.strictObject({
-  policyVersion: learnVersionSchema, revision: learnSequenceSchema, deliveryCount: learnSequenceSchema,
-  hintCount: learnSequenceSchema, workedExampleCount: learnSequenceSchema,
-  lastDeliveredAt: learnTimestampSchema, lastAuthorizationId: learnIdSchema<'learnAssessmentExposures'>(),
-}).refine(row => row.revision === row.deliveryCount && row.deliveryCount === row.hintCount + row.workedExampleCount
-  && row.deliveryCount > 0, 'Slot assistance counters disagree')
 
 export const learnPostSealHelpReceiptStorageSchema = boundedRow(z.strictObject({
   ...base, ...check, ...evidence, practiceBindingId: learnIdSchema<'learnPostSealPracticeBindings'>(),

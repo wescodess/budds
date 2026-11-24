@@ -265,15 +265,18 @@ export const assessmentExposureValidator: Validator<Infer<typeof legacyExposureV
   & { practiceHelp?: Infer<typeof practiceHelpExposureValidator> }, 'required', string>
   = v.union(legacyExposureValidator, practiceExposureValidator)
 const slotBase = {
-  ...base, ...evidenceState, stage: v.union(v.literal('retrieval'), v.literal('prediction'), v.literal('practice'), v.literal('teach_back'), v.literal('diagnostic')),
+  ...base, ...evidenceState,
   slotKey: v.string(), blockId: v.string(), promptDigest: v.string(), promptRevision: v.number(), responseFormatVersion: v.string(),
   deliveryExposureId: v.id('learnAssessmentExposures'), revision: v.number(),
   status: v.union(v.literal('open'), v.literal('accepted'), v.literal('terminal')),
   confidenceRequested: v.optional(v.boolean()),
-  practiceAssistance: v.optional(practiceSlotAssistanceValidator),
   terminalReason: v.optional(v.string()), submissionId: v.optional(v.id('learnResponses')),
 }
-export const responseSlotValidator = v.union(v.object({ ...slotBase, ...v2Scope }), v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }))
+export const responseSlotValidator = v.union(
+  v.object({ ...slotBase, ...v2Scope, stage: v.union(v.literal('retrieval'), v.literal('prediction'), v.literal('teach_back'), v.literal('diagnostic')) }),
+  v.object({ ...slotBase, ...v2Scope, stage: v.literal('practice'), practiceAssistance: v.optional(practiceSlotAssistanceValidator) }),
+  v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }),
+)
 const responseBase = {
   masteryAtAcceptance: v.optional(v.object({ performanceTimezone: v.string(), opportunityRevision: v.number(), state: masteryStateValidator, recordRevision: v.number(),
     firstIndependentLocalDate: v.union(v.string(), v.null()), firstIndependentTimezone: v.union(v.string(), v.null()) })),

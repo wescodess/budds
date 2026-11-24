@@ -16,14 +16,20 @@ export async function seedPostSealStorage(ctx: Pick<MutationCtx, 'db'>, input: {
   const base = { ...input.base, postSealStorageVersion: LEARN_V2_POST_SEAL_STORAGE_VERSION, learningVoidId: input.learningVoidId }
   const check = { assessmentOpportunityId: input.assessmentOpportunityId, submissionId: input.submissionId }
   const common = { ...base, ...check, evidenceStatus: 'available' as const, sourceDependencyCount: 1 }
-  const teachingSourceId = await ctx.db.insert('learnPostSealTeachingSources', learnPostSealTeachingSourceStorageSchema.parse({ ...common, attemptId: null, content: { status: 'pending' } }))
+  const teachingSourceId = await ctx.db.insert('learnPostSealTeachingSources', learnPostSealTeachingSourceStorageSchema.parse({ ...common, sourceDependencyCount: 0, attemptId: null, content: { status: 'pending' } }))
   const practiceCaseId = await ctx.db.insert('learnAssessmentCases', { ...input.base, caseKey: 'post-seal-practice', scenarioFingerprint: 'a'.repeat(64), solutionFingerprint: 'b'.repeat(64), identityPolicyVersion: 'identity.v1', usageClass: 'unknown' })
   const original = await ctx.db.get(input.slotId)
   if (!original || original.scopeKind !== 'v2') throw new Error('Missing V2 slot')
   const { _id: _id, _creationTime: _time, ...slot } = original
-  const responseSlotId = await ctx.db.insert('learnResponseSlots', { ...slot, stage: 'practice', slotKey: 'post-seal-practice', blockId: 'post-seal-practice' })
   const prompt = { tier: 'T0' as const, prompt: POST_SEAL_CANARIES.prompt }
-  const publication = { policyVersion: 'publication.fixture.v1', payloadDigest: await privacyDigest(prompt), sourceManifestDigest: 'a'.repeat(64), validationDigest: 'b'.repeat(64), publishedAt: base.createdAt }
+  const promptDigest = await privacyDigest(prompt)
+  const scope = { ...input.base, learningVoidId: input.learningVoidId, blueprintRevisionId: original.blueprintRevisionId,
+    objectiveId: original.objectiveId, caseId: practiceCaseId }
+  const deliveryExposureId = await ctx.db.insert('learnAssessmentExposures', { ...scope, purpose: 'practice', status: 'granted',
+    projectionDigest: promptDigest, deliveryReceiptHash: await privacyDigest(['practice_prompt', input.submissionId, practiceCaseId]),
+    serverTime: base.createdAt, policyVersion: 'practice-delivery.fixture.v1', provenanceVersion: 'delivery.fixture.v1' })
+  const responseSlotId = await ctx.db.insert('learnResponseSlots', { ...slot, stage: 'practice', slotKey: 'post-seal-practice', blockId: 'post-seal-practice', promptDigest, deliveryExposureId })
+  const publication = { policyVersion: 'publication.fixture.v1', payloadDigest: promptDigest, sourceManifestDigest: 'a'.repeat(64), validationDigest: 'b'.repeat(64), publishedAt: base.createdAt }
   const practiceBindingId = await ctx.db.insert('learnPostSealPracticeBindings', learnPostSealPracticeBindingStorageSchema.parse({ ...common,
     responseSlotId, checkCaseId: input.checkCaseId, practiceCaseId, caseRelation: 'separate_case', reservedCase: 'no',
     identityPolicyVersion: 'identity.v1', caseValidationDigest: 'c'.repeat(64), catalogRevision: 1,
@@ -32,23 +38,23 @@ export async function seedPostSealStorage(ctx: Pick<MutationCtx, 'db'>, input: {
     target: { responseSlotId }, expectedRevision: 1, kind: 'hint' as const, idempotencyKey: 'post_seal_request_123456' }
   const fingerprints = await fingerprintLearnPracticeHelpRequest(request)
   const payload = { kind: 'hint' as const, tier: 'T0' as const, text: POST_SEAL_CANARIES.help }
-  const authorizationId = await ctx.db.insert('learnAssessmentExposures', { ...input.base, learningVoidId: input.learningVoidId,
-    caseId: practiceCaseId, purpose: 'practice', status: 'granted', projectionDigest: await privacyDigest(payload),
+  const authorizationId = await ctx.db.insert('learnAssessmentExposures', { ...scope,
+    purpose: 'practice', status: 'granted', projectionDigest: await privacyDigest(payload),
     deliveryReceiptHash: fingerprints.requestDigest, serverTime: base.createdAt, policyVersion: 'practice-help.fixture.v1', provenanceVersion: 'delivery.fixture.v1',
     practiceHelp: { responseSlotId, practiceBindingId, kind: 'hint', assistanceSequence: 1 } })
   const helpReceiptId = await ctx.db.insert('learnPostSealHelpReceipts', learnPostSealHelpReceiptStorageSchema.parse({ ...common,
     practiceBindingId, responseSlotId, expectedRevision: 1, kind: 'hint', commandVersion: request.version, ...fingerprints,
     authorizationId, deliveredAt: base.createdAt, assistanceSequence: 1,
     content: { status: 'available', payload, publication: { ...publication, payloadDigest: await privacyDigest(payload) } } }))
-  await ctx.db.patch(responseSlotId, { deliveryExposureId: authorizationId, practiceAssistance: {
+  await ctx.db.patch(responseSlotId, { practiceAssistance: {
     policyVersion: 'practice-help.fixture.v1', revision: 1, deliveryCount: 1, hintCount: 1, workedExampleCount: 0,
     lastDeliveredAt: base.createdAt, lastAuthorizationId: authorizationId,
   } })
   const sourceLinkIds = []
-  for (const target of [{ teachingSourceId }, { practiceBindingId }, { helpReceiptId }]) {
+  for (const target of [{ practiceBindingId }, { helpReceiptId }]) {
     sourceLinkIds.push(await ctx.db.insert('learnPostSealSourceLinks', learnPostSealSourceLinkStorageSchema.parse({ ...base,
       evidenceStatus: 'available', target, dependency: { kind: 'snapshot', sourceSnapshotId: input.sourceSnapshotId,
         revision: 1, recordRevision: 1, contentHash: 'a'.repeat(64) } })))
   }
-  return { teachingSourceId, practiceBindingId, helpReceiptId, sourceLinkIds, responseSlotId, authorizationId, practiceCaseId, request }
+  return { teachingSourceId, practiceBindingId, helpReceiptId, sourceLinkIds, responseSlotId, deliveryExposureId, authorizationId, practiceCaseId, request }
 }

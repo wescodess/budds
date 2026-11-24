@@ -441,9 +441,27 @@ The measurement storage version remains v1: existing shapes are preserved and
 new tables carry a separate `postSealStorageVersion`. New stored version and
 policy fields use strings, including command and fingerprint versions, so a
 later label cannot invalidate historical rows.
-The reused measurement base also accepts string storage labels for the new
-practice exposure variant, preserving the existing v1 rows. Public commands
-remain strict current-version contracts; accepting a stored label grants no replay authority.
+The reused `learnV2MeasurementStorage.ts` base widens only `storageVersion`
+from the v1 literal to a string across **24 existing collections**:
+`learnMeasurementReportCells`, `learnMeasurementReportRows`,
+`learnMeasurementReportRuns`, `learnMeasurementReportViewerGrants`,
+`learnResponseBodies`, `learnResponseEvidenceLinks`,
+`learnResponseIntegrityEvents`, `learnResponseCommandReceipts`,
+`learnScoringExecutions`, `learnResponses`, `learnResponseSlots`,
+`learnAssessmentOpportunities`, `learnMeasurementAssignments`,
+`learnMeasurementSupports`, `learnMeasurementClaims`,
+`learnMeasurementScoringSpecs`, `learnMeasurementItems`,
+`learnMeasurementFamilies`, `learnMeasurementValidations`,
+`learnMeasurementReportFacts`, `learnMeasurementSourceWatermarks`,
+`learnAssessmentExposures`, `learnAssessmentCases` and `learnAssessmentCatalogs`.
+Both exposure variants inherit that base. The four new post-seal tables have
+their own string-valued storage labels. This does not change the artifact-lineage
+or due-work validators, nested attempt-version pins, or report/source versions.
+Existing v1 rows remain valid, and the strings already accepted at the reviewed
+head remain storable; no closed historical catalogue is asserted here. Future
+version changes must retain every historical stored label. Current writers and
+public commands keep their current-version contracts; accepting a stored label
+grants no replay, publication or scoring authority.
 No content writer, generator, selector, endpoint behavior, capability, flag,
 migration, backfill or deployment is enabled by this amendment.
 
@@ -454,7 +472,7 @@ preserves this V2 history. They are not standalone diagnostic storage.
 
 | Collection | Persisted shape and exact additional index fields after `userId` |
 | --- | --- |
-| `learnPostSealTeachingSources` | One row per sealed check submission: `assessmentOpportunityId`, `submissionId`, nullable source `attemptId`, `sourceDependencyCount`, evidence state and `content`. Content is pending, available cited feedback/lesson with publication pins, or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `attemptId`. |
+| `learnPostSealTeachingSources` | One row per sealed check submission: `assessmentOpportunityId`, `submissionId`, nullable source `attemptId`, dependency count, evidence state and `content`. Pending rows have count 0 and no links; publication atomically sets count 1–64 and the complete link set. Purged tombstones retain their preceding count. Indexes: `assessmentOpportunityId`; `submissionId`; `attemptId`. |
 | `learnPostSealPracticeBindings` | One immutable binding per sealed submission: check and practice case IDs, `caseRelation: separate_case`, `reservedCase: no`, identity policy, case-validation digest, catalogue revision, exact `responseSlotId`, dependency count and available prompt/publication pins or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `responseSlotId`; `practiceCaseId`. |
 | `learnPostSealHelpReceipts` | One immutable delivered authorization per owner/key hash: check/submission context, practice binding/slot, expected slot revision, help kind, command/fingerprint versions and hashes, exposure authorization ID, server delivery time, separate assistance sequence, dependency count and actual content/publication pins or a purged tombstone. Indexes: `assessmentOpportunityId`; `submissionId`; `responseSlotId, assistanceSequence`; `practiceBindingId`; `idempotencyKeyHash`; `authorizationId`. |
 | `learnPostSealSourceLinks` | One normalized dependency per content target. `target` contains exactly one teaching-source, practice-binding or help-receipt ID. A live dependency pins a snapshot, excerpt plus snapshot, document revision, or folder. Purged links retain the target but remove the entire dependency. Indexes: `target.teachingSourceId`; `target.practiceBindingId`; `target.helpReceiptId`; each `dependency.{sourceSnapshotId,sourceExcerptId,documentId,folderId}, invalidatedAt`. |
@@ -486,11 +504,18 @@ novelty, safe prose, time ordering or immutability.
   lessons contain 1–8 paragraphs. Feedback/lessons admit T0/T1, practice prompts
   and worked examples T0/T2, and hints T0 only. Whole-object validation also
   covers content withheld from a particular return.
-- Each content target declares 1–64 normalized source dependencies, including
+- Each published content target declares 1–64 normalized source dependencies, including
   the sealed check's evidence and every content/citation dependency. Count and
-  complete manifest must match the indexed links. No embedded history array
-  or owner-history scan is permitted. History/export/purge pages contain at
-  most eight rows; uniqueness reads take two and fail on duplicates.
+  complete manifest must match the indexed links. A pending teaching source
+  has `sourceDependencyCount: 0` and no links: the publication transaction
+  determines its complete dependencies, sets the positive count and creates
+  every link atomically with its content and publication pins. The count and
+  dependency manifest are then frozen; purge retains the last count, including
+  zero for a purged pending source. Bindings and help receipts declare their
+  complete dependencies when created. No embedded history array or owner-history
+  scan is permitted. History/export/purge pages contain at most eight rows;
+  uniqueness reads take two and duplicates deny publication/replay. Duplicate
+  teaching rows withhold teaching without rejecting the canonical score commit.
 - Case identities must differ. Distinct IDs/digests alone do not prove
   separate cases: #535 must verify the pinned complete case/publication
   decision, reservation history and current catalogue authority. Same-case,
@@ -499,8 +524,13 @@ novelty, safe prose, time ordering or immutability.
   A binding does not duplicate the slot's changing response revision: read
   and replay use `learnResponseSlots.revision`. Content/identity and receipts
   are immutable after publication, except irreversible privacy redaction.
+  The teaching source's one publication may change `content`,
+  `sourceDependencyCount` and its source-link set together. A null attempt stamp
+  may be filled once even after purge, without changing content or dependencies.
   A purged payload cannot be regenerated or restored on the same row.
-- `learnResponseSlots.practiceAssistance` is optional for existing rows.
+- `learnResponseSlots.practiceAssistance` is optional only on `stage: practice`.
+  All other V2 stages, standalone diagnostic slots and assessment opportunities
+  reject this field. Existing rows without it retain their shapes.
   It stores policy, separate assistance revision/delivery count, hint/worked
   example counts, and last delivery time/authorization. Counts are nonnegative
   safe integers, revision equals delivery count and kind counts sum to it;
@@ -533,24 +563,37 @@ following writers:
    transaction** that inserts the canonical attempt and sets
    `learnAssessmentOpportunities.authoritativeAttemptId`, it must create or
    stamp `learnPostSealTeachingSources.attemptId` with that exact ID. If absent,
-   insert a pending source with that ID; if a pending source has null, stamp it
-   once. A conflicting ID fails the commit. This is not a later scheduled
-   patch, client receipt, legacy scorer result or a second attempt. A source
-   created after a score must read and stamp the existing authoritative ID in
-   its creation transaction. Pending practice needs no valid score and can
-   exist while the source's attempt is null.
+   insert a pending source with that ID, `sourceDependencyCount: 0` and no source
+   links. If a pending **or purged** source has a null attempt, stamp it once.
+   A purged row keeps its purge reason/time, count and unavailable content;
+   stamping never restores it. An already matching stamp is unchanged.
+   Canonical response, evidence, execution and score-eligibility checks still
+   govern scoring. Optional teaching-side state must never add a score rejection
+   or abort an otherwise valid score commit: duplicate, malformed or conflicting
+   teaching rows keep teaching unavailable, and a different non-null stamp is
+   not overwritten. There is no later scheduled stamp, client receipt, legacy
+   scorer result or second attempt. A source created after a score must read and
+   stamp the existing authoritative ID in its creation transaction. Pending
+   practice needs no valid score and can exist while the source's attempt is null.
 2. A server-authorized teaching publication mutation may transition a pending
-   source to available once, writing only its validated cited feedback and
-   lesson/publication pins and complete normalized source links. It must
+   source to available once. In one transaction it writes validated cited
+   feedback and lesson/publication pins, sets `sourceDependencyCount` to the
+   complete 1–64 dependency count, and creates every normalized source link.
+   No pre-publication count or partial link set is reused. It must
    reread the exact sealed submission, authoritative valid score and current
    access/evidence/pins, then require scored pass/fail for feedback and valid
    scored failure for a lesson. It cannot replace the attempt stamp or publish
    score-driven teaching for pending/invalid scoring.
 3. A server-authorized practice preparation mutation may select one proven
    different nonreserved case, create its V2 `stage: practice` response slot,
-   persist the binding/prompt/publication pins and complete source links
-   atomically. It must serialize its owner-scoped relevant-open-check lookup
-   with check acceptance. A retry returns that same binding and slot. The
+   and persist the binding/prompt/publication pins, complete source links and
+   prompt delivery exposure atomically. That exposure has `purpose: practice`,
+   an authorized delivery status, matching owner/Void/Blueprint/objective pins,
+   `projectionDigest` exactly equal to the slot's `promptDigest`, and no
+   `assessmentOpportunityId`. Its ID is the slot's required `deliveryExposureId`.
+   Later help retains that prompt delivery ID; each help authorization has its
+   own exposure ID and content digest. It must serialize its owner-scoped
+   relevant-open-check lookup with check acceptance. A retry returns that same binding and slot. The
    query `learnV2Assessments.getPostSealTeaching` reads existing authority; it
    cannot select/persist a case, mint a grant or repair missing storage.
 4. `convex/learnV2Assistance.ts::authorizePracticeAssistance` may commit one
@@ -585,7 +628,10 @@ including citations and publication pins, with an evidence-unavailable reason
 and purge time, invalidate the practice slot when its binding loses evidence,
 and remove each private dependency from its link. Safe attempt, check, slot,
 delivery, count and digest history remains. Other owners and unrelated sources
-are preserved. Reimporting a source never restores a tombstone. Immediate
+are preserved. An owner-matching target is purged even when its Void differs
+from the link's Void; that inconsistent anchor cannot consume a dependency while
+leaving the owned content available. Referenced owned practice slots are also
+invalidated, while foreign targets remain unchanged. Reimporting a source never restores a tombstone. Immediate
 read/replay denial on access loss precedes physical cleanup; the future #535
 writers must recheck source/access state in every content commit so a race
 cannot restore withdrawn bytes. An access-revocation writer must schedule the

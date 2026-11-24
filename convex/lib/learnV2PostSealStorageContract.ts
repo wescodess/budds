@@ -20,7 +20,7 @@ const teachingPayload = v.object({
 })
 const teachingBase = { ...base, ...check, sourceDependencyCount: v.number() }
 export const postSealTeachingSourceValidator = v.union(
-  v.object({ ...teachingBase, evidenceStatus: v.literal('available'), attemptId: v.union(v.id('masteryAttempts'), v.null()), content: v.object({ status: v.literal('pending') }) }),
+  v.object({ ...teachingBase, sourceDependencyCount: v.literal(0), evidenceStatus: v.literal('available'), attemptId: v.union(v.id('masteryAttempts'), v.null()), content: v.object({ status: v.literal('pending') }) }),
   v.object({ ...teachingBase, attemptId: v.id('masteryAttempts'), evidenceStatus: v.literal('available'),
     content: v.object({ status: v.literal('available'), payload: teachingPayload, publication }) }),
   v.object({ ...teachingBase, attemptId: v.union(v.id('masteryAttempts'), v.null()), evidenceStatus: v.literal('evidence_unavailable'),
