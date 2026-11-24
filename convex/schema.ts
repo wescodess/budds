@@ -1858,6 +1858,7 @@ export default defineSchema({
     .index('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', ['userId', 'firstCheckClaim.claimKey', 'checkSequence']),
   learnMeasurementAssignments: defineTable(measurementStorage.measurementAssignmentValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_entryPoint_and_status', ['userId', 'flow', 'entryPoint', 'status'])
     .index('by_userId_and_assignmentKey', ['userId', 'assignmentKey'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_epoch_and_createdAt', ['userId', 'epoch', 'createdAt'])

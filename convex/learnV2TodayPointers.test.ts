@@ -3,14 +3,15 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import { canvasFamilyFixture, canvasIdentity } from '../tests/fixtures/learn-v2-canvas'
-import { publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+import { publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
-import { learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_LIMIT, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import type { Doc } from './_generated/dataModel'
+import * as privacyContext from './lib/learnV2PrivacyReadContext'
 
 const policy = vi.hoisted(() => ({ pointers: true, responses: true, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
@@ -40,7 +41,8 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers()
 })
 
-async function fixture(options: { canvas?: boolean, inventory?: { claims: number, supports: number, sources: number } } = {}) {
+async function fixture(options: { canvas?: boolean, inventory?: { claims: number, supports: number, sources: number },
+  test?: Awaited<ReturnType<typeof canvasFamilyFixture>>['t'], fixtureKey?: string, teaching?: DeliveryTeachingShape } = {}) {
   const definition = { configurationId: 'today-canvas.synthetic.v1', configurationVersion: 'today-canvas.synthetic.v1', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -57,12 +59,12 @@ async function fixture(options: { canvas?: boolean, inventory?: { claims: number
     modelPolicies: [{ model: 'synthetic/model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
     productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
     rollback: { ...originalManifest.rollback, ownerSubjectHash: await privacyDigest(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', userId]) } })
-  const f = await canvasFamilyFixture(saved.binding, { rubric: true, inventory: options.inventory })
+  const f = await canvasFamilyFixture(saved.binding, { rubric: true, inventory: options.inventory, test: options.test, fixtureKey: options.fixtureKey })
   if (options.canvas !== false) await f.t.run(async ctx => {
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
     await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: NOW } })
   })
-  await publishDeliveryTeaching(f)
+  await publishDeliveryTeaching(f, options.teaching)
   const start = (entryPoint: 'today' | 'session_deep_link' = 'today') => f.owner.mutation(api.learnV2SessionContent.startStudySession, {
     studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
     idempotencyKey: `today_pointer_start_${entryPoint}`, entryPoint })
@@ -207,13 +209,12 @@ test('Today grants and reads cannot change flow; canonical acceptance and scorin
     submissionId: saved.submissionId, idempotencyKey: 'pointer_launder_score_1234567890' })).rejects.toThrow('Learn access denied')
 })
 
-test.each(['source', 'entitlement', 'pilot', 'thread', 'void'] as const)('refresh never invents a destination after %s revocation', async revoked => {
+test.each(['entitlement', 'pilot', 'thread', 'void'] as const)('refresh never invents a destination after %s revocation', async revoked => {
   const f = await fixture()
   await f.start()
   const row = (await f.opportunities())[0]!
   expect(await f.read()).toHaveLength(1)
   await f.t.run(async ctx => {
-    if (revoked === 'source') await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: Date.now() })
     if (revoked === 'entitlement') {
       const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
       await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: false, updatedAt: NOW } })
@@ -223,6 +224,38 @@ test.each(['source', 'entitlement', 'pilot', 'thread', 'void'] as const)('refres
   })
   if (revoked === 'pilot') Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: false })
   expect(await f.read()).toEqual([])
+})
+
+test('a routing pointer does not authorize item delivery after source revocation', async () => {
+  const f = await fixture()
+  await f.start()
+  const pointers = await f.read()
+  await f.t.run(ctx => ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW }))
+  expect(await f.read()).toEqual(pointers)
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 2, idempotencyKey: 'revoked_pointer_attach_1234567890' })).toMatchObject({ kind: 'not_admitted', reasonCode: 'evidence_unavailable' })
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(3))).toEqual([])
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: pointers[0]!.destination.threadId })).toMatchObject({ responsePrompt: null })
+})
+
+test('pointer readers propagate an exhausted shared read budget', async () => {
+  const f = await fixture()
+  await f.start()
+  const original = privacyContext.createResponsePrivacyReadContext
+  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 1, options))
+  await expect(f.owner.query(api.learnV2Today.getCheckPointers, {})).rejects.toThrow('Learn source validation budget exhausted')
+  await expect(f.owner.query(api.learnV2Today.getToday, {})).rejects.toThrow('Learn source validation budget exhausted')
+})
+
+test('Today defers pointer discovery before its remaining budget is insufficient', async () => {
+  const f = await fixture()
+  await f.start()
+  const original = privacyContext.createResponsePrivacyReadContext
+  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 70, options))
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'empty', checkPointers: {
+    status: 'unavailable', reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null,
+  } })
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready' })] })
 })
 
 test('the amendment off keeps the dev Today grant contract and adds no projection field', async () => {
@@ -253,10 +286,18 @@ test('bounded discovery pages retain an older check after more than 32 later rec
   })
   const first = await f.owner.query(api.learnV2Today.getCheckPointers, {})
   expect(first).toMatchObject({ status: 'available', isDone: false, checks: [] })
-  const next = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: first.continueCursor! })
-  expect(next).toMatchObject({ status: 'available', isDone: true, continueCursor: null,
-    checks: [expect.objectContaining({ state: 'ready' })] })
-  expect(await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: first.continueCursor! })).toEqual(next)
+  let page = first
+  let pages = 1
+  const checks = [...first.checks]
+  while (!page.isDone) {
+    const cursor = page.continueCursor!
+    page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })
+    expect(await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })).toEqual(page)
+    checks.push(...page.checks)
+    expect(++pages).toBeLessThan(10)
+  }
+  expect(pages).toBe(Math.ceil(33 / LEARN_TODAY_CHECK_LIMIT))
+  expect(checks).toEqual([expect.objectContaining({ state: 'ready' })])
 })
 
 test('an ungranted expired check has a closed pointer without minting a grant', async () => {
@@ -276,4 +317,118 @@ test('responses off dominates the new capability and preserves the original Toda
   policy.pointers = true
   expect(JSON.stringify(await f.owner.query(api.learnV2Today.getToday, {}))).toBe(JSON.stringify(original))
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toEqual({ status: 'disabled', reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null })
+})
+
+test.each([6, 12])('%s maximum-sized families return bounded pointer pages without exhausting Today', async count => {
+  const families: Awaited<ReturnType<typeof fixture>>[] = []
+  for (let index = 0; index < count; index++) {
+    const f = await fixture({ test: families[0]?.t, fixtureKey: `volume-${index}`, inventory: { claims: 32, supports: 2, sources: 64 } })
+    await f.start()
+    families.push(f)
+  }
+  const f = families[0]!
+  await f.t.mutation(due, { userId, through: NOW })
+  await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  expect('checkPointers' in today && today.checkPointers.status).toBe('available')
+  const references: string[] = []
+  let cursor: string | undefined
+  let pages = 0
+  do {
+    const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })
+    expect(page.status).toBe('available')
+    references.push(...page.checks.map(check => check.reference))
+    pages++
+    cursor = page.continueCursor ?? undefined
+    if (page.isDone) break
+    expect(cursor).toBeTruthy()
+    expect(pages).toBeLessThan(count * 3)
+  } while (cursor)
+  expect(pages).toBeGreaterThan(1)
+  expect(references).toHaveLength(count)
+  expect(new Set(references).size).toBe(count)
+}, 60_000)
+
+test.each([17, 32])('Today preparation accepts %s teaching claims without a teaching Canvas ceiling', async claims => {
+  const f = await fixture({ teaching: { claims, supports: claims === 32 ? 2 : 1, sources: claims === 32 ? 64 : 17 } })
+  const started = await f.start()
+  expect(started).toMatchObject({ status: 'assessment', deliveryGrant: null, assessment: { check: { state: 'ready' } } })
+  expect(await f.start()).toEqual(started)
+  const row = (await f.opportunities()).find(row => row.purpose.kind === 'measurement_cold')!
+  await attach(f, row)
+  expect(await f.t.run(ctx => ctx.db.query('learningThreads').take(3))).toHaveLength(1)
+})
+
+test.each([false, true])('a mid-flight flag toggle preserves its frozen flow: initially enabled=%s', async enabled => {
+  policy.pointers = enabled
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities()).find(row => row.purpose.kind === 'measurement_cold')!
+  const reference = { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: row._id }
+  const opened = enabled ? await attach(f, row) : null
+  policy.pointers = !enabled
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  const state = await f.owner.query(api.learnV2Today.getCheckPointers, {})
+  if (opened) {
+    expect('checkPointers' in today && today.checkPointers.checks).toEqual([expect.objectContaining({ reference: row.delayedCheckId, state: 'ready' })])
+    expect(state.checks).toEqual([expect.objectContaining({ reference: row.delayedCheckId })])
+    expect(await f.owner.query(api.learnV2Assessments.getAssessment, reference)).toMatchObject({ reasonCodes: ['flow_mismatch'] })
+    const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+    expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: session._id, expectedSessionRevision: session.revision,
+      expectedContentRevision: session.startedSessionContentRevision!, idempotencyKey: 'toggle_canvas_start_1234567890' })).toMatchObject({ deliveryGrant: null, assessment: { check: { state: 'ready' } } })
+    expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+    expect((await f.read())[0]).toMatchObject({ state: 'saved_scoring' })
+  } else {
+    expect(today).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { phase: 'test_open' } } })
+    expect(state.checks).toEqual([])
+    expect(await f.owner.query(api.learnV2Assessments.getAssessment, reference)).toMatchObject({ status: 'delivered' })
+    expect(await f.start()).toMatchObject({ deliveryGrant: { status: 'granted' } })
+    const current = (await f.opportunities()).find(value => value._id === row._id)!
+    const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+      idempotencyKey: 'toggle_today_accept_1234567890', response: { target: { assessmentOpportunityId: row._id }, expectedRevision: current.revision,
+        payload: { kind: 'text', text: 'A saved Today answer.' } } } })
+    expect(accepted).toMatchObject({ kind: 'accepted' })
+  }
+  policy.pointers = enabled
+  await f.owner.query(api.learnV2Today.getToday, {})
+  expect(await f.t.run(ctx => ctx.db.get(row.assignmentId!))).toMatchObject({ flow: enabled ? 'v2_canvas' : 'v2_today' })
+  expect(await f.t.run(ctx => ctx.db.query('learnResponses').withIndex('by_userId_and_assessmentOpportunityId', q => q.eq('userId', userId).eq('assessmentOpportunityId', row._id)).first()))
+    .toMatchObject({ flow: enabled ? 'canvas' : 'today' })
+})
+
+test.each(['today', 'session_deep_link'] as const)('a frozen %s Canvas check survives rollback before its first grant', async entryPoint => {
+  const f = await fixture()
+  const started = await f.start(entryPoint)
+  const row = (await f.opportunities()).find(row => row.purpose.kind === 'measurement_cold')!
+  policy.pointers = false
+  expect(await f.start(entryPoint)).toEqual(started)
+  expect(await f.read()).toEqual([expect.objectContaining({ reference: row.delayedCheckId, state: 'ready' })])
+  const opened = await attach(f, row)
+  expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  expect((await f.read())[0]).toMatchObject({ state: 'saved_scoring' })
+})
+
+test('a legacy Today assignment keeps its dedicated delayed entry after rollout', async () => {
+  policy.pointers = false
+  const f = await fixture()
+  await f.start()
+  const cold = (await f.opportunities()).find(row => row.purpose.kind === 'measurement_cold')!
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'legacy_cold_save_1234567890', response: { target: { assessmentOpportunityId: cold._id }, expectedRevision: cold.revision,
+      payload: { kind: 'text', text: 'A saved Today answer.' } } } })).toMatchObject({ kind: 'accepted' })
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  policy.pointers = true
+  vi.setSystemTime(day7.openAt + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const ready = (await f.opportunities()).find(row => row._id === day7._id)!
+  if (ready.contextPins.kind !== 'session') throw new Error('Expected session pins')
+  const session = (await f.t.run(ctx => ctx.db.get(ready.contextPins.kind === 'session' ? ready.contextPins.studySessionId : f.graph.studySessionId)))!
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: session._id,
+    assessment: { kind: 'check', state: { phase: 'ready' } }, checkPointers: { checks: [] } })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: session._id,
+    expectedSessionRevision: session.revision, expectedContentRevision: ready.contextPins.contentRevision,
+    idempotencyKey: 'legacy_delayed_start_1234567890', entryPoint: 'today' })).toMatchObject({ status: 'assessment', deliveryGrant: { status: 'granted' } })
+  expect(await f.owner.query(api.learnV2Assessments.getAssessment, { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: ready._id })).toMatchObject({ status: 'delivered' })
+  expect(await f.read()).toEqual([])
 })

@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { convexTest } from 'convex-test'
+import { convexTest, type TestConvex } from 'convex-test'
 import { anyApi, type ApiFromModules } from 'convex/server'
 import { vi } from 'vitest'
 import { api, internal } from '../../convex/_generated/api'
@@ -22,9 +22,9 @@ const binding = { kind: 'deterministic' as const, engineVersion: 'fixture.numeri
 const privateRubric = { kind: 'bounded_rubric' as const, keyInsufficientReason: 'The capability requires written reasoning.',
   criteria: [{ key: 'private-criterion', description: 'PRIVATE-RUBRIC-CANARY', weightPercent: 100 }] }
 // Publication adapters supply synthetic validation evidence; grant, acceptance and scoring authority stay real.
-export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = { rubric: true }) {
+export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { test?: TestConvex<typeof schema>, fixtureKey?: string, core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = { rubric: true }) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
-  const t = convexTest({ schema, modules: { ...modules, ...measurementReplacementModules }, transactionLimits: options.transactionLimits ?? true })
+  const t = options.test ?? convexTest({ schema, modules: { ...modules, ...measurementReplacementModules }, transactionLimits: options.transactionLimits ?? true })
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
@@ -49,7 +49,8 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
     const excerpt = 'Synthetic rule: total equals groups multiplied by members per group. Source worked example: 2 groups of 3 yield 6.'
     const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId, locator: 'rule:1', excerpt, rightsStatus: 'permitted' })
     await ctx.db.insert('learnObjectiveSources', { userId, objectiveId, sourceSnapshotId, coverage: 'strong' })
-    const catalogId = await ctx.db.insert('learnAssessmentCatalogs', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: now,
+    const catalogId = (await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique())?._id
+      ?? await ctx.db.insert('learnAssessmentCatalogs', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: now,
       catalogRevision: 1, instrumentationEpoch: 'synthetic.epoch.v1', historyCompleteness: 'prospective_complete', historyBasisVersion: 'synthetic.history.v1',
       historyCoverageWatermark: 'synthetic.coverage.v1', measurementCapability: { enabled: true } })
     const support = { sourceSnapshotId, sourceSnapshotRevision: 1, sourceRecordRevision: 1, sourceContentHash, sourceRevision: 'source.v1',
@@ -62,9 +63,9 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
   const core = options.core ?? 3
   const labels = 'ABC'.slice(0, core) + 'DEF'.slice(0, options.reserveCount ?? (options.reserve ? 1 : 0))
   const members = [...labels].map((formLabel, index) => {
-    const groups = index + 3
+    const groups = index + 3 + (options.fixtureKey ? 100 * (Number(options.fixtureKey.match(/\d+$/u)?.[0] ?? 0) + 1) : 0)
     const size = index + 5
-    const prompt = `Hypothetical ${formLabel}: find the total using the declared givens.`
+    const prompt = `Hypothetical ${formLabel}${options.fixtureKey ? ` (${options.fixtureKey})` : ''}: find the total using the declared givens.`
     return { formLabel, reserve: index >= core, prompt, declaredStimulus: `Hypothetical givens: groups=${groups}, size=${size}.`,
       responseSpec: options.rubric ? { kind: 'bounded_rubric', version: 'response.v1', maxCodeUnits: 12000 }
         : options.keyed ? { kind: 'keyed', version: 'response.v1', maxSelections: 1 }
@@ -128,7 +129,7 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
     criteriaDigest: await measurementDigest(options.rubric ? privateRubric.criteria : { kind: options.keyed ? 'keyed' : options.ordered ? 'ordered' : 'numeric' }), thresholdVersion: options.rubric ? modelBinding.thresholdVersion : binding.thresholdVersion,
     rationale: 'Synthetic comparability fixture only.', difficultyPrior: 'Unverified outside this fixture.' }
   const begun = await t.mutation(commands.beginFamilyGeneration, { tokenIdentifier: userId, studySessionId: graph.studySessionId, expectedSessionRevision: 1,
-    familyKey: 'synthetic.family.v1', revision: 1, coreFormCount: core, equivalenceVersion: 'equivalence.v1', equivalenceDescriptorJson: JSON.stringify(descriptor), idempotencyKey: 'fixture-generation' })
+    familyKey: `synthetic.family.v1${options.fixtureKey ?? ''}`, revision: 1, coreFormCount: core, equivalenceVersion: 'equivalence.v1', equivalenceDescriptorJson: JSON.stringify(descriptor), idempotencyKey: `fixture-generation${options.fixtureKey ?? ''}` })
   if (!begun.leaseToken) throw new Error('Expected an active lease')
   const args = { tokenIdentifier: userId, jobId: begun.jobId, leaseToken: begun.leaseToken, expectedRevision: begun.revision }
   const staged = await t.mutation(commands.generateFamilyCandidates, args)

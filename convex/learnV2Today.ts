@@ -17,12 +17,15 @@ import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-s
 import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { prepareCanvasSessionForOwner, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
-import { LEARN_TODAY_CHECK_LIMIT, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_LIMIT, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
+import { remainingPrivacyReadBudget } from './lib/learnV2PrivacyReadContext'
 import { todayCheckPointersValidator } from './lib/learnV2PublicContract'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
+// Includes 32 reflow ancestors and owned routing metadata.
+const POINTER_READ_RESERVE = 64
 const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['in_progress', 'ready', 'blocked', 'generation_failed', 'planned']
 
 function rank(session: { assessmentPurpose?: string, placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {
@@ -40,7 +43,8 @@ export type TodayAssessment =
   | { kind: 'ordinary' }
   | { kind: 'unprepared' }
   | { kind: 'blocked', reasonCode: string, opportunity: Doc<'learnAssessmentOpportunities'> | null, state: LearnV2AssessmentState | null }
-  | { kind: 'check', opportunity: Doc<'learnAssessmentOpportunities'>, state: LearnV2AssessmentState & { status: 'available' }, pointer?: LearnTodayCheckPointer }
+  | { kind: 'check', flow: 'today', opportunity: Doc<'learnAssessmentOpportunities'>, state: LearnV2AssessmentState & { status: 'available' } }
+  | { kind: 'check', flow: 'canvas', opportunity: Doc<'learnAssessmentOpportunities'>, state: null, pointer: LearnTodayCheckPointer }
   | { kind: 'teach', opportunity: Doc<'learnAssessmentOpportunities'>, assignment: AdmittedAssignment }
 
 async function measurementCatalogEnabled(ctx: QueryCtx | MutationCtx, userId: string) {
@@ -49,11 +53,17 @@ async function measurementCatalogEnabled(ctx: QueryCtx | MutationCtx, userId: st
 }
 
 async function assessmentState(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>): Promise<TodayAssessment> {
-  const pointer = todayCanvasChecksEnabled() ? await readCanvasCheckPointerForOwner(ctx, userId, opportunity) : undefined
-  if (pointer === null) return { kind: 'blocked', reasonCode: 'canvas_not_admitted', opportunity, state: null }
-  const state = await readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, todayCanvasChecksEnabled() ? 'canvas' : 'today')
+  const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
+  const canvas = assignment?.status === 'admitted' ? assignment.flow === 'v2_canvas' : opportunity.contextPins.kind === 'session' && !!opportunity.contextPins.canvas
+  if (canvas && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))) {
+    if (opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas) return { kind: 'blocked', reasonCode: 'flow_mismatch', opportunity, state: null }
+    const pointer = await readCanvasCheckPointerForOwner(ctx, userId, opportunity)
+    return pointer ? { kind: 'check', flow: 'canvas', opportunity, state: null, pointer }
+      : { kind: 'blocked', reasonCode: 'canvas_not_admitted', opportunity, state: null }
+  }
+  const state = await readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, 'today')
   if (state.status !== 'available') return { kind: 'blocked', reasonCode: state.status === 'disabled' ? 'disabled' : state.reasonCodes[0] ?? 'assessment_unavailable', opportunity, state }
-  return { kind: 'check', opportunity, state, ...(pointer ? { pointer } : {}) }
+  return { kind: 'check', flow: 'today', opportunity, state }
 }
 
 function coldOpen(opportunity: Doc<'learnAssessmentOpportunities'>, now: number) {
@@ -92,7 +102,6 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
   const opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!opportunity || opportunity.purpose.kind !== 'measurement_cold' || opportunity.objectiveId !== session.primaryObjectiveId) return blocked('assessment_unavailable')
   if (!coldOpen(opportunity, Date.now())) return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
-  if (assignment.flow !== (todayCanvasChecksEnabled() ? 'v2_canvas' : 'v2_today')) return { kind: 'blocked', reasonCode: 'flow_mismatch', opportunity, state: null }
   return await assessmentState(ctx, userId, opportunity)
 }
 
@@ -115,16 +124,16 @@ export async function prepareTodayAssessment(ctx: MutationCtx, userId: string, s
 }
 
 export function todayAssessmentSummary(assessment: Exclude<TodayAssessment, { kind: 'ordinary' }>, reasonCode?: string) {
-  if (todayCanvasChecksEnabled()) return { kind: assessment.kind,
-    reasonCode: reasonCode ?? (assessment.kind === 'blocked' ? assessment.reasonCode : null), state: null,
-    check: assessment.kind === 'check' ? assessment.pointer ?? null : null }
+  if (assessment.kind === 'check' && assessment.flow === 'canvas') return { kind: assessment.kind,
+    reasonCode: reasonCode ?? null, state: null,
+    check: assessment.pointer }
   return { kind: assessment.kind, reasonCode: reasonCode ?? (assessment.kind === 'blocked' ? assessment.reasonCode : null),
     state: assessment.kind === 'check' || assessment.kind === 'blocked' ? assessment.state : null }
 }
 
-async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null) {
+async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null, limit = LEARN_TODAY_CHECK_LIMIT) {
   const page = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId))
-    .order('desc').paginate({ cursor, numItems: LEARN_TODAY_CHECK_LIMIT })
+    .order('desc').paginate({ cursor, numItems: limit })
   const checks: LearnTodayCheckPointer[] = []
   for (const row of page.page) {
     const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row)
@@ -134,11 +143,22 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
     continueCursor: page.isDone ? null : page.continueCursor }
 }
 
+async function surfaceCanvasPointers(ctx: QueryCtx, userId: string) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return false
+  if (todayCanvasChecksEnabled()) return true
+  for (const entryPoint of ['today', 'session_deep_link'] as const) {
+    const assignment = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_flow_and_entryPoint_and_status', q =>
+      q.eq('userId', userId).eq('flow', 'v2_canvas').eq('entryPoint', entryPoint).eq('status', 'admitted')).first()
+    if (assignment?.status === 'admitted') return true
+  }
+  return false
+}
+
 export const getCheckPointers = query({
   args: { cursor: v.optional(v.string()) }, returns: todayCheckPointersValidator,
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
-    if (!todayCanvasChecksEnabled()) return { status: 'disabled' as const, reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null }
+    if (!await surfaceCanvasPointers(ctx, userId)) return { status: 'disabled' as const, reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null }
     return await readTodayCheckPointers(measurementReadContext(ctx, userId), userId, args.cursor)
   },
 })
@@ -158,7 +178,12 @@ async function projectToday(ctx: QueryCtx, userId: string) {
     const now = Date.now()
     const candidates: Candidate[] = []
     for (const session of sessions) {
-      if (todayCanvasChecksEnabled() && isTestOnlyMeasurementSession(session)) continue
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && isTestOnlyMeasurementSession(session) && session.assessmentOpportunityId) {
+        const check = await ctx.db.get(session.assessmentOpportunityId)
+        const assignment = check?.assignmentId ? await ctx.db.get(check.assignmentId) : null
+        if (check?.userId === userId && check.contextPins.kind === 'session' && check.contextPins.canvas
+          && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))) continue
+      }
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId) {
         const check = await ctx.db.get(session.assessmentOpportunityId)
         if (check?.userId === userId && (check.contextPins.kind === 'session' && check.contextPins.canvas
@@ -246,9 +271,12 @@ export const getToday = query({
   args: {},
   handler: async (ctx) => {
     const userId = await requireLearnV2QueryAccess(ctx)
-    if (!todayCanvasChecksEnabled()) return await projectToday(ctx, userId)
+    if (!await surfaceCanvasPointers(ctx, userId)) return await projectToday(ctx, userId)
     ctx = measurementReadContext(ctx, userId)
-    const checks = await readTodayCheckPointers(ctx, userId)
-    return { ...await projectToday(ctx, userId), checkPointers: checks }
+    const today = await projectToday(ctx, userId)
+    const limit = Math.min(LEARN_TODAY_CHECK_LIMIT, Math.floor((remainingPrivacyReadBudget(ctx) - 1) / POINTER_READ_RESERVE))
+    const checks = limit > 0 ? await readTodayCheckPointers(ctx, userId, null, limit)
+      : { status: 'unavailable' as const, reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null }
+    return { ...today, checkPointers: checks }
   },
 })

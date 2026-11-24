@@ -35,7 +35,7 @@ import { enrollLearnMeasurementForOwner, measurementFlowReason, measurementItemR
 import { learnMeasurementItemPinsSchema } from '../shared/learn-v2-measurement'
 import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } from './lib/learnV2MeasurementAssignment'
 import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInventory'
-import { LEARN_TODAY_CHECK_POINTER_VERSION, learnTodayCheckPointerSchema, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnTodayCheckPointerSchema, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -102,12 +102,17 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
     blueprintRevisionId: blueprint._id, objectiveId: objective._id, revision: content.revision + 1, status: 'published',
     inputDigest: await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest]), generatorVersion: 'learn-v2.canvas-preparation.v1',
     providerModel: content.providerModel, assessmentPurpose: 'measurement_cold', createdAt: now, publishedAt: now })
-  const teachingClaims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
   const evidenceReferences: Doc<'learningThreadActivities'>['evidenceReferences'] = []
+  const teachingClaims = entryPoint === 'canvas'
+    ? await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
+    : await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(1)
   if (!teachingClaims.length || teachingClaims.length > 16) throw new Error('Learn Canvas evidence unavailable')
+  // Today needs one enrollment anchor, replaced by the held-out item plan before commit.
   for (const claim of teachingClaims) {
     const support = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', userId).eq('sessionContentClaimId', claim._id)).first()
-    const source = support?.sourceSnapshotId ? await ctx.db.get(support.sourceSnapshotId) : null
+    const excerpt = entryPoint !== 'canvas' && support ? await ctx.db.get(support.sourceExcerptId) : null
+    const sourceId = support?.sourceSnapshotId ?? excerpt?.sourceSnapshotId
+    const source = sourceId ? await ctx.db.get(sourceId) : null
     if (!support || !source || !support.verifierVersion) throw new Error('Learn Canvas evidence unavailable')
     evidenceReferences.push({ claimId: claim._id, supportId: support._id, sourceSnapshotId: source._id,
       sourceSnapshotRevision: source.revision, sourceRecordRevision: source.recordRevision ?? 1, sourceEffectiveStatus: 'user_accepted',
@@ -658,7 +663,7 @@ async function loadLegacyReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string
     }
 }
 
-async function canvasAssessmentScope(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>) {
+async function canvasAssessmentScope(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, validateClaims = true) {
   const thread = await ctx.db.get(threadId)
   const activity = thread?.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
   const content = activity?.sessionContentId ? await ctx.db.get(activity.sessionContentId) : null
@@ -693,6 +698,7 @@ async function canvasAssessmentScope(ctx: QueryCtx | MutationCtx, userId: string
       || reference.item.itemId !== itemPins.itemId || reference.item.itemRevision !== itemPins.itemRevision
       || reference.item.promptDigest !== itemPins.promptDigest || !item || item.userId !== userId
       || await privacyDigest(reference.responseSpec) !== await privacyDigest(item.responseSpec)) return null
+    if (!validateClaims) return { thread, activity, content, session, opportunity }
     const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemPins.itemId)).take(33)
     if (!claims.length || claims.length > 32 || reference.claims.length !== claims.length
       || claims.some((claim, index) => claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined
@@ -712,12 +718,13 @@ async function canvasPilotAllowed(userId: string, scope: NonNullable<Awaited<Ret
 
 export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx, userId: string,
   opportunity: Doc<'learnAssessmentOpportunities'>): Promise<LearnTodayCheckPointer | null> {
-  if (!todayCanvasChecksEnabled() || opportunity.userId !== userId || opportunity.contextPins.kind !== 'session'
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || opportunity.contextPins.kind !== 'session'
     || !opportunity.contextPins.canvas || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return null
-  const scope = await canvasAssessmentScope(ctx, userId, opportunity.contextPins.canvas.threadId)
+  const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
+  if (!todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return null
+  const scope = await canvasAssessmentScope(ctx, userId, opportunity.contextPins.canvas.threadId, false)
   if (!scope || scope.opportunity._id !== opportunity._id || !await canvasPilotAllowed(userId, scope)
     || await measurementScopeReason(ctx, userId, opportunity)) return null
-  const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
   if (opportunity.assignmentId && (!assignment || assignment.userId !== userId || assignment.status !== 'admitted' || assignment.flow !== 'v2_canvas')) return null
   if (!opportunity.deliveryGrantId && !opportunity.submissionId) {
     const reference = readAdaptiveAssessmentReference(scope.activity)
@@ -725,17 +732,33 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
     const rebuilt = await composeAdaptiveActivityPlan({ ...storedPlan(scope.activity), replacesActivityId: undefined, primitiveSequence: [], assessmentReference: reference })
     if (rebuilt.inputDigest !== scope.activity.inputDigest || rebuilt.canonicalInputSnapshot !== scope.activity.canonicalInputSnapshot) return null
   } else if (!(await replayAdaptiveActivityPlan(storedPlan(scope.activity))).ok) return null
-  const state = await readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, 'canvas')
+  let available = opportunity.evidenceStatus === 'available' && opportunity.invalidatedAt === undefined
+  if (opportunity.assessmentPins.kind === 'measurement') {
+    const pins = opportunity.assessmentPins.itemPins
+    const item = await ctx.db.get(pins.itemId)
+    const family = await ctx.db.get(pins.familyId)
+    const protocol = getFrozenLearnMeasurementProtocol()
+    available &&= !!item?.prompt?.trim() && item.status === 'published' && item.evidenceStatus === 'available' && item.invalidatedAt === undefined
+      && item.revision === pins.itemRevision && item.promptDigest === pins.promptDigest && item.familyId === pins.familyId
+      && item.familyRevision === pins.familyRevision && family?.userId === userId && family.revision === pins.familyRevision
+      && family.evidenceStatus === 'available' && family.invalidatedAt === undefined && ['provisional_equivalent', 'empirically_supported'].includes(family.status)
+      && assignment?.status === 'admitted' && protocol !== null && assignment.protocolVersion === protocol.version && assignment.epoch === protocol.epoch
+      && protocol.flows.includes('v2_canvas')
+  }
+  const response = opportunity.submissionId ? await ctx.db.get(opportunity.submissionId) : null
+  if (opportunity.submissionId) available &&= response?.userId === userId && 'assessmentOpportunityId' in response
+    && response.assessmentOpportunityId === opportunity._id && response.flow === 'canvas' && response.evidenceStatus === 'available'
+    && response.invalidatedAt === undefined && response.currentEligibility === 'eligible'
   const closed = ['invalid', 'cancelled', 'abandoned'].includes(opportunity.phase) || !opportunity.submissionId && Date.now() >= opportunity.closeAt
-  if (state.status !== 'available' && !closed && !opportunity.submissionId) return null
+  if (!opportunity.submissionId && !closed && (!available || opportunity.operationalEligibility !== 'eligible' || !['ready', 'test_open'].includes(opportunity.phase))) return null
   if (!opportunity.submissionId && Date.now() < opportunity.openAt) return null
-  const attempt = state.status === 'available' && state.capabilities.canReadFeedback && opportunity.authoritativeAttemptId
+  const attempt = available && ['scored_pass', 'scored_fail'].includes(opportunity.phase) && opportunity.authoritativeAttemptId
     ? await ctx.db.get(opportunity.authoritativeAttemptId) : null
   const resultReady = attempt?.userId === userId && attempt.submissionId === opportunity.submissionId
     && typeof attempt.scoreCommittedAt === 'number' && typeof attempt.serverScorePercent === 'number'
     && Number.isFinite(attempt.serverScorePercent) && attempt.serverScorePercent >= 0 && attempt.serverScorePercent <= 100
   const phase: LearnTodayCheckPointer['state'] = closed ? 'closed'
-    : state.status !== 'available' || opportunity.phase === 'reconciliation_required'
+    : !available || opportunity.phase === 'reconciliation_required'
       || ['scored_pass', 'scored_fail'].includes(opportunity.phase) && !resultReady ? 'result_unconfirmed'
       : resultReady ? 'result_ready'
         : opportunity.submissionId ? 'saved_scoring' : 'ready'
