@@ -39,6 +39,40 @@ const suppressed = {
   sourceAccounting: null, attritionByStartingBand: null, publicationPolicyVersion: LEARN_REPORT_PUBLICATION_POLICY_VERSION,
 }
 
+function canvasSurface(sources: Episode[]) {
+  return sources.map(source => ({ ...source, episode: { ...source.episode, assignment: { ...source.episode.assignment, checkSurface: 'canvas' as const } },
+    other: source.other ? { ...source.other, assignment: { ...source.other.assignment, checkSurface: 'canvas' as const } } : null }))
+}
+
+describe('frozen check-surface strata', () => {
+  it('separates Today-treatment cells by their frozen check surface', async () => {
+    const today = await episodes(5)
+    const canvas = canvasSurface(await Promise.all([11, 12, 13, 14, 15].map(index => computationEpisode(index))))
+    const cells = await published([...today, ...canvas])
+    const strata = new Set(daySeven(cells).filter(cell => cell.stratum.startingBand === 'all').map(cell => `${cell.stratum.flow}:${cell.stratum.checkSurface}`))
+    expect(strata).toEqual(new Set(['v2_today:today', 'v2_today:canvas']))
+    for (const surface of ['today', 'canvas'] as const) {
+      const cell = daySeven(cells).find(row => row.stratum.checkSurface === surface && row.stratum.startingBand === 'all' && row.weighting === 'capability_episode')
+      expect(cell?.counts?.maturedEpisodes).toBe(5)
+    }
+  })
+
+  it('omits a check-surface group whose all cell fails the five-learner rule and leaves its sibling intact', async () => {
+    const today = await episodes(5)
+    const small = canvasSurface(await Promise.all([11, 12, 13].map(index => computationEpisode(index))))
+    const cells = await published([...today, ...small])
+    expect(cells.some(cell => cell.stratum.checkSurface === 'canvas')).toBe(false)
+    expect(find(cells).stratum).toMatchObject({ flow: 'v2_today', checkSurface: 'today' })
+    expect(find(cells).counts?.considered).toBe(5)
+    expect(await published(today)).toEqual(cells)
+  })
+
+  it('derives a legacy surface from flow when the frozen assignment has no binding', async () => {
+    const cells = await published(await episodes(5))
+    expect(cells.every(cell => cell.stratum.checkSurface === 'today')).toBe(true)
+  })
+})
+
 describe('minimum contributing learners publication policy', () => {
   it('releases a singleton cohort exactly like an empty one across bands, acceptance and reasons', async () => {
     const first = await release(await episodes(1, () => ({ cold: 30, delayed: null, acceptedDelayed: true })))
