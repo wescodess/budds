@@ -64,6 +64,18 @@ async function setup(options: { definitions?: LearnScorerConfigurationDefinition
 }
 
 describe('closed immutable scorer inventory', () => {
+  test('sealed response execution bypasses admission rows and retains the hard transport cap', async () => {
+    const f = await setup()
+    const input = { ...f.input, scoringInput: { ...f.input.scoringInput,
+      evidence: Array.from({ length: 65 }, (_, index) => ({ ...f.input.scoringInput.evidence[0]!, alias: `S${index + 1}` })) } }
+    await expect(f.service.prepare(input)).rejects.toThrow('row limit')
+    const prepared = await f.service.prepare({ ...input, inputAdmission: 'sealed_response' })
+    expect(prepared.receipt.requestBytes).toBeLessThanOrEqual(48_000)
+    expect((await f.service.dispatch(prepared)).receipt.outcome).toBe('validated')
+    await expect(f.service.prepare({ ...input, inputAdmission: 'sealed_response',
+      scoringInput: { ...input.scoringInput, learnerResponse: 'x'.repeat(48_000) } })).rejects.toThrow()
+    expect(f.infer).toHaveBeenCalledTimes(1)
+  })
   test('binds old effective published models and settings; no implicit generation-model admission', async () => {
     const { registry } = await setup({ definitions: [definition(), definition('fixture.older.v1', 'fixture/older-model')] })
     const settings = await baselineMasteryScoringArtifacts()

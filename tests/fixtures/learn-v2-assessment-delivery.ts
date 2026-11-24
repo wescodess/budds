@@ -154,23 +154,55 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
   return { t, owner, graph, begun, args, generated, descriptor }
 }
 
-export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof assessmentDeliveryFixture>>, 't' | 'graph'>) {
+export type DeliveryTeachingShape = { claims: number, supports: number, sources?: number, extraSupports?: number, excerpt?: string }
+
+export async function publishDeliveryTeaching(f: Pick<Awaited<ReturnType<typeof assessmentDeliveryFixture>>, 't' | 'graph'>, shape?: DeliveryTeachingShape) {
   const session = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
   if (!session) throw new Error('Missing teaching session')
   const userId = session.userId
+  const sources = await f.t.run(async ctx => {
+    const source = (await ctx.db.get(f.graph.sourceSnapshotId))!
+    const excerpt = (await ctx.db.get(f.graph.sourceExcerptId))!
+    const identity = (await ctx.db.get(source.sourceIdentityId))!
+    const rows = [{ sourceSnapshotId: source._id, sourceExcerptId: excerpt._id }]
+    if (shape?.excerpt) await ctx.db.patch(excerpt._id, { excerpt: shape.excerpt })
+    for (let index = 1; index < (shape ? Math.max(shape.sources ?? 0, shape.supports + (shape.extraSupports ? 1 : 0)) : 1); index++) {
+      const { _id: _sourceId, _creationTime: _sourceTime, ...fields } = source
+      const { _id: _identityId, _creationTime: _identityTime, ...identityFields } = identity
+      const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { ...identityFields, externalKey: `teaching:${index}` })
+      const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { ...fields, sourceIdentityId })
+      const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { userId, sourceSnapshotId, locator: `teaching:${index}`,
+        excerpt: shape?.excerpt ?? excerpt.excerpt, rightsStatus: 'permitted' })
+      await ctx.db.insert('learnObjectiveSources', { userId, objectiveId: f.graph.objectiveId, sourceSnapshotId, coverage: 'strong' })
+      rows.push({ sourceSnapshotId, sourceExcerptId })
+    }
+    return rows
+  })
   const jobId = await f.t.run(ctx => ctx.db.insert('learnJobs', { userId, learningVoidId: f.graph.learningVoidId,
     blueprintRevisionId: f.graph.blueprintRevisionId, studyPlanRevisionId: f.graph.studyPlanRevisionId, studySessionId: f.graph.studySessionId,
     type: 'session_content_generation', status: 'running', revision: 1, providerResponseModel: 'synthetic/model', idempotencyKey: 'synthetic-teaching-job', inputDigest: `sha256:${'a'.repeat(64)}`,
     expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 1,
-    leaseToken: 'synthetic-teaching-lease', leaseExpiresAt: Date.now() + 60_000, dispatchSupportingSourceSnapshotIds: [f.graph.sourceSnapshotId] }))
+    leaseToken: 'synthetic-teaching-lease', leaseExpiresAt: Date.now() + 60_000, dispatchSupportingSourceSnapshotIds: sources.map(row => row.sourceSnapshotId) }))
   const candidate = { version: 'learn-v2.session-content.v1', generatorVersion: 'synthetic.teaching.v1', assessmentRubric: rubric,
     blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: `TEACHING-CANARY-${kind}: a separate practice case.`, claimOrders: [0] })),
     claims: [{ order: 0, claim: 'TEACHING-CLAIM-CANARY: the source supports the separate practice case.', supportSourceSnapshotIds: [String(f.graph.sourceSnapshotId)] }] }
+  if (shape) {
+    candidate.claims = Array.from({ length: shape.claims }, (_, order) => ({ ...candidate.claims[0]!, order,
+      supportSourceSnapshotIds: Array.from({ length: shape.supports + (order < (shape.extraSupports ?? 0) ? 1 : 0) }, (_, index) =>
+        String(sources[(order * shape.supports + index) % sources.length]!.sourceSnapshotId)) }))
+    for (const block of candidate.blocks) {
+      const linked = candidate.claims.filter(row => row.order % candidate.blocks.length === block.order).map(row => row.order)
+      block.claimOrders = linked.length ? linked : [0]
+    }
+  }
   const published = await f.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
     tokenIdentifier: userId, jobId, leaseToken: 'synthetic-teaching-lease', expectedRevision: 1, candidateJson: JSON.stringify(candidate),
-    verifierDecisionsJson: JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: [{ claimOrder: 0, sourceSnapshotId: String(f.graph.sourceSnapshotId),
-      sourceExcerptId: String(f.graph.sourceExcerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.99 }] }),
+    verifierDecisionsJson: JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: candidate.claims.flatMap(claim => claim.supportSourceSnapshotIds.map(id => ({ claimOrder: claim.order, sourceSnapshotId: id,
+      sourceExcerptId: String(sources.find(row => String(row.sourceSnapshotId) === id)!.sourceExcerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.99 }))) }),
   })
-  if (published.status !== 'ready') throw new Error('Synthetic teaching did not publish')
+  if (published.status !== 'ready') {
+    const job = await f.t.run(ctx => ctx.db.get(jobId))
+    throw new Error(`Synthetic teaching did not publish: ${job?.terminalReason ?? published.status}`)
+  }
   return published.sessionContentId
 }

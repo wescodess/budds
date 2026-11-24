@@ -8,7 +8,7 @@ import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
-import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { legacyResponseAvailable, retainedResponsePayload } from './learnV2ResponsePrivacy'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAssessmentDisclosureContextSchema,
@@ -252,7 +252,8 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
         : Boolean(assigned && JSON.stringify(assigned) === JSON.stringify(p))
       evidenceAvailable &&= assignment.evidenceStatus === 'available' && assignment.invalidatedAt === undefined
     }
-    const supportLimit = LEARN_MEASUREMENT_CAPABILITIES.responses ? itemLimits.evidenceRows : 64
+    const supportLimit = LEARN_MEASUREMENT_CAPABILITIES.responses
+      ? row.submissionId ? storageLimits.maxClaims * storageLimits.maxSupportsPerClaim : itemLimits.evidenceRows : 64
     const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', p.itemId)).take(supportLimit + 1)
     evidenceAvailable &&= supports.length > 0 && supports.length <= supportLimit
     for (const support of supports) {

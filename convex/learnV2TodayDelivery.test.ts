@@ -10,10 +10,11 @@ import { normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLi
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '../shared/learn-v2-responses'
-import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import * as assessmentDelivery from './lib/learnV2AssessmentDelivery'
+import * as scoringContract from '../server/utils/learn-v2-measurement-item-contract'
 import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
@@ -46,7 +47,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
-async function fixture(options: { reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = {}) {
+async function fixture(options: { reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean, teaching?: DeliveryTeachingShape } = {}) {
   const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -55,7 +56,7 @@ async function fixture(options: { reserve?: boolean, reserveCount?: number, inve
     legacyAllowlist: [definition.configurationId], prospectiveConfigurationId: null })
   policy.scorer = { registry, saved }
   const f = await assessmentDeliveryFixture(options)
-  const contentId = await publishDeliveryTeaching(f)
+  const contentId = await publishDeliveryTeaching(f, options.teaching)
   const request = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'today_start_command' }
   const settle = <T,>(value: Promise<T>) => value.catch((error: { data?: unknown }) => ({ rejected: error.data ?? String(error) }))
   const reads = async (key = 'today_content_delivery') => ({
@@ -1598,6 +1599,88 @@ test('publication revalidation rejects a validated family that grows to 65 suppo
     q.eq('userId', userId).eq('familyId', f.begun.familyId).eq('familyRevision', 1)).take(7))
   expect(rows.every(row => row.status !== 'published')).toBe(true)
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))).toEqual([])
+})
+
+test('ordinary publication rejects 65 evidence rows before making content ready', async () => {
+  await expect(fixture({ teaching: { claims: 32, supports: 2, extraSupports: 1 } })).rejects.toThrow('item_evidence_limit')
+})
+
+test('ordinary publication rejects source evidence above the serialized scoring request budget', async () => {
+  await expect(fixture({ teaching: { claims: 32, supports: 2, excerpt: 'Source evidence supports a separate practice case. '.repeat(10) } })).rejects.toThrow('item_scoring_request_limit')
+})
+
+test('responses-off ordinary publication and start keep the existing 65-row behavior', async () => {
+  policy.responses = false
+  const f = await fixture({ teaching: { claims: 32, supports: 2, extraSupports: 1 } })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toEqual({ status: 'in_progress',
+    sessionContentId: f.contentId, sessionContentRevision: 1 })
+  expect(await f.opportunities()).toEqual([])
+  expect(await f.exposures()).toEqual([])
+})
+
+test.each(['start', 'acceptance'] as const)('older 65-row ordinary content is explicitly unavailable at %s', async boundary => {
+  const original = scoringContract.assertMeasurementScoringContract
+  const oldPublication = vi.spyOn(scoringContract, 'assertMeasurementScoringContract').mockImplementation((input, binding, acceptance, request) => {
+    if (input.evidence.length <= 64) original(input, binding, acceptance, request)
+  })
+  const f = await fixture({ teaching: { claims: 32, supports: 2, extraSupports: 1 } })
+  await f.seal()
+  if (boundary === 'start') {
+    oldPublication.mockRestore()
+    await expect(f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).rejects.toThrow('Learn application delivery unavailable: item_evidence_limit')
+    expect((await f.opportunities()).filter(row => row.purpose.kind === 'independent_application')).toEqual([])
+    expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: 'ready', revision: 2 })
+  } else {
+    await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+    oldPublication.mockRestore()
+    const opportunity = (await f.opportunities()).find(row => row.purpose.kind === 'independent_application')!
+    expect(await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION,
+      assessmentOpportunityId: opportunity._id })).toMatchObject({ status: 'unavailable', reasonCodes: ['item_evidence_limit'] })
+    expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+      version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'legacy_ordinary_bound_1234567890', response: {
+        target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+        payload: { kind: 'text', text: 'An otherwise valid response.' }, confidence: 3 } } }))
+      .toMatchObject({ kind: 'rejected', reasonCode: 'item_evidence_limit' })
+    expect(await f.t.run(ctx => ctx.db.get(opportunity._id))).not.toHaveProperty('submissionId')
+  }
+  expect(await f.t.run(ctx => ctx.db.query('learnResponseBodies').take(4))).toHaveLength(1)
+})
+
+test.each(['canonical', 'compatibility'] as const)('ordinary %s admission rejects escaped wire overflow before sealing', async entry => {
+  const f = await fixture({ teaching: { claims: 32, supports: 2 } })
+  await f.seal()
+  ordinaryScorer()
+  await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)
+  const opportunity = (await f.opportunities()).find(row => row.purpose.kind === 'independent_application')!
+  const command = { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'ordinary_oversized_wire_1234567890', response: {
+    target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+    payload: { kind: 'text' as const, text: '\\'.repeat(4001) }, confidence: 3 } }
+  const result = entry === 'compatibility' ? await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: f.graph.studySessionId,
+    expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1,
+    response: command.response.payload.text, confidence: 3, idempotencyKey: command.idempotencyKey })
+    : await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: command })
+  expect(result).toMatchObject(entry === 'compatibility' ? { status: 'invalid', code: 'payload_too_large' } : { kind: 'rejected', reasonCode: 'payload_too_large' })
+  expect(await f.t.run(ctx => ctx.db.get(opportunity._id))).not.toHaveProperty('submissionId')
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { ...command,
+    idempotencyKey: 'ordinary_bounded_retry_1234567890', response: { ...command.response, payload: { kind: 'text', text: '\\'.repeat(4000) } } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected bounded retry')
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: 'ordinary_bounded_retry_score_1234567890' })).toMatchObject({ status: 'scored' })
+})
+
+test('ordinary publication, sealing and scoring accept the shared 64-row bound', async () => {
+  const f = await fixture({ teaching: { claims: 32, supports: 2, sources: 64 } })
+  await f.seal()
+  ordinaryScorer()
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, f.request)).toMatchObject({ status: 'in_progress' })
+  const opportunity = (await f.opportunities()).find(row => row.purpose.kind === 'independent_application')!
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'ordinary_bound_accept_1234567890', response: {
+      target: { assessmentOpportunityId: opportunity._id }, expectedRevision: opportunity.revision,
+      payload: { kind: 'text', text: 'A supported application.' }, confidence: 3 } } })
+  if (accepted.kind !== 'accepted') throw new Error('Expected sealed application')
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: accepted.submissionId, idempotencyKey: 'ordinary_bound_score_1234567890' })).toMatchObject({ status: 'scored' })
 })
 
 

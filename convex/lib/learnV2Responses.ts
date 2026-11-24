@@ -1,5 +1,6 @@
-import { LearnAccessError, LearnInputValidationError } from '../../shared/learn-v2-errors'
-import { readMeasurementScoringInput, measurementLearnerResponse } from './learnV2MeasurementItemContract'
+import { LearnAccessError, LearnInputValidationError, LearnScoringInputError } from '../../shared/learn-v2-errors'
+import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
+import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
@@ -399,20 +400,18 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const validity = assessment?.validity ?? parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
         status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] })
   if (entry.payload.kind !== 'text' && 'stage' in row) reject('invalid_payload')
+  if ('assessmentPins' in row && LEARN_MEASUREMENT_CAPABILITIES.responses) {
+    try {
+      await readLearnAssessmentScoringInput(ctx, userId, row, 'acceptance', measurementLearnerResponse(entry.payload))
+    } catch (error) {
+      if (error instanceof LearnScoringInputError) reject('evidence_unavailable')
+      if (!(error instanceof MeasurementItemBoundsError)) throw error
+      reject(error.code === 'response_payload_limit' ? 'payload_too_large' : error.code)
+    }
+  }
   if ('assessmentPins' in row && row.assessmentPins.kind === 'measurement') {
     const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
     const spec = item.responseSpec
-    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
-      const objective = await ctx.db.get(row.objectiveId)
-      if (!objective?.assessmentContract || typeof objective.assessmentContract === 'string') reject('evidence_unavailable')
-      try {
-        await readMeasurementScoringInput(ctx, userId, item._id,
-          { version: objective.assessmentContract.version, criteria: objective.assessmentContract.criteria }, measurementLearnerResponse(entry.payload))
-      } catch (error) {
-        if (!(error instanceof MeasurementItemBoundsError)) throw error
-        reject(error.code === 'response_payload_limit' ? 'payload_too_large' : error.code)
-      }
-    }
     const payload = entry.payload
     if (spec.kind === 'bounded_rubric' ? payload.kind !== 'text'
       : spec.kind === 'numeric' ? payload.kind !== 'numeric' || payload.unit !== spec.unit

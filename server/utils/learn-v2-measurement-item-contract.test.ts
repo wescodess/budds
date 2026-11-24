@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { assertMeasurementScoringContract } from './learn-v2-measurement-item-contract'
+import { assertMeasurementScoringContract, assertMeasurementScoringTransportContract } from './learn-v2-measurement-item-contract'
 import { buildBaselineMasteryScoringPayload, buildBaselineMasteryScoringRequest, type BaselineMasteryScoringInput } from './learn-v2-mastery-scorer'
 import { serializeCompletionRequest } from './ai-gateway'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as limits } from '../../shared/learn-v2-measurement-item-limits'
@@ -36,4 +36,25 @@ test('the response allowance counts escaped wire bytes rather than code units', 
   const above = { ...input, learnerResponse: '\\'.repeat(4001) }
   expect(bytes(above) - bytes(input)).toBe(16_003)
   expect(() => assertMeasurementScoringContract(above, binding, true)).toThrow('response_payload_limit')
+})
+
+test('recovery ignores admission rows and response growth while enforcing the exact hard cap', () => {
+  const recovered = { ...input, evidence: Array.from({ length: 65 }, (_, index) => ({ ...input.evidence[0]!, alias: `S${index + 1}` })),
+    learnerResponse: '\\'.repeat(4001) }
+  expect(() => assertMeasurementScoringContract(recovered, binding, true)).toThrow('item_evidence_limit')
+  expect(() => assertMeasurementScoringTransportContract(recovered, binding)).not.toThrow()
+  const oldStatic = { ...input, evidence: [{ ...input.evidence[0]!, claim: 'a'.repeat(limits.scoringRequestBytes - limits.responseWireBytes - bytes(input) + 1) }] }
+  expect(() => assertMeasurementScoringContract(oldStatic, binding)).toThrow('item_scoring_request_limit')
+  expect(() => assertMeasurementScoringTransportContract(oldStatic, binding)).not.toThrow()
+  const at = { ...input, learnerResponse: 'a'.repeat(limits.scoringRequestBytes - bytes(input) + 1) }
+  expect(bytes(at)).toBe(limits.scoringRequestBytes)
+  expect(() => assertMeasurementScoringTransportContract(at, binding)).not.toThrow()
+  expect(() => assertMeasurementScoringTransportContract({ ...at, learnerResponse: `${at.learnerResponse}a` }, binding)).toThrow('response_payload_limit')
+})
+
+test('admission and recovery measure the selected scorer protocol rather than the baseline request', () => {
+  const request = () => ({ model: 'measurement-deterministic', messages: [{ role: 'user' as const, content: 'a'.repeat(limits.scoringRequestBytes) }] })
+  expect(() => assertMeasurementScoringContract(input, binding)).not.toThrow()
+  expect(() => assertMeasurementScoringContract(input, binding, false, request)).toThrow('item_scoring_request_limit')
+  expect(() => assertMeasurementScoringTransportContract(input, binding, request)).toThrow('response_payload_limit')
 })

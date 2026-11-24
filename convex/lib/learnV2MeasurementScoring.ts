@@ -1,23 +1,20 @@
+import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
+import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
-import { readMeasurementScoringInput, measurementLearnerResponse } from './learnV2MeasurementItemContract'
-import { assertMeasurementScoringContract } from '../../server/utils/learn-v2-measurement-item-contract'
 import { LearnScoringInputError } from '../../shared/learn-v2-errors'
-import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-v2-measurement-item-limits'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { getLearnMeasurementScorer } from './learnV2MeasurementScorerInventory'
 import { getLearnResponseStateForOwner } from './learnV2Responses'
-import { calibrationEvidence } from '../learnV2MapCalibration'
-import { LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION, learnMeasurementRubricScoringProtocol } from '../../server/utils/learn-v2-measurement-rubric-scorer'
+import { learnMeasurementRubricScoringProtocol } from '../../server/utils/learn-v2-measurement-rubric-scorer'
 import { learnCalibrationScoringProtocol } from './learnV2MeasurementCalibrationScorer'
 import { hasLearnV2Access } from './learnV2Access'
 import { requireAuth } from './auth'
 import { privacyDigest } from './learnV2ResponsePrivacy'
-import { measurementItemReason, measurementScopeReason } from './learnV2Measurement'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
-import { learnPrivateScoringPayloadSchema, learnAssessmentPinsSchema, learnMeasurementItemPinsSchema, learnScoringExecutionReceiptSchema, type LearnScoringExecutionReceipt } from '../../shared/learn-v2-measurement'
+import { learnAssessmentPinsSchema, learnScoringExecutionReceiptSchema, type LearnScoringExecutionReceipt } from '../../shared/learn-v2-measurement'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../../shared/adaptive-v2-pilot-policy'
-import { createLearnMasteryScorerService, parseMasteryScoringResponseV2, scorerCanonicalJson, type BaselineMasteryScoringInput, type LearnScoringExecutionResult } from '../../server/utils/learn-v2-mastery-scorer'
+import { createLearnMasteryScorerService, parseMasteryScoringResponseV2, scorerCanonicalJson, type LearnScoringExecutionResult } from '../../server/utils/learn-v2-mastery-scorer'
 import { LEARN_V2_PUBLIC_API_VERSION, disabledLearnV2Result, type LearnV2SubmissionScore } from './learnV2PublicContract'
 import { learnSafeAssessmentResultSchema } from '../../shared/learn-v2-assessment-disclosure'
 
@@ -36,83 +33,17 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
     || !job || job.userId !== userId || job.submissionId !== response._id || job.assessmentOpportunityId !== opportunity._id
     || job.type !== 'sealed_response_scoring' || job.requestFingerprint !== response.payloadDigest
     || scorerCanonicalJson(job.scoringBinding) !== scorerCanonicalJson(response.scoringBinding)
+    || opportunity.assessmentContractDigest !== response.assessmentContractDigest
+    || opportunity.assessmentContractVersion !== response.assessmentContractVersion || opportunity.depth !== response.depth
+    || opportunity.learningVoidId !== response.learningVoidId || opportunity.objectiveId !== response.objectiveId
+    || opportunity.blueprintRevisionId !== response.blueprintRevisionId || opportunity.blueprintRecordRevision !== response.blueprintRecordRevision
     || scorerCanonicalJson(opportunity.scoringBinding) !== scorerCanonicalJson(response.scoringBinding)
     || scorerCanonicalJson(opportunity.assessmentPins) !== scorerCanonicalJson(response.assessmentPins)) throw new LearnScoringInputError('Learn scoring pins mismatch')
   const state = await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id })
   if (state.status !== 'available' || state.work?.body.bodyAvailability !== 'available'
     || response.currentEligibility === 'unknown' || response.invalidatedAt !== undefined || opportunity.invalidatedAt !== undefined) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-  const objective = await ctx.db.get(opportunity.objectiveId)
-  if (!objective || objective.userId !== userId || !objective.assessmentContract || typeof objective.assessmentContract === 'string'
-    || await privacyDigest(objective.assessmentContract) !== response.assessmentContractDigest) throw new LearnScoringInputError('Learn scoring rubric unavailable')
-  const payload = state.work.body.payload
-  const contract = objective.assessmentContract
-  let rubric = { version: contract.version as string, criteria: contract.criteria }
-  let rubricSnapshot: string | null = null
-  let challenge = contract.instructions
-  let declaredStimulus: string | null | undefined
-  const evidence: BaselineMasteryScoringInput['evidence'] = []
-  let scoringSpec: ReturnType<typeof learnPrivateScoringPayloadSchema.parse> | null = null
-  if (opportunity.assessmentPins.kind === 'measurement') {
-    const pins = opportunity.assessmentPins.itemPins
-    const reason = await measurementScopeReason(ctx, userId, opportunity)
-      ?? await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(pins), opportunity, response.scoringBinding)
-    if (reason) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-    const item = (await ctx.db.get(pins.itemId))!
-    const spec = (await ctx.db.get(pins.scoringSpecId))!
-    scoringSpec = learnPrivateScoringPayloadSchema.parse(spec.payload)
-    challenge = item.prompt!
-    if (scoringSpec.kind === 'bounded_rubric') {
-      if (await privacyDigest({ prompt: item.prompt, declaredStimulus: item.declaredStimulus ?? null, responseSpec: item.responseSpec }) !== pins.promptDigest) throw new LearnScoringInputError('Learn scoring stimulus pins mismatch')
-      if (response.scoringBinding.kind !== 'model' || response.scoringBinding.scorerVersion !== LEARN_MEASUREMENT_RUBRIC_SCORER_VERSION) throw new LearnScoringInputError('Learn declared stimulus scorer configuration required')
-      rubric = { version: contract.version, criteria: scoringSpec.criteria }
-      declaredStimulus = item.declaredStimulus ?? null
-    }
-    const measured = await readMeasurementScoringInput(ctx, userId, item._id, rubric, measurementLearnerResponse(payload))
-    evidence.push(...measured.input.evidence)
-  } else {
-    const blueprint = await ctx.db.get(response.blueprintRevisionId)
-    const learningVoid = await ctx.db.get(response.learningVoidId)
-    if (!blueprint || blueprint.userId !== userId || blueprint.recordRevision !== response.blueprintRecordRevision
-      || learningVoid?.activeBlueprintRevisionId !== blueprint._id) throw new LearnScoringInputError('Learn scoring pins mismatch')
-    if (response.contextPins.kind === 'session') {
-      const pins = response.contextPins
-      const content = await ctx.db.get(pins.sessionContentId)
-      const session = await ctx.db.get(pins.studySessionId)
-      if (!content || content.userId !== userId || content.revision !== pins.contentRevision || content.status !== 'published'
-        || session?.userId !== userId || session.startedSessionContentId !== content._id) throw new LearnScoringInputError('Learn scoring pins mismatch')
-      rubricSnapshot = content.assessmentRubricSnapshot ?? null
-      rubric = JSON.parse(rubricSnapshot ?? 'null')
-      if (!rubric || opportunity.assessmentPins.kind !== 'session_application' || await privacyDigest(rubric) !== opportunity.assessmentPins.rubricDigest) throw new LearnScoringInputError('Learn scoring rubric unavailable')
-      const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(16)
-      const prompts = blocks.filter(row => (row.kind === 'independent_application' || row.kind === 'transfer_challenge') && row.content)
-      if (prompts.length !== 1 || await privacyDigest(prompts[0]!.content) !== opportunity.assessmentPins.promptDigest) throw new LearnScoringInputError('Learn scoring prompt unavailable')
-      challenge = prompts[0]!.content!
-      const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33)
-      if (!claims.length || claims.length > 32) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-      for (const claim of claims) {
-        const supports = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q => q.eq('userId', userId).eq('sessionContentClaimId', claim._id)).take(9)
-        if (!supports.length || supports.length > 8) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-        for (const support of supports) {
-          const excerpt = await ctx.db.get(support.sourceExcerptId)
-          if (support.entailment !== 'entailed' || support.conflictStatus !== 'clear' || support.evidenceStatus !== 'evidence_available'
-            || !excerpt?.excerpt || excerpt.userId !== userId || excerpt.evidencePurgedAt !== undefined) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-          evidence.push({ alias: `S${evidence.length + 1}`, claim: claim.claim, excerpt: excerpt.excerpt })
-        }
-      }
-    } else {
-      const links = await ctx.db.query('learnObjectiveSources').withIndex('by_userId_and_objectiveId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('objectiveId', objective._id)).take(9)
-      if (!links.length || links.length > 8) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-      for (const link of links) {
-        const excerpts = await ctx.db.query('learnSourceExcerpts').withIndex('by_userId_and_sourceSnapshotId', q => q.eq('userId', userId).eq('sourceSnapshotId', link.sourceSnapshotId)).take(1)
-        if (!excerpts[0]?.excerpt) throw new LearnScoringInputError('Learn scoring evidence unavailable')
-        evidence.push({ alias: `S${evidence.length + 1}`, claim: objective.title, excerpt: excerpts[0].excerpt })
-      }
-    }
-  }
-  if (evidence.length > itemLimits.evidenceRows) throw new LearnScoringInputError('Learn scoring evidence exceeds its bound')
-  const scoringInput: BaselineMasteryScoringInput = { rubric, challenge, evidence, ...(declaredStimulus !== undefined ? { declaredStimulus } : {}),
-    learnerResponse: measurementLearnerResponse(payload) }
-  if (opportunity.assessmentPins.kind === 'measurement') assertMeasurementScoringContract(scoringInput, response.scoringBinding, true)
+  const pinned = opportunity.assessmentPins.kind === 'measurement' ? opportunity : { ...opportunity, contextPins: response.contextPins }
+  const { scoringInput, scoringSpec, rubricSnapshot, calibrationSnapshot } = await readLearnAssessmentScoringInput(ctx, userId, pinned, 'recovery', measurementLearnerResponse(state.work.body.payload))
   if (response.contextPins.kind === 'session' && response.contextPins.canvas) {
     const canvas = response.contextPins.canvas
     const thread = await ctx.db.get(canvas.threadId)
@@ -124,9 +55,7 @@ export async function requireSavedLearnScoringInput(ctx: ReadCtx, userId: string
         now: Date.now(), activityContractVersion: activity.contractVersion, evaluationContractVersion: activity.evaluationContract.version,
         learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) throw new LearnScoringInputError('Adaptive scoring admission unavailable')
   }
-  const calibration = opportunity.purpose.kind === 'calibration' ? { objective: { title: objective.title, capability: objective.capability, assessmentContract: objective.assessmentContract },
-    evidence: (await calibrationEvidence(ctx, userId, objective._id)).evidence } : null
-  return { response, opportunity, job, payload, scoringSpec, scoringInput, rubricSnapshot: rubricSnapshot ?? JSON.stringify(rubric), calibrationSnapshot: calibration ? JSON.stringify(calibration) : null }
+  return { response, opportunity, job, payload: state.work.body.payload, scoringSpec, scoringInput, rubricSnapshot, calibrationSnapshot }
 }
 export type SavedLearnScoringInput = Awaited<ReturnType<typeof requireSavedLearnScoringInput>>
 
@@ -158,7 +87,7 @@ export async function prepareSavedLearnModelScoring(input: SavedLearnScoringInpu
   const protocol = calibration ? learnCalibrationScoringProtocol(calibration.objective, calibration.evidence)
     : input.scoringSpec?.kind === 'bounded_rubric' ? { ...learnMeasurementRubricScoringProtocol, parse: parseMasteryScoringResponseV2 } : undefined
   const service = createLearnMasteryScorerService(registry, undefined, Date.now, protocol)
-  const prepared = await service.prepare({ saved, scoringInput: { ...input.scoringInput, rubric: JSON.parse(input.rubricSnapshot) }, leaseExpiresAt: input.job.leaseExpiresAt!,
+  const prepared = await service.prepare({ saved, inputAdmission: 'sealed_response', scoringInput: { ...input.scoringInput, rubric: JSON.parse(input.rubricSnapshot) }, leaseExpiresAt: input.job.leaseExpiresAt!,
     context: { assessmentOpportunityId: input.opportunity._id, submissionId: input.response._id, jobId: input.job._id,
       dispatchedAt: receipt.dispatchedAt, dispatchOrdinal: receipt.dispatchOrdinal, leaseIdentityHash: receipt.leaseIdentityHash, responseDigest: input.response.payloadDigest, assessmentPins: learnAssessmentPinsSchema.parse(input.opportunity.assessmentPins) } })
   return { service, prepared }

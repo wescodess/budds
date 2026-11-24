@@ -1,4 +1,6 @@
 import { MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
+import { LearnScoringInputError } from '../../shared/learn-v2-errors'
+import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { ZodError } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -56,6 +58,14 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
   if (['invalid', 'cancelled', 'abandoned', 'preparing'].includes(row.phase)) return deny('assessment_unavailable')
   if (!row.submissionId && (Date.now() < row.openAt || Date.now() >= row.closeAt)) return deny('outside_window')
   if (!row.submissionId && row.operationalEligibility !== 'eligible') return deny('assessment_unavailable')
+  if (pins.data.kind !== 'measurement' && !row.submissionId) {
+    try { await readLearnAssessmentScoringInput(ctx, userId, row, 'publication', 'x') }
+    catch (error) {
+      if (error instanceof MeasurementItemBoundsError) return deny(error.code)
+      if (error instanceof LearnScoringInputError) return deny('assessment_unavailable')
+      throw error
+    }
+  }
   if (row.deliveryGrantId) {
     const grant = await ctx.db.get(row.deliveryGrantId)
     const promptDigest = pins.data.kind === 'measurement' ? pins.data.itemPins.promptDigest : pins.data.promptDigest
@@ -80,7 +90,7 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
       || assignment.protocolVersion !== protocol.version || assignment.epoch !== protocol.epoch
       || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)
       || !protocol.flows.includes(flow === 'today' ? 'v2_today' : 'v2_canvas')) return deny('not_admitted')
-    try {
+    if (!row.submissionId) try {
       const manifest = await getValidatedMeasurementFamily(ctx, userId, pins.data.itemPins.familyId)
       const itemPins = pins.data.itemPins
       const caseRow = await ctx.db.get(itemPins.caseId)

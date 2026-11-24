@@ -19,7 +19,7 @@ import {
   evaluateLearnMeasurementAdmission, learnMeasurementItemPinsSchema,
   type LearnMeasurementItemPins,
 } from '../../shared/learn-v2-measurement'
-import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, learnTimezoneSchema, parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, resolveLearnReportFirstSlotV2, type LearnReportIndependentClaimV2 } from '../../shared/learn-v2-measurement-report'
@@ -35,7 +35,7 @@ export type EnrollmentRequest = {
 export type AdmittedAssignment = Extract<Doc<'learnMeasurementAssignments'>, { status: 'admitted' }>
 export type MeasurementScope = Pick<Doc<'learnAssessmentOpportunities'>,
   'learningVoidId' | 'blueprintRevisionId' | 'objectiveId' | 'blueprintRecordRevision' | 'assessmentContractVersion' | 'assessmentContractDigest' | 'depth' | 'contextPins'>
-  & Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'purpose'>>
+  & Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'purpose' | 'submissionId'>>
 
 export async function requireMeasurementSession(ctx: ReadCtx, userId: string, request: EnrollmentRequest) {
   if (!await hasLearnV2Access(ctx, userId)) throw new Error('Learn V2 access denied')
@@ -142,16 +142,18 @@ export async function measurementItemReason(ctx: ReadCtx, userId: string, pins: 
     || spec.digest !== pins.scoringSpecDigest || item.scoringSpecDigest !== spec.digest || item.supportManifestDigest !== pins.supportManifestDigest
     || item.publicationValidationId !== pins.publicationValidationId || family.equivalenceVersion !== pins.equivalenceVersion
     || await privacyDigest(spec.scoringBinding) !== await privacyDigest(scoringBinding) || item.responseSpec.kind !== spec.payload.kind) return 'pins_mismatch'
-  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(itemLimits.claims + 1)
-  if (!claims.length || claims.length > itemLimits.claims) return 'unmeasurable_no_t0'
+  const claimLimit = scope.submissionId ? storageLimits.maxClaims : itemLimits.claims
+  const supportLimit = scope.submissionId ? storageLimits.maxSupportsPerClaim : itemLimits.supportsPerClaim
+  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(claimLimit + 1)
+  if (!claims.length || claims.length > claimLimit) return 'unmeasurable_no_t0'
   let evidenceRows = 0
   const sources = new Set<string>()
   for (const claim of claims) {
     if (claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined || claim.scoringSpecId !== spec._id) return 'evidence_unavailable'
-    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
+    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(supportLimit + 1)
     evidenceRows += supports.length
-    if (evidenceRows > itemLimits.evidenceRows) return 'item_evidence_limit'
-    if (!supports.length || supports.length > itemLimits.supportsPerClaim) return 'unmeasurable_no_t0'
+    if (!scope.submissionId && evidenceRows > itemLimits.evidenceRows) return 'item_evidence_limit'
+    if (!supports.length || supports.length > supportLimit) return 'unmeasurable_no_t0'
     for (const support of supports) {
       const [source, excerpt] = await Promise.all([ctx.db.get(support.sourceSnapshotId), ctx.db.get(support.sourceExcerptId)])
       if (!source || !excerpt || source.userId !== userId || excerpt.userId !== userId || source.learningVoidId !== scope.learningVoidId

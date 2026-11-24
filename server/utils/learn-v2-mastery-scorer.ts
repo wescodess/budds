@@ -283,7 +283,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
 
   return {
     async prepare(input: { saved: BoundLearnScorerConfiguration, context: ExecutionContext,
-      leaseExpiresAt: number, scoringInput: BaselineMasteryScoringInput }): Promise<PreparedLearnScoringExecution> {
+      leaseExpiresAt: number, scoringInput: BaselineMasteryScoringInput, inputAdmission?: 'sealed_response' }): Promise<PreparedLearnScoringExecution> {
       const saved = await registry.verifySaved(input.saved)
       const now = clock()
       if (!Number.isSafeInteger(input.leaseExpiresAt) || input.context.dispatchedAt > now || input.leaseExpiresAt <= now
@@ -291,7 +291,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
         || input.context.dispatchOrdinal < 1 || input.context.dispatchOrdinal > limits.maxDispatchAttemptsPerJob
         || !validCriteria(input.scoringInput.rubric.criteria)) throw new LearnScoringProtocolError('Invalid finite scorer dispatch')
       const scoringInput = structuredClone(input.scoringInput)
-      if (scoringInput.evidence.length > itemLimits.evidenceRows) throw new LearnScoringProtocolError('Scoring evidence exceeded the row limit')
+      if (input.inputAdmission !== 'sealed_response' && scoringInput.evidence.length > itemLimits.evidenceRows) throw new LearnScoringProtocolError('Scoring evidence exceeded the row limit')
       const privacy = validateAdaptiveProviderPayload({ learnerResponse: scoringInput.learnerResponse, challenge: scoringInput.challenge,
         evidence: scoringInput.evidence.map(row => `${row.alias}: ${row.claim}\n${row.excerpt ?? ''}`),
         rubric: scoringInput.rubric.criteria.map(row => `${row.key}: ${row.description ?? ''}`) })

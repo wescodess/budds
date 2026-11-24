@@ -1,4 +1,5 @@
 import * as assessmentDelivery from './lib/learnV2AssessmentDelivery'
+import * as scoringContract from '../server/utils/learn-v2-measurement-item-contract'
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
@@ -22,7 +23,16 @@ import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION } from '../shared/learn-v2-asses
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 
-const policy = vi.hoisted(() => ({ responses: true, delivery: true, scoring: true, enrollment: true, scorer: null as unknown, protocol: null as unknown }))
+const policy = vi.hoisted(() => ({ responses: true, delivery: true, scoring: true, enrollment: true, evidenceRows: 64, scorer: null as unknown, protocol: null as unknown }))
+vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
+  return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
+    assertMeasurementEvidenceRows(claims: Parameters<typeof value.assertMeasurementEvidenceRows>[0]) {
+      if (policy.evidenceRows === 65 && claims.length === 32 && claims.every(claim => claim.supports.length <= 3)
+        && claims.reduce((count, claim) => count + claim.supports.length, 0) === 65) return
+      value.assertMeasurementEvidenceRows(claims)
+    } }
+})
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
   return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES,
@@ -45,6 +55,7 @@ const answer = 'A committed learner answer.'
 
 beforeEach(() => {
   policy.responses = true; policy.delivery = true; policy.scoring = true; policy.enrollment = true; policy.scorer = null
+  policy.evidenceRows = 64
   vi.useFakeTimers(); vi.setSystemTime(NOW)
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
@@ -776,6 +787,19 @@ test.each((['measurement_cold', 'measurement_delayed', 'retained_transfer', 'ind
   expect(network).toHaveBeenCalledTimes(1)
 })
 
+test.each(['retained_transfer', 'independent_application'] as const)('Canvas %s rejects response wire overflow before sealing', async kind => {
+  const s = await purposeFixture(kind)
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply(true, 'accuracy')))
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage, response: '\\'.repeat(4001) }))
+    .toMatchObject({ kind: 'rejected', reasonCode: 'payload_too_large' })
+  expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(4))).toEqual([])
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage,
+    response: '\\'.repeat(4000), idempotencyKey: 'canvas_application_bounded_1234567890' })
+  if (sealed.kind !== 'accepted') throw new Error('Expected bounded Canvas response')
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'canvas_application_bounded_score_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+})
+
 test.each(['v2_canvas', 'v2_today'] as const)('merged Today start races Canvas attachment without changing the %s stratum', async flow => {
   const s = await fixture({ attach: false, flow })
   const [canvas, today] = await Promise.all([
@@ -890,6 +914,66 @@ test('the 64-row publication bound delivers, seals, recovers and scores through 
 test('65-row inventory is rejected before Canvas publication or disclosure', async () => {
   await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } }))
     .rejects.toThrow('item_evidence_limit')
+})
+
+test.each(['sealed', 'scored'] as const)('saved %s work above the admission allowance recovers within the transport cap', async phase => {
+  const s = await fixture()
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const original = scoringContract.assertMeasurementScoringContract
+  const priorAdmission = vi.spyOn(scoringContract, 'assertMeasurementScoringContract').mockImplementation((input, binding, acceptance, request) => {
+    if (!acceptance) original(input, binding, acceptance, request)
+  })
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage, response: '\\'.repeat(4001) })
+  if (sealed.kind !== 'accepted') throw new Error('Expected sealed response')
+  const request = { threadId: s.stage.threadId, activityId: s.stage.activityId, submissionId: sealed.submissionId,
+    idempotencyKey: 'saved_allowance_recovery_1234567890' }
+  if (phase === 'scored') expect(await s.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  priorAdmission.mockRestore()
+  const before = await s.t.run(ctx => ctx.db.get(sealed.submissionId))
+  expect(await s.owner.query(internal.learnV2Mastery.getMasterySubmissionScoringState, {
+    version: LEARN_V2_PUBLIC_API_VERSION, submissionId: sealed.submissionId, idempotencyKey: 'saved_allowance_state_1234567890' }))
+    .toMatchObject({ status: phase === 'scored' ? 'scored' : 'scoring_pending' })
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await s.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.submissionId, idempotencyKey: 'saved_allowance_replay_1234567890' })).toMatchObject({ status: 'scored' })
+  expect(await s.t.run(ctx => ctx.db.get(sealed.submissionId))).toEqual(before)
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+test('saved work still fails the hard transport cap without dispatch or loss of its body', async () => {
+  const s = await fixture({ inventory: { claims: 32, supports: 2, sources: 64,
+    claimText: 'The source rule justifies this declared hypothetical total using multiplication. '.repeat(2) } })
+  const original = scoringContract.assertMeasurementScoringContract
+  const priorAdmission = vi.spyOn(scoringContract, 'assertMeasurementScoringContract').mockImplementation((input, binding, acceptance, request) => {
+    if (!acceptance) original(input, binding, acceptance, request)
+  })
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage, response: '\\'.repeat(8000) })
+  if (sealed.kind !== 'accepted') throw new Error('Expected saved fixture response')
+  priorAdmission.mockRestore()
+  vi.stubGlobal('fetch', vi.fn())
+  await expect(s.owner.query(internal.learnV2Mastery.getMasterySubmissionScoringState, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.submissionId, idempotencyKey: 'saved_hard_transport_cap_1234567890' })).rejects.toThrow('response_payload_limit')
+  expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(4))).toHaveLength(1)
+  expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(4))).toEqual([])
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+test('an authoritative result with 65 saved evidence rows survives a lower admission bound', async () => {
+  policy.evidenceRows = 65
+  const s = await fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } })
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (sealed.kind !== 'accepted') throw new Error('Expected sealed response')
+  const request = { threadId: s.stage.threadId, activityId: s.stage.activityId, submissionId: sealed.submissionId,
+    idempotencyKey: 'saved_evidence_bound_score_1234567890' }
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  const before = await s.t.run(ctx => ctx.db.get(sealed.submissionId))
+  policy.evidenceRows = 64
+  expect(await s.owner.query(internal.learnV2Mastery.getMasterySubmissionScoringState, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.submissionId, idempotencyKey: 'saved_evidence_bound_state_1234567890' })).toMatchObject({ status: 'scored' })
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await s.t.run(ctx => ctx.db.get(sealed.submissionId))).toEqual(before)
+  expect(fetch).toHaveBeenCalledTimes(1)
 })
 
 test('Canvas rejects an oversized scoring response before sealing and accepts a bounded retry', async () => {

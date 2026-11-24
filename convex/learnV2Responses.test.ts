@@ -189,6 +189,31 @@ test('ordinary assessment acceptance still requires its session-content claims',
   expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })).toMatchObject({ kind: 'rejected', reasonCode: 'evidence_unavailable' })
 })
 
+test('calibration acceptance uses its actual scorer request and rejects wire overflow before sealing', async () => {
+  const f = await fixture('ordinary')
+  await f.t.run(async ctx => {
+    const opportunity = (await ctx.db.get(f.f.rows.learnAssessmentOpportunities))!
+    const objective = (await ctx.db.get(f.capability.objectiveId))!
+    if (!objective.assessmentContract || typeof objective.assessmentContract === 'string' || opportunity.assessmentPins.kind !== 'session_application') throw new Error('Expected fixture rubric')
+    const promptDigest = await hash(objective.assessmentContract.instructions)
+    await ctx.db.insert('learnObjectiveSources', { userId: OWNER.tokenIdentifier, objectiveId: objective._id,
+      sourceSnapshotId: f.f.sourceSnapshotId, coverage: 'strong' })
+    await ctx.db.patch(opportunity._id, { purpose: { kind: 'calibration' }, contextPins: { kind: 'calibration', origin: 'today' },
+      assessmentPins: { kind: 'calibration', caseId: opportunity.assessmentPins.caseId, promptDigest,
+        assessmentContractVersion: objective.assessmentContract.version, assessmentContractDigest: f.capability.assessmentContractDigest,
+        supportManifestDigest: opportunity.assessmentPins.supportManifestDigest },
+      scoringBinding: opportunity.scoringBinding.kind === 'model' ? { ...opportunity.scoringBinding, scorerVersion: 'learn-v2.calibration-scorer.v1' } : opportunity.scoringBinding })
+    await ctx.db.patch(f.f.rows.learnAssessmentExposures, { purpose: 'calibration', projectionDigest: promptDigest })
+  })
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { ...f.submission,
+    response: { ...f.submission.response, payload: { kind: 'text', text: '\\'.repeat(4001) } } } }))
+    .toMatchObject({ kind: 'rejected', reasonCode: 'payload_too_large' })
+  expect(await f.t.run(ctx => ctx.db.query('learnResponseBodies').take(4))).toEqual([])
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: { ...f.submission,
+    idempotencyKey: 'calibration_bounded_retry_1234567890', response: { ...f.submission.response, payload: { kind: 'text', text: '\\'.repeat(4000) } } } }))
+    .toMatchObject({ kind: 'accepted', phase: 'submitted_sealed' })
+})
+
 test.each([false, true])('slot delivery digest mismatch=%s controls acceptance', async mismatch => {
   const f = await fixture()
   const slot = (await f.t.run(ctx => ctx.db.get(f.target.responseSlotId)))!

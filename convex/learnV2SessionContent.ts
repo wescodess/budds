@@ -52,6 +52,8 @@ import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } fro
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork';
 import { parseLearnContract } from '../shared/learn-v2-responses';
 import { bindSessionApplication } from './lib/learnV2SessionApplication';
+import { assertMeasurementScoringContract } from '../server/utils/learn-v2-measurement-item-contract';
+import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits';
 import { readLearnDelayedCheckBinding } from './lib/learnV2DelayedDelivery';
 import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks';
 
@@ -857,6 +859,7 @@ export const commitSessionContentCandidate = internalMutation({
     }
     const sourceToExcerpt = new Map<string, Id<"learnSourceExcerpts">>();
     const sourceEvidence = new Map<string, { sourceExcerptId: string }>();
+    const scoringExcerpts = new Map<string, string>();
     for (const sourceId of job.dispatchSupportingSourceSnapshotIds ?? []) {
       const source = await ctx.db.get(sourceId);
       if (!source || source.userId !== args.tokenIdentifier || source.status !== "user_accepted" || (source.effectiveStatus && source.effectiveStatus !== "user_accepted") || source.conflictStatus !== "clear" || source.evidencePurgedAt !== undefined) {
@@ -880,6 +883,7 @@ export const commitSessionContentCandidate = internalMutation({
         return { status: "blocked" as const };
       }
       sourceToExcerpt.set(String(source._id), excerpt._id);
+      scoringExcerpts.set(String(source._id), excerpt.excerpt ?? '');
       sourceEvidence.set(String(source._id), {
         sourceExcerptId: String(excerpt._id),
       });
@@ -922,6 +926,18 @@ export const commitSessionContentCandidate = internalMutation({
       return { status: "blocked" as const };
     }
     if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const evidence = candidate.claims.flatMap(claim => claim.supportSourceSnapshotIds.map(sourceId => ({
+        claim: claim.claim, excerpt: scoringExcerpts.get(sourceId)!,
+      }))).map((row, index) => ({ ...row, alias: `S${index + 1}` }));
+      try {
+        assertMeasurementScoringContract({ rubric: candidate.assessmentRubric,
+          challenge: candidate.blocks.find(block => block.kind === 'independent_application')!.content,
+          evidence, learnerResponse: 'x' }, { kind: 'model', requestedModel: job.providerResponseModel ?? '', routingMode: 'legacy_auto' });
+      } catch (error) {
+        if (!(error instanceof MeasurementItemBoundsError)) throw error;
+        await block(ctx, job, error.code);
+        return { status: 'blocked' as const };
+      }
       const catalogs = await ctx.db.query("learnAssessmentCatalogs").withIndex("by_userId", q => q.eq("userId", args.tokenIdentifier)).take(2);
       if (catalogs.length) {
         const scope = catalogs[0]?.measurementCapability?.enabled === true
