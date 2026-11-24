@@ -3,6 +3,8 @@ import type { Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } from '../../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { learnDueWorkEnabled } from './learnV2DueWorkQueue'
+import { retireLearnMeasurementDueWork } from './learnV2Measurement'
 
 const BATCH_SIZE = LEARN_MEASUREMENT_STORAGE_LIMITS.pageSize
 export const measurementSourceValidator = v.union(
@@ -142,6 +144,12 @@ export async function deleteMeasurementVoidBatch(ctx: MutationCtx, userId: strin
   for (const table of VOID_CHILDREN) {
     const rows = await readMeasurementVoidDescendants(ctx, userId, learningVoidId, table)
     for (const row of rows) {
+      if (learnDueWorkEnabled() && row.collection === 'learnMeasurementDueWork') {
+        const id = ctx.db.normalizeId('learnMeasurementDueWork', row.id)
+        const work = id && await ctx.db.get(id)
+        if (work?.userId === userId) await retireLearnMeasurementDueWork(ctx, work)
+        continue
+      }
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && row.collection === 'learnAssessmentOpportunities') {
         const id = ctx.db.normalizeId('learnAssessmentOpportunities', row.id)
         const opportunity = id && await ctx.db.get(id)

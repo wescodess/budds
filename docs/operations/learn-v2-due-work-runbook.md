@@ -37,7 +37,7 @@ npx convex run --prod learnV2MeasurementDueWork:listDelayedCheckFaults '{"state"
 npx convex run --prod learnV2MeasurementDueWork:listDelayedCheckFaults '{"state":"parked","limit":50}'
 ```
 
-Each row has `workId`, `kind` (`owner`, `assignment`, `open`, `close`), `state`, `assignmentId`, `assessmentOpportunityId`, `attempts`, `recoveryAttempts`, `dueAt`, `nextAttemptAt`, `windowFaultAt` and `updatedAt`. `windowFaultAt` is set when an opening record faulted before its check closed. Such a check, if never offered, closes as `system_due_work_late`. Closure also checks the opening record's scheduled-function receipts before retirement, so a failed or unresolved job scheduled no later than close cannot be hidden by an unexpired lease or an empty `windowFaultAt`. If takeover detects a failed receipt after close, it retains the receipt's scheduled time in `windowFaultAt` before clearing the receipt references.
+Each row has `workId`, `kind` (`owner`, `assignment`, `open`, `close`), `state`, `assignmentId`, `assessmentOpportunityId`, `attempts`, `recoveryAttempts`, `dueAt`, `nextAttemptAt`, `windowFaultAt` and `updatedAt`. `windowFaultAt` is set when an opening record faulted before its check closed. Such a check, if never offered, closes as `system_due_work_late`. The work record also retains `lastDispatchedAt`, `lastDispatchedGeneration`, `lastDispatchedFunctionId`, `lastProcessedAt`, `lastProcessedGeneration` and `undeliveredDispatchAt`. Only matching processing committed by close acknowledges an in-window dispatch. A missing, cancelled, unknown or successful receipt cannot substitute for that evidence. Takeover retains the earliest unprocessed dispatch even after receipt expiry or later successful blocked processing. Void cleanup records an expired never-offered system-late outcome before deleting its work; account erasure does not recreate outcome facts.
 
 ## Requeue after an incident
 
@@ -47,7 +47,7 @@ Terminal records recover on their own within 24 hours of the incident ending. To
 npx convex run --prod learnV2MeasurementDueWork:requeueDelayedCheckWork '{"workIds":["<workId>","<workId>"]}'
 ```
 
-Requeue resets the fault counters and makes the record due now. It fences any in-flight job and keeps `windowFaultAt`, so C6 still attributes an in-window fault to the system. It skips records that are no longer parked or terminal, and does nothing while the scheduler gates are off. The next one-minute cron dispatches requeued records. List again to confirm they have been retired.
+Requeue resets the fault counters and makes the record due now. It fences any in-flight job and keeps `windowFaultAt` and the durable dispatch/outcome evidence, preserving an unprocessed dispatch in `undeliveredDispatchAt`, so C6 still attributes an in-window fault to the system. It skips records that are no longer parked or terminal, and does nothing while the scheduler gates are off. The next one-minute cron dispatches requeued records. List again to confirm they have been retired.
 
 ## Settled assignments
 

@@ -15,21 +15,22 @@ export function learnDueWorkEnabled() {
     && LEARN_MEASUREMENT_CAPABILITIES.delivery && process.env.LEARN_V2_ENABLED === 'true' && getFrozenLearnMeasurementProtocol() !== null
 }
 
-const executingJob = Symbol('learnDueWorkExecutingJob')
-export function learnDueWorkExecutionContext(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>): MutationCtx {
-  return new Proxy(ctx, { get: (target, property) => property === executingJob ? work.scheduledFunctionId : Reflect.get(target, property) })
+function openingDispatchAt(work: Doc<'learnMeasurementDueWork'>) {
+  if (work.kind !== 'open') return undefined
+  return work.lastDispatchedAt ?? (work.generation > 0 || work.scheduledFunctionId || work.previousScheduledFunctionId || work.inFlight ? work.dueAt : undefined)
 }
 
-async function openingWorkFaultedInWindow(ctx: QueryCtx | MutationCtx, work: Doc<'learnMeasurementDueWork'>, closeAt: number) {
-  if (work.windowFaultAt !== undefined && work.windowFaultAt <= closeAt) return true
-  for (const jobId of new Set([work.previousScheduledFunctionId, work.scheduledFunctionId])) {
-    if (!jobId) continue
-    const job = await ctx.db.system.get(jobId)
-    if (!job || job.scheduledTime > closeAt) continue
-    if (job.state.kind === 'failed' || jobId !== Reflect.get(ctx, executingJob)
-      && ['pending', 'inProgress'].includes(job.state.kind)) return true
-  }
-  return false
+export function learnUnprocessedOpeningDispatchAt(work: Doc<'learnMeasurementDueWork'>) {
+  const dispatchedAt = openingDispatchAt(work)
+  const processed = work.lastProcessedGeneration === (work.lastDispatchedGeneration ?? work.generation) && work.lastProcessedAt !== undefined
+  const at = Math.min(work.undeliveredDispatchAt ?? Infinity, processed ? Infinity : dispatchedAt ?? Infinity)
+  return at === Infinity ? undefined : at
+}
+
+export function learnOpeningWorkFaultedInWindow(work: Doc<'learnMeasurementDueWork'>, closeAt: number) {
+  return [work.windowFaultAt, learnUnprocessedOpeningDispatchAt(work),
+    work.lastProcessedAt !== undefined && work.lastProcessedAt > closeAt ? openingDispatchAt(work) : undefined]
+    .some(at => at !== undefined && at <= closeAt)
 }
 
 type WorkInput = Pick<Doc<'learnMeasurementDueWork'>, 'userId' | 'key' | 'kind' | 'dueAt'>
@@ -60,7 +61,7 @@ export async function retireLearnOpportunityDueWork(ctx: MutationCtx, row: Doc<'
     const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
       q.eq('userId', row.userId).eq('key', `${row._id}:${kind}`)).unique()
     if (work) {
-      if (kind === 'open') faulted = await openingWorkFaultedInWindow(ctx, work, row.closeAt)
+      if (kind === 'open') faulted = learnOpeningWorkFaultedInWindow(work, row.closeAt)
       await ctx.db.delete(work._id)
     }
   }
@@ -84,7 +85,7 @@ export async function learnOpportunityFaultedInWindow(ctx: QueryCtx | MutationCt
   if (!learnDueWorkEnabled()) return false
   const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
     q.eq('userId', row.userId).eq('key', `${row._id}:open`)).unique()
-  return work !== null && await openingWorkFaultedInWindow(ctx, work, row.closeAt)
+  return work !== null && learnOpeningWorkFaultedInWindow(work, row.closeAt)
 }
 
 export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {

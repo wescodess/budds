@@ -1932,6 +1932,10 @@ export default defineSchema({
     previousScheduledFunctionId: v.optional(v.id('_scheduled_functions')),
     scheduledFunctionId: v.optional(v.id('_scheduled_functions')), reasonCode: v.optional(v.literal('retries_exhausted')),
     windowFaultAt: v.optional(v.number()),
+    lastDispatchedAt: v.optional(v.number()), lastDispatchedGeneration: v.optional(v.number()),
+    lastDispatchedFunctionId: v.optional(v.id('_scheduled_functions')),
+    lastProcessedAt: v.optional(v.number()), lastProcessedGeneration: v.optional(v.number()),
+    undeliveredDispatchAt: v.optional(v.number()),
     cursor: v.optional(v.string()), through: v.optional(v.number()), expectedSequence: v.optional(v.number()), coverageComplete: v.optional(v.boolean()),
   }).index('by_userId', ['userId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])

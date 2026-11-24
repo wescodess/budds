@@ -5,8 +5,9 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasLearnV2Access } from './learnV2Access'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
-import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, retireLearnOpportunityDueWork } from './learnV2DueWorkQueue'
+import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, learnOpeningWorkFaultedInWindow, retireLearnOpportunityDueWork } from './learnV2DueWorkQueue'
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
@@ -214,11 +215,11 @@ function sameOpportunityFact(previous: Record<string, unknown>, next: Record<str
 
 export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignment: Pick<AdmittedAssignment, 'userId' | 'epoch' | 'learningVoidId'>, row: Doc<'learnAssessmentOpportunities'>) {
   const faulted = await retireLearnOpportunityDueWork(ctx, row)
-  if (faulted && row.purpose.kind === 'measurement_delayed' && row.phase === 'abandoned' && Date.now() >= row.closeAt
-    && !row.submissionId && !row.deliveryGrantId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
-    && row.reasonCode !== LEARN_SYSTEM_DUE_WORK_LATE) {
-    row = { ...row, reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
-    await ctx.db.patch(row._id, { reasonCode: row.reasonCode, revision: row.revision })
+  if (faulted && row.purpose.kind === 'measurement_delayed' && ['abandoned', 'cancelled', 'invalid'].includes(row.phase) && Date.now() >= row.closeAt
+    && !row.submissionId && !row.deliveryGrantId && !row.authoritativeAttemptId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
+    && (row.phase !== 'abandoned' || row.reasonCode !== LEARN_SYSTEM_DUE_WORK_LATE)) {
+    row = { ...row, phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
+    await ctx.db.patch(row._id, { phase: row.phase, operationalEligibility: row.operationalEligibility, reasonCode: row.reasonCode, revision: row.revision })
     await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
   }
   const previous = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', assignment.userId).eq('fact.assessmentOpportunityId', row._id)).order('desc').first()
@@ -244,6 +245,26 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
   }
   const sequence = await appendLearnMeasurementFact(ctx, assignment.userId, { epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId, fact })
   return sequence
+}
+
+export async function retireLearnMeasurementDueWork(ctx: MutationCtx, reference: Doc<'learnMeasurementDueWork'>) {
+  if (!learnDueWorkEnabled()) return
+  const work = await ctx.db.get(reference._id)
+  if (!work) return
+  if (work.userId !== reference.userId) throw new Error('Learn due-work retirement scope conflicts')
+  if (work.kind === 'open' && work.assessmentOpportunityId && !await hasAccountDeletionTombstone(ctx, work.userId)) {
+    const row = await ctx.db.get(work.assessmentOpportunityId)
+    if (row && row.userId === work.userId && row.purpose.kind === 'measurement_delayed' && Date.now() >= row.closeAt
+      && !row.submissionId && !row.deliveryGrantId && !row.authoritativeAttemptId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
+      && learnOpeningWorkFaultedInWindow(work, row.closeAt)) {
+      const closed = { ...row, phase: 'abandoned' as const, operationalEligibility: 'blocked' as const, reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
+      await ctx.db.patch(row._id, { phase: closed.phase, operationalEligibility: closed.operationalEligibility, reasonCode: closed.reasonCode, revision: closed.revision })
+      await finalizeLearnDelayedCheckSession(ctx, work.userId, closed)
+      const assignment = row.assignmentId ? await ctx.db.get(row.assignmentId) : null
+      if (assignment?.userId === work.userId && assignment.status === 'admitted') await writeMeasurementOpportunityFact(ctx, assignment, closed)
+    }
+  }
+  if (await ctx.db.get(work._id)) await ctx.db.delete(work._id)
 }
 
 export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: string, request: EnrollmentRequest) {

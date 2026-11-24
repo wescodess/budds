@@ -3,7 +3,8 @@ import { makeFunctionReference } from 'convex/server'
 import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { materializeLearnMeasurementAssignment, materializeLearnMeasurementDueBatch, extendLearnDueWorkCoverage, processLearnMeasurementDueOpportunity } from './lib/learnV2MeasurementDueWork'
-import { learnDueWorkEnabled, learnDueWorkExecutionContext, learnDueWorkBackoff, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_HOUR_MS, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { learnDueWorkEnabled, learnUnprocessedOpeningDispatchAt, learnDueWorkBackoff, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_HOUR_MS, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { retireLearnMeasurementDueWork } from './lib/learnV2Measurement'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 
@@ -30,11 +31,14 @@ async function runSweepStep(ctx: MutationCtx, chain: Chain): Promise<SweepResult
   if (!cursor || cursor.leaseId !== chain.leaseId) return idle('stale')
   const rows = await dueRange(ctx, chain.target).take(LEARN_DUE_WORK_PAGE_SIZE)
   for (const work of rows) {
+    const now = Date.now()
     const generation = work.generation + 1
     const recovering = work.state === 'parked' || work.state === 'terminal' || work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
     const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation, recovering })
     await ctx.db.patch(work._id, { state: work.state === 'terminal' ? 'terminal' : recovering ? 'parked' : 'pending', generation, scheduledFunctionId, inFlight: true,
       previousScheduledFunctionId: work.inFlight ? work.scheduledFunctionId : undefined,
+      ...(work.kind === 'open' ? { lastDispatchedAt: now, lastDispatchedGeneration: generation, lastDispatchedFunctionId: scheduledFunctionId,
+        undeliveredDispatchAt: learnUnprocessedOpeningDispatchAt(work) } : {}),
       nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
   }
   const moreDue = await dueRange(ctx, chain.target).first() !== null
@@ -131,7 +135,7 @@ export const applyDelayedCheckWork = internalMutation({
     const work = await ctx.db.get(input.workId)
     if (!work || work.userId !== input.userId || !work.inFlight || work.generation !== input.generation) return null
     if (await hasAccountDeletionTombstone(ctx, work.userId)) { await ctx.db.delete(work._id); return null }
-    ctx = learnDueWorkExecutionContext(ctx, work)
+    if (work.kind === 'open') await ctx.db.patch(work._id, { lastProcessedGeneration: input.generation, lastProcessedAt: Date.now() })
     if (work.kind === 'owner') {
       const through = work.through ?? Date.now()
       const result = await materializeLearnMeasurementDueBatch(ctx, work.userId, { cursor: work.cursor ?? null, through,
@@ -158,7 +162,7 @@ export const applyDelayedCheckWork = internalMutation({
           && current.operationalEligibility === 'blocked' && Date.now() < current.closeAt) { await waitForDomain(ctx, work, current.closeAt); return null }
       }
     }
-    if (await ctx.db.get(work._id)) await ctx.db.delete(work._id)
+    await retireLearnMeasurementDueWork(ctx, work)
     const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', work.userId)).unique()
     if (watermark) await extendLearnDueWorkCoverage(ctx, watermark, Date.now())
     return null
@@ -208,6 +212,7 @@ export const requeueDelayedCheckWork = internalMutation({
       const work = await ctx.db.get(workId)
       if (!work || !['parked', 'terminal'].includes(work.state)) continue
       await ctx.db.patch(work._id, { state: 'pending', attempts: 0, recoveryAttempts: 0, reasonCode: undefined, generation: work.generation + 1,
+        ...(work.kind === 'open' ? { undeliveredDispatchAt: learnUnprocessedOpeningDispatchAt(work) } : {}),
         inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined, nextAttemptAt: Date.now(), updatedAt: Date.now() })
       requeued++
     }
