@@ -1,3 +1,4 @@
+import { LearnTeachingUnavailableError, LearnAccessError, LearnBlueprintAuthorityError } from '../../shared/learn-v2-errors'
 import { ConvexError, v } from 'convex/values'
 import { inspectLearnHelpForAudioJob } from './learnV2HelpAdmission'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
@@ -24,7 +25,7 @@ export function teachingPublication<T extends ReadCtx>(ctx: T) {
   return publication
 }
 function isMutationContext(ctx: ReadCtx): ctx is MutationCtx { return 'insert' in ctx.db }
-export function teachingUnavailable(): never { throw new Error('Teaching input is unavailable') }
+export function teachingUnavailable(): never { throw new LearnTeachingUnavailableError('Teaching input is unavailable') }
 
 export async function assertTeachingInputs(ctx: ReadCtx, userId: string, artifacts: Artifact[], record?: LearnArtifactOwnerRecord) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return
@@ -257,7 +258,10 @@ export async function assertInterjectionTeaching(ctx: ReadCtx, userId: string, i
 }
 export async function interjectionAnswerAvailable(ctx: ReadCtx, userId: string, interjection: Doc<'audioOverviewInterjections'> | Doc<'audioOverviewInterjectionsV2'>) {
   try { await assertInterjectionTeaching(ctx, userId, interjection); return true }
-  catch { return false }
+  catch (error) {
+    if (!(error instanceof LearnTeachingUnavailableError || error instanceof LearnAccessError || error instanceof LearnBlueprintAuthorityError)) throw error
+    return false
+  }
 }
 
 

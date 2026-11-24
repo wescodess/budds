@@ -1,3 +1,7 @@
+import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits'
+import { isKnownAiGatewayFailure, classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
+import { LearnFolderEvidenceError, retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
+import { LearnInputValidationError, LearnScoringProtocolError, LearnScoringInputError } from '../shared/learn-v2-errors'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingMutation } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -18,9 +22,7 @@ import { hasLearnV2Access, requireLearnV2MutationAccess } from './lib/learnV2Acc
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { addCalendarDays, deriveMastery, LEARN_V2_MASTERY_SCORER_VERSION, LEARN_V2_MASTERY_THRESHOLD, masteryAttemptTime, scoreCriteria, deriveEligibleMeasurementMastery, localDateAt } from '../shared/learn-v2-mastery'
 import { representativeNextAction } from '../shared/learn-adaptive-completion'
-import { classifyAiGatewayFailure, generateCompletion } from '../server/utils/ai-gateway'
 import { buildBaselineMasteryScoringPayload, buildBaselineMasteryScoringRequest, parseBaselineMasteryScoringResponse, scorerCanonicalJson } from '../server/utils/learn-v2-mastery-scorer'
-import { retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { matchesLegacyFingerprint, privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { getScopedMasteryRecord, transitionScopedMasteryRecord } from './lib/learnV2MasteryScope'
@@ -202,13 +204,22 @@ function legacyFeedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProj
       return typeof item.key === 'string' && typeof item.awarded === 'boolean' ? [{ key: item.key, awarded: item.awarded }] : []
     })
   }
-  catch { /* persisted rows before feedback */ }
-  try { misconceptionTags = JSON.parse(attempt.misconceptionTagsJson ?? '[]') } catch { /* persisted rows before feedback */ }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    /* persisted rows before feedback */
+  }
+  try { misconceptionTags = JSON.parse(attempt.misconceptionTagsJson ?? '[]') } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    /* persisted rows before feedback */
+  }
   try {
     const rubric = JSON.parse(attempt.rubricSnapshot ?? 'null') as { criteria?: Array<{ key?: unknown, description?: unknown }> } | null
     if (rubric?.criteria && Array.isArray(rubric.criteria)) criteria = rubric.criteria.flatMap(row => typeof row.key === 'string' ? [{ key: row.key, ...(typeof row.description === 'string' ? { description: row.description } : {}) }] : [])
   }
-  catch { /* persisted rows before feedback */ }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    /* persisted rows before feedback */
+  }
   const allowed = new Set<string>(ADAPTIVE_MISCONCEPTION_TAGS)
   const safeTags = [...new Set(misconceptionTags.filter(tag => typeof tag === 'string' && allowed.has(tag)))].slice(0, MAX_MISCONCEPTIONS)
   try {
@@ -218,7 +229,8 @@ function legacyFeedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProj
       misconceptionTags: safeTags,
     })
   }
-  catch {
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError)) throw error
     return { templateVersion: ADAPTIVE_FEEDBACK_TEMPLATE_VERSION, taxonomyVersion: ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION, criterionResults: [], misconceptionTags: [], misconceptionFeedback: [] }
   }
 }
@@ -231,7 +243,10 @@ function feedback(attempt: Doc<'masteryAttempts'>): ControlledFeedbackProjection
       && attempt.misconceptionTaxonomyVersion === ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION && attempt.feedbackProjectionJson
       ? (JSON.parse(attempt.feedbackProjectionJson) as { misconceptionTags?: unknown }).misconceptionTags
       : JSON.parse(attempt.misconceptionTagsJson ?? '[]')
-  } catch { /* legacy feedback may be unavailable */ }
+  } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    /* legacy feedback may be unavailable */
+  }
   const allowed = new Set<string>(ADAPTIVE_MISCONCEPTION_TAGS)
   const safeTags = Array.isArray(tags) ? [...new Set(tags.filter((tag): tag is string => typeof tag === 'string' && allowed.has(tag)))].slice(0, MAX_MISCONCEPTIONS) : []
   return projectControlledFeedback({ criteria: [], outcomes: [], misconceptionTags: safeTags })
@@ -327,7 +342,8 @@ async function projectAdaptiveReconciliation(ctx: MutationCtx, job: Doc<'learnJo
       updatedAt: Date.now(),
     })
   }
-  catch {
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) throw error
     // The V2 job is the authority. A stale/missing adaptive projection cannot
     // keep an ambiguous provider outcome running or cause it to be replayed.
   }
@@ -992,6 +1008,8 @@ export async function submitMasteryAttemptForOwner(
         scoringEvidence = scoringEvidence.map(item => item.excerpt?.trim() ? item : { ...item, excerpt: retrieved.get(item.alias) })
       }
       catch (error) {
+if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnFolderEvidenceError)) throw error
+
         await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: 'not_dispatched' })
         throw new Error('Started session evidence is unavailable', { cause: error })
       }
@@ -1042,7 +1060,7 @@ export async function submitMasteryAttemptForOwner(
       throw error
     }
     try {
-      const completion = await generateCompletion(buildBaselineMasteryScoringRequest(input.model, providerPayloadJson, AbortSignal.timeout(ADAPTIVE_V2_PILOT_MANIFEST.limits.timeoutMs)))
+      const completion = await generateCompletion({ ...buildBaselineMasteryScoringRequest(input.model, providerPayloadJson, AbortSignal.timeout(ADAPTIVE_V2_PILOT_MANIFEST.limits.timeoutMs)), strictErrors: LEARN_MEASUREMENT_CAPABILITIES.responses })
       const result = parseBaselineMasteryScoringResponse(completion.choices[0]!.message.content)
       const recorded = await ctx.runMutation(internal.learnV2Mastery.recordMasteryAttempt, {
         tokenIdentifier, ...args, scoringJobId: jobId, scoringLeaseToken: leaseToken, providerResponseId: completion.id,
@@ -1052,6 +1070,8 @@ export async function submitMasteryAttemptForOwner(
       return { status: 'completed', ...recorded }
     }
     catch (error) {
+if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnScoringProtocolError || isKnownAiGatewayFailure(error))) throw error
+
       const failure = classifyAiGatewayFailure(error)
       await ctx.runMutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier, jobId, leaseToken, outcome: failure === 'not_dispatched' ? 'not_dispatched' : failure === 'definitive_failure' ? 'definitive_failure' : 'ambiguous' })
       if (adaptiveAdmission && failure !== 'not_dispatched' && failure !== 'definitive_failure') return { status: 'blocked', code: 'provider_outcome_requires_reconciliation', message: 'Scoring needs reconciliation. No mastery change was made.', retryable: false }
@@ -1143,7 +1163,8 @@ export async function scoreMasterySubmissionForOwner(
         const verified = await ctx.runMutation(internal.learnV2Mastery.recordMasteryScoringReceipt, { tokenIdentifier, executionId, resultJson: JSON.stringify(result) })
         if (verified) await ctx.runMutation(internal.learnV2Mastery.commitSealedMasteryAttempt, { tokenIdentifier, submissionId: request.submissionId, executionId })
       }
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnScoringInputError || error instanceof LearnScoringProtocolError || error instanceof LearnInputValidationError || isKnownAiGatewayFailure(error) || error instanceof MeasurementItemBoundsError)) throw error
       await ctx.runMutation(internal.learnV2Mastery.failSealedMasteryScoring, { tokenIdentifier, submissionId: request.submissionId, leaseToken: reservation.leaseToken })
     }
   }

@@ -1,3 +1,4 @@
+import { LearnAccessError } from '../../shared/learn-v2-errors'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -272,6 +273,7 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
       if (relevant(scope, assessment)) matches.push(row)
     }
   } catch (error) {
+    if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
     if (!open.length) return ordinary
     const reason = error instanceof ScopeUnknown ? 'disclosure_unknown' : 'unavailable'
     const scopeDigest = await privacyDigest({ kind: request.kind, scope: request.scope })
@@ -284,7 +286,10 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
     try {
       await resolver.learningVoid(assessment, row.learningVoidId)
       if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(assessment, row.contextPins.canvas.threadId)
-    } catch { continue }
+    } catch (error) {
+      if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+      continue
+    }
     if (relevant(scope, assessment)) later.push(row)
   }
   if (!matches.length && !later.length) return ordinary
@@ -305,7 +310,10 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   const preparations = []
   for (const row of matches) {
     const prepared = await prepareLearnResponseAssistanceForOwner(ctx, userId, { version: LEARN_V2_PUBLIC_API_VERSION,
-      kind: request.kind, idempotencyKey: key, assessmentOpportunityId: row._id }).catch(() => null)
+      kind: request.kind, idempotencyKey: key, assessmentOpportunityId: row._id }).catch((error) => {
+        if (!(error instanceof LearnAccessError)) throw error
+        return null
+      })
     preparations.push(prepared)
   }
   const unavailable = preparations.some(value => !value || 'status' in value)

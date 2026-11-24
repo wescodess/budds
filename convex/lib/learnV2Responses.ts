@@ -1,3 +1,6 @@
+import { LearnAccessError, LearnInputValidationError } from '../../shared/learn-v2-errors'
+import { readMeasurementScoringInput, measurementLearnerResponse } from './learnV2MeasurementItemContract'
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
@@ -178,14 +181,17 @@ async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awa
   const item = 'assessmentPins' in row && row.assessmentPins.kind === 'measurement' ? row.assessmentPins.itemPins : null
   if (item) {
     const claims = await ctx.db.query('learnMeasurementClaims')
-      .withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item.itemId)).take(33)
-    if (!claims.length || claims.length > 32) reject('evidence_unavailable')
+      .withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item.itemId)).take(itemLimits.claims + 1)
+    if (!claims.length || claims.length > itemLimits.claims) reject('evidence_unavailable')
+    let evidenceRows = 0
     for (const claim of claims) {
       requireAvailable(claim)
       if (claim.scoringSpecId !== item.scoringSpecId) reject('pins_mismatch')
       const supports = await ctx.db.query('learnMeasurementSupports')
-        .withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(9)
-      if (!supports.length || supports.length > 8) reject('evidence_unavailable')
+        .withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
+      evidenceRows += supports.length
+      if (evidenceRows > itemLimits.evidenceRows) reject('item_evidence_limit')
+      if (!supports.length || supports.length > itemLimits.supportsPerClaim) reject('evidence_unavailable')
       for (const support of supports) {
         requireAvailable(support)
         const excerpt = await ctx.db.get(support.sourceExcerptId)
@@ -396,6 +402,17 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   if ('assessmentPins' in row && row.assessmentPins.kind === 'measurement') {
     const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
     const spec = item.responseSpec
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const objective = await ctx.db.get(row.objectiveId)
+      if (!objective?.assessmentContract || typeof objective.assessmentContract === 'string') reject('evidence_unavailable')
+      try {
+        await readMeasurementScoringInput(ctx, userId, item._id,
+          { version: objective.assessmentContract.version, criteria: objective.assessmentContract.criteria }, measurementLearnerResponse(entry.payload))
+      } catch (error) {
+        if (!(error instanceof MeasurementItemBoundsError)) throw error
+        reject(error.code === 'response_payload_limit' ? 'payload_too_large' : error.code)
+      }
+    }
     const payload = entry.payload
     if (spec.kind === 'bounded_rubric' ? payload.kind !== 'text'
       : spec.kind === 'numeric' ? payload.kind !== 'numeric' || payload.unit !== spec.unit
@@ -443,9 +460,10 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && !await liveResponseAggregate(ctx, userId, row)) return rejected('unavailable')
     if ('stage' in row && row.stage === 'diagnostic') {
       try { learnSerializedBytes(entry.payload, LEARN_V2_RESPONSE_LIMITS.maxDiagnosticBytes) }
-      catch {
+      catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError)) throw error
         if (LEARN_MEASUREMENT_CAPABILITIES.responses) return await saveRejection(ctx, userId, row, request.idempotencyKey, await digest(request), 'payload_too_large')
-        throw new Error('Invalid Learn request')
+        throw new Error('Invalid Learn request', { cause: error })
       }
     }
     rows.push(row)
@@ -481,7 +499,7 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
     prepared = []
     for (let index = 0; index < entries.length; index++) prepared.push(await prepareResponse(ctx, userId, entries[index]!, rows[index]!, now))
   } catch (error) {
-    const payloadError = error instanceof Error && ['Learn payload ', 'Learn text ', 'Confidence does not match the owned slot'].some(prefix => error.message.startsWith(prefix))
+    const payloadError = error instanceof LearnInputValidationError
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof ResponseRejection) && !(error instanceof z.ZodError) && !payloadError) throw error
     return await saveRejection(ctx, userId, main, request.idempotencyKey, requestDigest, error instanceof ResponseRejection ? error.code : 'invalid_payload')
   }
@@ -554,7 +572,10 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
         try {
           const current = await snapshotDependency(ctx, userId, response.scopeKind === 'v2' ? response.learningVoidId : link.learningVoidId!, dependency.sourceSnapshotId, dependency.supportManifestDigest)
           if (canonical(current) !== canonical(dependency)) return unavailable
-        } catch { return unavailable }
+        } catch (error) {
+          if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof ResponseRejection)) throw error
+          return unavailable
+        }
       } else if (dependency.kind === 'document') {
         const document = await ctx.db.get(dependency.documentId)
         const folder = document && await ctx.db.get(document.folderId)
@@ -645,7 +666,10 @@ export async function prepareLearnResponseAssistanceForOwner(ctx: MutationCtx, u
       const response = await ctx.db.get(row.submissionId)
       if (!response || (await retainedBody(ctx, userId, response)).bodyAvailability !== 'available') return deny('unavailable')
     }
-  } catch { return deny('unavailable') }
+  } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof LearnAccessError || error instanceof ResponseRejection || error instanceof z.ZodError)) throw error
+    return deny('unavailable')
+  }
   const denied = !row.submissionId && isLearnAssessmentTestOnly(parseLearnContract(learnAssessmentPurposeSchema, row.purpose))
   if (!row.submissionId && row.phase !== 'test_open') return deny('unavailable')
   const commit = async (): Promise<LearnV2AssistanceAuthorization> => {

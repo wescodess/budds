@@ -1,3 +1,6 @@
+import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits'
+import { ZodError } from 'zod'
+import { MeasurementValidationError, getValidatedMeasurementFamily } from './lib/learnV2MeasurementItems'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -31,7 +34,6 @@ import { acceptMasterySubmissionForOwner } from './learnV2Mastery'
 import { enrollLearnMeasurementForOwner, measurementFlowReason, measurementItemReason, measurementScopeReason, requireMeasurementSession } from './lib/learnV2Measurement'
 import { learnMeasurementItemPinsSchema } from '../shared/learn-v2-measurement'
 import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } from './lib/learnV2MeasurementAssignment'
-import { getValidatedMeasurementFamily } from './lib/learnV2MeasurementItems'
 import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInventory'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
@@ -79,7 +81,10 @@ async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: CanvasAttach
     q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).take(7)
   const available = families.filter(row => ['provisional_equivalent', 'empirically_supported'].includes(row.status) && row.evidenceStatus === 'available' && row.invalidatedAt === undefined)
   if (families.length > 6 || available.length !== 1) return canvasUnavailable('novel_item_unavailable')
-  const manifest = await getValidatedMeasurementFamily(ctx, userId, available[0]!._id).catch(() => null)
+  const manifest = await getValidatedMeasurementFamily(ctx, userId, available[0]!._id).catch(error => {
+    if (!(error instanceof MeasurementValidationError) && !(error instanceof MeasurementItemBoundsError) && !(error instanceof ZodError)) throw error
+    return null
+  })
   if (!manifest) return canvasUnavailable('assessment_unavailable')
   for (const member of manifest.members) {
     const item = await ctx.db.get(member.pins.itemId)
@@ -249,11 +254,13 @@ async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRe
       const rebuilt = await composeAdaptiveActivityPlan({ ...storedPlan(scope.activity), replacesActivityId: undefined, primitiveSequence: [], assessmentReference: reference })
       if (rebuilt.inputDigest !== scope.activity.inputDigest || rebuilt.canonicalInputSnapshot !== scope.activity.canonicalInputSnapshot) return unavailable('disclosure_unknown')
     } else if (!(await replayAdaptiveActivityPlan(storedPlan(scope.activity))).ok) return unavailable('disclosure_unknown')
+    let granted = false
     if (!opportunity.deliveryGrantId && !opportunity.submissionId && opportunity.phase === 'ready') {
       if (session.revision !== args.expectedSessionRevision || session.status !== 'ready') return unavailable('session_unavailable')
       const receipt = await grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id,
         expectedRevision: opportunity.revision, idempotencyKey: args.idempotencyKey, flow: 'canvas' })
       if (receipt.status !== 'granted') return unavailable(receipt.status === 'unavailable' ? receipt.reasonCodes[0] ?? 'canvas_not_admitted' : 'disabled')
+      granted = true
       const reference = readAdaptiveAssessmentReference(scope.activity)
       if (!reference || opportunity.contextPins.kind !== 'session') throw new Error('Learn Canvas preparation unavailable')
       const plan = await composeAdaptiveActivityPlan({ ...storedPlan(scope.activity), replacesActivityId: undefined, primitiveSequence: [],
@@ -264,7 +271,10 @@ async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRe
       await ctx.db.patch(opportunity._id, { contextPins: { ...opportunity.contextPins, sessionRevision: session.revision + 1 } })
     }
     const delivery = await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'canvas')
-    if (delivery.status !== 'delivered') return unavailable('assessment_unavailable')
+    if (delivery.status !== 'delivered') {
+      if (granted) throw new Error('Learn Canvas delivery authority changed')
+      return unavailable('assessment_unavailable')
+    }
     if (prior?.resultReference && prior.resultRedactedAt === undefined) {
       const saved = JSON.parse(prior.resultReference) as { threadId: string, activityId: string }
       if (saved.threadId !== scope.thread._id || saved.activityId !== scope.activity.activityId) return unavailable('receipt_conflict')
@@ -325,6 +335,7 @@ async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRe
   }
   const sealedPlan = await compose(receipt.deliveryGrantId)
   await ctx.db.patch(activityId, { canonicalInputSnapshot: sealedPlan.canonicalInputSnapshot, inputDigest: sealedPlan.inputDigest })
+  if ((await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'canvas')).status !== 'delivered') throw new Error('Learn Canvas delivery authority changed')
   const receiptId = await ctx.db.insert('learnActivityCommandReceipts', { userId, threadId, idempotencyKeyHash: prepared.idempotencyKeyHash,
     requestFingerprint: prepared.requestFingerprint, commandName: 'attachReadySession', targetRevision: args.expectedSessionRevision,
     resultKind: 'ok', resultReference: boundedAdaptiveCommandReference({ threadId, activityId: composed.activityId }), errorReference: null,
@@ -334,7 +345,10 @@ async function attachAssessmentCanvas(ctx: MutationCtx, args: CanvasAttachmentRe
 
 function referencedClaimOrders(raw: string | undefined): number[] {
   let parsed: unknown
-  try { parsed = raw && JSON.parse(raw) } catch { throw new Error('Ready Canvas evidence is unavailable') }
+  try { parsed = raw && JSON.parse(raw) } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    throw new Error('Ready Canvas evidence is unavailable', { cause: error })
+  }
   if (!Array.isArray(parsed) || parsed.length < 1 || parsed.length > 16
     || parsed.some(order => !Number.isSafeInteger(order) || order < 0)
     || new Set(parsed).size !== parsed.length) throw new Error('Ready Canvas evidence is unavailable')

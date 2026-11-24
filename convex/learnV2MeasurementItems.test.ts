@@ -1,3 +1,4 @@
+import * as itemLibrary from './lib/learnV2MeasurementItems'
 import { convexTest } from 'convex-test'
 import { anyApi, type ApiFromModules } from 'convex/server'
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -404,4 +405,39 @@ describe('held-out family publication commands', () => {
     expect(state.items.every(item => item.status !== 'published')).toBe(true)
     expect(state.cases.every(row => row.reservedAt === undefined)).toBe(true)
   })
+})
+
+test.each(['generate', 'validate', 'publish'] as const)('unexpected %s failures abort publication and roll back earlier writes', async phase => {
+  const f = await setup()
+  const args = phase === 'generate' ? f.args : phase === 'validate' ? await stage(f) : await validate(f)
+  const before = await inventory(f)
+  const reference = phase === 'generate' ? commands.generateFamilyCandidates : phase === 'validate' ? commands.validateFamily : commands.publishFamily
+  const beforeVoid = (await f.t.run(ctx => ctx.db.get(f.graph.learningVoidId)))!
+  if (phase === 'generate') vi.mocked(measurementItemAdapters.generate).mockRejectedValueOnce(new Error('Unexpected publication failure'))
+  else if (phase === 'validate') vi.mocked(measurementItemAdapters.compare).mockRejectedValueOnce(new Error('Unexpected publication failure'))
+  else vi.spyOn(itemLibrary, 'publishMeasurementFamily').mockRejectedValueOnce(new Error('Unexpected publication failure'))
+  await expect(f.t.mutation(async ctx => {
+    await ctx.db.patch(beforeVoid._id, { title: 'Uncommitted publication marker' })
+    return await ctx.runMutation(reference, args)
+  })).rejects.toThrow('Unexpected publication failure')
+  expect(await inventory(f)).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.get(beforeVoid._id))).toEqual(beforeVoid)
+})
+
+
+test.each(['keyed', 'ordered'] as const)('publication rejects %s keys whose correct response exceeds the scorer wire allowance', async kind => {
+  const f = await setup({ keyed: true })
+  const entries = Array.from({ length: 32 }, (_, index) => `${'\\'.repeat(197)}${String(index).padStart(3, '0')}`)
+  for (const member of f.generated.members) {
+    if (kind === 'keyed') {
+      Object.assign(member.responseSpec, { maxSelections: 32 })
+      Object.assign(member.privateScoring, { acceptedSets: [entries] })
+    } else {
+      Object.assign(member, { responseSpec: { kind: 'ordered', version: 'response.v1', maxEntries: 32 },
+        privateScoring: { kind: 'ordered', expected: entries, normalizationVersion: 'normalize.v1' } })
+    }
+  }
+  const args = await stage(f)
+  expect(await f.t.mutation(commands.validateFamily, args)).toMatchObject({ status: 'quarantined', reasonCode: 'response_payload_limit' })
+  expect((await inventory(f)).items.every(row => row.status !== 'published')).toBe(true)
 })

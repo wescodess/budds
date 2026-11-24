@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from './learn-v2-measurement-item-limits'
 import { z } from 'zod'
 import {
   learnCodeSchema, learnDigestSchema, learnIdSchema, learnRevisionSchema, learnSequenceSchema,
@@ -185,14 +186,15 @@ export const learnMeasurementPublicationCandidateSchema = z.strictObject({
   pins: learnMeasurementItemPinsSchema, prompt: learnTextSchema(), declaredStimulus: learnTextSchema().nullable(),
   responseSpec: learnMeasurementResponseSpecSchema, privateScoring: learnPrivateScoringPayloadSchema,
   referenceSolution: learnTextSchema(), derivation: learnTextSchema(), scoringBinding: learnScorerBindingSchema,
-  claims: z.array(z.strictObject({ order: z.number().int().min(0).max(31), part: z.enum(['stimulus', 'key', 'rubric', 'solution']),
+  claims: z.array(z.strictObject({ order: z.number().int().min(0).max(itemLimits.claims - 1), part: z.enum(['stimulus', 'key', 'rubric', 'solution']),
     claim: learnTextSchema(1000), claimDigest: learnDigestSchema, revision: learnRevisionSchema,
-    supports: z.array(learnMeasurementSupportSchema).min(1).max(8),
-  })).min(1).max(32),
+    supports: z.array(learnMeasurementSupportSchema).min(1).max(itemLimits.supportsPerClaim),
+  })).min(1).max(itemLimits.claims),
 }).superRefine((value, ctx) => {
+  if (value.claims.reduce((count, claim) => count + claim.supports.length, 0) > itemLimits.evidenceRows) ctx.addIssue({ code: 'custom', message: 'item_evidence_limit' })
   const sources = new Set(value.claims.flatMap(claim => claim.supports.map(support => support.sourceSnapshotId)))
   const responseSpec = value.responseSpec
-  if (value.responseSpec.kind !== value.privateScoring.kind || sources.size > 64
+  if (value.responseSpec.kind !== value.privateScoring.kind || sources.size > itemLimits.sources
     || value.claims.some((claim, index) => claim.order !== index || new Set(claim.supports.map(support => support.sourceSnapshotId)).size !== claim.supports.length)
     || (value.responseSpec.kind !== 'bounded_rubric' && value.scoringBinding.kind !== 'deterministic')
     || (value.responseSpec.kind === 'numeric' && value.privateScoring.kind === 'numeric' && value.responseSpec.unit !== value.privateScoring.unit)

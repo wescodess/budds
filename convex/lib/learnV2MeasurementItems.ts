@@ -1,3 +1,7 @@
+import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
+import { LearnInputValidationError } from '../../shared/learn-v2-errors'
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, assertMeasurementEvidenceRows, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
+import { assertMeasurementScoringContract } from '../../server/utils/learn-v2-measurement-item-contract'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -11,7 +15,7 @@ import {
   learnMeasurementFamilyManifestSchema, learnMeasurementPublicationCandidateSchema,
   type LearnMeasurementItemPins,
 } from '../../shared/learn-v2-measurement'
-import { learnTextSchema, learnVersionSchema, parseLearnContract } from '../../shared/learn-v2-responses'
+import { learnTextSchema, learnVersionSchema, parseLearnContract, learnSerializedBytes } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { requireLearnActiveWorkPlan } from './learnV2FixedChecks'
 
@@ -20,19 +24,19 @@ export const MEASUREMENT_NOVELTY_VERSION = 'learn-v2.measurement-novelty.v1'
 export const MEASUREMENT_HARNESS_VERSION = 'learn-v2.measurement-harness.v1'
 export const MEASUREMENT_JOB_TYPE = 'measurement_family_generation'
 const MAX_CORPUS = 256
-const MAX_BYTES = 512 * 1024
+const MAX_BYTES = itemLimits.generationBytes
 const LEASE_MS = 5 * 60_000
 type ReadCtx = Pick<QueryCtx, 'db'>
 type Capability = Pick<Doc<'learnMeasurementFamilies'>, 'learningVoidId' | 'blueprintRevisionId' | 'objectiveId' | 'blueprintRecordRevision' | 'assessmentContractVersion' | 'assessmentContractDigest' | 'depth'>
 type Support = z.infer<typeof learnMeasurementSupportSchema>
 type Case = Doc<'learnAssessmentCases'>
-const claimSchema = z.strictObject({ order: z.number().int().min(0).max(31), part: z.enum(['stimulus', 'key', 'rubric', 'solution']),
-  claim: learnTextSchema(1000), revision: z.number().int().min(1), supports: z.array(learnMeasurementSupportSchema).min(1).max(8) })
+const claimSchema = z.strictObject({ order: z.number().int().min(0).max(itemLimits.claims - 1), part: z.enum(['stimulus', 'key', 'rubric', 'solution']),
+  claim: learnTextSchema(1000), revision: z.number().int().min(1), supports: z.array(learnMeasurementSupportSchema).min(1).max(itemLimits.supportsPerClaim) })
 const memberSchema = z.strictObject({ formLabel: z.enum(['A', 'B', 'C', 'D', 'E', 'F']), reserve: z.boolean(),
   prompt: learnTextSchema(), declaredStimulus: learnTextSchema().nullable(), responseSpec: learnMeasurementResponseSpecSchema,
   privateScoring: learnPrivateScoringPayloadSchema, referenceSolution: learnTextSchema(), derivation: learnTextSchema(),
-  scoringBinding: learnScorerBindingSchema, claims: z.array(claimSchema).min(1).max(32) })
-const generationSchema = z.strictObject({ generatorVersion: learnVersionSchema, members: z.array(memberSchema).min(2).max(6) })
+  scoringBinding: learnScorerBindingSchema, claims: z.array(claimSchema).min(1).max(itemLimits.claims) })
+const generationSchema = z.strictObject({ generatorVersion: learnVersionSchema, members: z.array(memberSchema).min(2).max(itemLimits.forms) })
 type Member = z.infer<typeof memberSchema>
 type Decision = { decision: 'pass' | 'reject' | 'unknown', coverage: 'complete' | 'unknown' }
 export type MeasurementHarnessArtifact = {
@@ -214,6 +218,7 @@ export async function stageMeasurementFamily(ctx: MutationCtx, job: Doc<'learnJo
   if (sources.some(source => !source || source.status !== 'user_accepted' || source.effectiveStatus !== 'user_accepted'
     || source.evidencePurgedAt !== undefined || source.rightsStatus !== 'permitted' || source.conflictStatus !== 'clear')) fail('unmeasurable_no_t0')
   const generated = parseLearnContract(generationSchema, await measurementItemAdapters.generate({ job, family, sources: sources as Doc<'learnSourceSnapshots'>[] }), MAX_BYTES)
+  for (const member of generated.members) assertMeasurementEvidenceRows(member.claims)
   if (new Set(generated.members.map(member => member.formLabel)).size !== generated.members.length
     || generated.members.filter(member => !member.reserve).map(member => member.formLabel).sort().join('') !== 'ABC'.slice(0, family.coreFormCount)) fail('family_members_invalid')
   for (const member of generated.members) {
@@ -244,6 +249,8 @@ type Loaded = Awaited<ReturnType<typeof loadFamily>>
 async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasurementFamilies'>) {
   const userId = family.userId
   await requireMeasurementScope(ctx, userId, family)
+  const objective = (await ctx.db.get(family.objectiveId))!
+  if (!objective.assessmentContract || typeof objective.assessmentContract === 'string') fail('pins_mismatch')
   const items = await ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q => q.eq('userId', userId).eq('familyId', family._id).eq('familyRevision', family.revision)).take(7)
   if (items.length < 2 || items.length > 6 || items.length !== family.totalFormCount) fail('family_members_invalid')
   const members: Array<{ item: Doc<'learnMeasurementItems'>, spec: Doc<'learnMeasurementScoringSpecs'>, member: Member, caseRow: Case }> = []
@@ -255,12 +262,12 @@ async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasure
     if (!spec || !caseRow || caseRow.userId !== userId || spec.userId !== userId || spec.itemId !== item._id
       || [family, item, spec].some(row => row.evidenceStatus !== 'available' || row.invalidatedAt !== undefined || measurementCanonical(capability(row)) !== measurementCanonical(capability(family)))
       || spec.revision !== item.scoringSpecRevision || !item.prompt || !spec.payload || !spec.referenceSolution || !spec.derivation) fail('evidence_unavailable')
-    const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(33)
+    const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(itemLimits.claims + 1)
     const claimManifest = []
     for (const claim of claims) {
       if (claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined || !claim.claim || claim.scoringSpecId !== spec._id
         || await measurementDigest(claim.claim) !== claim.claimDigest) fail('claim_pins_mismatch')
-      const rows = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(9)
+      const rows = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
       const supports: Support[] = []
       for (const row of rows) {
         if (row.evidenceStatus !== 'available' || row.invalidatedAt !== undefined || row.itemId !== item._id || row.scoringSpecId !== spec._id) fail('evidence_unavailable')
@@ -276,11 +283,12 @@ async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasure
         const excerpt = evidenceChecks.get(evidenceKey) ?? await liveSupport(ctx, userId, family, pin)
         evidenceChecks.set(evidenceKey, excerpt)
         excerpts.set(excerpt._id, excerpt)
-        if (excerpts.size > 64) fail('comparison_coverage_unknown')
+        if (excerpts.size > itemLimits.sources) fail('comparison_coverage_unknown')
         supports.push(pin)
       }
       claimManifest.push({ order: claim.order, part: claim.part, claim: claim.claim, claimDigest: claim.claimDigest, revision: claim.revision, supports })
     }
+    assertMeasurementEvidenceRows(claimManifest)
     if (await measurementDigest(claimManifest) !== item.supportManifestDigest || await measurementDigest({ payload: spec.payload,
       referenceSolution: spec.referenceSolution, derivation: spec.derivation, scoringBinding: spec.scoringBinding }) !== item.scoringSpecDigest
       || spec.digest !== item.scoringSpecDigest || await measurementDigest({ prompt: item.prompt, declaredStimulus: item.declaredStimulus ?? null, responseSpec: item.responseSpec }) !== item.promptDigest) fail('item_pins_mismatch')
@@ -289,13 +297,31 @@ async function loadFamily(ctx: QueryCtx | MutationCtx, family: Doc<'learnMeasure
       scoringBinding: spec.scoringBinding, claims: claimManifest.map(({ claimDigest: _digest, ...claim }) => claim) })
     // The frozen shared validator also enforces modality, deterministic scoring and source bounds.
     const publicationValidationId = item.publicationValidationId ?? family.validationId ?? 'pending-validation'
-    parseLearnContract(learnMeasurementPublicationCandidateSchema, { version: LEARN_V2_MEASUREMENT_VERSION, ...capability(family),
+    const publication = { version: LEARN_V2_MEASUREMENT_VERSION, ...capability(family),
       pins: itemPins(item, family, publicationValidationId), prompt: member.prompt, declaredStimulus: member.declaredStimulus, responseSpec: member.responseSpec,
       privateScoring: member.privateScoring, referenceSolution: member.referenceSolution, derivation: member.derivation,
-      scoringBinding: member.scoringBinding, claims: claimManifest })
+      scoringBinding: member.scoringBinding, claims: claimManifest }
+    try { learnSerializedBytes(publication, itemLimits.publicationBytes) }
+    catch (error) {
+      if (!(error instanceof LearnInputValidationError)) throw error
+      throw new MeasurementItemBoundsError('item_payload_limit')
+    }
+    parseLearnContract(learnMeasurementPublicationCandidateSchema, publication, itemLimits.publicationBytes)
+    const scoringInput = { rubric: member.privateScoring.kind === 'bounded_rubric'
+      ? { version: objective.assessmentContract.version, criteria: member.privateScoring.criteria }
+      : { version: objective.assessmentContract.version, criteria: objective.assessmentContract.criteria }, challenge: member.prompt,
+      ...(member.privateScoring.kind === 'bounded_rubric' ? { declaredStimulus: member.declaredStimulus } : {}),
+      learnerResponse: 'x', evidence: claimManifest.flatMap(claim => claim.supports.map(pin => ({ claim: claim.claim, excerpt: excerpts.get(pin.sourceExcerptId)!.excerpt! })))
+        .map((row, index) => ({ alias: `S${index + 1}`, ...row })) }
+    assertMeasurementScoringContract(scoringInput, member.scoringBinding)
+    const expected = member.privateScoring.kind === 'keyed'
+      ? member.privateScoring.acceptedSets.map(keys => ({ kind: 'keyed' as const, keys }))
+      : member.privateScoring.kind === 'ordered' ? [{ kind: 'ordered' as const, entries: member.privateScoring.expected }]
+        : member.privateScoring.kind === 'numeric' ? [{ kind: 'numeric' as const, value: member.privateScoring.expected, unit: member.privateScoring.unit }] : []
+    for (const payload of expected) assertMeasurementScoringContract({ ...scoringInput, learnerResponse: measurementLearnerResponse(payload) }, member.scoringBinding, true)
     members.push({ item, spec, member, caseRow })
   }
-  if (excerpts.size > 64 || new Set(members.map(row => row.item.caseId)).size !== members.length
+  if (excerpts.size > itemLimits.sources || new Set(members.map(row => row.item.caseId)).size !== members.length
     || members.filter(row => !row.item.reserve).map(row => row.item.formLabel).sort().join('') !== 'ABC'.slice(0, family.coreFormCount)) fail('case_collision')
   const manifestDigest = await measurementDigest({ scope: capability(family), revision: family.revision, equivalenceVersion: family.equivalenceVersion,
     descriptor: family.equivalenceDescriptor, coreFormCount: family.coreFormCount, validator: measurementItemAdapters.version, novelty: MEASUREMENT_NOVELTY_VERSION,

@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import type { Doc } from '../_generated/dataModel'
 
 // Only closed, body-free command rejections survive source purging. Never
@@ -65,5 +66,8 @@ export function retainsSafeAdaptiveRejection(receipt: Doc<'learnActivityCommandR
       && row.kind === receipt.resultKind && row.retryable === false
       && safeRejections.has(JSON.stringify([row.kind, row.code, row.message]))
   }
-  catch { return false }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    return false
+  }
 }

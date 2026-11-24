@@ -112,12 +112,16 @@ describe('closed immutable scorer inventory', () => {
       const start = source.indexOf(`export function ${name}`)
       expect(await scorerDigest(source.slice(start, source.indexOf('\n}', start) + 2))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS[key])
     }
+    const currentParserStart = source.indexOf('export function parseMasteryScoringResponseV2')
+    expect(await scorerDigest(source.slice(currentParserStart, source.indexOf('\n}', currentParserStart) + 2))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.currentParser)
     expect(await scorerDigest(await readFile(new URL('../../shared/learn-v2-mastery.ts', import.meta.url), 'utf8'))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.arithmeticAndTransition)
     expect(await scorerDigest(source.slice(source.indexOf('export function scorerCanonicalJson')))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.executionGuard)
     const gateway = await readFile(new URL('./ai-gateway.ts', import.meta.url), 'utf8')
     const serializerStart = gateway.indexOf('export function serializeCompletionRequest')
     expect(await scorerDigest(gateway.slice(serializerStart, gateway.indexOf('\n}', serializerStart) + 2))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.gatewaySerializer)
     expect(await scorerDigest(gateway.slice(gateway.indexOf('export function validateGenerateResponse'), gateway.indexOf('\ntype GatewayRuntimeConfig')))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.gatewayProvenance)
+    expect(await scorerDigest(gateway.slice(gateway.indexOf('async function gatewayResponseIo'), gateway.indexOf('\nexport interface GenerateResponse')))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.gatewayResponseReader)
+    expect(await scorerDigest(gateway.slice(gateway.indexOf('export function isKnownAiGatewayFailure'), gateway.indexOf('\nfunction getGatewayConfig')))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.gatewayErrorPolicy)
     expect(await scorerDigest(gateway.slice(gateway.indexOf('export function generateCompletion('), gateway.indexOf('\nexport async function generateCompletionStream')))).toBe(LEARN_MASTERY_IMPLEMENTATION_PINS.gatewayTransport)
   })
 })
@@ -310,7 +314,7 @@ describe('recorded execution verification', () => {
   test('metadata failure consumes its one lookup and never retries inference', async () => {
     const { service, prepared, lookup, infer } = await setup({ response: completion({ openrouter_metadata: undefined }) })
     const saved = await service.dispatch(prepared)
-    lookup.mockRejectedValueOnce(new Error('Private metadata error'))
+    lookup.mockRejectedValueOnce(Object.assign(new Error('Private metadata error'), { aiGatewayFailureKind: 'outcome_unknown' }))
     const result = await service.reconcile(prepared, saved)
     expect(result.metadataLookups).toBe(1)
     await expect(service.reconcile(prepared, result)).rejects.toThrow('unavailable')
@@ -349,7 +353,7 @@ describe('recorded execution verification', () => {
 
   test('ambiguous dispatches stay unscored, with no redispatch', async () => {
     const { service, prepared, infer, lookup } = await setup()
-    infer.mockRejectedValueOnce(new Error('private learner response from upstream'))
+    infer.mockRejectedValueOnce(Object.assign(new Error('private learner response from upstream'), { aiGatewayFailureKind: 'outcome_unknown' }))
     const result = await service.dispatch(prepared)
     expect(result.terminal.failure).toBe('outcome_unknown')
     expect(result.receipt.outcome).toBe('reconciliation_required')
@@ -408,4 +412,26 @@ describe('recorded execution verification', () => {
     await expect(missing.service.reconcile(missing.prepared, saved)).rejects.toThrow('unavailable')
     expect(learnScoringExecutionReceiptSchema.safeParse(result.receipt).success).toBe(true)
   })
+})
+
+test.each(['Too many index ranges read', 'Unexpected scorer transport failure'])('unexpected scorer errors propagate: %s', async message => {
+  const { service, prepared, infer } = await setup()
+  infer.mockRejectedValueOnce(new Error(message))
+  await expect(service.dispatch(prepared)).rejects.toThrow(message)
+})
+
+test('unexpected metadata errors propagate without another inference', async () => {
+  const { service, prepared, lookup, infer } = await setup({ response: completion({ openrouter_metadata: undefined }) })
+  const saved = await service.dispatch(prepared)
+  lookup.mockRejectedValueOnce(new Error('Unexpected metadata failure'))
+  await expect(service.reconcile(prepared, saved)).rejects.toThrow('Unexpected metadata failure')
+  expect(infer).toHaveBeenCalledTimes(1)
+})
+
+test('narrowed error handling has new parser, guard and transport identities and rejects prior-version bindings', async () => {
+  const { registry, saved } = await setup()
+  expect(saved.binding).toMatchObject({ parserVersion: 'learn-v2.mastery-parser.v2', guardVersion: 'learn-v2.scoring-receipt-guard.v3' })
+  expect(JSON.parse(saved.frozenConfiguration.snapshot)).toMatchObject({ transportVersion: 'openrouter-via-cloudflare-ai-gateway.v2' })
+  await expect(registry.verifySaved({ ...saved, binding: { ...saved.binding,
+    parserVersion: 'learn-v2.mastery-parser.v1', guardVersion: 'learn-v2.scoring-receipt-guard.v2' } })).rejects.toThrow()
 })

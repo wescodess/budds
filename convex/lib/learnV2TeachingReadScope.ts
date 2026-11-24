@@ -1,3 +1,4 @@
+import { LearnTeachingScopeError, LearnBlueprintAuthorityError } from '../../shared/learn-v2-errors'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import type { LearnArtifactReference } from '../../shared/learn-v2-artifact-lineage'
@@ -55,7 +56,7 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
   const lineages = new Set<string>()
   let edges = 0
   let rowsRead = 0
-  function unavailable(): never { throw new Error('Teaching scope unavailable') }
+  function unavailable(): never { throw new LearnTeachingScopeError('Teaching scope unavailable') }
   const bounded = <T>(rows: T[]) => { rowsRead += rows.length; if (rowsRead > 1024) unavailable(); return rows }
   const add = (reference: LearnHelpReference) => {
     references.set(`${reference.kind}:${reference.id}`, reference)
@@ -464,5 +465,8 @@ export async function teachingReadScope(ctx: QueryCtx, userId: string, targets: 
     const scope = { references: [...references.values()] }
     currentScopes.add(scope)
     return scope
-  } catch { return null }
+  } catch (error) {
+    if (!(error instanceof LearnTeachingScopeError || error instanceof LearnBlueprintAuthorityError)) throw error
+    return null
+  }
 }

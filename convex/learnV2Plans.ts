@@ -94,7 +94,10 @@ async function replay(ctx: MutationCtx, userId: string, key: string, requestFing
     if (!result.success) throw new Error('Scheduling receipt is unavailable')
     return projectFields(schedulingReceipt.fields, result.data)
   }
-  catch { throw new Error('Scheduling receipt is unavailable') }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    throw new Error('Scheduling receipt is unavailable', { cause: error })
+  }
 }
 async function receipt(ctx: MutationCtx, data: { userId: string, learningVoidId: Id<'learningVoids'>, idempotencyKey: string, command: string, requestFingerprint: string, response: Record<string, unknown>, nowUtcMs: number }) {
   await ctx.db.insert('learnPlanCommandReceipts', { userId: data.userId, learningVoidId: data.learningVoidId, idempotencyKey: data.idempotencyKey, command: data.command, requestFingerprint: data.requestFingerprint, response: JSON.stringify(data.response), createdAt: data.nowUtcMs })

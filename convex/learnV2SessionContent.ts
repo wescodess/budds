@@ -1,3 +1,8 @@
+import { isKnownAiGatewayFailure,
+  classifyAiGatewayFailure,
+  generateCompletion } from '../server/utils/ai-gateway'
+import { LearnFolderEvidenceError, retrieveLearnV2FolderEvidence } from '../server/utils/learn-v2-folder-evidence'
+import { LearnSessionContentInputError, LearnBlueprintAuthorityError, LearnInputValidationError } from '../shared/learn-v2-errors'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -27,11 +32,6 @@ import {
   validateLearnV2EntailmentDecisions,
   validateLearnV2SessionContentCandidate,
 } from "../shared/learn-v2-session-content";
-import {
-  classifyAiGatewayFailure,
-  generateCompletion,
-} from "../server/utils/ai-gateway";
-import { retrieveLearnV2FolderEvidence } from "../server/utils/learn-v2-folder-evidence";
 import { localDateAt } from "../shared/learn-v2-mastery";
 import type { LearnV2AssessmentContract } from "../shared/learn-v2-blueprint";
 import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, writeLearnActivityEvent } from "./lib/learnAdaptiveEvents";
@@ -194,7 +194,10 @@ async function separateTeachingReady(ctx: QueryCtx | MutationCtx, userId: string
   const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33);
   if (!blocks.length || blocks.length > 16 || !claims.length || claims.length > 32) return false;
   let rubric: unknown;
-  try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? ''); } catch { return false; }
+  try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? ''); } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    return false;
+  }
   for (const text of [...blocks.map(row => row.content ?? ''), ...claims.map(row => row.claim ?? ''), measurementCanonical(rubric)]) {
     const pins = await normalizedInstructionalCaseFingerprints(text, text);
     const rows = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint_and_solutionFingerprint', q => q.eq('userId', userId).eq('scenarioFingerprint', pins.scenarioFingerprint).eq('solutionFingerprint', pins.solutionFingerprint)).take(2);
@@ -303,7 +306,7 @@ async function inputs(
     !job.studyPlanRevisionId ||
     !job.blueprintRevisionId
   )
-    throw new Error("Session-content job is incomplete");
+    throw new LearnSessionContentInputError("Session-content job is incomplete");
   const session = await ctx.db.get(job.studySessionId);
   const plan = await ctx.db.get(job.studyPlanRevisionId);
   const blueprint = await ctx.db.get(job.blueprintRevisionId);
@@ -322,7 +325,7 @@ async function inputs(
     blueprint.status !== "accepted" ||
     blueprint.recordRevision !== job.expectedBlueprintRecordRevision
   )
-    throw new Error("input_revision_conflict");
+    throw new LearnSessionContentInputError("input_revision_conflict");
   const latest = await ctx.db
     .query("studyPlanRevisions")
     .withIndex("by_userId_and_studyPlanId_and_revision", (q) =>
@@ -336,7 +339,7 @@ async function inputs(
     (latest._id !== plan._id && (!LEARN_MEASUREMENT_CAPABILITIES.responses || latest.status !== "draft")) ||
     stable?.activeRevisionId !== plan._id
   )
-    throw new Error("input_revision_conflict");
+    throw new LearnSessionContentInputError("input_revision_conflict");
   const learningVoid = await ctx.db.get(job.learningVoidId);
   const folder = learningVoid && (await ctx.db.get(learningVoid.folderId));
   if (
@@ -347,7 +350,7 @@ async function inputs(
     !folder ||
     folder.userId !== userId
   )
-    throw new Error("input_revision_conflict");
+    throw new LearnSessionContentInputError("input_revision_conflict");
   await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
   const retrieval = await ctx.db
     .query("studySessionRetrievalObjectives")
@@ -359,7 +362,7 @@ async function inputs(
     ? await validatedSessionMeasurement(ctx, userId, session)
     : null;
   if (job.assessmentPurpose !== undefined && job.assessmentPurpose !== session.assessmentPurpose)
-    throw new Error("assessment_purpose_conflict");
+    throw new LearnSessionContentInputError("assessment_purpose_conflict");
   return { session, plan, blueprint, retrieval, assessment };
 }
 
@@ -377,14 +380,15 @@ export const leaseSessionContentGeneration = internalMutation({
       job.type !== TYPE ||
       job.revision !== args.expectedRevision
     )
-      throw new Error("Session-content job not found");
+      throw new LearnSessionContentInputError("Session-content job not found");
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier))) {
       await block(ctx, job, "access_revoked");
       return { kind: "blocked" as const };
     }
     try {
       await inputs(ctx, args.tokenIdentifier, job);
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnSessionContentInputError || error instanceof LearnBlueprintAuthorityError)) throw error
       await block(ctx, job, "input_revision_conflict");
       return { kind: "blocked" as const };
     }
@@ -396,7 +400,7 @@ export const leaseSessionContentGeneration = internalMutation({
       job.status !== "queued" &&
       !(job.status === "leased" && (job.leaseExpiresAt ?? 0) <= Date.now())
     )
-      throw new Error("Session-content job is not leaseable");
+      throw new LearnSessionContentInputError("Session-content job is not leaseable");
     if ((job.attempts ?? 0) >= MAX_ATTEMPTS) {
       await ctx.db.patch(job._id, {
         status: "failed",
@@ -438,10 +442,11 @@ export const beginSessionContentGeneration = internalMutation({
       job.revision !== args.expectedRevision ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content lease unavailable");
+      throw new LearnSessionContentInputError("Session-content lease unavailable");
     try {
       await inputs(ctx, args.tokenIdentifier, job);
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnSessionContentInputError || error instanceof LearnBlueprintAuthorityError)) throw error
       await block(ctx, job, "input_revision_conflict");
       return { status: "blocked" as const, revision: job.revision + 1 };
     }
@@ -474,9 +479,9 @@ export const getSessionContentGenerationInput = internalQuery({
       !job.studySessionId ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content job unavailable");
+      throw new LearnSessionContentInputError("Session-content job unavailable");
     if (!(await hasLearnV2Access(ctx, args.tokenIdentifier)))
-      throw new Error("access_revoked");
+      throw new LearnSessionContentInputError("access_revoked");
     const input = await inputs(ctx, args.tokenIdentifier, job);
     if (input.assessment) return { ...input.assessment, providerEnabled: false, model: null,
       objective: { title: "Measurement Item", capability: "", assessmentRubric: null }, sources: [] as Array<{
@@ -489,10 +494,10 @@ export const getSessionContentGenerationInput = internalQuery({
       learningVoid.revision !== job.expectedVoidRevision ||
       !(await ctx.db.get(learningVoid.folderId))
     )
-      throw new Error("input_revision_conflict");
+      throw new LearnSessionContentInputError("input_revision_conflict");
     const objective = await ctx.db.get(input.session.primaryObjectiveId);
     if (!objective?.assessmentContract)
-      throw new Error("objective_rubric_unavailable");
+      throw new LearnSessionContentInputError("objective_rubric_unavailable");
     const sources = [] as Array<{
       alias: string;
       sourceSnapshotId: Id<"learnSourceSnapshots">;
@@ -502,7 +507,7 @@ export const getSessionContentGenerationInput = internalQuery({
     }>;
     const sourceIds = job.dispatchSupportingSourceSnapshotIds ?? [];
     if (!sourceIds.length || sourceIds.length > 64 || new Set(sourceIds.map(String)).size !== sourceIds.length)
-      throw new Error("evidence_unavailable");
+      throw new LearnSessionContentInputError("evidence_unavailable");
     for (const sourceId of sourceIds) {
       const source = await ctx.db.get(sourceId);
       const linked = await ctx.db
@@ -524,7 +529,7 @@ export const getSessionContentGenerationInput = internalQuery({
         )
         .first();
       if (!source || !linked || linked.coverage === "gap" || source.status !== "user_accepted" || source.effectiveStatus !== "user_accepted" || source.conflictStatus !== "clear" || source.evidencePurgedAt || !excerpt)
-        throw new Error("evidence_unavailable");
+        throw new LearnSessionContentInputError("evidence_unavailable");
       const base = {
         alias: `source-${String(sources.length + 1).padStart(3, "0")}`,
         sourceSnapshotId: sourceId,
@@ -535,10 +540,10 @@ export const getSessionContentGenerationInput = internalQuery({
         continue;
       }
       const identity = await ctx.db.get(source.sourceIdentityId);
-      if (!identity || identity.userId !== args.tokenIdentifier || identity.origin !== "folder_document" || !identity.folderDocumentId || typeof source.contentHash !== "string" || typeof source.sourceRevision !== "string") throw new Error("evidence_unavailable");
+      if (!identity || identity.userId !== args.tokenIdentifier || identity.origin !== "folder_document" || !identity.folderDocumentId || typeof source.contentHash !== "string" || typeof source.sourceRevision !== "string") throw new LearnSessionContentInputError("evidence_unavailable");
       sources.push({ ...base, folderEvidence: { documentId: String(identity.folderDocumentId), contentHash: source.contentHash, sourceRevision: source.sourceRevision } });
     }
-    if (!sources.length) throw new Error("evidence_unavailable");
+    if (!sources.length) throw new LearnSessionContentInputError("evidence_unavailable");
     return {
       providerEnabled: job.providerEnabled === true,
       model: job.providerModel ?? null,
@@ -570,7 +575,7 @@ export const markSessionContentDispatchStarted = internalMutation({
       job.revision !== args.expectedRevision ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content lease unavailable");
+      throw new LearnSessionContentInputError("Session-content lease unavailable");
     await ctx.db.patch(job._id, {
       checkpoint: "provider_dispatch_started",
       updatedAt: Date.now(),
@@ -597,7 +602,7 @@ export const markSessionContentVerifierDispatchStarted = internalMutation({
       job.revision !== args.expectedRevision ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content lease unavailable");
+      throw new LearnSessionContentInputError("Session-content lease unavailable");
     await ctx.db.patch(job._id, {
       checkpoint: "verifier_dispatch_started",
       updatedAt: Date.now(),
@@ -626,9 +631,9 @@ export const recordSessionContentProviderResponse = internalMutation({
       job.revision !== args.expectedRevision ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content lease unavailable");
+      throw new LearnSessionContentInputError("Session-content lease unavailable");
     if (!args.providerResponseId.trim() || !args.providerResponseModel.trim())
-      throw new Error("Provider response identity is required");
+      throw new LearnSessionContentInputError("Provider response identity is required");
     await ctx.db.patch(job._id, {
       providerResponseId: args.providerResponseId,
       providerResponseModel: args.providerResponseModel,
@@ -784,12 +789,13 @@ export const commitSessionContentCandidate = internalMutation({
       job.revision !== args.expectedRevision ||
       (job.leaseExpiresAt ?? 0) <= Date.now()
     )
-      throw new Error("Session-content lease unavailable");
+      throw new LearnSessionContentInputError("Session-content lease unavailable");
     let input: Awaited<ReturnType<typeof inputs>> | undefined;
     if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
       try {
         input = await inputs(ctx, args.tokenIdentifier, job);
-      } catch {
+      } catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnSessionContentInputError || error instanceof LearnBlueprintAuthorityError)) throw error
         await block(ctx, job, "input_revision_conflict");
         return { status: "blocked" as const };
       }
@@ -798,7 +804,7 @@ export const commitSessionContentCandidate = internalMutation({
       const sessionId = input.session._id;
       const existing = await ctx.db.query("sessionContent")
         .withIndex("by_userId_and_studySessionId_and_revision", q => q.eq("userId", args.tokenIdentifier).eq("studySessionId", sessionId)).take(1);
-      if (existing.length) throw new Error("Session content revision already exists");
+      if (existing.length) throw new LearnSessionContentInputError("Session content revision already exists");
       const now = Date.now();
       const contentId = await ctx.db.insert("sessionContent", {
         userId: args.tokenIdentifier, studySessionId: input.session._id, studyPlanRevisionId: input.plan._id,
@@ -818,7 +824,8 @@ export const commitSessionContentCandidate = internalMutation({
         JSON.parse(args.candidateJson),
         (job.dispatchSupportingSourceSnapshotIds ?? []).map(String),
       );
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof SyntaxError)) throw error
       const session = job.studySessionId
         ? await ctx.db.get(job.studySessionId)
         : null;
@@ -842,7 +849,8 @@ export const commitSessionContentCandidate = internalMutation({
     if (!input) {
       try {
         input = await inputs(ctx, args.tokenIdentifier, job);
-      } catch {
+      } catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnSessionContentInputError || error instanceof LearnBlueprintAuthorityError)) throw error
         await block(ctx, job, "input_revision_conflict");
         return { status: "blocked" as const };
       }
@@ -883,7 +891,8 @@ export const commitSessionContentCandidate = internalMutation({
         candidate,
         sourceEvidence,
       );
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof SyntaxError)) throw error
       const session = job.studySessionId ? await ctx.db.get(job.studySessionId) : null;
       if (session?.status === "planned") await ctx.db.patch(session._id, {
         status: "generation_failed", revision: session.revision + 1,
@@ -905,7 +914,7 @@ export const commitSessionContentCandidate = internalMutation({
       )
       .take(2);
     if (existing.length)
-      throw new Error("Session content revision already exists");
+      throw new LearnSessionContentInputError("Session content revision already exists");
     const objective = await ctx.db.get(input.session.primaryObjectiveId);
     if (!objective || objective.assessmentContract === undefined
       || canonicalJson(candidate.assessmentRubric) !== canonicalJson(objective.assessmentContract)) {
@@ -962,9 +971,9 @@ export const commitSessionContentCandidate = internalMutation({
       });
       for (const sourceId of item.supportSourceSnapshotIds) {
         const excerptId = sourceToExcerpt.get(sourceId);
-        if (!excerptId) throw new Error("Candidate support disappeared");
+        if (!excerptId) throw new LearnSessionContentInputError("Candidate support disappeared");
         const decision = verifierDecisions.find((value) => value.claimOrder === item.order && value.sourceSnapshotId === sourceId);
-        if (!decision) throw new Error("Entailment verification disappeared");
+        if (!decision) throw new LearnSessionContentInputError("Entailment verification disappeared");
         await ctx.db.insert("learnClaimSupports", {
           userId: args.tokenIdentifier,
           sessionContentClaimId: claimId,
@@ -1035,7 +1044,8 @@ export const executeSessionContentGeneration = internalAction({
         });
       }
       input = generationInput as ProviderInput;
-    } catch {
+    } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnSessionContentInputError || error instanceof LearnBlueprintAuthorityError)) throw error
       await ctx.runMutation(
         internal.learnV2SessionContent.terminalizeSessionContentGeneration,
         {
@@ -1078,7 +1088,8 @@ export const executeSessionContentGeneration = internalAction({
             ? source
             : { ...source, excerpt: retrieved.get(source.alias) ?? "" }),
         };
-      } catch {
+      } catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnFolderEvidenceError)) throw error
         await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
           ...args, leaseToken: lease.leaseToken, expectedRevision: begun.revision,
           reason: "evidence_unavailable", sessionStatus: "blocked",
@@ -1104,6 +1115,7 @@ export const executeSessionContentGeneration = internalAction({
     let response: Awaited<ReturnType<typeof generateCompletion>>;
     try {
       response = await generateCompletion({
+        strictErrors: LEARN_MEASUREMENT_CAPABILITIES.responses,
         model: providerModel,
         temperature: 0,
         maxAttempts: 1,
@@ -1138,6 +1150,7 @@ export const executeSessionContentGeneration = internalAction({
         ],
       });
     } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !isKnownAiGatewayFailure(error)) throw error
       const kind = classifyAiGatewayFailure(error);
       const outcomeUnknown = kind === "outcome_unknown";
       await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
@@ -1191,6 +1204,7 @@ export const executeSessionContentGeneration = internalAction({
         input.sources.map((source) => String(source.sourceSnapshotId)),
       );
     } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof SyntaxError)) throw error
       await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
         ...args,
         leaseToken: lease.leaseToken,
@@ -1206,7 +1220,7 @@ export const executeSessionContentGeneration = internalAction({
           const source = input.sources.find(
             (value) => String(value.sourceSnapshotId) === sourceSnapshotId,
           );
-          if (!source) throw new Error("Candidate support source is unavailable");
+          if (!source) throw new LearnSessionContentInputError("Candidate support source is unavailable");
           return {
             claimOrder: claim.order,
             claim: claim.claim,
@@ -1224,6 +1238,7 @@ export const executeSessionContentGeneration = internalAction({
     let verifier: Awaited<ReturnType<typeof generateCompletion>>;
     try {
       verifier = await generateCompletion({
+        strictErrors: LEARN_MEASUREMENT_CAPABILITIES.responses,
         model: providerModel,
         temperature: 0,
         maxAttempts: 1,
@@ -1243,6 +1258,7 @@ export const executeSessionContentGeneration = internalAction({
         ],
       });
     } catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !isKnownAiGatewayFailure(error)) throw error
       const kind = classifyAiGatewayFailure(error);
       const outcomeUnknown = kind === "outcome_unknown";
       await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
@@ -1258,27 +1274,18 @@ export const executeSessionContentGeneration = internalAction({
       });
       return { status: outcomeUnknown ? "blocked" : "generation_failed" };
     }
-    try {
-      return await ctx.runMutation(
-        internal.learnV2SessionContent.commitSessionContentCandidate,
-        {
-          ...args,
-          leaseToken: lease.leaseToken,
-          expectedRevision: begun.revision,
-          candidateJson: JSON.stringify(raw),
-          verifierDecisionsJson: verifier.choices[0]!.message.content,
-        },
-      );
-    } catch {
-      await ctx.runMutation(internal.learnV2SessionContent.terminalizeSessionContentGeneration, {
+
+    return await ctx.runMutation(
+      internal.learnV2SessionContent.commitSessionContentCandidate,
+      {
         ...args,
         leaseToken: lease.leaseToken,
         expectedRevision: begun.revision,
-        reason: "session_content_commit_failed",
-        sessionStatus: "generation_failed",
-      });
-      return { status: "generation_failed" };
-    }
+        candidateJson: JSON.stringify(raw),
+        verifierDecisionsJson: verifier.choices[0]!.message.content,
+      },
+    );
+
   },
 });
 
@@ -1291,9 +1298,9 @@ export const retrySessionContentGeneration = mutation({
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx);
     if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1)
-      throw new Error("Expected session revision is invalid");
+      throw new LearnSessionContentInputError("Expected session revision is invalid");
     if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 128)
-      throw new Error("Idempotency key is invalid");
+      throw new LearnSessionContentInputError("Idempotency key is invalid");
     const requestFingerprint = JSON.stringify({
       command: "retrySessionContentGeneration",
       studySessionId: String(args.studySessionId),
@@ -1304,19 +1311,19 @@ export const retrySessionContentGeneration = mutation({
       .unique();
     if (prior) {
       if (prior.command !== "retrySessionContentGeneration" || !await matchesLegacyFingerprint(prior.requestFingerprint, requestFingerprint))
-        throw new Error("Idempotency key was already used for a different request");
+        throw new LearnSessionContentInputError("Idempotency key was already used for a different request");
       return JSON.parse(prior.response) as { status: "pending"; sessionRevision: number; jobId: Id<"learnJobs"> };
     }
     const session = await ctx.db.get(args.studySessionId);
-    if (session && isTestOnlyMeasurementSession(session)) throw new Error("Assessment generation cannot be retried");
+    if (session && isTestOnlyMeasurementSession(session)) throw new LearnSessionContentInputError("Assessment generation cannot be retried");
     if (!session || session.userId !== userId || session.revision !== args.expectedSessionRevision || !["blocked", "generation_failed"].includes(session.status))
-      throw new Error("Study session is not retryable");
+      throw new LearnSessionContentInputError("Study session is not retryable");
     const plan = await ctx.db.get(session.studyPlanRevisionId);
     const root = plan && await ctx.db.get(plan.studyPlanId);
     const learningVoid = plan && await ctx.db.get(plan.learningVoidId);
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (!plan || !root || !learningVoid || !blueprint || plan.userId !== userId || root.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || root.activeRevisionId !== plan._id || plan.status !== "accepted" || blueprint.status !== "accepted" || plan.blueprintRecordRevision !== blueprint.recordRevision)
-      throw new Error("Study session is not current");
+      throw new LearnSessionContentInputError("Study session is not current");
     await requireLearnActiveWorkPlan(ctx, userId, plan);
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const terminalJobs = (await Promise.all((["blocked", "failed"] as const).map((status) => ctx.db.query("learnJobs")
@@ -1325,11 +1332,11 @@ export const retrySessionContentGeneration = mutation({
       .take(2)))).flat().sort((a, b) => (b.updatedAt ?? b._creationTime) - (a.updatedAt ?? a._creationTime));
     const priorJob = terminalJobs[0];
     if (!priorJob || priorJob.studyPlanRevisionId !== plan._id || priorJob.blueprintRevisionId !== blueprint._id || !priorJob.dispatchSupportingSourceSnapshotIds?.length)
-      throw new Error("Session generation cannot be retried safely");
+      throw new LearnSessionContentInputError("Session generation cannot be retried safely");
     const activeJobs = (await Promise.all((["queued", "leased", "running"] as const).map((status) => ctx.db.query("learnJobs")
       .withIndex("by_userId_and_studySessionId_and_type_and_status", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("type", TYPE).eq("status", status))
       .take(1)))).flat();
-    if (activeJobs.length) throw new Error("Session generation is already in progress");
+    if (activeJobs.length) throw new LearnSessionContentInputError("Session generation is already in progress");
     const now = Date.now();
     const sessionRevision = session.revision + 1;
     const inputDigest = await digest({
@@ -1400,32 +1407,32 @@ export const startStudySession = mutation({
     const userId = await requireLearnV2MutationAccess(ctx);
     ctx = measurementReadContext(ctx, userId);
     if (!args.idempotencyKey.trim() || args.idempotencyKey.length > 128)
-      throw new Error("Idempotency key is invalid");
+      throw new LearnSessionContentInputError("Idempotency key is invalid");
     const session = await ctx.db.get(args.studySessionId);
     if (!session || session.userId !== userId)
-      throw new Error("Study session is not ready");
-    if (!LEARN_MEASUREMENT_CAPABILITIES.responses && isTestOnlyMeasurementSession(session)) throw new Error("Assessment delivery is unavailable");
+      throw new LearnSessionContentInputError("Study session is not ready");
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses && isTestOnlyMeasurementSession(session)) throw new LearnSessionContentInputError("Assessment delivery is unavailable");
     const plan = await ctx.db.get(session.studyPlanRevisionId);
     if (!plan || plan.userId !== userId)
-      throw new Error("Study session is not ready");
+      throw new LearnSessionContentInputError("Study session is not ready");
     const stable = await ctx.db.get(plan.studyPlanId);
     if (!stable || (stable.activeRevisionId !== plan._id || plan.status !== "accepted")
       && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan)))
-      throw new Error("Study session is not current");
+      throw new LearnSessionContentInputError("Study session is not current");
     const learningVoid = await ctx.db.get(plan.learningVoidId);
     const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (!learningVoid || learningVoid.userId !== userId || !blueprint || blueprint.userId !== userId
       || blueprint.learningVoidId !== learningVoid._id || blueprint.status !== "accepted"
       || plan.blueprintRecordRevision !== blueprint.recordRevision)
-      throw new Error("Active Blueprint pointer is unavailable");
+      throw new LearnSessionContentInputError("Active Blueprint pointer is unavailable");
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const resolved = LEARN_MEASUREMENT_CAPABILITIES.responses ? await resolveTodayAssessment(ctx, userId, session) : null;
     if (resolved && resolved.kind !== 'ordinary') {
       if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1
-        || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new Error('Expected session revision is invalid');
+        || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new LearnSessionContentInputError('Expected session revision is invalid');
       if (session.status === 'completed' && resolved.kind === 'check' && resolved.opportunity.submissionId) {
         const binding = await readLearnDelayedCheckBinding(ctx, userId, resolved.opportunity, session);
-        if (!binding || binding.content.status !== 'published' || binding.content.revision !== args.expectedContentRevision) throw new Error('Study session is not ready');
+        if (!binding || binding.content.status !== 'published' || binding.content.revision !== args.expectedContentRevision) throw new LearnSessionContentInputError('Study session is not ready');
         return { status: 'assessment' as const, sessionContentId: binding.content._id, sessionContentRevision: binding.content.revision,
           assessment: todayAssessmentSummary(resolved), deliveryGrant: null };
       }
@@ -1433,11 +1440,11 @@ export const startStudySession = mutation({
       if (!content || content.status !== 'published' || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id
         || content.objectiveId !== session.primaryObjectiveId || !['ready', 'in_progress'].includes(session.status)
         || session.status === 'ready' && session.revision !== args.expectedSessionRevision
-        || session.status === 'in_progress' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision)) throw new Error('Study session is not ready');
+        || session.status === 'in_progress' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision)) throw new LearnSessionContentInputError('Study session is not ready');
       const now = Date.now();
       const timezone = session.timezone ?? plan.timezone ?? 'UTC';
-      if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, timezone) !== localDateAt(now, timezone)) throw new Error('Study session is not scheduled for today');
-      if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now) throw new Error('Study session window has expired');
+      if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, timezone) !== localDateAt(now, timezone)) throw new LearnSessionContentInputError('Study session is not scheduled for today');
+      if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now) throw new LearnSessionContentInputError('Study session window has expired');
       const assessment = resolved.kind === 'unprepared' ? await prepareTodayAssessment(ctx, userId, session, args.entryPoint ?? 'today') : resolved;
       const receipt = (current: Exclude<TodayAssessment, { kind: 'ordinary' }>, reasonCode?: string,
         deliveryGrant: Awaited<ReturnType<typeof grantLearnAssessmentDeliveryForOwner>> | null = null) => ({ status: 'assessment' as const,
@@ -1458,7 +1465,7 @@ export const startStudySession = mutation({
           await ctx.db.patch(opportunity._id, { contextPins: { ...opportunity.contextPins, sessionRevision: session.revision + 1 } });
         }
         const current = await resolveTodayAssessment(ctx, userId, session);
-        if (current.kind !== 'check' && grant.status === 'granted') throw new Error('Learn assessment delivery authority changed');
+        if (current.kind !== 'check' && grant.status === 'granted') throw new LearnSessionContentInputError('Learn assessment delivery authority changed');
         return receipt(current.kind === 'ordinary' ? assessment : current, undefined, grant);
       }
       if (assessment.kind === 'teach') {
@@ -1467,7 +1474,7 @@ export const startStudySession = mutation({
         await recordTodayInstruction(ctx, userId, content, assessment);
       }
     }
-    if (isTestOnlyMeasurementSession(session)) throw new Error("Assessment delivery is unavailable");
+    if (isTestOnlyMeasurementSession(session)) throw new LearnSessionContentInputError("Assessment delivery is unavailable");
     const fingerprint = sessionStartFingerprint(args);
     const prior = await ctx.db
       .query("learnPlanCommandReceipts")
@@ -1480,7 +1487,7 @@ export const startStudySession = mutation({
         prior.command !== "startStudySession" ||
         !await matchesLegacyFingerprint(prior.requestFingerprint, fingerprint)
       )
-        throw new Error(
+        throw new LearnSessionContentInputError(
           "Idempotency key was already used for a different request",
         );
       return JSON.parse(prior.response) as {
@@ -1493,13 +1500,13 @@ export const startStudySession = mutation({
       session.status !== "ready" ||
       session.revision !== args.expectedSessionRevision
     )
-      throw new Error("Study session is not ready");
+      throw new LearnSessionContentInputError("Study session is not ready");
     const now = Date.now();
     const timezone = session.timezone ?? plan.timezone ?? "UTC";
     if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, timezone) !== localDateAt(now, timezone))
-      throw new Error("Study session is not scheduled for today");
+      throw new LearnSessionContentInputError("Study session is not scheduled for today");
     if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now)
-      throw new Error("Study session window has expired");
+      throw new LearnSessionContentInputError("Study session window has expired");
     const content = await ctx.db
       .query("sessionContent")
       .withIndex("by_userId_and_studySessionId_and_revision", (q) =>
@@ -1512,7 +1519,7 @@ export const startStudySession = mutation({
     if (!content || content.status !== "published" || content.revision !== args.expectedContentRevision
       || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== blueprint._id
       || content.objectiveId !== session.primaryObjectiveId)
-      throw new Error("Published session content is required");
+      throw new LearnSessionContentInputError("Published session content is required");
     const response = {
       status: "in_progress" as const,
       sessionContentId: content._id,
@@ -1605,21 +1612,21 @@ export const recordMeaningfulActivityStarted = mutation({
   },
   handler: async (ctx, args) => {
     const userId = await requireLearnV2MutationAccess(ctx);
-    if (!(await hasAdaptiveExperienceAccess(ctx, userId))) throw new Error("Adaptive Learn access denied");
+    if (!(await hasAdaptiveExperienceAccess(ctx, userId))) throw new LearnSessionContentInputError("Adaptive Learn access denied");
     const session = await ctx.db.get(args.studySessionId);
     if (!session || session.userId !== userId || !["in_progress", "completed"].includes(session.status)
       || session.startedSessionContentRevision !== args.expectedContentRevision
-      || !session.startedSessionContentId) throw new Error("Study session is not in progress");
+      || !session.startedSessionContentId) throw new LearnSessionContentInputError("Study session is not in progress");
     const content = await ctx.db.get(session.startedSessionContentId);
     if (!content || content.userId !== userId || content.status !== "published"
       || content.revision !== args.expectedContentRevision || content.studySessionId !== session._id) {
-      throw new Error("Published session content is unavailable");
+      throw new LearnSessionContentInputError("Published session content is unavailable");
     }
     const adaptive = await findCurrentAdaptiveActivityForSessionContent(ctx, userId, content._id, new Set(["started", "submitted", "scoring", "feedback", "reconciling", "blocked"] as const));
     if (!adaptive || adaptive.activity.boundaryOrdinal !== 1
       || !(await hasLearnActivityEvent(ctx, userId, adaptive.activity._id, "activity_started"))
       || !(await isAuthoritativeReadyAdaptiveSessionActivity(ctx, userId, adaptive.activity, content))) {
-      throw new Error("Adaptive activity is not ready");
+      throw new LearnSessionContentInputError("Adaptive activity is not ready");
     }
     const result = await writeLearnActivityEvent(ctx, {
       userId,
@@ -1675,7 +1682,10 @@ const getSessionContentRead = defineTeachingRead({
     )
       return null;
     try { await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id); }
-    catch { return null; }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError)) throw error
+      return null;
+    }
     const content = session.status === "in_progress"
       ? await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id).eq("revision", session.startedSessionContentRevision!)).unique()
       : await ctx.db.query("sessionContent").withIndex("by_userId_and_studySessionId_and_revision", (q) => q.eq("userId", userId).eq("studySessionId", session._id)).order("desc").first();

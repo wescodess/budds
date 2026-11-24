@@ -302,7 +302,7 @@ export async function replayMetadata(state, item, intent, observation, lookup, s
   return reconcileObservation(state, item, intent, observation, async generationId => {
     assert.equal(generationId, lookup.payload.generationId)
     lookedUp = true
-    if (saved.payload.metadata === null) throw new Error('Saved metadata unavailable')
+    if (saved.payload.metadata === null) throw Object.assign(new Error('Saved metadata unavailable'), { aiGatewayFailureKind: 'outcome_unknown' })
     return saved.payload.metadata
   }, () => lookedUp ? saved.payload.observedAt : lookup.payload.startedAt, lookup.payload.deadline)
 }

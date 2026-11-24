@@ -1,3 +1,6 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from './learn-v2-measurement-storage-manifest'
+import { ZodError, z } from 'zod'
+import { LearnInputValidationError } from './learn-v2-errors'
 import {
   ADAPTIVE_ACTIVITY_CONTRACT_VERSION,
   ADAPTIVE_ACTIVITY_FALLBACK_VERSION,
@@ -7,7 +10,6 @@ import {
   type ValidatedAdaptiveActivityPrimitive,
   validateAdaptiveActivityPrimitiveSequence,
 } from './learn-adaptive-activity-registry'
-import { z } from 'zod'
 import { learnDigestSchema, learnIdSchema, learnRevisionSchema, learnVersionSchema } from './learn-v2-responses'
 
 export const ADAPTIVE_ACTIVITY_PLAN_VERSION = 'learn-adaptive.activity-plan.v1' as const
@@ -127,20 +129,20 @@ export type ComposedAdaptiveActivityPlan = Omit<AdaptiveActivityPlanInput, 'prim
 
 function boundedText(value: string, label: string, maximum: number) {
   if (typeof value !== 'string' || !value.trim() || value.length > maximum || /[\p{Cc}\p{Cf}]/u.test(value)) {
-    throw new Error(`${label} is invalid`)
+    throw new LearnInputValidationError(`${label} is invalid`)
   }
   return value.trim()
 }
 
 function positiveInteger(value: number, label: string) {
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(`${label} is invalid`)
+  if (!Number.isSafeInteger(value) || value < 1) throw new LearnInputValidationError(`${label} is invalid`)
   return value
 }
 
 export function canonicalAdaptiveActivityJson(value: unknown): string {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error('Canonical activity input contains a non-finite number')
+    if (!Number.isFinite(value)) throw new LearnInputValidationError('Canonical activity input contains a non-finite number')
     return JSON.stringify(value)
   }
   if (Array.isArray(value)) return `[${value.map(canonicalAdaptiveActivityJson).join(',')}]`
@@ -148,7 +150,7 @@ export function canonicalAdaptiveActivityJson(value: unknown): string {
     const record = value as Record<string, unknown>
     return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalAdaptiveActivityJson(record[key])}`).join(',')}}`
   }
-  throw new Error('Canonical activity input contains an unsupported value')
+  throw new LearnInputValidationError('Canonical activity input contains an unsupported value')
 }
 
 async function sha256(value: string) {
@@ -157,7 +159,7 @@ async function sha256(value: string) {
 }
 
 function validateEvidence(input: AdaptiveActivityPlanInput, assessment = false) {
-  if (input.evidenceReferences.length > 16) throw new Error('Activity evidence exceeds the maximum of 16 references')
+  if (input.evidenceReferences.length > 16) throw new LearnInputValidationError('Activity evidence exceeds the maximum of 16 references')
   const keys = new Set<string>()
   const evidenceReferences = input.evidenceReferences.map((reference) => {
     const validated = {
@@ -170,15 +172,15 @@ function validateEvidence(input: AdaptiveActivityPlanInput, assessment = false) 
       verifierVersion: boundedText(reference.verifierVersion, 'Evidence verifier version', 120),
       integrityState: reference.integrityState,
     }
-    if (validated.integrityState !== 'accepted') throw new Error('Factual activity requires accepted evidence')
-    if (validated.sourceEffectiveStatus !== 'user_accepted') throw new Error('Factual activity requires accepted evidence')
+    if (validated.integrityState !== 'accepted') throw new LearnInputValidationError('Factual activity requires accepted evidence')
+    if (validated.sourceEffectiveStatus !== 'user_accepted') throw new LearnInputValidationError('Factual activity requires accepted evidence')
     const key = `${validated.claimId}\u0000${validated.supportId}\u0000${validated.sourceSnapshotId}`
-    if (keys.has(key)) throw new Error('Activity evidence references must be unique')
+    if (keys.has(key)) throw new LearnInputValidationError('Activity evidence references must be unique')
     keys.add(key)
     return validated
   })
-  if (input.activityClass === 'factual' && evidenceReferences.length === 0 && !assessment) throw new Error('Factual activity requires accepted evidence')
-  if (input.activityClass === 'non_factual' && evidenceReferences.length > 0) throw new Error('Non-factual activity cannot cite evidence')
+  if (input.activityClass === 'factual' && evidenceReferences.length === 0 && !assessment) throw new LearnInputValidationError('Factual activity requires accepted evidence')
+  if (input.activityClass === 'non_factual' && evidenceReferences.length > 0) throw new LearnInputValidationError('Non-factual activity cannot cite evidence')
   return evidenceReferences
 }
 
@@ -188,7 +190,7 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
     if (input.activityClass !== 'factual' || input.attribution || input.evidenceReferences.length || input.decisionInputs.sourceInputs.length
       || !Array.isArray(input.primitiveSequence) || input.primitiveSequence.length
       || input.evaluationContract.kind !== 'server_scored' || input.evaluationContract.responseFormat !== 'short_text'
-      || input.evaluationContract.passingScorePercent !== 80) throw new Error('Assessment activity cannot contain teaching content')
+      || input.evaluationContract.passingScorePercent !== 80) throw new LearnInputValidationError('Assessment activity cannot contain teaching content')
     input = { ...input, purpose: 'Complete the assigned check.', reasonCode: 'assessment_check',
       requiredAction: { kind: 'submit_response', label: 'Submit response' },
       accessibilityMetadata: { heading: 'Assigned check', instructions: 'Submit your response.', focusTargetTestId: 'learn-primitive-independent-application', liveRegionMode: 'polite' },
@@ -198,27 +200,27 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
   const evidenceReferences = validateEvidence(input, assessment !== null)
   const factualPins = Object.values(input.pins).every(value => typeof value === 'string' && value.length > 0)
   if (input.activityClass === 'factual' && (!factualPins || input.objectiveId !== input.pins.objectiveId)) {
-    throw new Error('Factual activity requires complete matching V2 pins')
+    throw new LearnInputValidationError('Factual activity requires complete matching V2 pins')
   }
   if (input.activityClass === 'factual' && (input.generationInputs.sessionContentRevision === null || input.generationInputs.sessionContentInputDigest === null || input.generationInputs.generatorVersion === null)) {
-    throw new Error('Factual activity requires complete generation inputs')
+    throw new LearnInputValidationError('Factual activity requires complete generation inputs')
   }
-  if (input.activityClass === 'non_factual' && input.objectiveId !== null) throw new Error('Non-factual activity cannot target an objective')
+  if (input.activityClass === 'non_factual' && input.objectiveId !== null) throw new LearnInputValidationError('Non-factual activity cannot target an objective')
 
   const evidenceContext = Object.fromEntries(evidenceReferences.map(reference => [reference.sourceSnapshotId, { integrityState: reference.integrityState }]))
   const primitivePlan = (() => {
     if (assessment) return []
     const primitiveResult = validateAdaptiveActivityPrimitiveSequence(input.primitiveSequence, evidenceContext)
-    if (!primitiveResult.ok) throw new Error(`Primitive sequence is invalid: ${primitiveResult.error.code}`)
+    if (!primitiveResult.ok) throw new LearnInputValidationError(`Primitive sequence is invalid: ${primitiveResult.error.code}`)
     return primitiveResult.value.primitives
   })()
 
   const passingScorePercent = input.evaluationContract.passingScorePercent
   if (passingScorePercent !== null && (!Number.isSafeInteger(passingScorePercent) || passingScorePercent < 0 || passingScorePercent > 100)) {
-    throw new Error('Evaluation passing score is invalid')
+    throw new LearnInputValidationError('Evaluation passing score is invalid')
   }
   if (input.decisionInputs.confidence !== null && (!Number.isFinite(input.decisionInputs.confidence) || input.decisionInputs.confidence < 0 || input.decisionInputs.confidence > 1)) {
-    throw new Error('Decision confidence is invalid')
+    throw new LearnInputValidationError('Decision confidence is invalid')
   }
   const sourceInputs = input.decisionInputs.sourceInputs.map(source => ({
     sourceSnapshotId: boundedText(source.sourceSnapshotId, 'Decision source snapshot', 200),
@@ -228,7 +230,7 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
   if (sourceInputs.length !== evidenceReferences.length || sourceInputs.some((source, index) => {
     const evidence = evidenceReferences[index]
     return !evidence || source.sourceSnapshotId !== evidence.sourceSnapshotId || source.effectiveStatus !== evidence.sourceEffectiveStatus || source.recordRevision !== evidence.sourceRecordRevision
-  })) throw new Error('Decision source inputs do not match accepted evidence')
+  })) throw new LearnInputValidationError('Decision source inputs do not match accepted evidence')
 
   const core = {
     ...(input.attribution ? { attribution: {
@@ -305,7 +307,7 @@ export async function composeAdaptiveActivityPlan(input: AdaptiveActivityPlanInp
     replacesActivityId: input.replacesActivityId ? boundedText(input.replacesActivityId, 'Replacement activity identity', 160) : null,
   }
   const canonicalInputSnapshot = canonicalAdaptiveActivityJson({ ...core, ...(assessment ? { assessmentReference: assessment } : {}) })
-  if (canonicalInputSnapshot.length > 32_000) throw new Error('Canonical activity input exceeds 32000 characters')
+  if (canonicalInputSnapshot.length > 32_000) throw new LearnInputValidationError('Canonical activity input exceeds 32000 characters')
   return { ...core, canonicalInputSnapshot, inputDigest: await sha256(canonicalInputSnapshot) }
 }
 
@@ -325,7 +327,8 @@ export async function replayAdaptiveActivityPlan(candidate: ComposedAdaptiveActi
     }
     return { ok: true as const, value: candidate }
   }
-  catch {
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof SyntaxError || error instanceof ZodError)) throw error
     return { ok: false as const, reason: 'replay_integrity_failed' as const }
   }
 }
@@ -335,5 +338,8 @@ export function readAdaptiveAssessmentReference(plan: Pick<ComposedAdaptiveActiv
     const stored: unknown = JSON.parse(plan.canonicalInputSnapshot)
     if (!stored || typeof stored !== 'object' || !('assessmentReference' in stored)) return null
     return adaptiveAssessmentReferenceSchema.parse(stored.assessmentReference)
-  } catch { return null }
+  } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError || error instanceof ZodError)) throw error
+    return null
+  }
 }

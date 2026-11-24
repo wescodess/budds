@@ -1,3 +1,4 @@
+import { LearnBlueprintAuthorityError } from '../shared/learn-v2-errors'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
@@ -314,7 +315,10 @@ export const getSessionCandidate = query({
       || plan.blueprintRecordRevision !== blueprint.recordRevision
       || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
     try { await requireActiveBlueprint(ctx, userId, owned.row, blueprint._id) }
-    catch { return null }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError)) throw error
+      return null
+    }
     const content = session.status === 'in_progress' && session.startedSessionContentRevision !== undefined
       ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
       : await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first()

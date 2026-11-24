@@ -37,7 +37,7 @@ export function syntheticDeliveryProtocol(now = Date.now(), model = false) {
 }
 
 export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, adapters?: boolean, scorerBinding?: LearnScorerBinding,
-  test?: TestConvex<typeof schema>, identity?: typeof deliveryIdentity, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean } = {}) {
+  publish?: boolean, test?: TestConvex<typeof schema>, identity?: typeof deliveryIdentity, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = {}) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const identity = options.identity ?? deliveryIdentity
   const userId = identity.tokenIdentifier
@@ -117,7 +117,7 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
       }
       return rows
     })
-    for (const member of members) member.claims = Array.from({ length: inventory.claims }, (_, order) => ({ ...member.claims[order % 3]!, order,
+    for (const member of members) member.claims = Array.from({ length: inventory.claims }, (_, order) => ({ ...member.claims[order % 3]!, order, ...(inventory.claimText ? { claim: inventory.claimText } : {}),
       supports: Array.from({ length: Math.min(8, inventory.supports + Math.max(0, (inventory.extraSupports ?? 0) - order * (8 - inventory.supports))) }, (_, index) => supports[(order * inventory.supports + index) % supports.length]!) }))
   }
   const generated = { generatorVersion: 'fixture.generation.v1', members }
@@ -147,10 +147,10 @@ export async function assessmentDeliveryFixture(options: { core?: 2 | 3, reserve
   if (!begun.leaseToken) throw new Error('Expected an active lease')
   const args = { tokenIdentifier: userId, jobId: begun.jobId, leaseToken: begun.leaseToken, expectedRevision: begun.revision }
   const staged = await t.mutation(commands.generateFamilyCandidates, args)
-  if (!('revision' in staged)) throw new Error('Synthetic family did not stage')
+  if (!('revision' in staged)) throw new Error(`Synthetic family did not stage: ${JSON.stringify(staged)}`)
   const validated = await t.mutation(commands.validateFamily, { ...args, expectedRevision: staged.revision })
-  if (validated.status !== 'validated') throw new Error('Synthetic family did not validate')
-  await t.mutation(commands.publishFamily, { ...args, expectedRevision: validated.revision })
+  if (validated.status !== 'validated') throw new Error(`Synthetic family did not validate: ${JSON.stringify(validated)}`)
+  if (options.publish !== false) await t.mutation(commands.publishFamily, { ...args, expectedRevision: validated.revision })
   return { t, owner, graph, begun, args, generated, descriptor }
 }
 

@@ -1,3 +1,4 @@
+import { MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { ZodError } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -63,7 +64,7 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
   if (isLearnAssessmentTestOnly(purpose.data)) {
     try { await requireMeasurementCapability(ctx, userId) }
     catch (error) {
-      if (!(error instanceof MeasurementValidationError) && !(error instanceof ZodError)) throw error
+      if (!(error instanceof MeasurementValidationError) && !(error instanceof MeasurementItemBoundsError) && !(error instanceof ZodError)) throw error
       return deny('unknown_history')
     }
     const caseId = pins.data.kind === 'measurement' ? pins.data.itemPins.caseId : pins.data.caseId
@@ -87,8 +88,8 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
         || itemPins.noveltyPolicyVersion === caseRow?.identityPolicyVersion)
         && measurementCanonical({ ...member.pins, noveltyPolicyVersion: itemPins.noveltyPolicyVersion }) === measurementCanonical(itemPins))) return deny('pins_mismatch')
     } catch (error) {
-      if (!(error instanceof MeasurementValidationError) && !(error instanceof ZodError)) throw error
-      return deny('evidence_unavailable')
+      if (!(error instanceof MeasurementValidationError) && !(error instanceof MeasurementItemBoundsError) && !(error instanceof ZodError)) throw error
+      return deny(error instanceof MeasurementItemBoundsError ? error.code : 'evidence_unavailable')
     }
   }
   if (purpose.data.kind === 'retained_transfer' && !row.submissionId) {
@@ -123,7 +124,10 @@ async function assessmentProjection(ctx: ReadCtx, userId: string, row: Doc<'lear
   const content = await ctx.db.get(row.contextPins.sessionContentId)
   if (!content || !await isLearnV2ContentEvidenceReady(ctx, userId, content, row.learningVoidId)) return null
   let rubric: unknown
-  try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? '') } catch { return null }
+  try { rubric = JSON.parse(content.assessmentRubricSnapshot ?? '') } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return null
+  }
   if (await privacyDigest(rubric) !== pins.rubricDigest) return null
   const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(17)
   const prompts = blocks.filter(block => (block.kind === 'independent_application' || block.kind === 'transfer_challenge') && block.content)

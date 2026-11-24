@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -141,13 +142,16 @@ export async function measurementItemReason(ctx: ReadCtx, userId: string, pins: 
     || spec.digest !== pins.scoringSpecDigest || item.scoringSpecDigest !== spec.digest || item.supportManifestDigest !== pins.supportManifestDigest
     || item.publicationValidationId !== pins.publicationValidationId || family.equivalenceVersion !== pins.equivalenceVersion
     || await privacyDigest(spec.scoringBinding) !== await privacyDigest(scoringBinding) || item.responseSpec.kind !== spec.payload.kind) return 'pins_mismatch'
-  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(33)
-  if (!claims.length || claims.length > 32) return 'unmeasurable_no_t0'
+  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item._id)).take(itemLimits.claims + 1)
+  if (!claims.length || claims.length > itemLimits.claims) return 'unmeasurable_no_t0'
+  let evidenceRows = 0
   const sources = new Set<string>()
   for (const claim of claims) {
     if (claim.evidenceStatus !== 'available' || claim.invalidatedAt !== undefined || claim.scoringSpecId !== spec._id) return 'evidence_unavailable'
-    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(9)
-    if (!supports.length || supports.length > 8) return 'unmeasurable_no_t0'
+    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
+    evidenceRows += supports.length
+    if (evidenceRows > itemLimits.evidenceRows) return 'item_evidence_limit'
+    if (!supports.length || supports.length > itemLimits.supportsPerClaim) return 'unmeasurable_no_t0'
     for (const support of supports) {
       const [source, excerpt] = await Promise.all([ctx.db.get(support.sourceSnapshotId), ctx.db.get(support.sourceExcerptId)])
       if (!source || !excerpt || source.userId !== userId || excerpt.userId !== userId || source.learningVoidId !== scope.learningVoidId

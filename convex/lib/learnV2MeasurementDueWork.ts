@@ -1,3 +1,4 @@
+import { measurementReadContext } from './learnV2MeasurementReadContext'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import {
@@ -85,6 +86,7 @@ export async function replaceLearnMeasurementOpportunityForOwner(ctx: MutationCt
   assessmentOpportunityId: Id<'learnAssessmentOpportunities'>,
   reason: 'novel_item_unavailable' | 'evidence_unavailable' | 'contaminated' | 'abandoned',
 }) {
+  ctx = measurementReadContext(ctx, userId)
   const original = await ctx.db.get(input.assessmentOpportunityId)
   const assignment = original?.assignmentId ? await ctx.db.get(original.assignmentId) : null
   const protocol = getFrozenLearnMeasurementProtocol()
@@ -135,6 +137,7 @@ export async function replaceLearnMeasurementOpportunityForOwner(ctx: MutationCt
 }
 
 export async function materializeLearnMeasurementAssignment(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol, through: number) {
+  ctx = measurementReadContext(ctx, assignment.userId)
   const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', assignment.userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!cold || cold.purpose.kind !== 'measurement_cold') return 'missing_cold_opportunity'
   if (!await liveResponseAggregate(ctx, assignment.userId, cold)) return 'aggregate_unavailable'
@@ -195,6 +198,7 @@ export async function materializeLearnMeasurementAssignment(ctx: MutationCtx, as
 export async function materializeLearnMeasurementDueBatch(ctx: MutationCtx, userId: string, input: {
   cursor: string | null, through: number, expectedSequence?: number, coverageComplete?: boolean,
 }) {
+  ctx = measurementReadContext(ctx, userId)
   const frozen = getFrozenLearnMeasurementProtocol()
   if (!frozen) return { status: 'protocol_not_frozen' as const, cursor: null, processed: 0, sequence: 0, complete: false }
   if (!LEARN_MEASUREMENT_CAPABILITIES.enrollment) return { status: 'disabled' as const, cursor: null, processed: 0, sequence: 0, complete: false }

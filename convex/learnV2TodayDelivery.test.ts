@@ -14,10 +14,11 @@ import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, s
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import * as assessmentDelivery from './lib/learnV2AssessmentDelivery'
-import { createResponsePrivacyReadContext } from './lib/learnV2PrivacyReadContext'
+import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2PrivacyReadContext'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 
+const measurementItems = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
 const measurement = (anyApi as unknown as ApiFromModules<{ learnV2Measurement: typeof import('./learnV2Measurement') }>).learnV2Measurement
 const due = makeFunctionReference<'mutation', { userId: string, through?: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
@@ -45,7 +46,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers() })
 
-async function fixture(options: { reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean } = {}) {
+async function fixture(options: { reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = {}) {
   const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -1445,7 +1446,7 @@ test.each([false, true])('published repeated-source inventory fits Today start: 
   expect(measured.metrics.databaseQueries.used).toBeLessThan(3072)
 })
 
-test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 11, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Today start: %j', async shape => {
+test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Today start: %j', async shape => {
   const f = await fixture({ reserveCount: shape.reserves, inventory: { ...shape, sources: 64 } })
   const measured = await f.owner.mutation(async ctx => {
     const value = await ctx.runMutation(api.learnV2SessionContent.startStudySession, f.request)
@@ -1541,7 +1542,7 @@ test.each(['grant', 'accept'] as const)('native read exhaustion aborts %s instea
 
 
 test('the largest published inventory can grant before starting its session', async () => {
-  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, extraSupports: 11, backingDocuments: true } })
+  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, extraSupports: 0, backingDocuments: true } })
   await f.owner.mutation(measurement.enrollProspect, { studySessionId: f.graph.studySessionId, familyId: f.begun.familyId, entryPoint: 'today' })
   const opportunity = await f.cold()
   const granted = await f.owner.mutation(async ctx => {
@@ -1553,4 +1554,78 @@ test('the largest published inventory can grant before starting its session', as
   console.info('delivery-read-budget', JSON.stringify({ path: 'today-first-grant', queries: granted.metrics.databaseQueries.used,
     documents: granted.metrics.documentsRead.used, bytes: granted.metrics.bytesRead.used }))
   expect(granted.metrics.databaseQueries.used).toBeLessThan(3072)
+})
+
+test('the 64-row publication bound delivers, seals, recovers and scores through Today', async () => {
+  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  const sealed = await f.seal()
+  expect(await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: sealed.opportunity._id }))
+    .toMatchObject({ status: 'available', phase: 'submitted_sealed' })
+  const scored = await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.accepted.submissionId, idempotencyKey: 'bound_today_score_1234567890' })
+  expect(scored).toMatchObject({ status: 'scored' })
+  expect(await f.owner.query(api.learnV2Assessments.getAssessmentState, { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: sealed.opportunity._id }))
+    .toMatchObject({ status: 'available', phase: 'scored_fail' })
+  expect(await f.owner.action(api.learnV2Mastery.scoreMasterySubmission, { version: LEARN_V2_PUBLIC_API_VERSION,
+    submissionId: sealed.accepted.submissionId, idempotencyKey: 'bound_today_recovery_1234567890' })).toEqual(scored)
+})
+
+test('65-row inventory is rejected before Today publication or disclosure', async () => {
+  await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } }))
+    .rejects.toThrow('item_evidence_limit')
+})
+
+test('publication rejects an item above its publication byte budget', async () => {
+  await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, claimText: 'A'.repeat(500) } }))
+    .rejects.toThrow('item_payload_limit')
+})
+
+test('publication revalidation rejects a validated family that grows to 65 support rows', async () => {
+  const f = await assessmentDeliveryFixture({ publish: false, inventory: { claims: 32, supports: 2, sources: 3 } })
+  await f.t.run(async ctx => {
+    const item = (await ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q =>
+      q.eq('userId', userId).eq('familyId', f.begun.familyId).eq('familyRevision', 1)).first())!
+    const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q =>
+      q.eq('userId', userId).eq('itemId', item._id)).take(2)
+    const extra = (await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q =>
+      q.eq('userId', userId).eq('claimId', claims[1]!._id)).first())!
+    const { _id: _id, _creationTime: _time, ...support } = extra
+    await ctx.db.insert('learnMeasurementSupports', { ...support, claimId: claims[0]!._id })
+  })
+  expect(await f.t.mutation(measurementItems.publishFamily, { ...f.args, expectedRevision: 3 }))
+    .toMatchObject({ status: 'quarantined', reasonCode: 'item_evidence_limit' })
+  const rows = await f.t.run(ctx => ctx.db.query('learnMeasurementItems').withIndex('by_userId_and_familyId_and_familyRevision_and_formLabel', q =>
+    q.eq('userId', userId).eq('familyId', f.begun.familyId).eq('familyRevision', 1)).take(7))
+  expect(rows.every(row => row.status !== 'published')).toBe(true)
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))).toEqual([])
+})
+
+
+test('child privacy scopes propagate a strict parent budget and roll back earlier writes', async () => {
+  const f = await fixture()
+  const before = (await f.t.run(ctx => ctx.db.get(f.graph.learningVoidId)))!
+  await expect(f.owner.mutation(async ctx => {
+    await ctx.db.patch(before._id, { title: 'Uncommitted child-budget marker' })
+    const strict = createResponsePrivacyReadContext(ctx, userId, 1, { throwOnBudgetExhaustion: true }).ctx
+    const child = createResponsePrivacyReadContext(strict, userId).ctx
+    await child.db.get(f.graph.sourceSnapshotId)
+    return await privacyRead(child, userId, ['child-budget'], null, current => current.db.get(f.graph.sourceExcerptId))
+  })).rejects.toThrow('Learn source validation budget exhausted')
+  expect(await f.t.run(ctx => ctx.db.get(before._id))).toEqual(before)
+})
+
+test('publication rejects a field-valid item that exceeds the reserved scorer request budget', async () => {
+  await expect(fixture({ inventory: { claims: 8, supports: 8, sources: 8, claimText: 'A'.repeat(500) } }))
+    .rejects.toThrow('item_scoring_request_limit')
+})
+
+test.each([false, true])('strict descendants promote ancestor budget propagation through a copied context=%s', async copied => {
+  const f = await fixture()
+  await expect(f.owner.query(async ctx => {
+    const parent = createResponsePrivacyReadContext(ctx, userId, 1).ctx
+    const view = copied ? { ...parent } : parent
+    const strict = createResponsePrivacyReadContext(view, userId, undefined, { throwOnBudgetExhaustion: true }).ctx
+    await strict.db.get(f.graph.sourceSnapshotId)
+    return await privacyRead(parent, userId, ['ancestor-budget'], null, () => strict.db.get(f.graph.sourceExcerptId))
+  })).rejects.toThrow('Learn source validation budget exhausted')
 })

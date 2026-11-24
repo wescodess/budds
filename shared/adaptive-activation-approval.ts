@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from './learn-v2-measurement-storage-manifest'
 import shippedApproval from '../docs/operations/adaptive-learn-activation-approval.v1.json'
 
 // Server deployment configuration, never a client-provided approval claim.
@@ -39,7 +40,10 @@ export function hasReviewedAdaptiveActivationApproval(value: unknown, allowLocal
         return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
           && new TextEncoder().encode(evidence.reference).length <= 256
       }
-      catch { return false }
+      catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof TypeError)) throw error
+        return false
+      }
     })
   })
 }

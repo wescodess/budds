@@ -1,4 +1,7 @@
-import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { z } from 'zod'
+import { LearnInputValidationError } from '../../shared/learn-v2-errors'
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-v2-measurement-item-limits'
+import { responsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { v, type PropertyValidators, type ObjectType } from 'convex/values'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
@@ -19,7 +22,6 @@ import { adaptiveActivityFallbackForReason } from '../../shared/learn-adaptive-a
 import { adaptiveFixedNextPlanValidator, adaptiveOverrideOptionValidator } from '../../shared/learn-adaptive-controls'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../../shared/adaptive-v2-pilot-policy'
-import { privacyRead } from './learnV2PrivacyReadContext'
 import { projectSchedulingSnapshot } from './learnV2SchedulingProjection'
 
 type ReadCtx = QueryCtx | MutationCtx
@@ -171,7 +173,7 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, id: Id<'learnSource
 
 export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>): Promise<LearnAssessmentDisclosureContext | null> {
   const userId = await requireAuth(ctx)
-  ctx = measurementReadContext(ctx, userId)
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses) ctx = responsePrivacyReadContext(ctx, userId)
   const row = await ctx.db.get(assessmentOpportunityId)
   if (!row || row.userId !== userId) return null
   const purpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
@@ -250,7 +252,7 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
         : Boolean(assigned && JSON.stringify(assigned) === JSON.stringify(p))
       evidenceAvailable &&= assignment.evidenceStatus === 'available' && assignment.invalidatedAt === undefined
     }
-    const supportLimit = LEARN_MEASUREMENT_CAPABILITIES.responses ? 32 * 8 : 64
+    const supportLimit = LEARN_MEASUREMENT_CAPABILITIES.responses ? itemLimits.evidenceRows : 64
     const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', p.itemId)).take(supportLimit + 1)
     evidenceAvailable &&= supports.length > 0 && supports.length <= supportLimit
     for (const support of supports) {
@@ -373,7 +375,10 @@ export async function projectAttempt(ctx: ReadCtx, row: Doc<'masteryAttempts'>, 
         { owned: true, bodyDisclosureAllowed: !LEARN_MEASUREMENT_CAPABILITIES.responses || Boolean(context?.accessAvailable && context.evidenceAvailable && context.pinsMatch
           && context.lifecycle.submissionId === submission._id && submission.evidenceStatus === 'available' && submission.invalidatedAt === undefined), resultDisclosureAllowed: false })
       }
-      catch { /* Invalid legacy snapshots do not authorize body disclosure. */ }
+      catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof z.ZodError)) throw error
+        /* Invalid legacy snapshots do not authorize body disclosure. */
+      }
     }
   }
   // Legacy work is already learner authored; its evidence dependencies still

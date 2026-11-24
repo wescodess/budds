@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from './learn-v2-measurement-storage-manifest'
 export const SOURCE_COMPARISON_RESPONSE_VERSION = 'learn-adaptive.source-comparison-response.v1' as const
 
 export const MAX_SOURCE_COMPARISON_RESPONSE_BYTES = 12_000
@@ -15,7 +16,10 @@ export function decodeSourceComparisonResponse(value: string, allowedSourceRefs?
   if (typeof value !== 'string' || !sourceComparisonResponseFitsLimit(value)
     || allowedSourceRefs && (allowedSourceRefs.length !== 2 || new Set(allowedSourceRefs).size !== 2)) return null
   let parsed: unknown
-  try { parsed = JSON.parse(value) } catch { return null }
+  try { parsed = JSON.parse(value) } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    return null
+  }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
   const candidate = parsed as Record<string, unknown>
   if (Object.keys(candidate).length !== 3 || candidate.version !== SOURCE_COMPARISON_RESPONSE_VERSION

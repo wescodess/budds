@@ -1,3 +1,4 @@
+import { MeasurementValidationError, requireMeasurementCapability } from './learnV2MeasurementItems'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
@@ -7,7 +8,6 @@ import { isLearnRetainedPromotionTimeEligible } from '../../shared/learn-v2-dela
 import { learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { getFrozenLearnMeasurementProtocol, measurementWindowPolicyDigest } from './learnV2MeasurementAssignment'
 import { measurementCaseExposed, measurementFlowReason, measurementItemReason, measurementScopeReason, writeMeasurementOpportunityFact, type AdmittedAssignment } from './learnV2Measurement'
-import { requireMeasurementCapability } from './learnV2MeasurementItems'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
@@ -65,7 +65,10 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
   if (row.horizonDays !== row.purpose.horizonDays || row.openAt !== row.purpose.clock.openAt || row.closeAt !== row.purpose.clock.closeAt
     || row.dueAt !== row.purpose.clock.dueAt || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return blocked('pins_mismatch')
   const userId = assignment.userId
-  try { await requireMeasurementCapability(ctx, userId) } catch { return blocked('unknown_history') }
+  try { await requireMeasurementCapability(ctx, userId) } catch (error) {
+    if (!(error instanceof MeasurementValidationError)) throw error
+    return blocked('unknown_history')
+  }
   const reason = await measurementScopeReason(ctx, userId, row)
     ?? await measurementFlowReason(ctx, userId, assignment.flow, row, protocol)
     ?? await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(row.assessmentPins.itemPins), row, row.scoringBinding)

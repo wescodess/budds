@@ -1,3 +1,4 @@
+import * as assessmentDelivery from './lib/learnV2AssessmentDelivery'
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
 import { anyApi, makeFunctionReference, type ApiFromModules } from 'convex/server'
@@ -54,7 +55,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
 })
 
-async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
+async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v2_today' | 'v2_canvas', rubric?: boolean, reserve?: boolean, reserveCount?: number, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean, format?: 'numeric' | 'keyed' | 'ordered' } = {}) {
   const definition = { configurationId: 'canvas.synthetic.v2', configurationVersion: 'canvas.synthetic.v2', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -470,7 +471,7 @@ test.each(['pilot', 'entitlement'] as const)('direct V2 scoring cannot bypass de
 
 test('a lost scoring response keeps the saved answer in reconciliation without redispatch', async () => {
   const s = await fixture()
-  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('lost provider receipt') }))
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('lost provider receipt') }))
   const receipt = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
   if (receipt.kind !== 'accepted') throw new Error(JSON.stringify(receipt))
   const request = { threadId: s.stage.threadId, activityId: s.stage.activityId, submissionId: receipt.submissionId, idempotencyKey: 'canvas_lost_score_1234567890' }
@@ -824,7 +825,7 @@ test('saved-ID scoring rejects hybrid raw requests before dispatch', async () =>
   expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toHaveLength(1)
 })
 
-test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 10, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Canvas preparation and attachment: %j', async shape => {
+test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocuments: true }, { reserves: 3, claims: 8, supports: 8, extraSupports: 0 }])('published inventory fits Canvas preparation and attachment: %j', async shape => {
   const s = await fixture({ prepare: false, attach: false, reserveCount: shape.reserves, inventory: { ...shape, sources: 64 } })
   const prepared = await s.owner.mutation(async ctx => {
     const value = await ctx.runMutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)
@@ -855,4 +856,88 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 10, backingDoc
     documents: accepted.metrics.documentsRead.used, bytes: accepted.metrics.bytesRead.used }))
   expect(accepted.metrics.databaseQueries.used).toBeLessThan(3072)
 
+})
+
+test.each(['nested_limit', 'native_limit'] as const)('Canvas preparation propagates %s and rolls back earlier writes', async mode => {
+  const s = await fixture({ prepare: false, attach: false, reserveCount: 3,
+    inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  const before = (await s.t.run(ctx => ctx.db.get(s.f.learningVoidId)))!
+  await expect(s.owner.mutation(async ctx => {
+    await ctx.db.patch(before._id, { title: 'Uncommitted preparation marker' })
+    if (mode === 'native_limit') for (let index = 0; index < 3500; index++) await ctx.db.get(s.f.studySessionId)
+    return await ctx.runMutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare,
+      mode === 'nested_limit' ? { transactionLimits: { databaseQueries: 180 } } : {})
+  })).rejects.toThrow('Too many index ranges')
+  expect(await s.t.run(ctx => ctx.db.get(before._id))).toEqual(before)
+})
+
+test('the 64-row publication bound delivers, seals, recovers and scores through Canvas', async () => {
+  const s = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (sealed.kind !== 'accepted') throw new Error('Expected sealed response')
+  expect(await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: s.stage.threadId }))
+    .toMatchObject({ assessment: { phase: 'submitted_sealed' } })
+  const scored = await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'bound_canvas_score_1234567890' })
+  expect(scored).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: s.stage.threadId }))
+    .toMatchObject({ assessment: { phase: 'scored_pass' } })
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'bound_canvas_recovery_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+})
+
+test('65-row inventory is rejected before Canvas publication or disclosure', async () => {
+  await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } }))
+    .rejects.toThrow('item_evidence_limit')
+})
+
+test('Canvas rejects an oversized scoring response before sealing and accepts a bounded retry', async () => {
+  const s = await fixture({ inventory: { claims: 32, supports: 2, sources: 3 } })
+  const oversized = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage,
+    response: '\\'.repeat(4001), idempotencyKey: 'oversized_wire_body_1234567890' })
+  expect(oversized).toMatchObject({ kind: 'rejected', reasonCode: 'payload_too_large' })
+  expect(await s.t.run(ctx => ctx.db.query('learnResponses').take(8))).toEqual([])
+  const accepted = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { ...s.stage,
+    response: '\\'.repeat(4000), idempotencyKey: 'bounded_wire_body_1234567890' })
+  expect(accepted).toMatchObject({ kind: 'accepted', phase: 'submitted_sealed' })
+  if (accepted.kind !== 'accepted') throw new Error('Expected sealed response')
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'bounded_wire_score_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+})
+
+test.each(['Too many index ranges read', 'Unexpected scoring failure'])('Canvas scoring propagates %s and retains the sealed answer for recovery', async message => {
+  const s = await fixture({ inventory: { claims: 32, supports: 2, sources: 3 } })
+  const sealed = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, s.stage)
+  if (sealed.kind !== 'accepted') throw new Error('Expected sealed response')
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error(message) }))
+  const request = { threadId: s.stage.threadId, activityId: s.stage.activityId, submissionId: sealed.submissionId,
+    idempotencyKey: 'unexpected_canvas_score_1234567890' }
+  await expect(s.owner.action(api.learnAdaptive.submitResponse, request)).rejects.toThrow(message)
+  expect(await s.t.run(ctx => ctx.db.query('masteryAttempts').take(8))).toEqual([])
+  expect(await s.t.run(ctx => ctx.db.query('learnResponseBodies').take(8))).toHaveLength(1)
+  await vi.advanceTimersByTimeAsync(61_000)
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  const recovered = await s.owner.action(api.learnAdaptive.submitResponse, request)
+  expect(recovered).toMatchObject({ kind: 'accepted', status: 'in_progress' })
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+
+test('Canvas attachment rolls back a grant when its final assessment is blocked', async () => {
+  const s = await fixture({ attach: false })
+  const original = assessmentDelivery.readLearnAssessmentForOwner
+  vi.spyOn(assessmentDelivery, 'readLearnAssessmentForOwner').mockImplementation(async (ctx, owner, id, flow) => {
+    const row = await ctx.db.get(id)
+    if (row?.deliveryGrantId) {
+      if (!('patch' in ctx.db)) throw new Error('Expected mutation context')
+      await ctx.db.patch(s.family.graph.sourceIdentityId, { tombstonedAt: Date.now() })
+    }
+    return await original(ctx, owner, id, flow)
+  })
+  await expect(s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)).rejects.toThrow('Learn Canvas delivery authority changed')
+  expect(await s.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(8))).toEqual([])
+  expect(await s.t.run(ctx => ctx.db.get(s.family.graph.sourceIdentityId))).not.toHaveProperty('tombstonedAt')
+  expect(await s.t.run(ctx => ctx.db.get(s.f.studySessionId))).toMatchObject({ status: 'ready', revision: 2 })
 })

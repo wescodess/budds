@@ -200,6 +200,8 @@ export function parseIndependent(adapter, blind, raw) {
       }
       return { key: row.key, awarded: row.awarded }
     })
+    assert.equal(new Set(criteria.map(row => row.key)).size, criteria.length)
+    assert.deepEqual(criteria.map(row => row.key).sort(), blind.scoringInput.rubric.criteria.map(row => row.key).sort())
     const scorePercent = scoreCriteria(blind.scoringInput.rubric.criteria, criteria)
     const inputTokens = claude ? raw.usage?.input_tokens : raw.usage?.total_input_tokens
     const outputTokens = claude ? raw.usage?.output_tokens : raw.usage?.total_output_tokens
@@ -209,7 +211,10 @@ export function parseIndependent(adapter, blind, raw) {
       identity: { model: raw.model, requestId: raw.requestId ?? raw.id, generationId: raw.id, provider: adapter.upstream,
         endpoint: adapter.endpoint, api: adapter.api, immutableRevision: null }, usage: { inputTokens, outputTokens, costMicroUsd: null } }
   }
-  catch { return unavailable('malformed') }
+  catch (error) {
+    if (!(error instanceof assert.AssertionError) && !(error instanceof SyntaxError) && !(error instanceof TypeError)) throw error
+    return unavailable('malformed')
+  }
 }
 
 function cancelBody(body) {
@@ -227,7 +232,12 @@ async function boundedResponse(response) {
   try {
     if (Number(response.headers.get('content-length')) > LIMITS.maxResponseBytes) throw invalid()
     while (true) {
-      const { done, value } = await reader.read()
+      let done, value
+      try { ({ done, value } = await reader.read()) }
+      catch (error) {
+        if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error
+        throw Object.assign(error, { aiGatewayFailureKind: 'outcome_unknown' })
+      }
       if (done) { complete = true; break }
       size += value.byteLength
       if (size > LIMITS.maxResponseBytes) throw invalid()
@@ -241,7 +251,10 @@ async function boundedResponse(response) {
       assert.ok(!['failure', 'accessRefusalStatus', 'requestId', 'pinsDigest'].some(key => Object.hasOwn(body, key)), 'Internal field in provider response')
       return body
     }
-    catch { throw invalid() }
+    catch (error) {
+      if (!(error instanceof SyntaxError) && !(error instanceof assert.AssertionError)) throw error
+      throw invalid()
+    }
   }
   finally {
     if (!complete) cancelBody(reader)
@@ -258,7 +271,12 @@ export async function liveInfer(adapter, request, signal, baselineRequest) {
   const headers = { 'content-type': 'application/json', ...(adapter.role === 'claude'
     ? { 'x-api-key': key, 'anthropic-version': adapter.api }
     : { 'x-goog-api-key': key, 'Api-Revision': adapter.api }) }
-  const response = await fetch(adapter.endpoint, { method: 'POST', headers, body: request.body, signal, redirect: 'error' })
+  let response
+  try { response = await fetch(adapter.endpoint, { method: 'POST', headers, body: request.body, signal, redirect: 'error' }) }
+  catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error
+    throw Object.assign(error, { aiGatewayFailureKind: 'outcome_unknown' })
+  }
   if (!response.ok) {
     const failure = response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'
     cancelBody(response.body)

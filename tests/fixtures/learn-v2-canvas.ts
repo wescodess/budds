@@ -22,7 +22,7 @@ const binding = { kind: 'deterministic' as const, engineVersion: 'fixture.numeri
 const privateRubric = { kind: 'bounded_rubric' as const, keyInsufficientReason: 'The capability requires written reasoning.',
   criteria: [{ key: 'private-criterion', description: 'PRIVATE-RUBRIC-CANARY', weightPercent: 100 }] }
 // Publication adapters supply synthetic validation evidence; grant, acceptance and scoring authority stay real.
-export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean }, transactionLimits?: boolean } = { rubric: true }) {
+export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, options: { core?: 2 | 3, reserve?: boolean, reserveCount?: number, rubric?: boolean, keyed?: boolean, ordered?: boolean, adapters?: boolean, inventory?: { claims: number, supports: number, sources: number, extraSupports?: number, backingDocuments?: boolean, claimText?: string }, transactionLimits?: boolean } = { rubric: true }) {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   const t = convexTest({ schema, modules: { ...modules, ...measurementReplacementModules }, transactionLimits: options.transactionLimits ?? true })
   const owner = t.withIdentity(identity)
@@ -102,7 +102,7 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
       }
       return rows
     })
-    for (const member of members) member.claims = Array.from({ length: inventory.claims }, (_, order) => ({ ...member.claims[order % 3]!, order,
+    for (const member of members) member.claims = Array.from({ length: inventory.claims }, (_, order) => ({ ...member.claims[order % 3]!, order, ...(inventory.claimText ? { claim: inventory.claimText } : {}),
       supports: Array.from({ length: Math.min(8, inventory.supports + Math.max(0, (inventory.extraSupports ?? 0) - order * (8 - inventory.supports))) }, (_, index) => supports[(order * inventory.supports + index) % supports.length]!) }))
   }
   const generated = { generatorVersion: 'fixture.generation.v1', members }
@@ -132,7 +132,7 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
   if (!begun.leaseToken) throw new Error('Expected an active lease')
   const args = { tokenIdentifier: userId, jobId: begun.jobId, leaseToken: begun.leaseToken, expectedRevision: begun.revision }
   const staged = await t.mutation(commands.generateFamilyCandidates, args)
-  if (!('revision' in staged)) throw new Error('Synthetic family did not stage')
+  if (!('revision' in staged)) throw new Error(`Synthetic family did not stage: ${JSON.stringify(staged)}`)
   const validated = await t.mutation(commands.validateFamily, { ...args, expectedRevision: staged.revision })
   if (validated.status !== 'validated') throw new Error(`Synthetic family did not validate: ${JSON.stringify(validated)}`)
   await t.mutation(commands.publishFamily, { ...args, expectedRevision: validated.revision })

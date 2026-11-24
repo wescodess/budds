@@ -1,3 +1,4 @@
+import { LearnInputValidationError, LearnScoringInputError, LearnAccessError, LearnScoringProtocolError } from '../shared/learn-v2-errors'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
@@ -657,7 +658,10 @@ export const saveArtifact = mutation({
       if (thread.lifecycle === 'ended' || thread.lifecycle === 'rollback') throw new AdaptiveCommandRejection('blocked', 'thread_not_editable', 'Thread is unavailable for artifact editing')
       let text: ReturnType<typeof boundedArtifactText>
       try { text = boundedArtifactText(args.title, args.summary, args.status) }
-      catch { throw new AdaptiveCommandRejection('invalid', 'artifact_text_invalid', 'Artifact title or summary is invalid') }
+      catch (error) {
+        if (!(error instanceof LearnInputValidationError)) throw error
+        throw new AdaptiveCommandRejection('invalid', 'artifact_text_invalid', 'Artifact title or summary is invalid')
+      }
       const activity = await commandCtx.db.query('learningThreadActivities')
         .withIndex('by_userId_and_activityId', q => q.eq('userId', userId).eq('activityId', args.activityId)).unique()
       if (!activity || activity.threadId !== thread._id) throw new AdaptiveCommandRejection('blocked', 'activity_unavailable', 'Activity is unavailable')
@@ -1484,7 +1488,8 @@ export const submitResponse = action({
         if (score.status === 'scored') return { kind: 'accepted', status: 'completed', attemptReference: String(score.result.attemptId), replayed: authority.replayed }
         if (score.status === 'scoring_pending') return { kind: 'accepted', status: 'in_progress', replayed: false }
         return { kind: 'blocked', code: score.status, message: 'The saved response is awaiting a scoring result.', retryable: score.status === 'retryable_failure' }
-      } catch {
+      } catch (error) {
+        if (!(error instanceof LearnScoringInputError || error instanceof LearnAccessError || error instanceof LearnInputValidationError || error instanceof LearnScoringProtocolError)) throw error
         return { kind: 'denied', code: 'adaptive_submission_unavailable', message: 'Canvas scoring is unavailable.', retryable: false }
       }
     }

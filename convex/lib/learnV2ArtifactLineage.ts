@@ -1,3 +1,6 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
+import { propagatesResponseReadBudget } from './learnV2PrivacyReadContext'
+import { LearnBlueprintAuthorityError, LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { ConvexError, getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -29,6 +32,7 @@ class Unavailable extends Error {}
 class ArtifactContentChanged extends Unavailable {}
 class RegistrationRequired extends Unavailable {}
 class ReadBudgetExceeded extends Unavailable {}
+class MeasurementReadBudgetExceeded extends Error {}
 export class ArtifactProjectionBudgetError extends ConvexError<Extract<LearnArtifactInputAdmissionResult, { status: 'rejected' }>> {
   constructor() { super({ version: LEARN_ARTIFACT_INPUT_ADMISSION_VERSION, status: 'rejected', reasonCode: 'projection_exceeds_budget' }) }
 }
@@ -62,6 +66,10 @@ export function createArtifactLineageReadContext<T extends ReadCtx>(ctx: T) {
 }
 
 function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLimit: number) {
+  const exceeded = (): never => {
+    if (propagatesResponseReadBudget(ctx)) throw new MeasurementReadBudgetExceeded('Learn artifact validation budget exhausted')
+    throw new ReadBudgetExceeded('Artifact lineage unavailable')
+  }
   let bytes = 0
   let documentsRead = 0
   let readRequests = 0
@@ -69,11 +77,11 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
   let reserved = 0
   let ranges = 0
   const range = () => {
-    if (ranges >= rangeLimit) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+    if (ranges >= rangeLimit) exceeded()
     ranges++
   }
   const read = async <R>(operation: () => Promise<R>): Promise<R> => {
-    if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > byteLimit) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+    if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > byteLimit) exceeded()
     reserved += MAX_DOCUMENT_READ_BYTES
     readRequests++
     try {
@@ -81,7 +89,7 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
       if (result !== null && result !== undefined) {
         // Iterator results are unwrapped before reaching this function.
         const size = getDocumentSize(result as Record<string, Value>) + 64
-        if (size > MAX_DOCUMENT_READ_BYTES) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+        if (size > MAX_DOCUMENT_READ_BYTES) exceeded()
         bytes += size
         documentsRead++
       }
@@ -579,7 +587,10 @@ async function liveSessionBlock(scope: Invocation, userId: string, row: Artifact
     const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, plan.blueprintRevisionId)
     if (blueprint.recordRevision !== plan.blueprintRecordRevision) unavailable()
   }
-  catch { unavailable() }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError || error instanceof Unavailable)) throw error
+    unavailable()
+  }
   await pinned(row, await readSessionBlockContentProjection(scope, block, content), content.revision)
 }
 
@@ -670,7 +681,10 @@ async function liveMeasurementInventory(scope: Invocation, userId: string, item:
     const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, item.blueprintRevisionId)
     if (blueprint.recordRevision !== item.blueprintRecordRevision) unavailable()
   }
-  catch { unavailable() }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError || error instanceof Unavailable)) throw error
+    unavailable()
+  }
   const objective = await scope.get(item.objectiveId)
   if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== item.blueprintRevisionId) unavailable()
   const family = await scope.get(item.familyId)
@@ -860,7 +874,10 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
     try {
       if (await computeArtifactManifestDigest(scope, row, origins, bindings, sources, indexingDocument) !== row.manifestDigest) unavailable()
     }
-    catch { unavailable() }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof Unavailable)) throw error
+      unavailable()
+    }
     const dependencies: Dependency[] = []
     for (const link of sources) {
       const dependency = learnArtifactSourceDependencySchema.safeParse(link.dependency)
