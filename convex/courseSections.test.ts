@@ -3,6 +3,7 @@ import { convexTest } from 'convex-test'
 import { describe, expect, test } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
+import { withOrdinaryTeachingSources } from '../tests/fixtures/ordinary-teaching-source'
 import { transitionMastery, type MasteryState } from './lib/masteryStateMachine'
 
 const modules = import.meta.glob('./**/*.ts')
@@ -59,7 +60,7 @@ async function seedCourseWithSections(t: ReturnType<typeof convexTest>) {
 
 describe('courseSections.listByCourse', () => {
   test('returns sections in order', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     expect(sections).toHaveLength(3)
     expect(sections[0].title).toBe('Section A')
@@ -69,7 +70,7 @@ describe('courseSections.listByCourse', () => {
   })
 
   test('returns empty array for other user', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
     const sections = await asOther.query(api.courseSections.listByCourse, { courseId })
@@ -79,7 +80,7 @@ describe('courseSections.listByCourse', () => {
 
 describe('courseSections.updateTitle', () => {
   test('updates section and course outline title', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.updateTitle, {
@@ -95,7 +96,7 @@ describe('courseSections.updateTitle', () => {
   })
 
   test('rejects update from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
     await expect(
@@ -109,7 +110,7 @@ describe('courseSections.updateTitle', () => {
 
 describe('courseSections.updateKnowledgeType', () => {
   test('updates section and course outline knowledgeType', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.updateKnowledgeType, {
@@ -127,7 +128,7 @@ describe('courseSections.updateKnowledgeType', () => {
 
 describe('courseSections.remove', () => {
   test('removes section, re-orders siblings, and updates course', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.remove, { sectionId: sections[1]._id })
@@ -145,7 +146,7 @@ describe('courseSections.remove', () => {
   })
 
   test('rejects removal from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
     await expect(
@@ -156,7 +157,7 @@ describe('courseSections.remove', () => {
 
 describe('courseSections.create', () => {
   test('creates new section at end and updates course', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const newId = await asUser.mutation(api.courseSections.create, { courseId })
@@ -176,7 +177,7 @@ describe('courseSections.create', () => {
   })
 
   test('accepts custom title and knowledgeType', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const newId = await asUser.mutation(api.courseSections.create, {
@@ -191,7 +192,7 @@ describe('courseSections.create', () => {
   })
 
   test('rejects creation for non-owner course', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
     await expect(
@@ -202,7 +203,7 @@ describe('courseSections.create', () => {
 
 describe('courseSections.updateOrder', () => {
   test('reorders sections and updates course outline', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.updateOrder, {
@@ -225,7 +226,7 @@ describe('courseSections.updateOrder', () => {
   })
 
   test('rejects reorder from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId, sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
     await expect(
@@ -239,7 +240,7 @@ describe('courseSections.updateOrder', () => {
 
 describe('courses.updateOutline', () => {
   test('updates outline and totalSectionCount', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const newOutline = [
@@ -260,7 +261,7 @@ describe('courses.updateOutline', () => {
 
 describe('courseSections.finalizeSectionGeneration', () => {
   test('persists valid free-response rubrics and drops invalid or other-type rubrics', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
     const gradingCriteria = [{ key: 'fact', description: 'States the supported fact.', weightPercent: 100 }]
     const base = { order: 0, question: 'State the fact.', type: 'free-response' as const, correctAnswer: 'A fact.', gradingCriteria }
@@ -294,7 +295,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('creates quiz and flashcard entities and sets section to ready', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
     const sectionId = sections[0]._id
 
@@ -351,7 +352,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('content blocks are ordered: text -> quiz -> flashcard', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
@@ -379,7 +380,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('handles partial failure gracefully', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
@@ -397,7 +398,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('marks section failed when all engines fail', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     const result = await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
@@ -413,7 +414,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('entityType is stored alongside entityId', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.finalizeSectionGeneration, {
@@ -434,7 +435,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
   })
 
   test('rejects finalization from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -449,7 +450,7 @@ describe('courseSections.finalizeSectionGeneration', () => {
 
 describe('courseSections.getNextSection', () => {
   test('returns the next section by order', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const next = await asUser.query(api.courseSections.getNextSection, {
@@ -463,7 +464,7 @@ describe('courseSections.getNextSection', () => {
   })
 
   test('returns null for the last section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const next = await asUser.query(api.courseSections.getNextSection, {
@@ -475,7 +476,7 @@ describe('courseSections.getNextSection', () => {
   })
 
   test('returns null for non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -490,7 +491,7 @@ describe('courseSections.getNextSection', () => {
 
 describe('courseSections.checkPreFetchStatus', () => {
   test('returns needsPreFetch true for locked section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
@@ -504,7 +505,7 @@ describe('courseSections.checkPreFetchStatus', () => {
   })
 
   test('returns needsPreFetch false for ready section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -521,7 +522,7 @@ describe('courseSections.checkPreFetchStatus', () => {
   })
 
   test('returns needsPreFetch false for generating section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -538,7 +539,7 @@ describe('courseSections.checkPreFetchStatus', () => {
   })
 
   test('returns needsPreFetch true for failed section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -555,7 +556,7 @@ describe('courseSections.checkPreFetchStatus', () => {
   })
 
   test('returns null when no next section exists', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const result = await asUser.query(api.courseSections.checkPreFetchStatus, {
@@ -567,7 +568,7 @@ describe('courseSections.checkPreFetchStatus', () => {
   })
 
   test('returns projection without contentBlocks', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -598,7 +599,7 @@ describe('courseSections.checkPreFetchStatus', () => {
 
 describe('courseSections.triggerPreFetch', () => {
   test('transitions locked section to generating and creates task', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
@@ -616,7 +617,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('returns null when next section is already ready', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -632,7 +633,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('returns null when next section is already generating', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -648,7 +649,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('returns null when no next section exists', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId } = await seedCourseWithSections(t)
 
     const result = await asUser.mutation(api.courseSections.triggerPreFetch, {
@@ -660,7 +661,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('retries a failed section once', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, folderId, sections } = await seedCourseWithSections(t)
 
     const failedTaskId = await t.run(async (ctx) => {
@@ -696,7 +697,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('does not retry a failed section more than once', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, folderId, sections } = await seedCourseWithSections(t)
 
     const retryTaskId = await t.run(async (ctx) => {
@@ -731,7 +732,7 @@ describe('courseSections.triggerPreFetch', () => {
   })
 
   test('rejects trigger from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { courseId } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -746,7 +747,7 @@ describe('courseSections.triggerPreFetch', () => {
 
 describe('courseSections.completeSection', () => {
   test('first completion always transitions to learning via state machine', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -775,7 +776,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('increments course completedSectionCount', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -797,7 +798,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('high score on first completion still yields learning (not mastered)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -817,7 +818,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('characterizes V1 accepting a client-supplied perfect score with no quiz', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -848,7 +849,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('returns adaptive feedback for score < 60', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -868,7 +869,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('clamps score to 0-100 range', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -887,7 +888,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('is idempotent for already-completed sections', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, courseId, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -916,7 +917,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('rejects completion from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -931,7 +932,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('mastery level learning for any first-completion score', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -950,7 +951,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('score of exactly 90 gets reduce-practice hint but learning mastery on first completion', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -969,7 +970,7 @@ describe('courseSections.completeSection', () => {
   })
 
   test('rejects completion of non-ready section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await expect(
@@ -999,7 +1000,7 @@ describe('courseSections.reviewSection', () => {
   }
 
   test('learning -> reviewing when reviewed at >= 70%', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     const result = await asUser.mutation(api.courseSections.reviewSection, {
@@ -1022,7 +1023,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('learning stays learning when reviewed at < 70%', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     const result = await asUser.mutation(api.courseSections.reviewSection, {
@@ -1036,7 +1037,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('reviewing -> mastered after 3 consecutive reviews at >= 80%', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     await asUser.mutation(api.courseSections.reviewSection, {
@@ -1055,7 +1056,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('reviewing does not advance to mastered if < 80% interrupts streak', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     await asUser.mutation(api.courseSections.reviewSection, {
@@ -1079,7 +1080,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('mastered -> learning when section retaken (reviewed)', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     await t.run(async (ctx) => {
@@ -1098,7 +1099,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('reviewHistory is capped at 10 entries', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     for (let i = 0; i < 12; i++) {
@@ -1113,7 +1114,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('rejects review of non-completed section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -1131,7 +1132,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('rejects review from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sectionId } = await seedCompletedSection(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -1146,7 +1147,7 @@ describe('courseSections.reviewSection', () => {
   })
 
   test('does not change status from completed', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sectionId } = await seedCompletedSection(t)
 
     await asUser.mutation(api.courseSections.reviewSection, {
@@ -1272,7 +1273,7 @@ describe('mastery state machine (pure function)', () => {
 
 describe('courseSections.setOfflineAvailable', () => {
   test('sets offlineAvailable to true', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.setOfflineAvailable, {
@@ -1285,7 +1286,7 @@ describe('courseSections.setOfflineAvailable', () => {
   })
 
   test('sets offlineAvailable to false', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     await asUser.mutation(api.courseSections.setOfflineAvailable, {
@@ -1302,7 +1303,7 @@ describe('courseSections.setOfflineAvailable', () => {
   })
 
   test('rejects from non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -1317,7 +1318,7 @@ describe('courseSections.setOfflineAvailable', () => {
 
 describe('courseSections.getOfflineCachePayload', () => {
   test('returns null for non-completed section', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections } = await seedCourseWithSections(t)
 
     const payload = await asUser.query(api.courseSections.getOfflineCachePayload, {
@@ -1327,7 +1328,7 @@ describe('courseSections.getOfflineCachePayload', () => {
   })
 
   test('returns payload for completed section with text block', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { asUser, sections, courseId } = await seedCourseWithSections(t)
 
     await t.run(async (ctx) => {
@@ -1353,7 +1354,7 @@ describe('courseSections.getOfflineCachePayload', () => {
   })
 
   test('returns null for non-owner', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
     const asOther = t.withIdentity(USER_B)
 
@@ -1373,10 +1374,10 @@ describe('courseSections.getOfflineCachePayload', () => {
 
 describe('courseSections internal mutations', () => {
   test('markReady sets status and contentBlocks', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
 
-    await t.mutation(internal.courseSections.markReady, {
+    await t.withIdentity(USER_A).mutation(internal.courseSections.markReady, {
       sectionId: sections[0]._id,
       contentBlocks: [
         { type: 'text', content: 'hello', order: 0 },
@@ -1389,7 +1390,7 @@ describe('courseSections internal mutations', () => {
   })
 
   test('markSectionFailed sets status to failed', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
 
     await t.mutation(internal.courseSections.markSectionFailed, {
@@ -1403,10 +1404,10 @@ describe('courseSections internal mutations', () => {
   })
 
   test('getForGeneration returns section with course and sourceDocs', async () => {
-    const t = convexTest(schema, modules)
+    const t = withOrdinaryTeachingSources(convexTest(schema, modules))
     const { sections } = await seedCourseWithSections(t)
 
-    const result = await t.query(internal.courseSections.getForGeneration, {
+    const result = await t.withIdentity(USER_A).query(internal.courseSections.getForGeneration, {
       sectionId: sections[0]._id,
     })
 

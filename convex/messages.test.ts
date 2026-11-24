@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 import { convexTest } from 'convex-test'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from './_generated/api'
 import schema from './schema'
+import { signMessageProvenance } from '../shared/learn-v2-message-provenance'
+beforeEach(()=>vi.stubEnv('NUXT_BETTER_AUTH_SECRET','message-fixture-secret'))
+afterEach(()=>vi.unstubAllEnvs())
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -49,7 +52,7 @@ describe('messages.appendMessage', () => {
     expect(messages[0].conversationId).toBe(conversationId)
   })
 
-  it('[P0] should append an assistant message with sources and model', async () => {
+  it('[P0] should withhold an assistant message without known source provenance', async () => {
     const t = convexTest(schema, modules)
     const asUser = t.withIdentity(TEST_IDENTITY)
     const { conversationId } = await seedConversation(asUser)
@@ -63,6 +66,7 @@ describe('messages.appendMessage', () => {
       conversationId,
       role: 'assistant',
       content: 'Photosynthesis converts light to energy.',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, TEST_IDENTITY.tokenIdentifier, 'Photosynthesis converts light to energy.',sources,[]),
       sources,
       model: 'claude-opus-4-6',
     })
@@ -70,8 +74,10 @@ describe('messages.appendMessage', () => {
     const messages = await asUser.query(api.messages.listByConversation, { conversationId })
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('assistant')
-    expect(messages[0].sources).toEqual(sources)
-    expect(messages[0].model).toBe('claude-opus-4-6')
+    expect(messages[0].content).toBe('')
+    expect(messages[0]).not.toHaveProperty('sources')
+    expect(messages[0]).toHaveProperty('evidenceStatus', 'evidence_unavailable')
+    expect(messages[0]).not.toHaveProperty('model')
   })
 
   it('[P0] should reject appending to another user\'s conversation', async () => {
@@ -120,6 +126,7 @@ describe('messages.listByConversation', () => {
       conversationId,
       role: 'assistant',
       content: 'A1',
+      provenance: await signMessageProvenance(process.env.NUXT_BETTER_AUTH_SECRET!, TEST_IDENTITY.tokenIdentifier, 'A1',[],[]),
     })
     await asUser.mutation(api.messages.appendMessage, {
       conversationId,
@@ -128,7 +135,7 @@ describe('messages.listByConversation', () => {
     })
 
     const messages = await asUser.query(api.messages.listByConversation, { conversationId })
-    expect(messages.map((m: any) => m.content)).toEqual(['Q1', 'A1', 'Q2'])
+    expect(messages.map((m: any) => m.content)).toEqual(['Q1', '', 'Q2'])
   })
 
   it('[P0] should be scoped to the conversation\'s owner', async () => {
@@ -166,4 +173,9 @@ describe('messages.listByConversation', () => {
       t.query(api.messages.listByConversation, { conversationId }),
     ).rejects.toThrow()
   })
+})
+
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

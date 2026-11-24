@@ -1,3 +1,4 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 const SIMPLE_PUBLIC_LABEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 const OPAQUE_INTEGRITY_LOCATOR = /^[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/
 
@@ -9,7 +10,8 @@ export function sanitizePublicSourceLocator(value: string | undefined): string |
     if ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname) return `${url.origin}/`
     return OPAQUE_INTEGRITY_LOCATOR.test(value) ? value : undefined
   }
-  catch {
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof TypeError)) throw error
     return SIMPLE_PUBLIC_LABEL.test(value) ? value : undefined
   }
 }

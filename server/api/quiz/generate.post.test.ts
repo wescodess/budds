@@ -1,5 +1,8 @@
+// Registered help admission is exercised in server/api/help-admission.test.ts.
 import { vi, describe, test, expect, beforeEach } from 'vitest'
+vi.mock('../../utils/learn-v2-help-admission', () => ({ createHelpAdmissionGuard: () => async () => {}, assertHelpAdmission: () => {} }))
 
+const mockTeachingScope = vi.hoisted(() => vi.fn(async () => []))
 const shadowEvaluateQuiz = vi.hoisted(() => vi.fn())
 const convexMutation = vi.hoisted(() => vi.fn())
 vi.mock('../../utils/learning-decisions', () => ({ shadowEvaluateQuiz }))
@@ -7,6 +10,7 @@ vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
     setAuth() {}
     mutation = convexMutation
+    query = mockTeachingScope
   },
 }))
 
@@ -69,6 +73,7 @@ function goodLlmResponse() {
 
 describe('POST /api/quiz/generate', () => {
   beforeEach(() => {
+    mockTeachingScope.mockReset().mockResolvedValue([])
     vi.mocked(globalThis.readBody).mockReset()
     vi.mocked(globalThis.searchDocuments).mockReset()
     vi.mocked(globalThis.assertSearchIndexAvailable).mockReset()
@@ -112,6 +117,15 @@ describe('POST /api/quiz/generate', () => {
     }))
   })
 
+
+  test.each(['measurement', 'private_scoring', 'unknown'])('rejects %s input before retrieval or generation', async () => {
+    vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', taskId: 'task_123' })
+    mockTeachingScope.mockRejectedValueOnce(new Error('Teaching input is unavailable'))
+    await expect(handler(makeEvent())).rejects.toThrow('Teaching input is unavailable')
+    expect(globalThis.searchDocuments).not.toHaveBeenCalled()
+    expect(globalThis.generateCompletion).not.toHaveBeenCalled()
+    expect(convexMutation).not.toHaveBeenCalled()
+  })
   test('persists direct-generation criteria server-side and returns a safe saved identifier', async () => {
     vi.mocked(globalThis.readBody).mockResolvedValue({ folderId: 'folder_abc', language: 'en' })
     vi.mocked(globalThis.searchDocuments).mockResolvedValue({ data: [
@@ -249,7 +263,7 @@ describe('POST /api/quiz/generate', () => {
     expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [
       { id: 'q0', question: 'What do mitochondria produce?', options: ['ATP', 'DNA', 'RNA', 'Glucose'], correctAnswer: 'ATP', language: 'en', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' } },
       { id: 'q1', question: 'What is photosynthesis?', options: undefined, correctAnswer: 'Converting light to chemical energy.', language: 'en', evidence: { sourceIndex: 0, excerpt: 'Photosynthesis content' } },
-    ])
+    ], expect.any(Function))
   })
 
   test('[P0] preserves a generated question with an invalid source index without substituting or evaluating false provenance', async () => {
@@ -311,7 +325,7 @@ describe('POST /api/quiz/generate', () => {
     expect(shadowEvaluateQuiz).toHaveBeenCalledOnce()
     expect(shadowEvaluateQuiz).toHaveBeenCalledWith(expect.anything(), [expect.objectContaining({
       id: 'q0', evidence: { sourceIndex: 1, excerpt: 'Mitochondria content' },
-    })])
+    })], expect.any(Function))
     expect(console.info).toHaveBeenCalledWith('[quiz-quality-evidence]', {
       status: 'unavailable', reason: 'missing_evidence', itemCount: 1,
     })
@@ -398,4 +412,9 @@ describe('POST /api/quiz/generate', () => {
       }
     }
   })
+})
+
+vi.mock('../../../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
+  const original = await importOriginal<typeof import('../../../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
 })

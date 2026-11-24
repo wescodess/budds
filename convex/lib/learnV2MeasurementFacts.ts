@@ -4,11 +4,17 @@ import {
   LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportAssignmentSnapshotSchema,
   learnReportFactSchema, learnReportSourceWatermarkSchema, learnReportWatermarkSnapshotSchema,
   deriveLearnReportLearnerKey,
+  resolveLearnReportFirstSlotV2, qualifiesLearnReportFirstSlot,
+  learnReportFirstSlotStratumSchema, reconcileLearnReportFirstClaims,
+  type LearnReportIndependentClaimV2, type LearnReportLinkedFirstSlot, type LearnReportFirstClaimIdentity,
   type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
-import { parseLearnContract } from '../../shared/learn-v2-responses'
-import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
+import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, parseLearnContract } from '../../shared/learn-v2-responses'
+import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
+import { learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins, learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
+import { masteryScopeKey } from './learnV2MasteryScope'
+import { privacyDigest } from './learnV2ResponsePrivacy'
 
 type FactInput = Omit<LearnReportSourceFact, 'factVersion' | 'sequence'> & {
   learningVoidId?: Id<'learningVoids'>
@@ -36,12 +42,18 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
     epoch: input.epoch, occurredAt: input.occurredAt, fact: input.fact,
   })
   const fact = value.fact
+  if (fact.kind === 'independent_claim') throw new Error('Learn legacy Independent claims are read-only')
+  if (fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') await assertNoLegacyFirstClaims(ctx, userId)
   const source = fact.kind === 'enrollment' ? await ctx.db.get(fact.assignmentId)
     : fact.kind === 'opportunity' ? await ctx.db.get(fact.assessmentOpportunityId)
-      : fact.kind === 'independent_claim' ? await ctx.db.get(fact.basisAttemptId)
-        : await ctx.db.get(fact.submissionId)
+      : fact.kind === 'independent_claim_v2' ? await ctx.db.get(fact.basisAttemptId)
+        : fact.kind === 'first_slot_link' ? await ctx.db.get(fact.slot.firstCheckOpportunityId)
+          : await ctx.db.get(fact.submissionId)
   if (!source || source.userId !== userId
     || ('learningVoidId' in source && source.learningVoidId !== input.learningVoidId)) throw new Error('Learn fact scope mismatch')
+  if (fact.kind === 'independent_claim_v2' || fact.kind === 'first_slot_link') {
+    await validateFirstIndependentFact(ctx, userId, value, input.learningVoidId)
+  }
   const now = Date.now()
   await ctx.db.insert('learnMeasurementReportFacts', {
     ...value, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
@@ -56,6 +68,193 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
     ...state, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
   })
   return sequence
+}
+
+async function validateFirstIndependentFact(ctx: MutationCtx, userId: string, value: LearnReportSourceFact, learningVoidId?: Id<'learningVoids'>) {
+  const fact = value.fact
+  if (fact.kind !== 'independent_claim_v2' && fact.kind !== 'first_slot_link') throw new Error('Invalid Independent fact')
+  if (fact.kind === 'first_slot_link') {
+    const previous = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId).eq('fact.claimKey', fact.claimKey).eq('fact.claimSequence', fact.claimSequence)).take(3)
+    const saved = previous[0]
+    if (previous.length !== 1 || !saved || saved.fact.kind !== 'independent_claim_v2'
+      || saved.learningVoidId !== learningVoidId) throw new Error('Learn first slot already linked or claim unavailable')
+    const resolved = resolveLearnReportFirstSlotV2({ factVersion: saved.factVersion, sequence: saved.sequence,
+      epoch: saved.epoch, occurredAt: saved.occurredAt, fact: saved.fact }, value)
+    if (resolved.firstSlot.kind !== 'linked') throw new Error('Learn first slot unavailable')
+    await validateFirstSlot(ctx, userId, resolved, resolved.firstSlot, learningVoidId)
+    await assertFirstClaimReconciles(ctx, userId, value.epoch, resolved, saved._id)
+    return
+  }
+  await assertFirstClaimReconciles(ctx, userId, value.epoch, fact)
+  const claim = resolveLearnReportFirstSlotV2(value)
+  const basis = await ctx.db.get(claim.basisAttemptId)
+  const blueprint = await ctx.db.get(claim.blueprintRevisionId)
+  const objective = await ctx.db.get(claim.objectiveId)
+  const acceptedAt = basis?.acceptedAt ?? basis?.measurementStorage?.acceptedAt
+  const key = await privacyDigest(['learn-v2.first-independent.v1', await masteryScopeKey(userId, claim.blueprintRevisionId, claim.objectiveId), value.epoch])
+  if (!basis || basis.userId !== userId || basis.blueprintRevisionId !== claim.blueprintRevisionId || basis.objectiveId !== claim.objectiveId
+    || blueprint?.userId !== userId || blueprint.learningVoidId !== learningVoidId
+    || objective?.userId !== userId || objective.blueprintRevisionId !== blueprint._id
+    || claim.claimKey !== key || basis.kind !== 'independent_application'
+    || basis.masteryStateBefore === undefined || ['independent', 'retained'].includes(basis.masteryStateBefore) || basis.masteryStateAfter !== 'independent'
+    || basis.masteryTransitionVersion !== claim.transitionVersion || basis.masteryRecordRevision !== claim.masteryRecordRevision
+    || acceptedAt !== claim.firstIndependentAt || value.occurredAt > Date.now()
+    || basis.attemptLocalDate !== claim.firstIndependentLocalDate || basis.attemptTimezone !== claim.firstIndependentTimezone
+    || basis.serverScorePercent === undefined || !Number.isFinite(basis.serverScorePercent) || basis.serverScorePercent < 80 || basis.serverScorePercent > 100
+    || basis.assistanceSnapshot?.state !== 'unassisted' || basis.assistanceSnapshot.policyVersion !== LEARN_V2_ASSISTANCE_POLICY_VERSION
+    || basis.validitySnapshot?.status !== 'valid' || !basis.validitySnapshot.masteryEligible || basis.validitySnapshot.policyVersion !== LEARN_V2_VALIDITY_POLICY_VERSION
+    || claim.policyPins.assistancePolicyVersion !== basis.assistanceSnapshot.policyVersion
+    || claim.policyPins.validityPolicyVersion !== basis.validitySnapshot.policyVersion
+    || claim.policyPins.thresholdVersion !== (basis.scoringBinding?.thresholdVersion ?? 'learn-v2.mastery-threshold.v1')) throw new Error('Learn first Independent basis is invalid')
+  if (claim.firstSlot.kind === 'linked') await validateFirstSlot(ctx, userId, claim, claim.firstSlot, learningVoidId)
+}
+
+const FIRST_CLAIM_IDENTITY_LIMIT = 2
+
+async function assertNoLegacyFirstClaims(ctx: MutationCtx, userId: string) {
+  const legacy = await ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_fact_kind', q => q.eq('userId', userId).eq('fact.kind', 'independent_claim')).first()
+  if (legacy) throw new Error('Learn legacy first-Independent claims must be reconciled before new claims')
+}
+
+async function assertFirstClaimReconciles(ctx: MutationCtx, userId: string, epoch: string,
+  candidate: LearnReportIndependentClaimV2, claimFactId?: Id<'learnMeasurementReportFacts'>) {
+  const opportunityId = candidate.firstSlot.kind === 'linked' ? candidate.firstSlot.firstCheckOpportunityId : null
+  const proposed: LearnReportFirstClaimIdentity = { owner: userId, capability: JSON.stringify([candidate.blueprintRevisionId, candidate.objectiveId]),
+    epoch: candidate.stratum.epoch, snapshot: 'candidate', claimKey: candidate.claimKey, basisAttemptId: candidate.basisAttemptId,
+    firstCheckOpportunityId: opportunityId }
+  const checked = new Set<Id<'learnMeasurementReportFacts'>>()
+  function bounded(rows: Doc<'learnMeasurementReportFacts'>[]) {
+    if (rows.length > FIRST_CLAIM_IDENTITY_LIMIT) throw new Error('Learn first Independent claim identity exceeds its bound')
+    return rows
+  }
+  async function byKey(key: string) {
+    return bounded(await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_claimKey', q => q.eq('fact.claimKey', key)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1))
+  }
+  async function check(rows: Doc<'learnMeasurementReportFacts'>[]): Promise<void> {
+    for (const row of bounded(rows)) {
+      if (row._id === claimFactId || checked.has(row._id)) continue
+      checked.add(row._id)
+      if (row.fact.kind === 'first_slot_link') {
+        const fact = row.fact
+        const parent = (await byKey(fact.claimKey)).find(value => value.fact.kind === 'independent_claim_v2')
+        if (!parent || parent.fact.kind !== 'independent_claim_v2' || parent.userId !== row.userId
+          || parent.sequence !== fact.claimFactSequence || parent.fact.claimSequence !== fact.claimSequence) throw new Error('Learn first slot claim unavailable')
+        await check([parent])
+        continue
+      }
+      const links = new Map<string, string>()
+      if (row.fact.kind === 'independent_claim_v2' && row.fact.firstSlot.kind === 'unresolved') {
+        for (const value of await byKey(row.fact.claimKey)) {
+          if (value.fact.kind === 'first_slot_link') links.set(JSON.stringify([value.userId, value.fact.claimKey]), value.fact.slot.firstCheckOpportunityId)
+        }
+      }
+      const existing = readFirstClaimIdentity(row, links)
+      const reasons = existing ? reconcileLearnReportFirstClaims([existing, proposed]) : new Set<string>()
+      if (reasons.size) throw new Error(`Learn first Independent claim already recorded: ${[...reasons].sort().join(', ')}`)
+    }
+  }
+  const groups = await Promise.all([
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_objectiveId_and_fact_stratum_epoch',
+      q => q.eq('userId', userId).eq('fact.objectiveId', candidate.objectiveId).eq('fact.stratum.epoch', epoch)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1),
+    byKey(candidate.claimKey),
+    ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_basisAttemptId', q => q.eq('fact.basisAttemptId', candidate.basisAttemptId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1),
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstCheckOpportunityId',
+      q => q.eq('fact.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_firstSlot_firstCheckOpportunityId',
+      q => q.eq('fact.firstSlot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+    opportunityId ? ctx.db.query('learnMeasurementReportFacts').withIndex('by_fact_slot_firstCheckOpportunityId',
+      q => q.eq('fact.slot.firstCheckOpportunityId', opportunityId)).take(FIRST_CLAIM_IDENTITY_LIMIT + 1) : [],
+  ])
+  for (const rows of groups) await check(rows)
+}
+
+function readFirstClaimIdentity(row: Doc<'learnMeasurementReportFacts'>,
+  links: ReadonlyMap<string, string>): LearnReportFirstClaimIdentity | null {
+  const fact = row.fact
+  if (fact.kind === 'independent_claim_v2') return { owner: row.userId, capability: JSON.stringify([fact.blueprintRevisionId, fact.objectiveId]),
+    epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
+    firstCheckOpportunityId: fact.firstSlot.kind === 'linked' ? fact.firstSlot.firstCheckOpportunityId
+      : links.get(JSON.stringify([row.userId, fact.claimKey])) ?? null }
+  if (fact.kind !== 'independent_claim') return null
+  // Owner-local legacy claims are refused before source reads; only global identities apply here.
+  return { owner: row.userId, capability: row._id,
+    epoch: fact.stratum.epoch, snapshot: row._id, claimKey: fact.claimKey, basisAttemptId: fact.basisAttemptId,
+    firstCheckOpportunityId: fact.firstCheckOpportunityId }
+}
+
+async function validateFirstSlot(ctx: MutationCtx, userId: string, claim: LearnReportIndependentClaimV2,
+  slot: LearnReportLinkedFirstSlot, learningVoidId?: Id<'learningVoids'>) {
+  if (!learningVoidId || slot.linkedAt !== Date.now() || !qualifiesLearnReportFirstSlot(claim, slot)) throw new Error('Learn first slot is not qualifying')
+  const row = await ctx.db.get(slot.firstCheckOpportunityId)
+  const candidate = row && await readQualifyingFirstSlot(ctx, userId, claim, row)
+  if (!row || !candidate || row.learningVoidId !== learningVoidId
+    || row.firstCheckClaim && (row.firstCheckClaim.claimKey !== claim.claimKey || row.checkSequence !== 1)) throw new Error('Learn first slot is not qualifying')
+  const first = await readEarliestLearnFirstSlot(ctx, userId, claim)
+  if (first?.firstCheckOpportunityId !== row._id) throw new Error('Learn first slot must be the earliest qualifying original')
+  if (await privacyDigest(candidate) !== await privacyDigest(slot)) throw new Error('Learn first-slot stratum mismatch')
+}
+
+// Two assigned delayed originals and one ordinary retained original per epoch.
+// Each original may have one reserve; inherited markers never make it original.
+export async function readLearnFirstSlotInventory(ctx: QueryCtx | MutationCtx, userId: string,
+  blueprintRevisionId: Id<'learnBlueprintRevisions'>, objectiveId: Id<'learnObjectives'>, epoch: string) {
+  const rows = await ctx.db.query('learnAssessmentOpportunities')
+    .withIndex('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', q =>
+      q.eq('userId', userId).eq('objectiveId', objectiveId).eq('firstSlotEpoch', epoch)).take(7)
+  if (rows.some(row => row.blueprintRevisionId !== blueprintRevisionId)) throw new Error('Learn original slot capability mismatch')
+  const originals = rows.filter(row => row.originalSlot && row.replacesOpportunityId === undefined)
+  if (rows.length > 6 || originals.length > 3) throw new Error('Learn original slot inventory exceeds its protocol bound')
+  return originals.sort((a, b) => a.openAt - b.openAt || a.delayedCheckId.localeCompare(b.delayedCheckId))
+}
+
+export async function readEarliestLearnFirstSlot(ctx: QueryCtx | MutationCtx, userId: string, claim: LearnReportIndependentClaimV2) {
+  const rows = await readLearnFirstSlotInventory(ctx, userId, claim.blueprintRevisionId, claim.objectiveId, claim.stratum.epoch)
+  for (const row of rows) {
+    const slot = await readQualifyingFirstSlot(ctx, userId, claim, row)
+    if (slot) return slot
+  }
+  return null
+}
+
+async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: LearnReportIndependentClaimV2,
+  row: Doc<'learnAssessmentOpportunities'>): Promise<LearnReportLinkedFirstSlot | null> {
+  if (row.userId !== userId || row.blueprintRevisionId !== claim.blueprintRevisionId || row.objectiveId !== claim.objectiveId
+    || row.firstSlotEpoch !== claim.stratum.epoch || row.createdAt > Date.now()
+    || !row.originalSlot || row.replacesOpportunityId !== undefined) return null
+  const parsedPurpose = learnAssessmentPurposeSchema.safeParse(row.purpose)
+  if (!parsedPurpose.success || !('clock' in parsedPurpose.data)) return null
+  const purpose = parsedPurpose.data
+  if (!doesLearnAssessmentPurposeMatchPins(purpose, row.assessmentPins)) return null
+  const clock = purpose.clock
+  const binding = learnScorerBindingSchema.safeParse(row.scoringBinding)
+  if (!binding.success || row.openAt !== clock.openAt || row.closeAt !== clock.closeAt || row.dueAt !== clock.dueAt
+    || row.horizonDays !== undefined && row.horizonDays !== clock.horizonDays) return null
+  const assignment = purpose.kind === 'measurement_delayed' ? await ctx.db.get(purpose.assignmentId) : null
+  if (purpose.kind === 'retained_transfer' ? purpose.basisAttemptId !== claim.basisAttemptId
+    : !assignment || assignment.userId !== userId || assignment.status !== 'admitted' || assignment.epoch !== claim.stratum.epoch
+      || assignment.learningVoidId !== row.learningVoidId || assignment.blueprintRevisionId !== claim.blueprintRevisionId
+      || assignment.objectiveId !== claim.objectiveId || row.assignmentId !== assignment._id) return null
+  const pins = row.assessmentPins.kind === 'measurement' ? row.assessmentPins.itemPins : null
+  const [family, item] = await Promise.all([pins ? ctx.db.get(pins.familyId) : null, pins ? ctx.db.get(pins.itemId) : null])
+  if (pins ? !family || family.userId !== userId || !item || item.userId !== userId || item.familyId !== family._id
+    || family.revision !== pins.familyRevision || item.familyRevision !== pins.familyRevision || family.equivalenceVersion !== pins.equivalenceVersion
+    : row.assessmentPins.kind !== 'session_application') return null
+  const stratum = learnReportFirstSlotStratumSchema.safeParse({
+    epoch: assignment?.epoch ?? claim.stratum.epoch, baselineSha: assignment?.baselineSha ?? claim.stratum.baselineSha,
+    cohortVersion: assignment?.cohortVersion ?? claim.stratum.cohortVersion,
+    flow: assignment?.flow ?? (row.contextPins.kind === 'session' && row.contextPins.canvas ? 'v2_canvas' : 'v2_today'),
+    entryPoint: assignment?.entryPoint ?? 'retained_check', depth: row.depth,
+    familyId: pins?.familyId ?? null, familyRevision: pins?.familyRevision ?? null,
+    familyValidationStatus: family?.status ?? 'unknown', equivalenceVersion: pins?.equivalenceVersion ?? null,
+    responseKind: item?.responseSpec.kind ?? 'bounded_rubric', scorerConfiguration: await deriveLearnScorerConfiguration(binding.data),
+  })
+  if (!stratum.success) return null
+  const candidate: LearnReportLinkedFirstSlot = { kind: 'linked', firstCheckOpportunityId: row._id, checkSequence: 1,
+    linkedAt: Date.now(), clock, stratum: stratum.data }
+  return qualifiesLearnReportFirstSlot(claim, candidate) ? candidate : null
 }
 
 export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, userId: string, assignment: Doc<'learnMeasurementAssignments'>) {
@@ -93,13 +292,56 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
   })
 }
 
-export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId: string, response: Doc<'learnResponses'>, epoch: string) {
+export async function readLearnFirstCheckFact(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (!opportunity.originalSlot) return null
+  let identity = opportunity.firstCheckClaim
+  if (!identity) {
+    const direct = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_firstSlot_firstCheckOpportunityId', q => q.eq('fact.firstSlot.firstCheckOpportunityId', opportunity._id)).take(2)
+    const links = await ctx.db.query('learnMeasurementReportFacts')
+      .withIndex('by_fact_slot_firstCheckOpportunityId', q => q.eq('fact.slot.firstCheckOpportunityId', opportunity._id)).take(2)
+    const matches = [...direct, ...links]
+    if (!matches.length) return null
+    const match = matches[0]!
+    if (matches.length !== 1 || match.userId !== userId
+      || (match.fact.kind !== 'independent_claim_v2' && match.fact.kind !== 'first_slot_link')) throw new Error('Learn first-check fact unavailable')
+    const fact = match.fact
+    const parent = fact.kind === 'independent_claim_v2' ? match
+      : await ctx.db.query('learnMeasurementReportFacts')
+        .withIndex('by_userId_and_sequence', q => q.eq('userId', userId).eq('sequence', fact.claimFactSequence)).unique()
+    if (!parent || parent.fact.kind !== 'independent_claim_v2' || parent.learningVoidId !== opportunity.learningVoidId
+      || parent.fact.blueprintRevisionId !== opportunity.blueprintRevisionId || parent.fact.objectiveId !== opportunity.objectiveId
+      || parent.fact.claimKey !== match.fact.claimKey || parent.fact.claimSequence !== match.fact.claimSequence) throw new Error('Learn first-check fact unavailable')
+    identity = learnFirstCheckClaimSchema.strip().parse(parent.fact)
+  }
+  const claim = parseLearnContract(learnFirstCheckClaimSchema, identity)
+  const rows = await ctx.db.query('learnMeasurementReportFacts')
+    .withIndex('by_userId_and_fact_claimKey_and_fact_claimSequence', q => q.eq('userId', userId)
+      .eq('fact.claimKey', claim.claimKey).eq('fact.claimSequence', claim.claimSequence)).take(3)
+  const row = rows[0]
+  if (opportunity.userId !== userId || !row || row.learningVoidId !== opportunity.learningVoidId || rows.length === 3) {
+    throw new Error('Learn first-check fact unavailable')
+  }
+  const envelope = (value: Doc<'learnMeasurementReportFacts'>) => ({ factVersion: value.factVersion, sequence: value.sequence,
+    epoch: value.epoch, occurredAt: value.occurredAt, fact: value.fact })
+  const saved = row.fact.kind === 'independent_claim_v2' ? resolveLearnReportFirstSlotV2(envelope(row), rows[1] ? envelope(rows[1]) : null) : row.fact
+  const slot = saved.kind === 'independent_claim' ? saved : saved.kind === 'independent_claim_v2' && saved.firstSlot.kind === 'linked' ? saved.firstSlot : null
+  if (!slot || row.fact.kind === 'independent_claim' && rows.length !== 1 || row.epoch !== ('stratum' in saved ? saved.stratum.epoch : null)
+    || slot.firstCheckOpportunityId !== opportunity._id
+    || opportunity.firstCheckClaim && slot.checkSequence !== opportunity.checkSequence) throw new Error('Learn first-check fact unavailable')
+  const savedClaim = learnFirstCheckClaimSchema.strip().parse(saved)
+  if (JSON.stringify(parseLearnContract(learnFirstCheckClaimSchema, savedClaim)) !== JSON.stringify(claim)) throw new Error('Learn first-check fact unavailable')
+  return row
+}
+
+export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId: string, response: Doc<'learnResponses'>, epoch: string,
+  stateAtAcceptance: Extract<LearnReportSourceFact['fact'], { kind: 'response' }>['stateAtAcceptance'] = 'unknown') {
   return await appendLearnMeasurementFact(ctx, userId, {
     epoch, occurredAt: response.acceptedAt,
     ...(response.scopeKind === 'v2' ? { learningVoidId: response.learningVoidId } : {}),
     fact: { kind: 'response', submissionId: response._id, acceptedAt: response.acceptedAt,
       measurementEligible: response.validitySnapshot.measurementEligible, masteryEligible: response.validitySnapshot.masteryEligible,
-      assistanceSnapshot: response.assistanceSnapshot, validitySnapshot: response.validitySnapshot },
+      assistanceSnapshot: response.assistanceSnapshot, validitySnapshot: response.validitySnapshot, stateAtAcceptance },
   })
 }
 

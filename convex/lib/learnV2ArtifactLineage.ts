@@ -1,3 +1,6 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
+import { propagatesResponseReadBudget } from './learnV2PrivacyReadContext'
+import { LearnBlueprintAuthorityError, LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { ConvexError, getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
@@ -29,6 +32,7 @@ class Unavailable extends Error {}
 class ArtifactContentChanged extends Unavailable {}
 class RegistrationRequired extends Unavailable {}
 class ReadBudgetExceeded extends Unavailable {}
+class MeasurementReadBudgetExceeded extends Error {}
 export class ArtifactProjectionBudgetError extends ConvexError<Extract<LearnArtifactInputAdmissionResult, { status: 'rejected' }>> {
   constructor() { super({ version: LEARN_ARTIFACT_INPUT_ADMISSION_VERSION, status: 'rejected', reasonCode: 'projection_exceeds_budget' }) }
 }
@@ -62,6 +66,10 @@ export function createArtifactLineageReadContext<T extends ReadCtx>(ctx: T) {
 }
 
 function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLimit: number) {
+  const exceeded = (): never => {
+    if (propagatesResponseReadBudget(ctx)) throw new MeasurementReadBudgetExceeded('Learn artifact validation budget exhausted')
+    throw new ReadBudgetExceeded('Artifact lineage unavailable')
+  }
   let bytes = 0
   let documentsRead = 0
   let readRequests = 0
@@ -69,11 +77,11 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
   let reserved = 0
   let ranges = 0
   const range = () => {
-    if (ranges >= rangeLimit) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+    if (ranges >= rangeLimit) exceeded()
     ranges++
   }
   const read = async <R>(operation: () => Promise<R>): Promise<R> => {
-    if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > byteLimit) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+    if (bytes + reserved + MAX_DOCUMENT_READ_BYTES > byteLimit) exceeded()
     reserved += MAX_DOCUMENT_READ_BYTES
     readRequests++
     try {
@@ -81,7 +89,7 @@ function createReadBudget<T extends ReadCtx>(ctx: T, byteLimit: number, rangeLim
       if (result !== null && result !== undefined) {
         // Iterator results are unwrapped before reaching this function.
         const size = getDocumentSize(result as Record<string, Value>) + 64
-        if (size > MAX_DOCUMENT_READ_BYTES) throw new ReadBudgetExceeded('Artifact lineage unavailable')
+        if (size > MAX_DOCUMENT_READ_BYTES) exceeded()
         bytes += size
         documentsRead++
       }
@@ -163,6 +171,8 @@ type AudioPlayback = {
   utterances: Doc<'audioOverviewUtterances'>[], utteranceSources: Doc<'audioOverviewUtteranceSources'>[], utteranceClaims: Doc<'audioOverviewUtteranceClaims'>[],
   segments: Doc<'audioOverviewAlignmentSegments'>[],
 }
+type InterjectionContent = { id: string, userId: string, audioOverviewId: Id<'audioOverviews'>, insertedAfterTurnIndex: number, answerTurns?: Doc<'audioOverviewInterjections'>['answerTurns'], audioProfile?: { id: string, version: string, renderer: string, hostAVoice: string, hostBVoice: string }, sourceDocumentIds?: Id<'documents'>[], sourceManifest?: { revision?: string, contentHash?: string, sources: Array<{ documentId: Id<'documents'>, revision?: string, contentHash?: string, objectKey?: string }> }, utterances?: Array<{ id: string, order: number, speaker: string, text: string, claim?: string, evidenceQuotes?: Array<{ sourceId: string, quote: string }>, sourceIds: string[] }>, media?: { id: string, objectKey: string, checksumSha256: string, byteLength: number, contentType: string, container: string, sampleRateHz: number, channelCount: number, bitsPerSample: number, durationMs: number } }
+
 type SectionLinks = Array<
   | { kind: 'quiz', questions: Doc<'quizQuestions'>[] }
   | { kind: 'flashcard', cards: Doc<'flashcardRoomCards'>[] }
@@ -176,6 +186,7 @@ type ArtifactContent =
   | { kind: 'section_block', section: Doc<'courseSections'>, linked: SectionLinks }
   | { kind: 'flashcard_version', version: Doc<'flashcardRoomVersions'>, cards: Doc<'flashcardVersionCards'>[] }
   | { kind: 'audio_overview', overview: Doc<'audioOverviews'>, playback: AudioPlayback | null }
+  | { kind: 'audio_interjection' | 'audio_interjection_v2', payload: InterjectionContent }
   | { kind: 'learner_artifact', artifact: Doc<'learningThreadArtifacts'> }
   | { kind: 'measurement_item' | 'scoring_spec', item: Doc<'learnMeasurementItems'>, family: Doc<'learnMeasurementFamilies'>, spec: Doc<'learnMeasurementScoringSpecs'> }
 
@@ -281,6 +292,7 @@ export function artifactContentProjection(input: ArtifactContent) {
       case 'audio_overview': {
         return audioContent(input.overview, input.playback)
       }
+      case 'audio_interjection': case 'audio_interjection_v2': return input.payload
       case 'learner_artifact': {
         const a = input.artifact
         return { ...objectIdentity(a), threadId: a.threadId, activityId: a.activityId, artifactKind: a.artifactKind, revision: a.revision,
@@ -450,10 +462,61 @@ export async function audioOverviewContentProjection(ctx: ReadCtx, overview: Doc
 }
 
 async function readAudioOverviewContentProjection(scope: Invocation, overview: Doc<'audioOverviews'>) {
+  return boundedAudioProjection(async () => artifactContentProjection({ kind: 'audio_overview', overview, playback: await readAudioPlayback(scope, overview) }))
+}
+
+async function boundedAudioProjection(operation: () => Promise<ReturnType<typeof artifactContentProjection>>) {
   return withinAudioProjection(async () => {
-    const projection = artifactContentProjection({ kind: 'audio_overview', overview, playback: await readAudioPlayback(scope, overview) })
+    const projection = await operation()
     if (new TextEncoder().encode(canonicalJson(projection)).length > ARTIFACT_CONTENT_BYTES) throw new ArtifactProjectionBudgetError()
     return projection
+  })
+}
+
+async function readInterjectionContent(scope: Invocation, userId: string, artifact: Extract<LearnArtifactReference['artifact'], { kind: 'audio_interjection' | 'audio_interjection_v2' }>) {
+  return boundedAudioProjection(async () => {
+    const interjection = await scope.get(artifact.id)
+    if (!interjection || interjection.userId !== userId) unavailable()
+    const overview = await scope.get(interjection.audioOverviewId)
+    if (!overview || overview.userId !== userId || overview.status !== 'ready') unavailable()
+    await liveAudioScope(scope, overview)
+    const payload: InterjectionContent = { ...objectIdentity(interjection), audioOverviewId: overview._id, insertedAfterTurnIndex: interjection.insertedAfterTurnIndex }
+    if ('answerTurns' in interjection) {
+      if (!interjection.answerTurns.length || interjection.answerTurns.length > 4) unavailable()
+      payload.answerTurns = interjection.answerTurns.map(turn => ({ speaker: turn.speaker, text: turn.text, audioFileId: turn.audioFileId, durationMs: turn.durationMs, sourceIndex: turn.sourceIndex, wordTimings: turn.wordTimings?.map(word => ({ word: word.word, start: word.start, end: word.end })) }))
+      if (interjection.taskId) {
+        const task = await scope.get(interjection.taskId)
+        if (!task || task.userId !== userId || task.folderId !== overview.folderId || task.type !== 'audio-overview-generation' || !task.audioOverviewRequest || ['failed', 'cancelled'].includes(task.status)) unavailable()
+        payload.sourceManifest = { sources: task.audioOverviewRequest.documents.map(document => ({ documentId: document.documentId, revision: document.sourceRevision, contentHash: document.contentHash, objectKey: document.r2Key })) }
+      } else payload.sourceDocumentIds = [...new Set([...(overview.sourceDocumentIds ?? []), ...(overview.scopeDocIds ?? [])])]
+    } else {
+      if (!['rendering', 'ready'].includes(interjection.status)) unavailable()
+      payload.audioProfile = { id: interjection.audioProfileId, version: interjection.audioProfileVersion, renderer: interjection.renderer, hostAVoice: interjection.hostAVoice, hostBVoice: interjection.hostBVoice }
+      const current = await readAudioMedia(scope, overview)
+      if (!current || current.episode._id !== interjection.episodeId || current.episode.jobId !== interjection.jobId || current.episode.sourceManifestId !== interjection.sourceManifestId) unavailable()
+      const manifest = await scope.get(interjection.sourceManifestId)
+      if (!manifest || manifest.userId !== userId || manifest.jobId !== interjection.jobId) unavailable()
+      const ctx = scope.ctx
+      const entries = await boundedRows(scope.read(() => ctx.db.query('audioOverviewSourceManifestEntries').withIndex('by_manifestId_and_order', q => q.eq('manifestId', manifest._id)).take(51)), 50)
+      const utterances = await boundedRows(scope.read(() => ctx.db.query('audioOverviewInterjectionUtterances').withIndex('by_interjectionId_and_order', q => q.eq('interjectionId', interjection._id)).take(5)), 4)
+      const links = await boundedRows(scope.read(() => ctx.db.query('audioOverviewInterjectionSources').withIndex('by_interjectionId', q => q.eq('interjectionId', interjection._id)).take(49)), 48)
+      if (entries.length !== manifest.entryCount || !entries.length || utterances.length !== interjection.utteranceCount || utterances.length < 2
+        || [...entries, ...utterances, ...links].some(row => row.userId !== userId)
+        || utterances.some((row, index) => row.episodeId !== interjection.episodeId || row.order !== index)
+        || links.some(link => link.episodeId !== interjection.episodeId || !utterances.some(row => row._id === link.utteranceId) || !entries.some(entry => entry._id === link.manifestEntryId))) unavailable()
+      payload.sourceManifest = { revision: manifest.revision, contentHash: manifest.contentHash, sources: entries.map(entry => ({ documentId: entry.documentId, revision: entry.revision, contentHash: entry.contentHash, objectKey: entry.objectKey })) }
+      payload.utterances = utterances.map(row => {
+        const sourceIds = links.filter(link => link.utteranceId === row._id).map(link => entries.find(entry => entry._id === link.manifestEntryId)!.sourceId)
+        if (!sourceIds.length || new Set(sourceIds).size !== sourceIds.length) unavailable()
+        return { id: row._id, order: row.order, speaker: row.speaker, text: row.text, claim: row.claimText, evidenceQuotes: row.evidenceQuotes?.map(evidence => ({ sourceId: evidence.sourceId, quote: evidence.quote })), sourceIds }
+      })
+      if (interjection.artifactId) {
+        const media = await scope.get(interjection.artifactId)
+        if (!media || interjection.status !== 'ready' || media.userId !== userId || media.interjectionId !== interjection._id || media.episodeId !== interjection.episodeId || media.jobId !== interjection.jobId || media.kind !== 'interjection' || media.status !== 'published' || media.storageProvider !== 'r2' || media.container !== 'wav') unavailable()
+        payload.media = { id: media._id, objectKey: media.objectKey, checksumSha256: media.checksumSha256, byteLength: media.byteLength, contentType: media.contentType, container: media.container, sampleRateHz: media.sampleRateHz, channelCount: media.channelCount, bitsPerSample: media.bitsPerSample, durationMs: media.durationMs }
+      } else if (interjection.status === 'ready') unavailable()
+    }
+    return artifactContentProjection({ kind: artifact.kind, payload })
   })
 }
 
@@ -524,7 +587,10 @@ async function liveSessionBlock(scope: Invocation, userId: string, row: Artifact
     const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, plan.blueprintRevisionId)
     if (blueprint.recordRevision !== plan.blueprintRecordRevision) unavailable()
   }
-  catch { unavailable() }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError || error instanceof Unavailable)) throw error
+    unavailable()
+  }
   await pinned(row, await readSessionBlockContentProjection(scope, block, content), content.revision)
 }
 
@@ -615,7 +681,10 @@ async function liveMeasurementInventory(scope: Invocation, userId: string, item:
     const blueprint = await requireActiveBlueprint(ctx, userId, learningVoid, item.blueprintRevisionId)
     if (blueprint.recordRevision !== item.blueprintRecordRevision) unavailable()
   }
-  catch { unavailable() }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError || error instanceof Unavailable)) throw error
+    unavailable()
+  }
   const objective = await scope.get(item.objectiveId)
   if (!objective || objective.userId !== userId || objective.blueprintRevisionId !== item.blueprintRevisionId) unavailable()
   const family = await scope.get(item.familyId)
@@ -656,6 +725,7 @@ async function requireLiveArtifact(scope: Invocation, userId: string, row: Artif
       case 'section_block': return liveSectionBlock(scope, userId, row, artifact.id)
       case 'flashcard_version': return liveFlashcardVersion(scope, userId, row, artifact.id)
       case 'audio_overview': return liveAudioOverview(scope, userId, row, artifact.id)
+      case 'audio_interjection': case 'audio_interjection_v2': return pinned(row, await readInterjectionContent(scope, userId, artifact))
       case 'learner_artifact': return liveLearnerArtifact(scope, userId, row, artifact.id)
       case 'measurement_item': await liveMeasurementItem(scope, userId, row, artifact.id); return
       case 'scoring_spec': return liveScoringSpec(scope, userId, row, artifact.id)
@@ -804,7 +874,10 @@ async function inspectNode(scope: Invocation, userId: string, row: Lineage, stal
     try {
       if (await computeArtifactManifestDigest(scope, row, origins, bindings, sources, indexingDocument) !== row.manifestDigest) unavailable()
     }
-    catch { unavailable() }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof Unavailable)) throw error
+      unavailable()
+    }
     const dependencies: Dependency[] = []
     for (const link of sources) {
       const dependency = learnArtifactSourceDependencySchema.safeParse(link.dependency)
@@ -1195,7 +1268,7 @@ async function admitInput(scope: Invocation, userId: string, input: unknown, gra
     return result
   }
   catch (error) {
-    if (error instanceof ReadBudgetExceeded && reference.artifact.kind === 'audio_overview') throw new ArtifactProjectionBudgetError()
+    if (error instanceof ReadBudgetExceeded && ['audio_overview', 'audio_interjection', 'audio_interjection_v2'].includes(reference.artifact.kind)) throw new ArtifactProjectionBudgetError()
     throw error
   }
   finally { graph.active.delete(identity) }
@@ -1293,7 +1366,7 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
   const references = new Map<string, LearnArtifactReference>()
   const retainedReferences = new Map<string, LearnArtifactReference>()
   const currentComponents: LearnArtifactReference[] = []
-  const documentPins: Array<{ id: Id<'documents'>, revision: string, contentHash: string }> = []
+  const documentPins: Array<{ id: Id<'documents'>, revision: string, contentHash: string, objectKey?: string }> = []
   const roomCards = new Map<string, unknown[]>()
   let ordinaryComponent = false
   let deckMismatch = false
@@ -1311,6 +1384,11 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
   const visit = (value: unknown, key = ''): void => {
     if (typeof value === 'string') {
       if (['documentId', 'sourceDocumentId', 'sourceDocumentIds', 'scopeDocIds'].includes(key)) documentId(value)
+      if (key === 'audioOverviewId') {
+        const id = ctx.db.normalizeId('audioOverviews', value)
+        if (!id) unavailable()
+        addComponent({ kind: 'audio_overview', id })
+      }
       if (key === 'sourceSnapshotId') {
         const id = ctx.db.normalizeId('learnSourceSnapshots', value)
         if (!id) unavailable()
@@ -1324,7 +1402,7 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
     if (typeof row.documentId === 'string' && typeof row.revision === 'string' && typeof row.contentHash === 'string') {
       const id = ctx.db.normalizeId('documents', row.documentId)
       if (!id) unavailable()
-      documentPins.push({ id, revision: row.revision, contentHash: row.contentHash })
+      documentPins.push({ id, revision: row.revision, contentHash: row.contentHash, objectKey: typeof row.objectKey === 'string' ? row.objectKey : undefined })
     }
     if (row.kind === 'flashcard' && Array.isArray(row.cards)) {
       for (const card of row.cards) {
@@ -1377,7 +1455,7 @@ async function inputReferences(scope: Invocation, userId: string, root: LearnArt
   for (const pin of documentPins) {
     if (await ordinaryLegacyDocument(scope, userId, pin.id, true)) { ordinaryComponent = true; continue }
     const document = await liveDocument(scope, userId, pin.id)
-    if (document.sourceRevision !== pin.revision || document.contentHash !== pin.contentHash) unavailable()
+    if (document.sourceRevision !== pin.revision || document.contentHash !== pin.contentHash || pin.objectKey !== undefined && document.r2Key !== pin.objectKey) unavailable()
   }
   for (const id of documents) addComponent({ kind: 'document', id })
   for (const artifact of components.values()) {
@@ -1572,6 +1650,7 @@ async function preparationContent(scope: Invocation, userId: string, artifact: P
         if (cards.some(card => card.userId !== userId || card.roomId !== version.roomId)) unavailable()
         return { projection: artifactContentProjection({ kind: artifact.kind, version, cards }), revision: String(version._id) }
       }
+      case 'audio_interjection': case 'audio_interjection_v2': return { projection: await readInterjectionContent(scope, userId, artifact) }
       case 'audio_overview': return withinAudioProjection(async () => ({ projection: await readAudioOverviewContentProjection(scope, owned(await scope.get(artifact.id))) }))
       case 'session_block': {
         const block = owned(await scope.get(artifact.id))
@@ -1794,7 +1873,17 @@ async function prepareAndRegisterBatch(scope: Invocation<MutationCtx>, userId: s
     if (cases.length > caseLimit(member.artifact.kind)) unavailable()
     const origins = new Map<Id<'learnArtifactLineages'>, { row: Lineage, transformation: Doc<'learnArtifactLineageOrigins'>['transformation'] }>()
     for (const { row, transformation } of inherited) if (!origins.has(row._id)) origins.set(row._id, { row, transformation })
-    for (const origin of member.origins) {
+    const declaredOrigins = [...member.origins]
+    if (member.artifact.kind === 'audio_interjection' || member.artifact.kind === 'audio_interjection_v2') {
+      const parentId = (content.projection.payload as InterjectionContent).audioOverviewId
+      const parent = { kind: 'audio_overview' as const, id: parentId }
+      if ((await admitIdentity(scope, userId, parent, admissions)).status !== 'admitted_registered') unavailable()
+      const rows = await inputLineages(scope, userId, parent)
+      const row = rows.find(row => row.key === 'whole') ?? rows[0]
+      if (!row) unavailable()
+      declaredOrigins.push({ reference: { artifact: parent, key: row.key, revision: row.revision, payloadDigest: row.payloadDigest }, transformation: 'summary' })
+    }
+    for (const origin of declaredOrigins) {
       const row = await findLineage(scope, userId, origin.reference)
       origins.set(row._id, { row, transformation: origin.transformation })
     }
@@ -1953,7 +2042,7 @@ export async function classifyPersonalWorkDocumentForRecord(ctx: ReadCtx, record
 
 async function requireSuccession(scope: Invocation, userId: string, previous: Lineage, replacement: Lineage) {
   const ctx = scope.ctx
-  const revisable = ['quiz_question', 'section_block', 'flashcard_version', 'audio_overview']
+  const revisable = ['quiz_question', 'section_block', 'flashcard_version', 'audio_overview', 'audio_interjection', 'audio_interjection_v2']
   if (!revisable.includes(previous.artifact.kind) && previous.revision !== replacement.revision) unavailable()
   if (!previous || !replacement || previous._id === replacement._id || previous.userId !== userId || replacement.userId !== userId
     || !available(previous) || previous.nextId !== undefined || replacement.nextId !== undefined || replacement.publication

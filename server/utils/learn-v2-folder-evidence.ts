@@ -1,5 +1,6 @@
 import { readConfiguredRuntimeValue } from './runtime-config'
 import { deterministicLearnV2FolderEvidence } from './learn-v2-e2e-fixtures'
+export class LearnFolderEvidenceError extends Error {}
 
 const MAX_RESPONSE_BYTES = 512_000
 const MAX_RESULTS = 32
@@ -59,8 +60,8 @@ function filterValue(value: string) {
 
 async function boundedJson(response: Response): Promise<unknown> {
   const declared = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new Error('Folder evidence response exceeded its byte limit')
-  if (!response.body) throw new Error('Folder evidence response body unavailable')
+  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new LearnFolderEvidenceError('Folder evidence response exceeded its byte limit')
+  if (!response.body) throw new LearnFolderEvidenceError('Folder evidence response body unavailable')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let total = 0
@@ -72,7 +73,7 @@ async function boundedJson(response: Response): Promise<unknown> {
       total += value.byteLength
       if (total > MAX_RESPONSE_BYTES) {
         await reader.cancel()
-        throw new Error('Folder evidence response exceeded its byte limit')
+        throw new LearnFolderEvidenceError('Folder evidence response exceeded its byte limit')
       }
       text += decoder.decode(value, { stream: true })
     }
@@ -81,7 +82,8 @@ async function boundedJson(response: Response): Promise<unknown> {
   finally {
     reader.releaseLock()
   }
-  return JSON.parse(text)
+  try { return JSON.parse(text) }
+  catch (error) { if (!(error instanceof SyntaxError)) throw error; throw new LearnFolderEvidenceError('Folder evidence search returned invalid JSON') }
 }
 
 export async function retrieveLearnV2FolderEvidence(args: {
@@ -98,7 +100,7 @@ export async function retrieveLearnV2FolderEvidence(args: {
   const accountId = readConfiguredRuntimeValue(config.cloudflareAccountId, 'NUXT_CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID')
   const instance = readConfiguredRuntimeValue(config.cloudflareAiSearchInstance, 'NUXT_CLOUDFLARE_AI_SEARCH_INSTANCE', 'CLOUDFLARE_AI_SEARCH_INSTANCE')
   const token = readConfiguredRuntimeValue(config.cloudflareAiSearchToken, 'NUXT_CLOUDFLARE_AI_SEARCH_TOKEN', 'CLOUDFLARE_AI_SEARCH_TOKEN')
-  if (!accountId || !instance || !token) throw new Error('Folder evidence search is not configured')
+  if (!accountId || !instance || !token) throw new LearnFolderEvidenceError('Folder evidence search is not configured')
 
   const response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/autorag/rags/${instance}/search`, {
     method: 'POST',
@@ -111,9 +113,9 @@ export async function retrieveLearnV2FolderEvidence(args: {
       filters: documentFilters(args.sources),
     }),
   })
-  if (!response.ok) throw new Error(`Folder evidence search returned ${response.status}`)
+  if (!response.ok) throw new LearnFolderEvidenceError(`Folder evidence search returned ${response.status}`)
   const envelope = await boundedJson(response) as AiSearchEnvelope
-  if (envelope.success !== true || !Array.isArray(envelope.result?.data)) throw new Error('Folder evidence search returned an invalid envelope')
+  if (envelope.success !== true || !Array.isArray(envelope.result?.data)) throw new LearnFolderEvidenceError('Folder evidence search returned an invalid envelope')
 
   const sourcesByDocument = new Map(args.sources.map(source => [source.documentId, source]))
   const excerpts = new Map<string, string>()

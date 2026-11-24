@@ -1,9 +1,10 @@
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
 /* eslint-disable @typescript-eslint/no-explicit-any -- Convex generated journey projection is intentionally adapted at this single boundary. */
 import { computed, ref, toValue, watch, type MaybeRef } from 'vue'
 import { api } from '#convex/api'
-import type { LearnAssessmentContract, LearnHubSnapshot, LearnMissionSnapshot, LearnOutcomeDraft, LearnPlanSnapshot, LearnReadinessItem, LearnSourceSnapshot, LearnObjectiveSnapshot, LearnMapEdit, LearnScheduleInput } from '~/types/learn-v2-journey'
+import type { LearnHubSnapshot, LearnMissionSnapshot, LearnOutcomeDraft, LearnPlanSnapshot, LearnReadinessItem, LearnSourceSnapshot, LearnObjectiveSnapshot, LearnMapEdit, LearnMapSaveResult, LearnScheduleInput } from '~/types/learn-v2-journey'
 import { parseLearnV2PlanResult } from '~/utils/learn-v2-plan-result'
-import { applyLearnMapEdit, type LearnMapCandidate } from '~/utils/learn-v2-map-editor'
+import { applyLearnMapEdit, isLearnMapChangedError, LearnMapChangedError, type LearnMapCandidate } from '~/utils/learn-v2-map-editor'
 
 type Mission = any
 const key = (name: string) => `${name}:${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
@@ -52,7 +53,7 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const missionArgs = ref<{ learningVoidId: string | null }>({ learningVoidId: id.value })
   watch(id, learningVoidId => { missionArgs.value = { learningVoidId } }, { flush: 'sync' })
   const hubQuery = import.meta.client ? useConvexQuery(api.learnV2Journey.listHub, {}, { enabled: allowed }) : { data: ref<any>(null), pending: ref(false) }
-  const missionQuery = import.meta.client ? useConvexQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false) }
+  const missionQuery = import.meta.client ? useTeachingQuery(api.learnV2Journey.getMission, missionArgs as never, { enabled: computed(() => allowed.value && !!id.value) }) : { data: ref<Mission | null>(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
   const sourceReviewArgs = ref<{ blueprintRevisionId: string | null; paginationOpts: { cursor: null; numItems: number } }>({ blueprintRevisionId: null, paginationOpts: { cursor: null, numItems: 64 } })
   const createVoid = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.createLearningVoid) : { mutate: async () => null }
   const updateVoidDraft = import.meta.client ? useConvexMutation(api.learnV2Lifecycle.updateLearningVoidDraft) : { mutate: async () => null }
@@ -84,7 +85,9 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   const researchResults = ref<Array<{ title: string; url: string; snippet?: string }>>([])
   const mission = computed(() => missionQuery.data.value as Mission | null | undefined)
   watch(mission, value => { sourceReviewArgs.value = { blueprintRevisionId: value?.currentBlueprint?._id ?? null, paginationOpts: { cursor: null, numItems: 64 } } }, { flush: 'sync' })
-  const sourceReviewQuery = import.meta.client ? useConvexQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false) }
+  const sourceReviewQuery = import.meta.client ? useTeachingQuery(api.learnV2Sources.listSourceReview, sourceReviewArgs as never, { enabled: computed(() => allowed.value && !!sourceReviewArgs.value.blueprintRevisionId) }) : { data: ref<any>(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
+  const readFailure = computed(() => missionQuery.failure.value ?? sourceReviewQuery.failure.value ?? null)
+  function retryRead() { for (const query of [missionQuery, sourceReviewQuery]) if (query.failure.value) void query.refresh() }
   const hub = computed<LearnHubSnapshot>(() => {
     const rows = (hubQuery.data.value as any)?.items ?? []
     const missions = rows.map((row: any) => missionSnapshot(row))
@@ -99,12 +102,11 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
     const objectiveKeyById = new Map(map.objectives.map((row: any) => [String(row._id), row.stableKey ?? `objective-${row.order + 1}`]))
     return map.objectives.map((row: any) => {
       const milestone = map.milestones.find((item: any) => String(item._id) === String(row.milestoneId))
-      const assessmentContract = row.assessmentContract as LearnAssessmentContract
       const sourceLinks = (row.sourceLinks ?? []).map((link: any) => {
         const source = mission.value?.sources?.items?.find((item: any) => String(item._id) === String(link.sourceSnapshotId))
         return { sourceKey: String(source?.identity?._id ?? source?.sourceIdentityId ?? link.sourceSnapshotId), title: source?.identity?.title ?? source?.title ?? source?.publicLocator ?? 'Evidence source', origin: source?.identity?.origin ?? source?.origin ?? 'folder_document', coverage: link.coverage, evidenceStatus: link.evidenceStatus ?? 'evidence_available' }
       })
-      return { id: String(row._id), stableKey: row.stableKey ?? `objective-${row.order + 1}`, title: row.title, capability: row.capability, milestoneKey: milestone?.stableKey ?? `milestone-${(milestone?.order ?? 0) + 1}`, milestone: milestone?.title ?? 'Capability', effortMinutes: row.estimatedMinutes ?? 25, depth: row.depth ?? ({ overview: 'foundational', working: 'working', deep: 'advanced' } as const)[mission.value?.currentBlueprint?.desiredDepth as 'overview' | 'working' | 'deep'] ?? 'working', mastery: mission.value?.mastery?.find((entry: any) => String(entry.objectiveId) === String(row._id))?.record?.state ?? 'unseen', coverage: row.coverage ?? 'gap', gapReason: row.gapReason, prerequisiteIds: row.prerequisiteObjectiveIds?.map(String) ?? [], prerequisiteKeys: row.prerequisiteObjectiveIds?.map((id: unknown) => objectiveKeyById.get(String(id))).filter(Boolean) ?? [], assessment: assessmentContract?.instructions ?? 'Assessment contract pending review', assessmentContract, sourceLinks }
+      return { id: String(row._id), stableKey: row.stableKey ?? `objective-${row.order + 1}`, title: row.title, capability: row.capability, milestoneKey: milestone?.stableKey ?? `milestone-${(milestone?.order ?? 0) + 1}`, milestone: milestone?.title ?? 'Capability', effortMinutes: row.estimatedMinutes ?? 25, depth: row.depth ?? ({ overview: 'foundational', working: 'working', deep: 'advanced' } as const)[mission.value?.currentBlueprint?.desiredDepth as 'overview' | 'working' | 'deep'] ?? 'working', mastery: mission.value?.mastery?.find((entry: any) => String(entry.objectiveId) === String(row._id))?.record?.state ?? 'unseen', coverage: row.coverage ?? 'gap', gapReason: row.gapReason, prerequisiteIds: row.prerequisiteObjectiveIds?.map(String) ?? [], prerequisiteKeys: row.prerequisiteObjectiveIds?.map((id: unknown) => objectiveKeyById.get(String(id))).filter(Boolean) ?? [], sourceLinks }
     })
   })
   const readiness = computed<LearnReadinessItem[]>(() => { const row = mission.value; if (!row) return []; const status = row.learningVoid.status; return [{ id: 'outcome', label: 'Outcome', state: row.currentBlueprint?.desiredOutcome ? 'complete' : 'current' }, { id: 'sources', label: 'Sources', state: row.sources.counts.accepted ? 'complete' : status === 'source_review' || status === 'sourcing' ? 'current' : 'locked', detail: row.sources.counts.accepted ? `${row.sources.counts.accepted} accepted` : 'Accept evidence' }, { id: 'map', label: 'Learning map', state: row.map?.objectives?.length ? 'complete' : status === 'map_review' ? 'current' : 'locked' }, { id: 'plan', label: 'Study plan', state: row.plan?.accepted ? 'complete' : status === 'plan_review' ? 'current' : 'locked' }] })
@@ -201,25 +203,26 @@ export function useLearnV2Journey(learningVoidId?: MaybeRef<string | null | unde
   }
   async function createPlanPreview(schedulingInput: LearnScheduleInput) { const row = mission.value; if (!row?.currentBlueprint) return; return await run(() => createPreviewMutation.mutate({ learningVoidId: row.learningVoid._id, blueprintRevisionId: row.currentBlueprint._id, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, idempotencyKey: key('plan-preview'), schedulingInput })) }
   async function editPlanPreview(schedulingInput: LearnScheduleInput, changeReason: 'availability_changed' | 'deadline_changed' | 'session_length_changed') { const row = mission.value; const preview = row?.plan?.preview; if (!row?.currentBlueprint || !preview) return; return await run(() => editPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedPlanRecordRevision: preview.recordRevision, expectedVoidRevision: row.learningVoid.revision, expectedBlueprintRecordRevision: row.currentBlueprint.recordRevision, changeReason, idempotencyKey: key('edit-plan-preview'), schedulingInput })) }
-  async function editLearningMap(edit: LearnMapEdit) { const original = mission.value; if (!original?.currentBlueprint || !original.map) return; return await run(async () => {
+  async function editLearningMap(edit: LearnMapEdit): Promise<LearnMapSaveResult> { const original = mission.value; if (!original?.currentBlueprint || !original.map) return { ok: false, reason: 'changed' }; busy.value = true; try {
     const fork: any = await forkBlueprint.mutate({ blueprintRevisionId: original.currentBlueprint._id, expectedRecordRevision: original.currentBlueprint.recordRevision, expectedVoidRevision: original.learningVoid.revision, idempotencyKey: key('fork-map') })
     // The fork copies sources and the authoritative map. Wait for the subscription so
     // candidate source IDs are scoped to that new revision rather than the source map.
     await new Promise<void>((resolve, reject) => {
-      let settled = false; let stop = () => {}; const timer = setTimeout(() => { if (settled) return; settled = true; stop(); reject(new Error('The editable map revision did not become available. Refresh and try again.')) }, 5_000)
+      let settled = false; let stop = () => {}; const timer = setTimeout(() => { if (settled) return; settled = true; stop(); reject(new LearnMapChangedError('The editable map revision did not become available')) }, 5_000)
       const watcher = watch(mission, value => { if (!settled && String(value?.currentBlueprint?._id) === String(fork._id)) { settled = true; clearTimeout(timer); stop(); resolve() } }, { flush: 'sync', immediate: true })
       stop = watcher; if (settled) stop()
     })
     const row = mission.value
-    if (!row?.map || !row.currentBlueprint || String(row.currentBlueprint._id) !== String(fork._id)) throw new Error('The editable map revision is unavailable')
+    if (!row?.map || !row.currentBlueprint || String(row.currentBlueprint._id) !== String(fork._id)) throw new LearnMapChangedError('The editable map revision is unavailable')
     const milestoneKeys = new Map(row.map.milestones.map((item: any) => [String(item._id), item.stableKey ?? `milestone-${item.order + 1}`]))
     const objectiveKeys = new Map(row.map.objectives.map((item: any) => [String(item._id), item.stableKey ?? `objective-${item.order + 1}`]))
     const sourceIdByKey = Object.fromEntries((row.sources?.items ?? []).map((source: any) => [String(source.identity?._id ?? source.sourceIdentityId), String(source._id)]))
     const defaultDepth = ({ overview: 'foundational', working: 'working', deep: 'advanced' } as const)[row.currentBlueprint.desiredDepth as 'overview' | 'working' | 'deep'] ?? 'working'
-    const candidate: LearnMapCandidate = { version: 'learn-v2.blueprint-candidate.v1', generatorVersion: 'learn-v2.learner-map-edit.v2', milestones: row.map.milestones.map((item: any) => ({ key: milestoneKeys.get(String(item._id))!, order: item.order, title: item.title, description: item.description })), objectives: row.map.objectives.map((item: any) => ({ key: objectiveKeys.get(String(item._id))!, milestoneKey: milestoneKeys.get(String(item.milestoneId))!, order: item.order, title: item.title, capability: item.capability, estimatedMinutes: item.estimatedMinutes, depth: item.depth ?? defaultDepth, coverage: item.storedCoverage ?? item.coverage, gapReason: item.gapReason, sourceSnapshotIds: item.sourceLinks.filter((link: any) => link.coverage !== 'gap').map((link: any) => String(link.sourceSnapshotId)), gapSourceSnapshotIds: item.sourceLinks.filter((link: any) => link.coverage === 'gap').map((link: any) => String(link.sourceSnapshotId)), prerequisiteObjectiveKeys: item.prerequisiteObjectiveIds.map((itemId: any) => objectiveKeys.get(String(itemId))).filter(Boolean), assessmentContract: item.assessmentContract })) }
+    const candidate: LearnMapCandidate = { version: 'learn-v2.blueprint-candidate.v1', generatorVersion: 'learn-v2.learner-map-edit.v2', milestones: row.map.milestones.map((item: any) => ({ key: milestoneKeys.get(String(item._id))!, order: item.order, title: item.title, description: item.description })), objectives: row.map.objectives.map((item: any) => ({ key: objectiveKeys.get(String(item._id))!, milestoneKey: milestoneKeys.get(String(item.milestoneId))!, order: item.order, title: item.title, capability: item.capability, estimatedMinutes: item.estimatedMinutes, depth: item.depth ?? defaultDepth, coverage: item.storedCoverage ?? item.coverage, gapReason: item.gapReason, sourceSnapshotIds: item.sourceLinks.filter((link: any) => link.coverage !== 'gap').map((link: any) => String(link.sourceSnapshotId)), gapSourceSnapshotIds: item.sourceLinks.filter((link: any) => link.coverage === 'gap').map((link: any) => String(link.sourceSnapshotId)), prerequisiteObjectiveKeys: item.prerequisiteObjectiveIds.map((itemId: any) => objectiveKeys.get(String(itemId))).filter(Boolean) })) }
     const edited = applyLearnMapEdit(candidate, edit, sourceIdByKey)
-    return await replaceMap.mutate({ blueprintRevisionId: row.currentBlueprint._id, expectedRecordRevision: row.currentBlueprint.recordRevision, expectedVoidRevision: row.learningVoid.revision, idempotencyKey: key('replace-map'), candidate: edited as never })
-  }) }
+    await replaceMap.mutate({ blueprintRevisionId: row.currentBlueprint._id, expectedRecordRevision: row.currentBlueprint.recordRevision, expectedVoidRevision: row.learningVoid.revision, idempotencyKey: key('replace-map'), candidate: edited as never })
+    return { ok: true }
+  } catch (cause) { return { ok: false, reason: isLearnMapChangedError(cause) ? 'changed' : 'failed' } } finally { busy.value = false } }
   async function acceptPlan() { const row = mission.value; const preview = row?.plan?.preview; if (!row || !preview) return; return await run(() => acceptPreviewMutation.mutate({ studyPlanRevisionId: preview._id, expectedVoidRevision: row.learningVoid.revision, expectedPlanRecordRevision: preview.recordRevision, idempotencyKey: key('accept-plan') })) }
-  return { allowed, checkingAccess, hub, mission, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults, defaultSchedule, planInput, saveOutcomeDraft, createMission, startMapGeneration, editLearningMap, acceptSource, prepareSource, rejectSource, addUrlSource, researchPublicSources, acceptLearningMap, submitCalibrationAttempt, completeCalibration, createPlanPreview, editPlanPreview, acceptPlan }
+  return { allowed, checkingAccess, hub, mission, readFailure, retryRead, snapshot, sources, objectives, readiness, plan, busy, error, generation, generationIsActive, canResearch, researching, researchResults, defaultSchedule, planInput, saveOutcomeDraft, createMission, startMapGeneration, editLearningMap, acceptSource, prepareSource, rejectSource, addUrlSource, researchPublicSources, acceptLearningMap, submitCalibrationAttempt, completeCalibration, createPlanPreview, editPlanPreview, acceptPlan }
 }

@@ -1,3 +1,4 @@
+import { assertTeachingSourcePins, TeachingSourceError, type TeachingSource } from './teaching-source-scope'
 import { AwsClient } from 'aws4fetch'
 import { sanitizeUserSegment } from './ai-search'
 import { readConfiguredRuntimeValue } from './runtime-config'
@@ -13,6 +14,7 @@ export interface FolderDoc {
 }
 
 export interface FetchFolderDocsParams {
+  teachingScope?: TeachingSource[]
   userId: string
   folderId?: string
   documents?: Array<{
@@ -181,6 +183,10 @@ function isTextReadableKey(key: string): boolean {
 export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<FolderDoc[]> {
   const r2 = getR2Config()
   if (!r2) return []
+  if (params.teachingScope) {
+    if (!params.teachingScope.length) return []
+    params = { ...params, documents: params.teachingScope.map(source => ({ ...source, documentId: String(source.documentId), folderId: String(source.folderId) })) }
+  }
   const budget = params.maxChars ?? 80_000
 
   const docs: FolderDoc[] = []
@@ -198,6 +204,7 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
       try {
         const result = await getObject(r2, key)
         if (!result?.content) continue
+        if (params.teachingScope) assertTeachingSourcePins(params.teachingScope, { documentId: doc.documentId, contentHash: result.contentHash, sourceRevision: result.sourceRevision })
 
         const remaining = budget - spent
         const content = result.content.length > remaining ? result.content.slice(0, remaining) : result.content
@@ -214,6 +221,7 @@ export async function fetchFolderDocs(params: FetchFolderDocsParams): Promise<Fo
         })
       }
       catch (error) {
+        if (error instanceof TeachingSourceError) throw error
         console.error(`[r2-folder] Failed to read scoped doc ${doc.documentId}:`, error)
       }
     }

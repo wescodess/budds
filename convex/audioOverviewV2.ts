@@ -1,3 +1,7 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { assertAudioJobSources, assertAudioTeaching, publishTeaching } from './lib/learnV2AssessmentLineage'
 import { paginationOptsValidator } from 'convex/server'
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
@@ -239,6 +243,7 @@ export const createPlan = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
       throw new Error('Audio overview job is terminal')
     }
@@ -621,7 +626,8 @@ export const createPlan = mutation({
 export const getForWorkflow = query({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string() },
   handler: async (ctx, args) => {
-    await requireCapability(ctx, args.jobId, args.capability)
+    const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const manifest = await ctx.db
       .query('audioOverviewSourceManifests')
       .withIndex('by_jobId', q => q.eq('jobId', args.jobId))
@@ -864,20 +870,31 @@ async function loadPlaybackProjection(ctx: QueryCtx, overview: Doc<'audioOvervie
   }
 }
 
-export const getPlaybackForOwner = query({
+const getPlaybackForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewV2.getPlaybackForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'audio_overview', id: args.overviewId }]),
+
   args: { overviewId: v.id('audioOverviews') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
     if (!userId) return null
     const overview = await ctx.db.get(args.overviewId)
     if (!overview || overview.userId !== userId) return null
+    await assertAudioTeaching(ctx, overview, true)
     return await loadPlaybackProjection(ctx, overview)
   },
-})
+
+}, {hasContent:value=>Boolean(value?.utterances.length || value?.outline.narrativeArc.trim() || value?.claims.length)})
+export const getPlaybackForOwner = query(getPlaybackForOwnerRead.query)
+export const getPlaybackForOwnerDelivery = mutation(getPlaybackForOwnerRead.delivery)
 
 const SHARE_TOKEN_PATTERN = /^[0-9a-f]{32}$/
 
-export const getPlaybackByShareToken = query({
+const getPlaybackByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviewV2.getPlaybackByShareToken',
+  anonymousShare: true,
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -889,6 +906,7 @@ export const getPlaybackByShareToken = query({
     if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
     const folder = await ctx.db.get(overview.folderId)
     if (!folder || folder.userId !== overview.userId) return null
+    await assertAudioTeaching(ctx, overview, false)
     const projection = await loadPlaybackProjection(ctx, overview)
     if (!projection) return null
     return {
@@ -910,7 +928,10 @@ export const getPlaybackByShareToken = query({
       alignment: projection.alignment,
     }
   },
-})
+
+}, {hasContent:value=>Boolean(value?.utterances.length)})
+export const getPlaybackByShareToken = query(getPlaybackByShareTokenRead.query)
+export const getPlaybackByShareTokenDelivery = mutation(getPlaybackByShareTokenRead.delivery)
 
 function mediaMetadata(artifact: Doc<'audioOverviewAudioArtifacts'>) {
   return {
@@ -936,7 +957,11 @@ function isPublishedFinalArtifact(artifact: Doc<'audioOverviewAudioArtifacts'> |
     && artifact.container === 'wav'
 }
 
-export const resolveMediaForOwner = query({
+const resolveMediaForOwnerRead = defineTeachingRead({
+  name: 'audioOverviewV2.resolveMediaForOwner',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'media', id: args.artifactId }]),
+  metadataPreparation: true,
+
   args: { artifactId: v.id('audioOverviewAudioArtifacts') },
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
@@ -953,11 +978,21 @@ export const resolveMediaForOwner = query({
       || overview.userId !== userId
       || overview.status !== 'ready'
       || overview.finalArtifactId !== artifact._id) return null
+    await assertAudioTeaching(ctx, overview, true)
     return mediaMetadata(artifact)
   },
-})
 
-export const resolveMediaByShareToken = query({
+})
+export const resolveMediaForOwner = query(resolveMediaForOwnerRead.query)
+export const resolveMediaForOwnerDelivery = mutation(resolveMediaForOwnerRead.delivery)
+export const resolveMediaForOwnerPreparation = mutation(resolveMediaForOwnerRead.preparation)
+
+const resolveMediaByShareTokenRead = defineTeachingRead({
+  name: 'audioOverviewV2.resolveMediaByShareToken',
+  anonymousShare: true,
+  scope: async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'share',token:args.token}]),
+  metadataPreparation: true,
+
   args: { token: v.string() },
   handler: async (ctx, args) => {
     if (!SHARE_TOKEN_PATTERN.test(args.token)) return null
@@ -971,6 +1006,7 @@ export const resolveMediaByShareToken = query({
       || !overview.episodeId
       || !overview.finalArtifactId) return null
     if (await hasAccountDeletionTombstone(ctx, overview.userId)) return null
+    await assertAudioTeaching(ctx, overview, false)
     const artifact = await ctx.db.get(overview.finalArtifactId)
     if (!isPublishedFinalArtifact(artifact)
       || artifact.userId !== overview.userId
@@ -982,7 +1018,11 @@ export const resolveMediaByShareToken = query({
       || episode.finalArtifactId !== artifact._id) return null
     return mediaMetadata(artifact)
   },
+
 })
+export const resolveMediaByShareToken = query(resolveMediaByShareTokenRead.query)
+export const resolveMediaByShareTokenDelivery = mutation(resolveMediaByShareTokenRead.delivery)
+export const resolveMediaByShareTokenPreparation = mutation(resolveMediaByShareTokenRead.preparation)
 
 export const recordSceneEvaluation = mutation({
   args: {
@@ -998,6 +1038,7 @@ export const recordSceneEvaluation = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
       throw new Error('Audio overview job is terminal')
     }
@@ -1237,6 +1278,7 @@ export const publishFinalArtifact = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     if (job.status === 'failed' || job.status === 'cancelled') throw new Error('Audio overview job is terminal')
     const episode = await ctx.db
       .query('audioOverviewEpisodes')
@@ -1261,6 +1303,7 @@ export const publishFinalArtifact = mutation({
         .unique()
       if (!alignment) throw new Error('Published audio overview alignment is unavailable')
       const overviewId = await completePublication(ctx, job, episode, existingFinal, alignment._id)
+      await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overviewId }, key: 'whole' }], { kind: 'audio_job', id: job._id })
       return { duplicate: true, overviewId, episodeId: episode._id, artifactId: existingFinal._id, alignmentId: alignment._id }
     }
     if (job.status === 'completed') throw new Error('Completed audio overview job has no published artifact')
@@ -1335,6 +1378,7 @@ export const publishFinalArtifact = mutation({
     const artifact = await ctx.db.get(artifactId)
     if (!artifact) throw new Error('Published audio artifact is unavailable')
     const overviewId = await completePublication(ctx, job, episode, artifact, alignmentId)
+    await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overviewId }, key: 'whole' }], { kind: 'audio_job', id: job._id })
     return { duplicate: false, overviewId, episodeId: episode._id, artifactId, alignmentId }
   },
 })
@@ -1348,6 +1392,7 @@ export const appendAlignmentSegments = mutation({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')
@@ -1432,10 +1477,15 @@ export const completeAlignment = mutation({
   args: { jobId: v.id('audioOverviewJobs'), capability: v.string(), alignmentId: v.id('audioOverviewAlignments') },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')
     }
+    const episode = LEARN_MEASUREMENT_CAPABILITIES.responses ? await ctx.db.get(alignment.episodeId) : null
+    const overview = episode?.compatibilityOverviewId && await ctx.db.get(episode.compatibilityOverviewId)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (!overview || overview.userId !== job.userId)) throw new Error('Audio overview is unavailable')
+    if (overview) await assertAudioTeaching(ctx, overview, false)
     if (alignment.status === 'ready') return { duplicate: true }
     if (alignment.status === 'failed') throw new Error('Failed alignment cannot become ready')
     if (alignment.segmentCount < 1) throw new Error('Cannot complete an empty alignment')
@@ -1463,6 +1513,7 @@ export const completeAlignment = mutation({
     }
     const now = Date.now()
     await ctx.db.patch(alignment._id, { status: 'ready', error: undefined, updatedAt: now, completedAt: now })
+    if (overview) await publishTeaching(ctx, job.userId, [{ artifact: { kind: 'audio_overview', id: overview._id }, key: 'whole' }], { kind: 'audio_job', id: job._id })
     return { duplicate: false }
   },
 })
@@ -1502,6 +1553,7 @@ export const listAlignmentSegments = query({
   },
   handler: async (ctx, args) => {
     const job = await requireCapability(ctx, args.jobId, args.capability)
+    await assertAudioJobSources(ctx, job)
     const alignment = await ctx.db.get(args.alignmentId)
     if (!alignment || alignment.jobId !== job._id || alignment.userId !== job.userId) {
       throw new Error('Audio overview alignment not found')

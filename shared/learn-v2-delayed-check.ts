@@ -6,7 +6,7 @@ import {
   LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_RETAINED_PROMOTION_INELIGIBLE, parseLearnContract,
   learnResponseDeliveryPinsSchema,
 } from './learn-v2-responses'
-import { learnMeasurementHorizonSchema } from './learn-v2-measurement'
+import { type learnAssessmentPinsSchema, learnMeasurementHorizonSchema } from './learn-v2-measurement'
 
 export const LEARN_V2_DELAYED_CHECK_VERSION = 'learn-v2.delayed-check.v1' as const
 export const LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION = 'learn-v2.assessment-capabilities.v1' as const
@@ -39,6 +39,12 @@ export const learnAssessmentPurposeSchema = z.discriminatedUnion('kind', [
 ])
 export type LearnAssessmentPurpose = z.infer<typeof learnAssessmentPurposeSchema>
 export type LearnAssessmentPhase = z.infer<typeof learnAssessmentPhaseSchema>
+
+export function doesLearnAssessmentPurposeMatchPins(purpose: LearnAssessmentPurpose, pins: Pick<z.infer<typeof learnAssessmentPinsSchema>, 'kind'>) {
+  return (pins.kind === 'measurement') === purpose.kind.startsWith('measurement_')
+    && (purpose.kind !== 'calibration' || pins.kind === 'calibration')
+    && (purpose.kind !== 'independent_application' || pins.kind === 'session_application')
+}
 
 export const learnAssessmentLifecycleSchema = z.strictObject({
   version: z.literal(LEARN_V2_DELAYED_CHECK_VERSION), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
@@ -159,3 +165,4 @@ export function evaluateLearnAssessmentEligibility(input: z.infer<typeof learnAs
     reasonCodes: reasons,
   })
 }
+export const LEARN_SYSTEM_DUE_WORK_LATE = 'system_due_work_late' as const

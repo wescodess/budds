@@ -1,3 +1,5 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
@@ -21,7 +23,9 @@ import {
 import {
   LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION,
   LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION,
-  type learnMeasurementReportSchema, type learnMeasurementReportCellsSchema,
+  LEARN_REPORT_PUBLICATION_POLICY_VERSION,
+  type learnPublishedMeasurementReportSchema as learnMeasurementReportSchema,
+  type learnPublishedMeasurementReportCellsSchema as learnMeasurementReportCellsSchema,
 } from '../../shared/learn-v2-measurement-report'
 
 export const LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-api.v1' as const
@@ -236,7 +240,8 @@ const provenance = v.object({
   kind: v.literal('aggregate_snapshot'), sourceVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION),
   queryVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION), adapterVersion: v.string(), codeVersion: v.string(),
   rosterDigest: v.string(), inputDigest: v.string(), cutoff: v.number(), extractionStartedAt: v.number(), extractionEndedAt: v.number(), sourceCoverage,
-  episodeCount: v.number(), inputBytes: v.number(), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000),
+  episodeCount: v.null(), inputBytes: v.null(), bootstrapSeed: v.string(), bootstrapReplicates: v.literal(10000),
+  publicationPolicyVersion: v.literal(LEARN_REPORT_PUBLICATION_POLICY_VERSION),
 })
 export const reportValidator = v.union(reportUnavailableValidator, v.object({
   version: v.literal(LEARN_V2_MEASUREMENT_REPORT_VERSION), status: v.literal('sealed'), reportRunId: v.id('learnMeasurementReportRuns'), query: reportQuery, provenance,
@@ -282,7 +287,10 @@ export type LearnV2AggregateExport = Infer<typeof aggregateExportValidator>
 
 export function parsePublicLearnRequest<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
   try { return parseLearnContract(schema, input) }
-  catch { throw new Error('Invalid Learn request') }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof z.ZodError)) throw error
+    throw new LearnInputValidationError('Invalid Learn request')
+  }
 }
 
 export function validateLearnMasterySubmission(input: unknown, pins: Parameters<typeof validateLearnFinalResponseBundle>[1]) {

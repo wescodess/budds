@@ -1,3 +1,5 @@
+import { getAudioOverviewWorkerToken } from '../../../utils/audio-overview-interjection-worker'
+import { teachingDeliveryValue, needsTeachingDelivery } from '../../../utils/teaching-delivery'
 import { api } from '../../../../convex/_generated/api'
 import type { Id } from '../../../../convex/_generated/dataModel'
 import { makeConvexClient } from '../../../utils/convex-client'
@@ -8,9 +10,15 @@ export default defineEventHandler(async (event) => {
   if (!artifactId) throw createError({ statusCode: 400, message: 'Audio artifact ID is required' })
   const client = makeConvexClient(event)
   if (!client) throw createError({ statusCode: 401, message: 'Authentication required' })
-  const media = await client.query(api.audioOverviewV2.resolveMediaForOwner, {
-    artifactId: artifactId as Id<'audioOverviewAudioArtifacts'>,
-  })
+  const input = { ...{ artifactId: artifactId as Id<'audioOverviewAudioArtifacts'> }, idempotencyKey: `audio_media_${crypto.randomUUID()}` }
+  const media = needsTeachingDelivery()
+    ? teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaForOwnerPreparation, input))
+    : await client.query(api.audioOverviewV2.resolveMediaForOwner, { artifactId: input.artifactId })
   if (!media) throw createError({ statusCode: 404, message: 'Audio media not found' })
-  return await privateAudioResponse(event, media)
+  return await privateAudioResponse(event, media, async () => {
+    if (!needsTeachingDelivery()) return
+    if (!teachingDeliveryValue(await client.mutation(api.audioOverviewV2.resolveMediaForOwnerDelivery, { ...input, orchestrationToken: getAudioOverviewWorkerToken(event) }))) {
+      throw createError({ statusCode: 409, message: 'Audio media is unavailable' })
+    }
+  })
 })

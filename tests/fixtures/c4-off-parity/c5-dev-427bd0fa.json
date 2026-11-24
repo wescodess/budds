@@ -1,0 +1,1066 @@
+{
+  "canvas.attach": {
+    "activityId": "ready-session:0000000000000010008studySessions",
+    "kind": "attached",
+    "receiptId": "10025learnActivityCommandReceipts",
+    "replayed": false,
+    "threadId": "00000000000010021learningThreads"
+  },
+  "canvas.attach.replay": {
+    "activityId": "ready-session:0000000000000010008studySessions",
+    "kind": "attached",
+    "replayed": true,
+    "threadId": "00000000000010021learningThreads"
+  },
+  "canvas.ready": {
+    "activity": {
+      "controls": {
+        "fixedNextPlan": null,
+        "options": [
+          {
+            "available": true,
+            "key": "explain_differently",
+            "label": "Explain differently",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "example",
+            "label": "Show an example",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "try",
+            "label": "Let me try",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "quiz",
+            "label": "Quiz me",
+            "unavailableReason": null
+          },
+          {
+            "available": false,
+            "key": "compare_sources",
+            "label": "Compare sources",
+            "unavailableReason": "evidence"
+          },
+          {
+            "available": true,
+            "key": "practical",
+            "label": "Make it practical",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "easier",
+            "label": "Make it easier",
+            "unavailableReason": null
+          },
+          {
+            "available": false,
+            "key": "harder",
+            "label": "Make it harder",
+            "unavailableReason": "policy"
+          },
+          {
+            "available": false,
+            "key": "answer_now",
+            "label": "Answer now",
+            "unavailableReason": "state"
+          },
+          {
+            "available": true,
+            "key": "time_15",
+            "label": "15 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_25",
+            "label": "25 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_45",
+            "label": "45 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_60",
+            "label": "60 minutes",
+            "unavailableReason": null
+          },
+          {
+            "available": true,
+            "key": "time_no_limit",
+            "label": "No time limit",
+            "unavailableReason": null
+          }
+        ],
+        "reasonText": {
+          "purpose": "Study the supported explanation, then apply it independently.",
+          "text": "This activity uses accepted sources for the current learning objective.",
+          "version": "learn-adaptive.reason-text.v1"
+        },
+        "selected": null
+      },
+      "draftKind": null,
+      "evidenceScope": {
+        "integrityState": "accepted",
+        "sourceRefs": [
+          "000000010014learnSourceSnapshots"
+        ],
+        "version": "learn-adaptive.canvas-evidence-scope.v1"
+      },
+      "fallback": {
+        "body": "This activity could not be replayed safely.",
+        "kind": "text_card",
+        "primaryAction": {
+          "label": "Continue safely",
+          "type": "continue_safe"
+        },
+        "testId": "learn-activity-fallback",
+        "title": "Activity unavailable",
+        "version": "learn-adaptive.text-card-fallback.v1"
+      },
+      "id": "ready-session:0000000000000010008studySessions",
+      "planRevision": 1,
+      "primitive": {
+        "action": "continue",
+        "contractVersion": "learn-adaptive.activity-contract.v1",
+        "props": {
+          "explanation": "Study the supported explanation.",
+          "heading": "Apply a rule",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ]
+        },
+        "rendererVersion": "learn-adaptive.renderer.v1",
+        "testId": "learn-primitive-cited-explanation",
+        "type": "cited_explanation"
+      },
+      "purpose": "Study the supported explanation, then apply it independently.",
+      "reasonCode": "ready_v2_session",
+      "requiredAction": {
+        "kind": "continue",
+        "label": "Continue"
+      },
+      "status": "eligible"
+    },
+    "ownerId": "000000000000000000000010000users",
+    "recovery": null,
+    "recoveryEvidenceIssue": null,
+    "recoveryState": null,
+    "responsePrompt": "Apply the rule independently.",
+    "savedResponse": null,
+    "session": {
+      "blueprintRecordRevision": 1,
+      "contentRevision": 1,
+      "planRecordRevision": 1,
+      "revision": 1,
+      "scheduledEndAt": null,
+      "scheduledStartAt": 1800000000001,
+      "studySessionId": "0000000000000010008studySessions",
+      "timezone": "UTC"
+    },
+    "status": "ready",
+    "thread": {
+      "id": "00000000000010021learningThreads",
+      "intent": "understand",
+      "outcome": "Apply a rule",
+      "revision": 2
+    }
+  },
+  "canvas.ready.delivery": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "activity": {
+        "controls": {
+          "fixedNextPlan": null,
+          "options": [
+            {
+              "available": true,
+              "key": "explain_differently",
+              "label": "Explain differently",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "example",
+              "label": "Show an example",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "try",
+              "label": "Let me try",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "quiz",
+              "label": "Quiz me",
+              "unavailableReason": null
+            },
+            {
+              "available": false,
+              "key": "compare_sources",
+              "label": "Compare sources",
+              "unavailableReason": "evidence"
+            },
+            {
+              "available": true,
+              "key": "practical",
+              "label": "Make it practical",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "easier",
+              "label": "Make it easier",
+              "unavailableReason": null
+            },
+            {
+              "available": false,
+              "key": "harder",
+              "label": "Make it harder",
+              "unavailableReason": "policy"
+            },
+            {
+              "available": false,
+              "key": "answer_now",
+              "label": "Answer now",
+              "unavailableReason": "state"
+            },
+            {
+              "available": true,
+              "key": "time_15",
+              "label": "15 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_25",
+              "label": "25 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_45",
+              "label": "45 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_60",
+              "label": "60 minutes",
+              "unavailableReason": null
+            },
+            {
+              "available": true,
+              "key": "time_no_limit",
+              "label": "No time limit",
+              "unavailableReason": null
+            }
+          ],
+          "reasonText": {
+            "purpose": "Study the supported explanation, then apply it independently.",
+            "text": "This activity uses accepted sources for the current learning objective.",
+            "version": "learn-adaptive.reason-text.v1"
+          },
+          "selected": null
+        },
+        "draftKind": null,
+        "evidenceScope": {
+          "integrityState": "accepted",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ],
+          "version": "learn-adaptive.canvas-evidence-scope.v1"
+        },
+        "fallback": {
+          "body": "This activity could not be replayed safely.",
+          "kind": "text_card",
+          "primaryAction": {
+            "label": "Continue safely",
+            "type": "continue_safe"
+          },
+          "testId": "learn-activity-fallback",
+          "title": "Activity unavailable",
+          "version": "learn-adaptive.text-card-fallback.v1"
+        },
+        "id": "ready-session:0000000000000010008studySessions",
+        "planRevision": 1,
+        "primitive": {
+          "action": "continue",
+          "contractVersion": "learn-adaptive.activity-contract.v1",
+          "props": {
+            "explanation": "Study the supported explanation.",
+            "heading": "Apply a rule",
+            "sourceRefs": [
+              "000000010014learnSourceSnapshots"
+            ]
+          },
+          "rendererVersion": "learn-adaptive.renderer.v1",
+          "testId": "learn-primitive-cited-explanation",
+          "type": "cited_explanation"
+        },
+        "purpose": "Study the supported explanation, then apply it independently.",
+        "reasonCode": "ready_v2_session",
+        "requiredAction": {
+          "kind": "continue",
+          "label": "Continue"
+        },
+        "status": "eligible"
+      },
+      "ownerId": "000000000000000000000010000users",
+      "recovery": null,
+      "recoveryEvidenceIssue": null,
+      "recoveryState": null,
+      "responsePrompt": "Apply the rule independently.",
+      "savedResponse": null,
+      "session": {
+        "blueprintRecordRevision": 1,
+        "contentRevision": 1,
+        "planRecordRevision": 1,
+        "revision": 1,
+        "scheduledEndAt": null,
+        "scheduledStartAt": 1800000000001,
+        "studySessionId": "0000000000000010008studySessions",
+        "timezone": "UTC"
+      },
+      "status": "ready",
+      "thread": {
+        "id": "00000000000010021learningThreads",
+        "intent": "understand",
+        "outcome": "Apply a rule",
+        "revision": 2
+      }
+    }
+  },
+  "canvas.score.denied": {
+    "admission": {
+      "productPolicyVersion": "adaptive-v2-product-budget.utc-hour-day.v1",
+      "rollbackPolicyVersion": "adaptive-v2-provider-rollback.v1",
+      "stage": "reservation",
+      "version": "adaptive-v2-provider-admission.v1"
+    },
+    "code": "pilot_manifest_missing",
+    "kind": "blocked",
+    "message": "Adaptive pilot dispatch is not approved.",
+    "retryable": false
+  },
+  "canvas.stage": {
+    "kind": "ok",
+    "receiptId": "10029learnActivityCommandReceipts",
+    "revision": 3,
+    "value": {
+      "activityId": "ready-session:0000000000000010008studySessions",
+      "status": "submitted"
+    }
+  },
+  "canvas.stage.replay": {
+    "kind": "ok",
+    "receiptId": "10029learnActivityCommandReceipts",
+    "revision": 3,
+    "value": {
+      "activityId": "ready-session:0000000000000010008studySessions",
+      "status": "submitted"
+    }
+  },
+  "canvas.submitted": {
+    "activity": {
+      "controls": {
+        "fixedNextPlan": null,
+        "options": [
+          {
+            "available": false,
+            "key": "explain_differently",
+            "label": "Explain differently",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "example",
+            "label": "Show an example",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "try",
+            "label": "Let me try",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "quiz",
+            "label": "Quiz me",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "compare_sources",
+            "label": "Compare sources",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "practical",
+            "label": "Make it practical",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "easier",
+            "label": "Make it easier",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "harder",
+            "label": "Make it harder",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "answer_now",
+            "label": "Answer now",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_15",
+            "label": "15 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_25",
+            "label": "25 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_45",
+            "label": "45 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_60",
+            "label": "60 minutes",
+            "unavailableReason": "state"
+          },
+          {
+            "available": false,
+            "key": "time_no_limit",
+            "label": "No time limit",
+            "unavailableReason": "state"
+          }
+        ],
+        "reasonText": {
+          "purpose": "Study the supported explanation, then apply it independently.",
+          "text": "This activity uses accepted sources for the current learning objective.",
+          "version": "learn-adaptive.reason-text.v1"
+        },
+        "selected": null
+      },
+      "draftKind": null,
+      "evidenceScope": {
+        "integrityState": "accepted",
+        "sourceRefs": [
+          "000000010014learnSourceSnapshots"
+        ],
+        "version": "learn-adaptive.canvas-evidence-scope.v1"
+      },
+      "fallback": {
+        "body": "This activity could not be replayed safely.",
+        "kind": "text_card",
+        "primaryAction": {
+          "label": "Continue safely",
+          "type": "continue_safe"
+        },
+        "testId": "learn-activity-fallback",
+        "title": "Activity unavailable",
+        "version": "learn-adaptive.text-card-fallback.v1"
+      },
+      "id": "ready-session:0000000000000010008studySessions",
+      "planRevision": 1,
+      "primitive": {
+        "action": "continue",
+        "contractVersion": "learn-adaptive.activity-contract.v1",
+        "props": {
+          "explanation": "Study the supported explanation.",
+          "heading": "Apply a rule",
+          "sourceRefs": [
+            "000000010014learnSourceSnapshots"
+          ]
+        },
+        "rendererVersion": "learn-adaptive.renderer.v1",
+        "testId": "learn-primitive-cited-explanation",
+        "type": "cited_explanation"
+      },
+      "purpose": "Study the supported explanation, then apply it independently.",
+      "reasonCode": "ready_v2_session",
+      "requiredAction": {
+        "kind": "continue",
+        "label": "Continue"
+      },
+      "status": "submitted"
+    },
+    "ownerId": "000000000000000000000010000users",
+    "recovery": null,
+    "recoveryEvidenceIssue": null,
+    "recoveryState": null,
+    "responsePrompt": "Apply the rule independently.",
+    "savedResponse": {
+      "confidence": 3,
+      "response": "My committed response."
+    },
+    "session": {
+      "blueprintRecordRevision": 1,
+      "contentRevision": 1,
+      "planRecordRevision": 1,
+      "revision": 2,
+      "scheduledEndAt": null,
+      "scheduledStartAt": 1800000000001,
+      "studySessionId": "0000000000000010008studySessions",
+      "timezone": "UTC"
+    },
+    "status": "submitted",
+    "thread": {
+      "id": "00000000000010021learningThreads",
+      "intent": "understand",
+      "outcome": "Apply a rule",
+      "revision": 3
+    }
+  },
+  "feedback.invalid": {
+    "error": "Committed feedback projection is invalid"
+  },
+  "feedback.legacy": {
+    "attemptId": "00000000000010013masteryAttempts",
+    "feedback": {
+      "criterionResults": [
+        {
+          "awarded": true,
+          "key": "rule",
+          "label": "Apply the rule correctly.",
+          "message": "Apply the rule correctly.: criterion met.",
+          "template": "criterion_met"
+        }
+      ],
+      "misconceptionFeedback": [],
+      "misconceptionTags": [],
+      "taxonomyVersion": "learn-adaptive.misconception-taxonomy.v1",
+      "templateVersion": "learn-adaptive.feedback-templates.v1"
+    },
+    "nextReviewAt": null,
+    "replayed": true,
+    "scorePercent": 100,
+    "state": "independent",
+    "status": "completed"
+  },
+  "feedback.persisted": {
+    "attemptId": "00000000000010013masteryAttempts",
+    "feedback": {
+      "criterionResults": [
+        {
+          "awarded": true,
+          "key": "rule",
+          "label": "Apply the rule correctly.",
+          "message": "Apply the rule correctly.: criterion met.",
+          "template": "criterion_met"
+        }
+      ],
+      "misconceptionFeedback": [],
+      "misconceptionTags": [],
+      "taxonomyVersion": "learn-adaptive.misconception-taxonomy.v1",
+      "templateVersion": "learn-adaptive.feedback-templates.v1"
+    },
+    "nextReviewAt": null,
+    "replayed": true,
+    "scorePercent": 100,
+    "state": "independent",
+    "status": "completed"
+  },
+  "help.learning.first": {
+    "assistance": {
+      "content": "Teaching faded_example",
+      "kind": "substantive_hint"
+    },
+    "replayed": false,
+    "revision": 2,
+    "status": "recorded"
+  },
+  "help.learning.replay": {
+    "assistance": {
+      "content": "Teaching faded_example",
+      "kind": "substantive_hint"
+    },
+    "replayed": true,
+    "revision": 2,
+    "status": "recorded"
+  },
+  "help.retained_review.first": {
+    "assistance": {
+      "content": "Teaching faded_example",
+      "kind": "substantive_hint"
+    },
+    "replayed": false,
+    "revision": 2,
+    "status": "recorded"
+  },
+  "help.retained_review.replay": {
+    "assistance": {
+      "content": "Teaching faded_example",
+      "kind": "substantive_hint"
+    },
+    "replayed": true,
+    "revision": 2,
+    "status": "recorded"
+  },
+  "retained.delivery.false": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "retained.delivery.true": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "retained.read.false": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "retained.read.true": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "retained.retry": {
+    "jobId": "00000000000000000010016learnJobs",
+    "sessionRevision": 2,
+    "status": "pending"
+  },
+  "retained.start": {
+    "sessionContentId": "000000000000010009sessionContent",
+    "sessionContentRevision": 1,
+    "status": "in_progress"
+  },
+  "today.delivery.false": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "today.delivery.true": {
+    "admission": {
+      "status": "ordinary",
+      "version": "learn-v2.help-admission.v1"
+    },
+    "value": {
+      "_creationTime": 1800000000001.0088,
+      "_id": "000000000000010009sessionContent",
+      "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+      "blocks": [
+        {
+          "_creationTime": 1800000000001.0117,
+          "_id": "000000010012sessionContentBlocks",
+          "content": "Teaching transfer_challenge",
+          "kind": "transfer_challenge",
+          "order": 2,
+          "sessionContentId": "000000000000010009sessionContent",
+          "userId": "https://auth.example|c5-off-parity"
+        }
+      ],
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "claims": [],
+      "createdAt": 1800000000001,
+      "objectiveId": "00000000000010005learnObjectives",
+      "publishedAt": 1800000000001,
+      "revision": 1,
+      "status": "published",
+      "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+      "studySessionId": "0000000000000010008studySessions",
+      "supports": [],
+      "userId": "https://auth.example|c5-off-parity"
+    }
+  },
+  "today.list.false": {
+    "nextScheduledAt": null,
+    "reason": "content_evidence_unavailable",
+    "status": "blocked"
+  },
+  "today.list.ready.false": {
+    "content": {
+      "assessmentRubricVersion": "learn-v2.assessment.v1",
+      "id": "000000000000010009sessionContent",
+      "revision": 1
+    },
+    "mastery": {
+      "nextReviewAt": null,
+      "state": "unseen"
+    },
+    "nextScheduledAt": null,
+    "objective": {
+      "capability": null,
+      "estimatedMinutes": null,
+      "id": "00000000000010005learnObjectives",
+      "title": "Apply a rule"
+    },
+    "placementKind": "learning",
+    "plan": {
+      "blueprintRecordRevision": 1,
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "recordRevision": 1,
+      "revisionId": "00000000010007studyPlanRevisions"
+    },
+    "scheduledEndAt": null,
+    "scheduledStartAt": 1800000000001,
+    "sessionId": "0000000000000010008studySessions",
+    "sessionRevision": 1,
+    "status": "ready",
+    "timezone": "UTC"
+  },
+  "today.list.ready.true": {
+    "content": {
+      "assessmentRubricVersion": "learn-v2.assessment.v1",
+      "id": "000000000000010009sessionContent",
+      "revision": 1
+    },
+    "mastery": {
+      "nextReviewAt": null,
+      "state": "unseen"
+    },
+    "nextScheduledAt": null,
+    "objective": {
+      "capability": null,
+      "estimatedMinutes": null,
+      "id": "00000000000010005learnObjectives",
+      "title": "Apply a rule"
+    },
+    "placementKind": "learning",
+    "plan": {
+      "blueprintRecordRevision": 1,
+      "blueprintRevisionId": "000010004learnBlueprintRevisions",
+      "recordRevision": 1,
+      "revisionId": "00000000010007studyPlanRevisions"
+    },
+    "scheduledEndAt": null,
+    "scheduledStartAt": 1800000000001,
+    "sessionId": "0000000000000010008studySessions",
+    "sessionRevision": 1,
+    "status": "ready",
+    "timezone": "UTC"
+  },
+  "today.list.true": {
+    "nextScheduledAt": null,
+    "reason": "content_evidence_unavailable",
+    "status": "blocked"
+  },
+  "today.read.false": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.ready.false": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [
+      {
+        "_creationTime": 1800000000001.0156,
+        "_id": "000000010016sessionContentClaims",
+        "claim": "The rule applies.",
+        "order": 0,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [
+      {
+        "_creationTime": 1800000000001.0166,
+        "_id": "00000000010017learnClaimSupports",
+        "confidence": 0.95,
+        "conflictStatus": "clear",
+        "entailment": "entailed",
+        "evidenceStatus": "evidence_available",
+        "sessionContentClaimId": "000000010016sessionContentClaims",
+        "sourceSnapshotId": "000000010014learnSourceSnapshots",
+        "userId": "https://auth.example|c5-off-parity",
+        "verifierVersion": "learn-v2.entailment.v2"
+      }
+    ],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.ready.true": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [
+      {
+        "_creationTime": 1800000000001.0156,
+        "_id": "000000010016sessionContentClaims",
+        "claim": "The rule applies.",
+        "order": 0,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [
+      {
+        "_creationTime": 1800000000001.0166,
+        "_id": "00000000010017learnClaimSupports",
+        "confidence": 0.95,
+        "conflictStatus": "clear",
+        "entailment": "entailed",
+        "evidenceStatus": "evidence_available",
+        "sessionContentClaimId": "000000010016sessionContentClaims",
+        "sourceSnapshotId": "000000010014learnSourceSnapshots",
+        "userId": "https://auth.example|c5-off-parity",
+        "verifierVersion": "learn-v2.entailment.v2"
+      }
+    ],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.read.true": {
+    "_creationTime": 1800000000001.0088,
+    "_id": "000000000000010009sessionContent",
+    "assessmentRubricSnapshot": "{\"version\":\"learn-v2.assessment.v1\",\"kind\":\"machine_checkable\",\"responseFormat\":\"short_text\",\"instructions\":\"Apply the source rule.\",\"passingScorePercent\":80,\"criteria\":[{\"key\":\"rule\",\"description\":\"Apply the rule correctly.\",\"weightPercent\":100}]}",
+    "blocks": [
+      {
+        "_creationTime": 1800000000001.0117,
+        "_id": "000000010012sessionContentBlocks",
+        "content": "Teaching transfer_challenge",
+        "kind": "transfer_challenge",
+        "order": 2,
+        "sessionContentId": "000000000000010009sessionContent",
+        "userId": "https://auth.example|c5-off-parity"
+      }
+    ],
+    "blueprintRevisionId": "000010004learnBlueprintRevisions",
+    "claims": [],
+    "createdAt": 1800000000001,
+    "objectiveId": "00000000000010005learnObjectives",
+    "publishedAt": 1800000000001,
+    "revision": 1,
+    "status": "published",
+    "studyPlanRevisionId": "00000000010007studyPlanRevisions",
+    "studySessionId": "0000000000000010008studySessions",
+    "supports": [],
+    "userId": "https://auth.example|c5-off-parity"
+  },
+  "today.retry": {
+    "jobId": "00000000000000000010016learnJobs",
+    "sessionRevision": 2,
+    "status": "pending"
+  },
+  "today.start": {
+    "sessionContentId": "000000000000010009sessionContent",
+    "sessionContentRevision": 1,
+    "status": "in_progress"
+  },
+  "today.start.replay": {
+    "sessionContentId": "000000000000010009sessionContent",
+    "sessionContentRevision": 1,
+    "status": "in_progress"
+  }
+}

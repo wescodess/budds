@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { getFunctionName } from 'convex/server'
 import { mockMatchMedia } from '../../support/match-media'
 
 const mockCourses = ref<any[]>([])
+const mockCoursesError = ref<Error | null>(null)
 
 mockNuxtImport('useUserSession', () => {
   return () => ({
@@ -13,9 +14,9 @@ mockNuxtImport('useUserSession', () => {
 })
 
 mockNuxtImport('useConvexQuery', () => {
-  return (apiRef: unknown) => ({
-    data: getFunctionName(apiRef as any) === 'courses:listByFolder' ? mockCourses : ref([]),
-  })
+  return (apiRef: unknown) => getFunctionName(apiRef as any) === 'courses:listByFolder'
+    ? { data: mockCourses, error: mockCoursesError }
+    : { data: ref([]) }
 })
 
 mockNuxtImport('useFolders', () => {
@@ -82,5 +83,31 @@ describe('FolderShellRail', () => {
 
     expect(wrapper.get('[data-testid="rail-void-course-course-1"]').text()).toBe('Course')
     mockCourses.value = []
+  })
+
+  it('[P2] matches dev while responses are off: course errors never replace the course list', async () => {
+    mockMatchMedia({ mobile: false, touch: false })
+    const Rail = (await import('~/components/folder-shell/FolderShellRail.vue')).default
+    mockCoursesError.value = Object.assign(new Error('denied'), { data: { admission: { status: 'denied', reasonCode: 'test_open' } } })
+    const wrapper = await mountSuspended(Rail, {
+      props: {
+        folderId: 'folder-1' as any,
+        folder: { _id: 'folder-1', name: 'Biology 101', color: null } as any,
+        activeTab: 'learn',
+        activeConversationId: null,
+        activeVoidId: null,
+        compact: false,
+        hidden: false,
+        mobileExpanded: false,
+        drawerSection: null,
+      },
+    })
+    expect(wrapper.find('[data-testid="rail-courses-read-paused"]').exists()).toBe(false)
+    mockCourses.value = [{ _id: 'course-2', title: 'Cells', createdAt: 1 }]
+    await nextTick()
+    expect(wrapper.get('[data-testid="rail-void-course-course-2"]').text()).toBe('Cells')
+    expect(wrapper.find('[data-testid="rail-courses-read-error"]').exists()).toBe(false)
+    mockCourses.value = []
+    mockCoursesError.value = null
   })
 })

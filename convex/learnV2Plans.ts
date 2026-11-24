@@ -1,4 +1,9 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { v } from 'convex/values'
+import { z } from 'zod'
+import { learnIdSchema } from '../shared/learn-v2-responses'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { mutation, query, type MutationCtx } from './_generated/server'
@@ -8,6 +13,7 @@ import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord } from './lib/learnV2MasteryScope'
 import { matchesLegacyFingerprint } from './lib/learnV2ResponsePrivacy'
 import { sourceSupportsGeneration } from './lib/learnV2BackingSource'
+import { disclosureLiterals, planSummary, projectFields, projectPlan } from './lib/learnV2AssessmentDisclosure'
 
 const MAX_IDEMPOTENCY_KEY_LENGTH = 128
 const MAX_OBJECTIVES = 15
@@ -15,6 +21,24 @@ const MAX_SESSIONS = 600
 const MAX_AVAILABILITY_WINDOWS = 28
 const MAX_BLACKOUT_DATES = 90
 const MAX_REVIEW_INTERVALS = 4
+const schedulingReceipt = v.object({
+  _id: v.optional(v.union(v.id('studyPlanRevisions'), v.id('studySessions'))), status: v.optional(disclosureLiterals(['draft', 'accepted', 'missed', 'unavailable'])),
+  reasonCode: v.optional(v.literal('evidence_unavailable')),
+  revision: v.optional(v.number()), recordRevision: v.optional(v.number()), feasibility: v.optional(disclosureLiterals(['feasible', 'infeasible'])),
+  schedulerVersion: v.optional(v.string()), reasonCodes: v.optional(v.array(v.string())), parentRevisionId: v.optional(v.id('studyPlanRevisions')),
+  voidStatus: v.optional(v.literal('scheduled')), sessionCount: v.optional(v.number()), missedSessionIds: v.optional(v.array(v.id('studySessions'))),
+  successorPlanRevisionId: v.optional(v.id('studyPlanRevisions')), changedSessionIds: v.optional(v.array(v.string())), preservedSessionIds: v.optional(v.array(v.string())),
+})
+const schedulingReceiptSchema = z.union([
+  z.object({ status: z.literal('unavailable'), reasonCode: z.literal('evidence_unavailable') }),
+  z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('draft'), revision: z.number().int().positive(), recordRevision: z.number().int().positive(),
+    feasibility: z.enum(['feasible', 'infeasible']), schedulerVersion: z.literal(LEARN_V2_SCHEDULER_VERSION).optional(),
+    reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8).optional(), parentRevisionId: learnIdSchema<'studyPlanRevisions'>().optional() }),
+  z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('accepted'), voidStatus: z.literal('scheduled'), sessionCount: z.number().int().min(0).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
+  z.object({ _id: learnIdSchema<'studySessions'>(), status: z.literal('missed'), revision: z.number().int().positive() }),
+  z.object({ missedSessionIds: z.array(learnIdSchema<'studySessions'>()).max(MAX_SESSIONS) }),
+  z.object({ successorPlanRevisionId: learnIdSchema<'studyPlanRevisions'>(), changedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), preservedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
+])
 
 async function digest(value: unknown) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
@@ -63,7 +87,17 @@ async function replay(ctx: MutationCtx, userId: string, key: string, requestFing
   if (!row) return null
   if (!await matchesLegacyFingerprint(row.requestFingerprint, requestFingerprint)) throw new Error('Idempotency key was already used for a different request')
   await requireLiveVoid(ctx, userId, row.learningVoidId)
-  return JSON.parse(row.response) as Record<string, unknown>
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return projectFields(schedulingReceipt.fields, JSON.parse(row.response))
+  if (row.response.length > 128_000) throw new Error('Scheduling receipt is unavailable')
+  try {
+    const result = schedulingReceiptSchema.safeParse(JSON.parse(row.response))
+    if (!result.success) throw new Error('Scheduling receipt is unavailable')
+    return projectFields(schedulingReceipt.fields, result.data)
+  }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    throw new Error('Scheduling receipt is unavailable', { cause: error })
+  }
 }
 async function receipt(ctx: MutationCtx, data: { userId: string, learningVoidId: Id<'learningVoids'>, idempotencyKey: string, command: string, requestFingerprint: string, response: Record<string, unknown>, nowUtcMs: number }) {
   await ctx.db.insert('learnPlanCommandReceipts', { userId: data.userId, learningVoidId: data.learningVoidId, idempotencyKey: data.idempotencyKey, command: data.command, requestFingerprint: data.requestFingerprint, response: JSON.stringify(data.response), createdAt: data.nowUtcMs })
@@ -107,6 +141,7 @@ async function buildSchedulingInput(ctx: MutationCtx, userId: string, blueprint:
 
 export const createPlanPreview = mutation({
   args: { learningVoidId: v.id('learningVoids'), blueprintRevisionId: v.id('learnBlueprintRevisions'), expectedVoidRevision: v.number(), expectedBlueprintRecordRevision: v.number(), idempotencyKey: v.string(), schedulingInput: schedulingInputValidator },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedBlueprintRecordRevision, 'Expected Blueprint record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('createPlanPreview', args)
@@ -134,6 +169,7 @@ export const createPlanPreview = mutation({
 
 export const editPlanPreview = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedPlanRecordRevision: v.number(), expectedVoidRevision: v.number(), expectedBlueprintRecordRevision: v.number(), changeReason: v.union(v.literal('availability_changed'), v.literal('deadline_changed'), v.literal('session_length_changed')), idempotencyKey: v.string(), schedulingInput: schedulingInputValidator },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedBlueprintRecordRevision, 'Expected Blueprint record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('editPlanPreview', args)
@@ -159,6 +195,7 @@ export const editPlanPreview = mutation({
 
 export const acceptPlanPreview = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedVoidRevision: v.number(), expectedPlanRecordRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedVoidRevision, 'Expected Learning Void revision'); assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('acceptPlanPreview', args)
@@ -202,6 +239,7 @@ export const acceptPlanPreview = mutation({
 
 export const markExpiredSessionsMissed = mutation({
   args: { learningVoidId: v.id('learningVoids'), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertIdempotencyKey(args.idempotencyKey)
     const now = Date.now()
@@ -214,11 +252,27 @@ export const markExpiredSessionsMissed = mutation({
     const missedSessionIds: Id<'studySessions'>[] = []
     const revision = await ctx.db.get(activeRevisionId)
     if (!revision || revision.userId !== userId || revision.studyPlanId !== plans[0]!._id) throw new Error('Current active Study Plan revision not found')
-    const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
+    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, revision, MAX_SESSIONS) : []
+    const sessions = [...new Map([...currentSessions, ...fixed].map(row => [row._id, row])).values()]
     if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
-    for (const session of sessions) if ((session.status === 'planned' || session.status === 'ready') && (session.scheduledEndAt ?? session.scheduledStartAt) < now) {
-      await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' }); missedSessionIds.push(session._id)
-      await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+    for (const session of sessions) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId
+        && ['planned', 'ready', 'in_progress'].includes(session.status) && now >= (session.scheduledEndAt ?? session.scheduledStartAt)) {
+        const opportunity = await ctx.db.get(session.assessmentOpportunityId)
+        const terminal = opportunity && !opportunity.submissionId && await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session)
+        if (terminal) {
+          if (terminal === 'missed') {
+            missedSessionIds.push(session._id)
+            await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+          }
+          continue
+        }
+      }
+      if ((session.status === 'planned' || session.status === 'ready') && (session.scheduledEndAt ?? session.scheduledStartAt) < now) {
+        await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' }); missedSessionIds.push(session._id)
+        await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: revision._id, studySessionId: session._id, reasonCode: 'session_expired', details: { priorStatus: session.status, scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
+      }
     }
     const response = { missedSessionIds }
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'markExpiredSessionsMissed', requestFingerprint, response, nowUtcMs: now })
@@ -228,19 +282,26 @@ export const markExpiredSessionsMissed = mutation({
 
 export const markStudySessionMissed = mutation({
   args: { studySessionId: v.id('studySessions'), expectedSessionRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedSessionRevision, 'Expected Study Session revision'); assertIdempotencyKey(args.idempotencyKey)
     const userId = await requireLearnV2MutationAccess(ctx); const requestFingerprint = fingerprint('markStudySessionMissed', args)
     const session = await ctx.db.get(args.studySessionId); if (!session || session.userId !== userId) throw new Error('Study Session not found')
     const plan = await ctx.db.get(session.studyPlanRevisionId); if (!plan || plan.userId !== userId) throw new Error('Study-plan revision not found')
     const planRoot = await ctx.db.get(plan.studyPlanId)
-    if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
+    if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id
+      && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))) throw new Error('Study-plan revision is not current')
     const prior = await replay(ctx, userId, args.idempotencyKey, requestFingerprint); if (prior) return prior
     const learningVoid = await requireLiveVoid(ctx, userId, plan.learningVoidId); const now = Date.now()
     if (session.revision !== args.expectedSessionRevision || !['planned', 'ready'].includes(session.status)) throw new Error('Study Session revision conflict')
     if ((session.scheduledEndAt ?? session.scheduledStartAt) >= now) throw new Error('Future Study Session cannot be marked missed')
-    await ctx.db.patch(session._id, { status: 'missed', revision: session.revision + 1, missedAt: now, auditReasonCode: 'session_expired' })
-    const response = { _id: session._id, status: 'missed' as const, revision: session.revision + 1 }
+    let revision = session.revision + 1
+    if (isDedicatedLearnCheck(session)) {
+      const opportunity = await ctx.db.get(session.assessmentOpportunityId!)
+      if (!opportunity || await finalizeLearnDelayedCheckSession(ctx, userId, opportunity, session) !== 'missed') throw new Error('Fixed check window is unavailable')
+      revision = session.revision
+    } else await ctx.db.patch(session._id, { status: 'missed', revision, missedAt: now, auditReasonCode: 'session_expired' })
+    const response = { _id: session._id, status: 'missed' as const, revision }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: plan._id, studySessionId: session._id, reasonCode: 'session_expired', details: { scheduledEndAt: session.scheduledEndAt ?? session.scheduledStartAt }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'markStudySessionMissed', requestFingerprint, response, nowUtcMs: now })
     return response
@@ -249,6 +310,7 @@ export const markStudySessionMissed = mutation({
 
 export const reflowFutureIncomplete = mutation({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions'), expectedPlanRecordRevision: v.number(), idempotencyKey: v.string() },
+  returns: schedulingReceipt,
   handler: async (ctx, args) => {
     assertPositiveInteger(args.expectedPlanRecordRevision, 'Expected plan record revision'); assertIdempotencyKey(args.idempotencyKey)
     const now = Date.now()
@@ -259,8 +321,11 @@ export const reflowFutureIncomplete = mutation({
     if (plan.recordRevision !== args.expectedPlanRecordRevision || !['accepted', 'active'].includes(plan.status)) throw new Error('Study-plan revision conflict')
     const planRoot = await ctx.db.get(plan.studyPlanId)
     if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
-    const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
-    if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    await requireLearnActiveWorkPlan(ctx, userId, plan)
+    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
+    if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan, MAX_SESSIONS) : []
+    const sessions = currentSessions.filter(row => !isDedicatedLearnCheck(row))
     const storedInput = JSON.parse(plan.inputSnapshot ?? '{}') as StudyPlanSchedulingInput
     const validPriorities = new Set<SchedulingPriority>(['overdue_retained_review', 'prerequisite_remediation', 'due_review', 'new_learning', 'optional_enrichment'])
     const reflow = rescheduleStudySessions({
@@ -294,7 +359,10 @@ export const reflowFutureIncomplete = mutation({
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
       // Content belongs to the immutable old session identity. A successor
       // shell must regenerate rather than exposing `ready` without content.
-      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : 'preserved_during_reflow' })
+      const retainedBlock = LEARN_MEASUREMENT_CAPABILITIES.responses && session.status === 'blocked'
+        && session.assessmentPurpose === 'retained_transfer' && !session.assessmentOpportunityId
+      const successorSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: successorId, primaryObjectiveId: session.primaryObjectiveId, placementId: session.placementId, status: session.status === 'ready' ? 'planned' : session.status, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt, scheduledEndAt: session.scheduledEndAt, timezone: session.timezone, offsetMinutes: session.offsetMinutes, placementKind: session.placementKind, schedulingPriority: session.schedulingPriority, schedulerVersion: session.schedulerVersion, auditReasonCode: session.status === 'ready' ? 'ready_content_regeneration_required' : retainedBlock ? session.auditReasonCode : 'preserved_during_reflow',
+        ...(retainedBlock ? { assessmentPurpose: session.assessmentPurpose } : {}) })
       if (session.status === 'ready' || session.status === 'planned') generationCandidates.push({ id: successorSessionId, objectiveId: session.primaryObjectiveId, revision: session.status === 'ready' ? 1 : session.revision, scheduledStartAt: session.scheduledStartAt })
     }
     if (plan.blueprintRevisionId) {
@@ -307,7 +375,8 @@ export const reflowFutureIncomplete = mutation({
     }
     await ctx.db.patch(plan._id, { status: 'superseded', recordRevision: (plan.recordRevision ?? 0) + 1, updatedAt: now })
     await ctx.db.patch(planRoot._id, { activeRevisionId: successorId, updatedAt: now })
-    const response = { successorPlanRevisionId: successorId, changedSessionIds: reflow.replacedSessionIds, preservedSessionIds: reflow.preservedSessionIds, recordRevision: 1 }
+    const response = { successorPlanRevisionId: successorId, changedSessionIds: reflow.replacedSessionIds,
+      preservedSessionIds: [...reflow.preservedSessionIds, ...fixed.map(row => String(row._id))], recordRevision: 1 }
     await audit(ctx, { userId, learningVoidId: learningVoid._id, studyPlanRevisionId: successorId, reasonCode: 'future_incomplete_reflow_accepted', details: { ...response, parentRevisionId: plan._id }, nowUtcMs: now })
     await receipt(ctx, { userId, learningVoidId: learningVoid._id, idempotencyKey: args.idempotencyKey, command: 'reflowFutureIncomplete', requestFingerprint, response, nowUtcMs: now })
     return response
@@ -316,10 +385,11 @@ export const reflowFutureIncomplete = mutation({
 
 export const getPlanPreview = query({
   args: { studyPlanRevisionId: v.id('studyPlanRevisions') },
+  returns: v.union(planSummary, v.null()),
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx); const row = await ctx.db.get(args.studyPlanRevisionId)
     if (!row || row.userId !== userId) return null
     const voidRow = await ctx.db.get(row.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
-    return voidRow?.userId === userId && folder?.userId === userId ? row : null
+    return voidRow?.userId === userId && folder?.userId === userId ? projectPlan(row) : null
   },
 })

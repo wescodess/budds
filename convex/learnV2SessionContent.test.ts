@@ -1,5 +1,7 @@
 import { convexTest } from 'convex-test'
-import { describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { v } from 'convex/values'
+import { internalMutation } from './_generated/server'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
@@ -8,6 +10,13 @@ import { LEARN_V2_MASTERY_LOOP_BLOCKS, learnV2SessionCandidateFailureReason, nor
 const sourceId = 'source-snapshot-1'
 const identity = { tokenIdentifier: 'https://auth.example.com|session-content-owner', name: 'Session Content Owner' }
 const modules = import.meta.glob('./**/*.ts')
+const policy = vi.hoisted(() => ({ responses: false }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES, get responses() { return policy.responses } } }
+})
+beforeEach(() => { policy.responses = false })
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers() })
 const candidate = () => ({
   version: 'learn-v2.session-content.v1',
   generatorVersion: 'session-content-test',
@@ -24,9 +33,20 @@ function verifierDecisionsJson(snapshotId: Id<'learnSourceSnapshots'>, excerptId
   return JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: input.claims.flatMap(claim => claim.supportSourceSnapshotIds.map(sourceSnapshotId => ({ claimOrder: claim.order, sourceSnapshotId: sourceSnapshotId === sourceId ? String(snapshotId) : sourceSnapshotId, sourceExcerptId: String(excerptId), decision: 'entailed', verifierVersion: 'learn-v2.entailment.v2', confidence: 0.9 }))) })
 }
 
-async function seedGenerationGraph() {
+async function seedGenerationGraph(commitFailure?: 'unexpected' | 'limit') {
   process.env.LEARN_V2_ENABLED = 'true'
-  const t = convexTest(schema, modules)
+  const t = commitFailure ? convexTest({ schema, transactionLimits: true, modules: { ...modules,
+    './learnV2SessionContent.ts': async () => ({ ...await import('./learnV2SessionContent'), commitSessionContentCandidate: internalMutation({
+      args: { tokenIdentifier: v.string(), jobId: v.id('learnJobs'), leaseToken: v.string(), expectedRevision: v.number(), candidateJson: v.string(), verifierDecisionsJson: v.string() },
+      handler: async (ctx, args) => {
+        const job = (await ctx.db.get(args.jobId))!
+        await ctx.db.patch(job.learningVoidId!, { title: 'Uncommitted publication marker' })
+        if (commitFailure === 'unexpected') throw new Error('Injected publication commit failure')
+        for (let read = 0; read < 4200; read++) await ctx.db.get(args.jobId)
+        throw new Error('Expected native transaction limit')
+      },
+    }) }),
+  } }) : convexTest(schema, modules)
   const owner = t.withIdentity(identity)
   await owner.mutation(api.users.upsertUser, {})
   await t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: identity.tokenIdentifier, enabled: true })
@@ -61,6 +81,29 @@ async function leaseAndBegin(t: ReturnType<typeof convexTest>, jobId: Id<'learnJ
 }
 
 describe('Learn V2 session-content publication contract', () => {
+  test.each([false, true].flatMap(responses => (['unexpected', 'limit'] as const).map(failure => ({ responses, failure }))))(
+    'final publication $failure leaves an immediate retry with responses=$responses', async ({ responses, failure }) => {
+      policy.responses = responses
+      vi.useFakeTimers()
+      for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
+      const f = await seedGenerationGraph(failure)
+      await f.t.run(ctx => ctx.db.patch(f.graph.jobId, { providerEnabled: true, providerModel: 'synthetic/model' }))
+      let request = 0
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: `synthetic-generation-${++request}`, model: 'synthetic/model',
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: request === 1
+          ? JSON.stringify(candidate()).replaceAll(sourceId, String(f.graph.snapshotId))
+          : verifierDecisionsJson(f.graph.snapshotId, f.graph.excerptId) } }] }))))
+      const action = f.owner.action(internal.learnV2SessionContent.executeSessionContentGeneration, {
+        tokenIdentifier: identity.tokenIdentifier, jobId: f.graph.jobId, expectedRevision: 1 })
+      if (responses) await expect(action).rejects.toThrow(failure === 'limit' ? 'Too many index ranges' : 'Injected publication commit failure')
+      else expect(await action).toEqual({ status: 'generation_failed' })
+      expect(await f.t.run(ctx => ctx.db.get(f.graph.jobId))).toMatchObject({ status: 'failed', terminalReason: 'session_content_commit_failed' })
+      expect(await f.t.run(ctx => ctx.db.get(f.graph.sessionId))).toMatchObject({ status: 'generation_failed', revision: 2, auditReasonCode: 'session_content_commit_failed' })
+      expect(await f.t.run(ctx => ctx.db.get(f.graph.voidId))).toMatchObject({ title: 'Learn' })
+      expect(await f.owner.mutation(api.learnV2SessionContent.retrySessionContentGeneration, { studySessionId: f.graph.sessionId,
+        expectedSessionRevision: 2, idempotencyKey: 'immediate_publication_retry_1234567890' })).toMatchObject({ status: 'pending', sessionRevision: 3 })
+    })
+
   test('a purged objective contract produces a clean session-generation error', async () => {
     const { t, graph } = await seedGenerationGraph()
     const { lease, begun } = await leaseAndBegin(t, graph.jobId)

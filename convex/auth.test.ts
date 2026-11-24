@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { convexTest } from 'convex-test'
 import betterAuthTest from '@convex-dev/better-auth/test'
 import schema from './schema'
@@ -30,6 +30,12 @@ function decodeBase64Url(value: string) {
 }
 
 describe('Better Auth with the Convex adapter', () => {
+  beforeAll(async () => {
+    // Load the auth module graph before the per-test timeout starts.
+    vi.stubEnv('CONVEX_SITE_URL', convexSiteUrl)
+    await import('./auth')
+  })
+
   beforeEach(() => {
     vi.stubEnv('NODE_ENV', 'development')
     vi.stubEnv('TEST', 'false')

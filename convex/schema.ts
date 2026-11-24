@@ -2,6 +2,7 @@ import { defineSchema, defineTable } from 'convex/server'
 import { v } from 'convex/values'
 import * as measurementStorage from './lib/learnV2MeasurementStorage'
 import * as artifactLineage from './lib/learnV2ArtifactLineageContract'
+import { messageHelpScope } from './lib/learnV2HelpContract'
 import { adaptiveProviderJobFields, learnActivityCommandReceiptFields, learnActivityDecisionFields, learnActivityEvidenceLinkFields, learnActivityOverrideFields, learnAdaptiveThreadDeletionJobFields, learningThreadActivityFields, learningThreadArtifactFields, learningThreadContributionFields, learningThreadFields, learningThreadPreferenceFields } from '../shared/adaptive-learn-storage-manifest'
 import { learnActivityEventFields } from '../shared/learn-adaptive-events'
 import { adaptiveRoutingAnalysisPlanValidator } from '../shared/learn-adaptive-experiment'
@@ -98,6 +99,7 @@ export default defineSchema({
     .index('by_userId_and_conversationId', ['userId', 'conversationId']),
 
   messages: defineTable({
+    helpScope: v.optional(v.object(messageHelpScope)),
     conversationId: v.id('conversations'),
     userId: v.string(),
     role: v.union(v.literal('user'), v.literal('assistant')),
@@ -357,6 +359,8 @@ export default defineSchema({
     nextAttemptAt: v.optional(v.number()),
     status: v.union(v.literal('pending'), v.literal('available'), v.literal('unavailable')),
     questionSnapshot: v.object({
+      scopeVersion: v.optional(v.literal('quiz.source-scope.v1')),
+      sourceDocumentId: v.optional(v.id('documents')),
       question: v.string(),
       questionType: v.union(v.literal('free-response'), v.literal('fill_in_the_blank')),
       expectedAnswer: v.string(),
@@ -993,6 +997,7 @@ export default defineSchema({
     .index('by_expiresAt', ['expiresAt']),
 
   audioOverviewInterjections: defineTable({
+    taskId: v.optional(v.id('tasks')),
     audioOverviewId: v.id('audioOverviews'),
     userId: v.string(),
     insertedAfterTurnIndex: v.number(),
@@ -1194,6 +1199,7 @@ export default defineSchema({
     courseId: v.id('courses'),
     sectionId: v.id('courseSections'),
     flashcardRoomCardId: v.optional(v.id('flashcardRoomCards')),
+    sourceVersionId: v.optional(v.id('flashcardRoomVersions')),
     prompt: v.string(),
     answer: v.string(),
     easeFactor: v.number(),
@@ -1586,7 +1592,7 @@ export default defineSchema({
   masteryRecords: defineTable({ userId: v.string(), blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), objectiveId: v.id('learnObjectives'), scopeKey: v.optional(v.string()), state: masteryStateValidator, schedulingPriority: v.optional(v.union(v.literal('remediation'), v.literal('standard'), v.literal('deprioritized'))), recordRevision: v.optional(v.number()), firstIndependentPassAt: v.optional(v.number()), firstIndependentLocalDate: v.optional(v.string()), firstIndependentTimezone: v.optional(v.string()), lastAttemptAt: v.optional(v.number()), lastAttemptId: v.optional(v.id('masteryAttempts')), remediationAttemptId: v.optional(v.id('masteryAttempts')), nextReviewAt: v.optional(v.number()), updatedAt: v.optional(v.number()) }).index('by_userId', ['userId']).index('by_userId_and_scopeKey', ['userId', 'scopeKey']).index('by_userId_and_blueprintRevisionId', ['userId', 'blueprintRevisionId']).index('by_userId_and_blueprintRevisionId_and_objectiveId', ['userId', 'blueprintRevisionId', 'objectiveId']).index('by_userId_and_objectiveId', ['userId', 'objectiveId']).index('by_userId_and_nextReviewAt', ['userId', 'nextReviewAt']).index('by_userId_and_state_and_updatedAt', ['userId', 'state', 'updatedAt']),
   studyPlans: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), revision: v.number(), activeRevisionId: v.optional(v.id('studyPlanRevisions')), createdAt: v.number(), updatedAt: v.optional(v.number()) }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   studyPlanRevisions: defineTable({ userId: v.string(), studyPlanId: v.id('studyPlans'), learningVoidId: v.id('learningVoids'), revision: v.number(), recordRevision: v.optional(v.number()), status: v.union(v.literal('draft'), v.literal('accepted'), v.literal('active'), v.literal('superseded')), parentRevisionId: v.optional(v.id('studyPlanRevisions')), changeReason: v.optional(v.union(v.literal('availability_changed'), v.literal('deadline_changed'), v.literal('session_length_changed'), v.literal('future_incomplete_reflow'))), blueprintRevisionId: v.optional(v.id('learnBlueprintRevisions')), blueprintRecordRevision: v.optional(v.number()), schedulerVersion: v.optional(v.string()), timezone: v.optional(v.string()), inputSnapshot: v.optional(v.string()), resultSnapshot: v.optional(v.string()), feasibility: v.optional(v.union(v.literal('feasible'), v.literal('infeasible'))), createdAt: v.number(), acceptedAt: v.optional(v.number()), updatedAt: v.optional(v.number()) }).index('by_userId', ['userId']).index('by_userId_and_studyPlanId_and_revision', ['userId', 'studyPlanId', 'revision']).index('by_userId_and_studyPlanId_and_feasibility_and_revision', ['userId', 'studyPlanId', 'feasibility', 'revision']).index('by_userId_and_learningVoidId_and_status', ['userId', 'learningVoidId', 'status']),
-  studySessions: defineTable({ ...measurementStorage.optionalAssessmentReferenceFields, userId: v.string(), studyPlanRevisionId: v.id('studyPlanRevisions'), primaryObjectiveId: v.id('learnObjectives'), placementId: v.optional(v.string()), status: v.union(v.literal('planned'), v.literal('ready'), v.literal('in_progress'), v.literal('completed'), v.literal('missed'), v.literal('cancelled'), v.literal('blocked'), v.literal('generation_failed'), v.literal('needs_reschedule')), revision: v.number(), scheduledStartAt: v.number(), scheduledEndAt: v.optional(v.number()), timezone: v.optional(v.string()), offsetMinutes: v.optional(v.number()), placementKind: v.optional(v.union(v.literal('learning'), v.literal('review'), v.literal('retained_review'))), schedulingPriority: v.optional(v.string()), schedulerVersion: v.optional(v.string()), startedSessionContentId: v.optional(v.id('sessionContent')), startedSessionContentRevision: v.optional(v.number()), substantiveHintUsedAt: v.optional(v.number()), answerRevealedAt: v.optional(v.number()), assistanceRevision: v.optional(v.number()), missedAt: v.optional(v.number()), auditReasonCode: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', ['userId', 'studyPlanRevisionId', 'scheduledStartAt']).index('by_userId_and_status_and_scheduledStartAt', ['userId', 'status', 'scheduledStartAt']).index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId']),
+  studySessions: defineTable({ ...measurementStorage.optionalAssessmentReferenceFields, userId: v.string(), studyPlanRevisionId: v.id('studyPlanRevisions'), primaryObjectiveId: v.id('learnObjectives'), placementId: v.optional(v.string()), status: v.union(v.literal('planned'), v.literal('ready'), v.literal('in_progress'), v.literal('completed'), v.literal('missed'), v.literal('cancelled'), v.literal('blocked'), v.literal('generation_failed'), v.literal('needs_reschedule')), revision: v.number(), scheduledStartAt: v.number(), scheduledEndAt: v.optional(v.number()), timezone: v.optional(v.string()), offsetMinutes: v.optional(v.number()), placementKind: v.optional(v.union(v.literal('learning'), v.literal('review'), v.literal('retained_review'))), schedulingPriority: v.optional(v.string()), schedulerVersion: v.optional(v.string()), startedSessionContentId: v.optional(v.id('sessionContent')), startedSessionContentRevision: v.optional(v.number()), substantiveHintUsedAt: v.optional(v.number()), answerRevealedAt: v.optional(v.number()), assistanceRevision: v.optional(v.number()), missedAt: v.optional(v.number()), auditReasonCode: v.optional(v.string()) }).index('by_userId', ['userId']).index('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', ['userId', 'studyPlanRevisionId', 'scheduledStartAt']).index('by_userId_and_status_and_scheduledStartAt', ['userId', 'status', 'scheduledStartAt']).index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId']).index('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', ['userId', 'studyPlanRevisionId', 'assessmentPurpose']),
   learnPlanCommandReceipts: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), idempotencyKey: v.string(), command: v.string(), requestFingerprint: v.string(), response: v.string(), createdAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_idempotencyKey', ['userId', 'idempotencyKey']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnPlanAuditEvents: defineTable({ userId: v.string(), learningVoidId: v.id('learningVoids'), studyPlanRevisionId: v.optional(v.id('studyPlanRevisions')), studySessionId: v.optional(v.id('studySessions')), reasonCode: v.string(), details: v.string(), createdAt: v.number() }).index('by_userId', ['userId']).index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']).index('by_userId_and_studyPlanRevisionId', ['userId', 'studyPlanRevisionId']),
   studySessionRetrievalObjectives: defineTable({ userId: v.string(), studySessionId: v.id('studySessions'), objectiveId: v.id('learnObjectives'), order: v.number() }).index('by_userId', ['userId']).index('by_userId_and_studySessionId_and_order', ['userId', 'studySessionId', 'order']),
@@ -1775,6 +1781,12 @@ export default defineSchema({
     .index('by_userId_and_reportRunId_and_sequence', ['userId', 'reportRunId', 'sequence'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_assignmentId_and_horizonDays', ['userId', 'assignmentId', 'horizonDays']),
+  learnMeasurementReportAccessAudits: defineTable({
+    userId: v.string(), reportRunId: v.union(v.id('learnMeasurementReportRuns'), v.null()),
+    action: v.union(v.literal('request'), v.literal('refresh'), v.literal('manifest'), v.literal('page'), v.literal('export'), v.literal('download')),
+    status: v.union(v.literal('requested'), v.literal('disabled'), v.literal('unavailable'), v.literal('building'), v.literal('failed'), v.literal('stale'), v.literal('sealed'), v.literal('read'), v.literal('aggregate_page')),
+    createdAt: v.number(),
+  }).index('by_userId', ['userId']).index('by_userId_and_createdAt', ['userId', 'createdAt']).index('by_createdAt', ['createdAt']),
   learnMeasurementReportRuns: defineTable(measurementStorage.reportRunFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_status_and_createdAt', ['userId', 'status', 'createdAt'])
@@ -1829,7 +1841,9 @@ export default defineSchema({
     .index('by_userId_and_threadId', ['userId', 'threadId'])
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
+    .index('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'])
     .index('by_userId', ['userId'])
+    .index('by_userId_and_phase', ['userId', 'phase'])
     .index('by_userId_and_contextPins_canvas_activityId', ['userId', 'contextPins.canvas.activityId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_contextPins_studySessionId', ['userId', 'contextPins.studySessionId'])
@@ -1837,6 +1851,10 @@ export default defineSchema({
     .index('by_userId_and_delayedCheckId', ['userId', 'delayedCheckId'])
     .index('by_userId_and_submissionId', ['userId', 'submissionId'])
     .index('by_phase_and_dueAt', ['phase', 'dueAt'])
+    .index('by_phase_and_openAt', ['phase', 'openAt'])
+    .index('by_phase_and_closeAt', ['phase', 'closeAt'])
+    .index('by_userId_and_phase_and_openAt', ['userId', 'phase', 'openAt'])
+    .index('by_userId_and_phase_and_closeAt', ['userId', 'phase', 'closeAt'])
     .index('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', ['userId', 'firstCheckClaim.claimKey', 'checkSequence']),
   learnMeasurementAssignments: defineTable(measurementStorage.measurementAssignmentValidator)
     .index('by_userId', ['userId'])
@@ -1881,15 +1899,28 @@ export default defineSchema({
   learnMeasurementReportFacts: defineTable(measurementStorage.reportFactFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_sequence', ['userId', 'sequence'])
+    .index('by_userId_and_fact_kind_and_sequence', ['userId', 'fact.kind', 'sequence'])
     .index('by_userId_and_epoch_and_sequence', ['userId', 'epoch', 'sequence'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_fact_assignmentId', ['userId', 'fact.assignmentId'])
     .index('by_userId_and_fact_assessmentOpportunityId', ['userId', 'fact.assessmentOpportunityId'])
     .index('by_userId_and_fact_submissionId', ['userId', 'fact.submissionId'])
+    .index('by_fact_claimKey', ['fact.claimKey'])
+    .index('by_fact_basisAttemptId', ['fact.basisAttemptId'])
+    .index('by_userId_and_fact_objectiveId_and_fact_stratum_epoch', ['userId', 'fact.objectiveId', 'fact.stratum.epoch'])
+    .index('by_fact_firstCheckOpportunityId', ['fact.firstCheckOpportunityId'])
+    .index('by_fact_firstSlot_firstCheckOpportunityId', ['fact.firstSlot.firstCheckOpportunityId'])
+    .index('by_fact_slot_firstCheckOpportunityId', ['fact.slot.firstCheckOpportunityId'])
+    .index('by_userId_and_fact_kind', ['userId', 'fact.kind'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
+    .index('by_createdAt', ['createdAt'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_sequence', ['userId', 'sequence']),
+  learnMeasurementDueWorkCursors: defineTable({
+    key: v.literal('delayed_checks'), through: v.union(v.number(), v.null()),
+    leaseId: v.union(v.string(), v.null()), leaseExpiresAt: v.number(), updatedAt: v.number(),
+  }).index('by_key', ['key']),
   learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_caseId_and_serverTime', ['userId', 'caseId', 'serverTime'])

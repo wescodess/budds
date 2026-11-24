@@ -1,3 +1,5 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../../shared/learn-v2-measurement-storage-manifest'
+import { assertTeachingCommand, createTeachingHelpGuard, TeachingSourceError } from '../../utils/teaching-source-scope'
 import { getErrorMessage, getErrorStatusCode } from '../../../shared/errors'
 import { ConvexHttpClient } from 'convex/browser'
 import type { H3Event } from 'h3'
@@ -40,6 +42,8 @@ export default defineEventHandler(async (event) => {
     language?: string
   }>(event)
 
+  assertTeachingCommand(body, { folderId: 'string', model: 'string', questionCount: 'number', topics: 'strings', questionTypes: 'strings', difficulty: 'string', resourceIds: 'strings', taskId: 'string', language: 'string' })
+
   if (!body?.folderId?.trim()) {
     throw createError({ statusCode: 400, message: 'folderId is required' })
   }
@@ -47,6 +51,9 @@ export default defineEventHandler(async (event) => {
   const taskId = body.taskId as Id<'tasks'> | undefined
   const convexClient = makeConvexClient(event)
   if (!convexClient) throw createError({ statusCode: 503, message: 'Quiz storage unavailable' })
+
+  const authorizeTeaching = createTeachingHelpGuard(event, convexClient, { folderId: body.folderId as Id<'folders'>, documentIds: body.resourceIds as Id<'documents'>[] | undefined })
+  const teachingScope = await authorizeTeaching()
 
   async function setTaskProgress(progress: string) {
     if (!taskId || !convexClient) return
@@ -75,8 +82,9 @@ export default defineEventHandler(async (event) => {
 
     let searchUnavailable = false
     const searchOrEmpty = async (params: Parameters<typeof searchDocuments>[0]) => {
+      await authorizeTeaching()
       try {
-        const result = await searchDocuments(params)
+        const result = await searchDocuments({ ...params, teachingScope })
         searchUnavailable = false
         return result
       }
@@ -99,8 +107,9 @@ export default defineEventHandler(async (event) => {
     let chunks: AISearchChunk[] = searchResults.data ?? []
 
     if (chunks.length < 2) {
+      await authorizeTeaching()
       try {
-        const folderDocs = await fetchFolderDocs({ userId, folderId: body.folderId, maxChars: 80_000 })
+        const folderDocs = await fetchFolderDocs({ teachingScope, userId, folderId: body.folderId, maxChars: 80_000 })
         if (folderDocs.length > 0) {
           chunks = folderDocs.map((doc): AISearchChunk => ({
             id: doc.key,
@@ -116,6 +125,7 @@ export default defineEventHandler(async (event) => {
         }
       }
       catch (error) {
+        if (error instanceof TeachingSourceError) throw error
         console.error('[quiz/generate] Failed to fetch folder docs fallback:', error)
       }
     }
@@ -154,7 +164,9 @@ export default defineEventHandler(async (event) => {
       difficulty: body.difficulty,
     })
 
+    await authorizeTeaching()
     const completion = await generateCompletion({
+      redactUpstreamErrorBody: LEARN_MEASUREMENT_CAPABILITIES.responses,
       model,
       messages,
       temperature: 0.3,
@@ -163,6 +175,7 @@ export default defineEventHandler(async (event) => {
 
     const raw = completion.choices[0]?.message?.content ?? ''
     const parsed = parseQuizResponse(raw)
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && parsed.questions.length > questionCount) throw createError({ statusCode: 502, message: 'Quiz exceeds the requested publication size' })
     parsed.questions = parsed.questions.filter(question => !question.gradingCriteria || chunks[question.sourceIndex] !== undefined)
 
     if (parsed.questions.length === 0) {
@@ -210,15 +223,25 @@ export default defineEventHandler(async (event) => {
     if (invalidEvidenceCount > 0) {
       console.info('[quiz-quality-evidence]', { status: 'unavailable', reason: 'missing_evidence', itemCount: invalidEvidenceCount })
     }
-    if (validQualityItems.length > 0) await shadowEvaluateQuiz(event, validQualityItems).catch(() => undefined)
+    await authorizeTeaching()
+    if (validQualityItems.length > 0) {
+      let admissionError: unknown
+      await shadowEvaluateQuiz(event, validQualityItems, async () => {
+        try { await authorizeTeaching() }
+        catch (error) { admissionError = error; throw error }
+      }).catch(() => { if (admissionError) throw admissionError })
+    }
 
     await setTaskProgress('Saving quiz…')
 
+    await authorizeTeaching()
     const { quizId } = await convexClient.mutation(api.quizzes.createWithQuestions, {
       folderId: body.folderId as Id<'folders'>,
       title: parsed.title,
       model,
       creationMethod: 'auto_generated' as const,
+      requestedQuestionCount: questionCount,
+      sourcePins: teachingScope?.filter(source => chunks.some(chunk => chunk.attributes?.documentId === source.documentId)).map(({ documentId, sourceRevision, contentHash }) => ({ documentId, sourceRevision, contentHash })),
       difficulty: body.difficulty,
       language: body.language,
       questions: persistQuestions,
@@ -231,6 +254,7 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    await authorizeTeaching()
     return {
       title: parsed.title,
       model,

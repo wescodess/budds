@@ -1,6 +1,7 @@
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
+import { LearnInputValidationError } from './learn-v2-errors'
 import { z } from 'zod'
 import type { GenericId } from 'convex/values'
-import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 
 export const LEARN_V2_RESPONSE_CONTRACT_VERSION = 'learn-v2.responses.v1' as const
 export const LEARN_V2_RESPONSE_CONTEXT_VERSION = 'learn-v2.response-context.v1' as const
@@ -29,7 +30,10 @@ export const learnReasonCodesSchema = z.array(learnCodeSchema).max(32).refine(va
 export const learnObservationSchema = z.union([z.boolean(), z.literal('unknown')])
 export const learnTimezoneSchema = z.string().min(1).max(100).refine(value => {
   try { new Intl.DateTimeFormat('en', { timeZone: value }); return true }
-  catch { return false }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof RangeError)) throw error
+    return false
+  }
 }, 'Invalid timezone')
 export const learnLocalDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => {
   const instant = new Date(`${value}T00:00:00Z`)
@@ -52,31 +56,31 @@ export function learnSerializedBytes(value: unknown, maximum: number = LEARN_V2_
   const seen = new Set<object>()
   const add = (amount: number) => {
     bytes += amount
-    if (bytes > maximum) throw new Error('Learn payload exceeds its byte ceiling')
+    if (bytes > maximum) throw new LearnInputValidationError('Learn payload exceeds its byte ceiling')
   }
   const visit = (input: unknown, depth: number) => {
-    if (++nodes > 32_768 || depth > 16) throw new Error('Learn payload exceeds its structural ceiling')
+    if (++nodes > 32_768 || depth > 16) throw new LearnInputValidationError('Learn payload exceeds its structural ceiling')
     if (input === null) { add(4); return }
     if (typeof input === 'string') {
-      if (input.length > maximum) throw new Error('Learn text exceeds its byte ceiling')
+      if (input.length > maximum) throw new LearnInputValidationError('Learn text exceeds its byte ceiling')
       add(encoder.encode(JSON.stringify(input)).byteLength)
       return
     }
     if (typeof input === 'boolean') { add(input ? 4 : 5); return }
     if (typeof input === 'number' && Number.isFinite(input)) { add(String(input).length); return }
-    if (typeof input !== 'object' || seen.has(input)) throw new Error('Learn payload must be finite JSON data')
+    if (typeof input !== 'object' || seen.has(input)) throw new LearnInputValidationError('Learn payload must be finite JSON data')
     const array = Array.isArray(input)
-    if (!array && Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null) throw new Error('Learn payload must be plain data')
+    if (!array && Object.getPrototypeOf(input) !== Object.prototype && Object.getPrototypeOf(input) !== null) throw new LearnInputValidationError('Learn payload must be plain data')
     seen.add(input)
     add(2)
     const keys = Reflect.ownKeys(input)
     const entries = array ? keys.filter(key => key !== 'length') : keys
-    if (array && entries.length !== input.length) throw new Error('Learn payload has a sparse or extended array')
+    if (array && entries.length !== input.length) throw new LearnInputValidationError('Learn payload has a sparse or extended array')
     for (let index = 0; index < entries.length; index++) {
       const key = entries[index]!
-      if (typeof key !== 'string' || (array && key !== String(index))) throw new Error('Learn payload has unsupported fields')
+      if (typeof key !== 'string' || (array && key !== String(index))) throw new LearnInputValidationError('Learn payload has unsupported fields')
       const descriptor = Object.getOwnPropertyDescriptor(input, key)!
-      if (!descriptor.enumerable || !('value' in descriptor)) throw new Error('Learn payload must be plain data')
+      if (!descriptor.enumerable || !('value' in descriptor)) throw new LearnInputValidationError('Learn payload must be plain data')
       if (index) add(1)
       if (!array) { visit(key, depth + 1); add(1) }
       visit(descriptor.value, depth + 1)
@@ -131,7 +135,10 @@ export const learnResponsePayloadSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('source_comparison'), sourceRef: learnTextSchema(200), comparison: learnTextSchema() }),
 ]).superRefine((payload, ctx) => {
   try { learnSerializedBytes(payload, LEARN_V2_RESPONSE_LIMITS.maxResponseBytes) }
-  catch { ctx.addIssue({ code: 'custom', message: 'Response exceeds its byte ceiling' }) }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError)) throw error
+    ctx.addIssue({ code: 'custom', message: 'Response exceeds its byte ceiling' })
+  }
 })
 
 export const learnAssistanceSnapshotSchema = z.strictObject({
@@ -189,6 +196,7 @@ export const LEARN_V2_RESPONSE_REJECTION_CODES = [
   'stale_revision', 'idempotency_conflict', 'already_accepted', 'not_delivered',
   'evidence_unavailable', 'outside_window', 'pins_mismatch', 'unauthorized',
   'confidence_required', 'confidence_not_requested', 'source_scope_too_large',
+  'item_evidence_limit', 'item_payload_limit', 'item_scoring_request_limit', 'provider_payload_unavailable',
 ] as const
 export const learnResponseReceiptSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('accepted'), version: z.literal(LEARN_V2_RESPONSE_CONTRACT_VERSION), target: learnResponseTargetSchema,
@@ -219,7 +227,7 @@ export function validateLearnAcceptResponseRequest(input: unknown, slot: {
   confidenceRequested?: boolean, deliveryPins?: z.infer<typeof learnResponseDeliveryPinsSchema>, diagnostic: boolean,
 }) {
   const request = parseLearnContract(learnAcceptResponseRequestSchema, input)
-  if (resolveLearnResponseConfidenceRequested(slot) !== (request.response.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
+  if (resolveLearnResponseConfidenceRequested(slot) !== (request.response.confidence !== undefined)) throw new LearnInputValidationError('Confidence does not match the owned slot')
   if (slot.diagnostic) learnSerializedBytes(request.response.payload, LEARN_V2_RESPONSE_LIMITS.maxDiagnosticBytes)
   return request
 }
@@ -230,7 +238,7 @@ export function validateLearnFinalResponseBundle(input: unknown, pins: {
 }) {
   const request = parseLearnContract(learnFinalResponseBundleSchema, input)
   for (const [entry, pin] of [[request.teachBack, pins.teachBack], [request.application, pins.application]] as const) {
-    if (resolveLearnResponseConfidenceRequested(pin) !== (entry.confidence !== undefined)) throw new Error('Confidence does not match the owned slot')
+    if (resolveLearnResponseConfidenceRequested(pin) !== (entry.confidence !== undefined)) throw new LearnInputValidationError('Confidence does not match the owned slot')
   }
   return request
 }

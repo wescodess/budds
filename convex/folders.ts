@@ -1,4 +1,5 @@
 import { ConvexError, v } from 'convex/values'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import type { Id, Doc } from './_generated/dataModel'
 import type { QueryCtx, MutationCtx } from './_generated/server'
 import { internalMutation, mutation, query } from './_generated/server'
@@ -178,16 +179,17 @@ async function collectDescendants(
   ctx: QueryCtx | MutationCtx,
   userId: string,
   folderId: Id<'folders'>,
+  maximumRows?: number,
 ): Promise<Doc<'folders'>[]> {
-  const children = await ctx.db
+  const query = ctx.db
     .query('folders')
     .withIndex('by_userId_and_parentId', (q) =>
       q.eq('userId', userId).eq('parentId', folderId),
     )
-    .collect()
+  const children = maximumRows === undefined ? await query.collect() : await query.take(maximumRows)
   const all = [...children]
   for (const child of children) {
-    all.push(...(await collectDescendants(ctx, userId, child._id)))
+    all.push(...(await collectDescendants(ctx, userId, child._id, maximumRows)))
   }
   return all
 }
@@ -542,6 +544,29 @@ export const resolveScope = query({
   handler: async (ctx, args) => {
     const userId = await getOptionalAuthUserId(ctx)
     if (!userId) return { documentIds: [], documents: [], ownedFolderIds: [] }
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) {
+      const documents = new Map<string, { id: Id<'documents'>, folderId: Id<'folders'>, filename: string, r2Key?: string }>()
+      const ownedFolderIds: Id<'folders'>[] = []
+      const add = (doc: Doc<'documents'>) => {
+        if (doc.status === 'success') documents.set(doc._id, { id: doc._id, folderId: doc.folderId, filename: doc.filename, r2Key: doc.r2Key })
+      }
+      for (const folderId of args.folderIds ?? []) {
+        const folder = await ctx.db.get(folderId)
+        if (!folder || folder.userId !== userId) continue
+        ownedFolderIds.push(folderId)
+        const descendants = await collectDescendants(ctx, userId, folderId)
+        for (const id of [folderId, ...descendants.map(row => row._id)]) {
+          const rows = await ctx.db.query('documents').withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', id)).collect()
+          for (const row of rows) add(row)
+        }
+      }
+      for (const id of args.fileIds ?? []) {
+        const doc = await ctx.db.get(id)
+        if (doc?.userId === userId) add(doc)
+      }
+      return { documentIds: [...documents.keys()], documents: [...documents.values()], ownedFolderIds }
+    }
+    if ((args.folderIds?.length ?? 0) + (args.fileIds?.length ?? 0) > 64) throw new Error('Teaching input is unavailable')
     const documentIds = new Set<string>()
     const documents = new Map<string, {
       id: Id<'documents'>
@@ -551,38 +576,42 @@ export const resolveScope = query({
     }>()
     const ownedFolderIds: Id<'folders'>[] = []
 
+    const pending: Id<'folders'>[] = []
+    const visited = new Set<string>()
+    let inspectedDocuments = 0
     for (const folderId of args.folderIds ?? []) {
       const folder = await ctx.db.get(folderId)
       if (!folder || folder.userId !== userId) continue
       ownedFolderIds.push(folderId)
-      const descendantIds: Id<'folders'>[] = [folderId]
-      const descendants = await collectDescendants(ctx, userId, folderId)
-      for (const d of descendants) descendantIds.push(d._id)
-      for (const fid of descendantIds) {
-        const docs = await ctx.db
-          .query('documents')
-          .withIndex('by_userId_and_folderId', (q) =>
-            q.eq('userId', userId).eq('folderId', fid),
-          )
-          .collect()
-        for (const doc of docs) {
-          if (doc.status !== 'success') continue
-          const key = doc._id as unknown as string
-          documentIds.add(key)
-          documents.set(key, {
-            id: doc._id,
-            folderId: doc.folderId,
-            filename: doc.filename,
-            r2Key: doc.r2Key,
-          })
-        }
+      if (!visited.has(folderId)) { visited.add(folderId); pending.push(folderId) }
+    }
+    while (pending.length) {
+      const folderId = pending.shift()!
+      const docs = await ctx.db.query('documents').withIndex('by_userId_and_folderId', q => q.eq('userId', userId).eq('folderId', folderId))
+        .take(65 - inspectedDocuments)
+      inspectedDocuments += docs.length
+      if (inspectedDocuments > 64) throw new Error('Teaching input is unavailable')
+      for (const doc of docs) {
+        if (doc.status !== 'success') continue
+        documentIds.add(doc._id)
+        documents.set(doc._id, { id: doc._id, folderId: doc.folderId, filename: doc.filename, r2Key: doc.r2Key })
+      }
+      const children = await ctx.db.query('folders').withIndex('by_userId_and_parentId', q => q.eq('userId', userId).eq('parentId', folderId)).take(65)
+      if (children.length > 64) throw new Error('Teaching input is unavailable')
+      for (const child of children) {
+        if (visited.has(child._id)) continue
+        visited.add(child._id)
+        if (visited.size > 64) throw new Error('Teaching input is unavailable')
+        pending.push(child._id)
       }
     }
 
     for (const fileId of args.fileIds ?? []) {
+      if (documentIds.has(fileId)) continue
       const doc = await ctx.db.get(fileId)
       if (!doc || doc.userId !== userId) continue
       if (doc.status !== 'success') continue
+      if (++inspectedDocuments > 64) throw new Error('Teaching input is unavailable')
       const key = doc._id as unknown as string
       documentIds.add(key)
       documents.set(key, {

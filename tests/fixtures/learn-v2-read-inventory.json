@@ -1,0 +1,518 @@
+[
+  {
+    "path": "audioOverviewInterjections.getTurnUrls",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviewInterjections.listByOverview",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviewInterjectionsV2.getForOwner",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviewInterjectionsV2.getStatusForOwner",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviewInterjectionsV2.resolveMediaForOwner",
+    "handling": "media_locator"
+  },
+  {
+    "path": "audioOverviewJobs.getAlignmentContext",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "audioOverviewJobs.getStepContext",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "audioOverviewRooms.getForConversation",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviewRooms.listByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviews.getByShareToken",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviews.getCourseScopedOverview",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviews.getInterjectionMetadata",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviews.getTurnUrls",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviews.getTurnUrlsByShareToken",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviews.getWithTurns",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviews.listByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviews.listByRoom",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "audioOverviewV2.getForWorkflow",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "audioOverviewV2.getPlaybackByShareToken",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviewV2.getPlaybackForOwner",
+    "handling": "delivery"
+  },
+  {
+    "path": "audioOverviewV2.listAlignmentSegments",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "audioOverviewV2.resolveMediaByShareToken",
+    "handling": "media_locator"
+  },
+  {
+    "path": "audioOverviewV2.resolveMediaForOwner",
+    "handling": "media_locator"
+  },
+  {
+    "path": "calendarConnections.getByUser",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "calendarEvents.listByCourse",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "calendarEvents.listByUser",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "calendarEvents.listScheduled",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "contentFlags.getFlagRateForCourse",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "conversations.getConversation",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "conversations.getMostRecentForFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "conversations.listRecentForUser",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "courses.get",
+    "handling": "delivery"
+  },
+  {
+    "path": "courses.listByFolder",
+    "handling": "delivery"
+  },
+  {
+    "path": "courses.listByUser",
+    "handling": "delivery"
+  },
+  {
+    "path": "courseSections.checkPreFetchStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "courseSections.get",
+    "handling": "delivery"
+  },
+  {
+    "path": "courseSections.getNextSection",
+    "handling": "delivery"
+  },
+  {
+    "path": "courseSections.getOfflineCachePayload",
+    "handling": "delivery"
+  },
+  {
+    "path": "courseSections.listByCourse",
+    "handling": "delivery"
+  },
+  {
+    "path": "courseSourceDocs.listByCourse",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "dataExport.getAttemptAnswersPage",
+    "handling": "personal_export"
+  },
+  {
+    "path": "dataExport.getCourseSourceDocsPage",
+    "handling": "personal_export"
+  },
+  {
+    "path": "dataExport.getDocumentDownloadUrl",
+    "handling": "personal_export"
+  },
+  {
+    "path": "dataExport.getExportMetadata",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "dataExport.getUserDataPage",
+    "handling": "personal_export"
+  },
+  {
+    "path": "documents.countsByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "documents.getTeachingScope",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "documents.listDocumentsByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "flashcardRooms.getRoom",
+    "handling": "delivery"
+  },
+  {
+    "path": "flashcardRooms.getRoomVersion",
+    "handling": "delivery"
+  },
+  {
+    "path": "flashcardRooms.listRoomsByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "flashcardRooms.listRoomVersions",
+    "handling": "delivery"
+  },
+  {
+    "path": "folders.getFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.getFolderDescendantCounts",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.listAllFolders",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.listChildFolders",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.listSubtree",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.listTopLevelFolders",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.resolveScope",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "folders.searchScopeItems",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.getArtifactCanvas",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnAdaptive.getMemory",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.getReflectionCanvas",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnAdaptive.getThread",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.inspectContributionSource",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.listPromotionProposals",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.listResumeCandidates",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.listThreadArtifacts",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.listThreadContributions",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptive.listThreadHistory",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveAccess.adaptiveStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveCanvas.getCanvas",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnAdaptiveCanvas.listDueChecks",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveClarifications.getInitialDecision",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveDrafts.getThreadDraft",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveEvidence.getThreadActivityEvidence",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnAdaptiveExperiment.getGuardrailStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveExperiment.getMyStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveRecovery.getDiagnosticCanvas",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnAdaptiveRouting.replayDecision",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnProfile.getProfile",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Access.status",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Assessments.getAssessment",
+    "handling": "assessment_or_own_response"
+  },
+  {
+    "path": "learnV2Assessments.getAssessmentState",
+    "handling": "assessment_or_own_response"
+  },
+  {
+    "path": "learnV2Assessments.getFeatureReadiness",
+    "handling": "assessment_or_own_response"
+  },
+  {
+    "path": "learnV2Assessments.getPostSealTeaching",
+    "handling": "assessment_or_own_response"
+  },
+  {
+    "path": "learnV2Blueprints.getBlueprintGenerationJob",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Blueprints.getBlueprintMap",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Calendar.getStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Calendar.listProjections",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2CalendarReconciliation.listProposals",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2FolderManifests.getLatestManifestForBlueprint",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2FolderManifests.getManifest",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2FolderManifests.listManifestEntries",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2FolderManifests.listManifestFolders",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Journey.getCurrentMission",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnV2Journey.getMission",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnV2Journey.getSessionCandidate",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Journey.listHub",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Lifecycle.getBlueprintRevision",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Lifecycle.getLearningVoid",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Lifecycle.listLearningVoids",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2MeasurementReports.exportAggregateReport",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2MeasurementReports.getReport",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2MeasurementReports.getReportCells",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Plans.getPlanPreview",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Responses.getResponseState",
+    "handling": "assessment_or_own_response"
+  },
+  {
+    "path": "learnV2Search.quotaStatus",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2SessionContent.getSessionContent",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnV2Sources.getSource",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Sources.listSourceReview",
+    "handling": "delivery"
+  },
+  {
+    "path": "learnV2Sources.listSources",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "learnV2Today.getToday",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "messages.listByConversation",
+    "handling": "message_metadata"
+  },
+  {
+    "path": "quizAnswerAssessments.listPendingForAttempt",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "quizAnswerAssessments.listPendingForShadowAttempt",
+    "handling": "worker_ordinary_only"
+  },
+  {
+    "path": "quizzes.getAttemptResults",
+    "handling": "delivery"
+  },
+  {
+    "path": "quizzes.getQuizHistory",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "quizzes.getWithQuestions",
+    "handling": "delivery"
+  },
+  {
+    "path": "quizzes.listAttempts",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "quizzes.listByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "reviewItems.getReviewBacklogCount",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "reviewItems.listBySection",
+    "handling": "delivery"
+  },
+  {
+    "path": "reviewItems.listDueForUser",
+    "handling": "delivery"
+  },
+  {
+    "path": "reviewItems.listDueWithContext",
+    "handling": "delivery"
+  },
+  {
+    "path": "tasks.get",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "tasks.listByFolder",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "users.getDailyQuota",
+    "handling": "summary_or_own_work"
+  },
+  {
+    "path": "users.getUser",
+    "handling": "summary_or_own_work"
+  }
+]

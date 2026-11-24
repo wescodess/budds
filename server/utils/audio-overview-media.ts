@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import { fetchPrivateR2Object } from './r2-folder'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 
 export type PrivateAudioMedia = {
   objectKey: string
@@ -12,7 +13,7 @@ export type PrivateAudioMedia = {
 
 const SINGLE_BYTE_RANGE = /^bytes=(?:\d+-\d*|-\d+)$/
 
-export async function privateAudioResponse(event: H3Event, media: PrivateAudioMedia): Promise<Response> {
+export async function privateAudioResponse(event: H3Event, media: PrivateAudioMedia, deliver: () => Promise<void>): Promise<Response> {
   if (media.container !== 'wav' || media.contentType !== 'audio/wav' || media.byteLength < 44) {
     throw createError({ statusCode: 409, message: 'Published audio media is invalid' })
   }
@@ -42,5 +43,28 @@ export async function privateAudioResponse(event: H3Event, media: PrivateAudioMe
     const value = upstream.headers.get(name)
     if (value) headers.set(name, value)
   }
-  return new Response(upstream.body, { status: upstream.status, headers })
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !upstream.body) return new Response(upstream.body, { status: upstream.status, headers })
+  const reader = upstream.body.getReader()
+  let bytes = 0
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        let part = await reader.read()
+        for (let empty = 0; !part.done && part.value.byteLength === 0; empty++) {
+          if (empty >= 128) throw new Error('Audio storage could not deliver published media')
+          part = await reader.read()
+        }
+        if (part.done) { controller.close(); return }
+        bytes += part.value.byteLength
+        if (bytes > media.byteLength) throw new Error('Published audio media changed after publication')
+        await deliver()
+        controller.enqueue(part.value)
+      } catch (error) {
+        await reader.cancel().catch(() => {})
+        controller.error(error)
+      }
+    },
+    async cancel() { await reader.cancel() },
+  }, { highWaterMark: 0 })
+  return new Response(body, { status: upstream.status, headers })
 }

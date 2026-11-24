@@ -1,4 +1,4 @@
-import { cronJobs } from 'convex/server'
+import { cronJobs, makeFunctionReference } from 'convex/server'
 import { internal } from './_generated/api'
 
 const crons = cronJobs()
@@ -17,6 +17,7 @@ crons.interval('cleanup distributed rate limits', { hours: 1 }, internal.rateLim
 crons.interval('cleanup undispatched Learn V2 searches', { minutes: 5 }, internal.learnV2Search.cleanupExpiredUndispatched, {})
 crons.interval('recover expired Learn V2 blueprint jobs', { minutes: 5 }, internal.learnV2Blueprints.recoverExpiredBlueprintJobs, {})
 crons.interval('recover expired Learn V2 session-content jobs', { minutes: 5 }, internal.learnV2SessionContent.recoverExpiredSessionContentJobs, {})
+crons.interval('materialize Learn V2 delayed checks', { minutes: 1 }, makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:sweepDelayedCheckEligibility'), {})
 crons.interval('recover expired Learn V2 mastery scoring jobs', { minutes: 5 }, internal.learnV2Mastery.recoverExpiredMasteryScoringJobs, {})
 crons.interval('cleanup Learn V2 mastery scoring rate events', { hours: 1 }, internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
 crons.interval('expire Learn V2 calendar reconciliation proposals', { hours: 1 }, internal.learnV2CalendarReconciliation.expireProposals, {})
@@ -24,5 +25,7 @@ crons.interval('poll and renew Learn V2 calendar watches', { minutes: 15 }, inte
 crons.interval('purge Learn V2 calendar webhook receipts', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeWebhookReceipts, {})
 crons.interval('purge stopped Learn V2 calendar watches', { hours: 1 }, internal.learnV2CalendarReconciliation.purgeStoppedWatches, {})
 crons.interval('purge expired Adaptive Learn operational events', { hours: 24 }, internal.learnActivityEventRetention.purgeExpiredLearnActivityEvents, {})
+
+crons.interval('purge expired report access audits', { hours: 24 }, internal.learnV2MeasurementReports.purgeExpiredAccessAudits, {})
 
 export default crons

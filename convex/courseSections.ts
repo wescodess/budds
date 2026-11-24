@@ -1,3 +1,7 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { defineTeachingRead } from './lib/learnV2TeachingReads'
+import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { teachingSourcePinsValidator, admitTeachingSourcePins, assertSectionTeaching, assertBlockInputs, teachingDocuments, publishSections, publishCourseSections } from './lib/learnV2AssessmentLineage'
 import { v } from 'convex/values'
 import { quizGradingCriterionValidator } from '../shared/quiz-grading'
 import { validatedQuestionGradingCriteria } from './lib/quizQuestionGrading'
@@ -9,29 +13,44 @@ import { transitionMastery } from './lib/masteryStateMachine'
 import type { MasteryLevel } from './lib/masteryStateMachine'
 import { updateStreakForActivity } from './learnProfile'
 
-export const get = query({
+const getRead = defineTeachingRead({
+  name: 'courseSections.get',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'section', id: args.id }]),
+
   args: { id: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.id)
     if (!section || section.userId !== userId) return null
+    await assertSectionTeaching(ctx, section)
     return section
   },
-})
 
-export const listByCourse = query({
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const get = query(getRead.query)
+export const getDelivery = mutation(getRead.delivery)
+
+const listByCourseRead = defineTeachingRead({
+  name: 'courseSections.listByCourse',
+  scope: async (ctx,userId,args)=>{const rows=await ctx.db.query('courseSections').withIndex('by_courseId_and_order',q=>q.eq('courseId',args.courseId)).take(100); return await teachingReadScope(ctx,userId,rows.map(row=>({kind:'section' as const,id:row._id})))},
+
   args: { courseId: v.id('courses') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const course = await ctx.db.get(args.courseId)
     if (!course || course.userId !== userId) return []
 
-    return await ctx.db
+    const sections = await ctx.db
       .query('courseSections')
       .withIndex('by_courseId_and_order', (q) => q.eq('courseId', args.courseId))
       .take(100)
+    for (const section of sections) await assertSectionTeaching(ctx, section)
+    return sections
   },
-})
+
+}, { hasContent: value => value.some(row => row.contentBlocks.length > 0) })
+export const listByCourse = query(listByCourseRead.query)
+export const listByCourseDelivery = mutation(listByCourseRead.delivery)
 
 export const updateTitle = mutation({
   args: {
@@ -42,6 +61,7 @@ export const updateTitle = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
 
     const trimmed = args.title.trim().slice(0, 200) || 'Untitled Section'
     await ctx.db.patch(args.sectionId, { title: trimmed })
@@ -56,6 +76,7 @@ export const updateTitle = mutation({
         updatedAt: Date.now(),
       })
     }
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -73,6 +94,7 @@ export const updateKnowledgeType = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
 
     await ctx.db.patch(args.sectionId, { knowledgeType: args.knowledgeType })
 
@@ -86,6 +108,7 @@ export const updateKnowledgeType = mutation({
         updatedAt: Date.now(),
       })
     }
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -96,6 +119,7 @@ export const remove = mutation({
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
 
+    await assertSectionTeaching(ctx, section)
     const removedOrder = section.order
     await ctx.db.delete(args.sectionId)
 
@@ -110,6 +134,7 @@ export const remove = mutation({
       }
     }
 
+    await publishCourseSections(ctx, userId, section.courseId)
     const course = await ctx.db.get(section.courseId)
     if (course) {
       const filtered = course.outlineSections
@@ -206,6 +231,7 @@ export const updateOrder = mutation({
       if (!section || section.userId !== userId || section.courseId !== args.courseId) {
         throw new Error('Section not found')
       }
+      await assertSectionTeaching(ctx, section)
       await ctx.db.patch(sectionId, { order: i })
 
       const oldOrder = orderBySectionId.get(sectionId as string)
@@ -217,6 +243,7 @@ export const updateOrder = mutation({
       })
     }
 
+    await publishCourseSections(ctx, userId, args.courseId)
     await ctx.db.patch(args.courseId, {
       outlineSections: reorderedOutline,
       updatedAt: Date.now(),
@@ -255,6 +282,10 @@ export const getForGeneration = internalQuery({
       .withIndex('by_courseId', (q) => q.eq('courseId', section.courseId))
       .collect()
 
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : section.userId
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && (section.userId !== userId || course.userId !== userId)) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
+    await teachingDocuments(ctx, userId, sourceDocs.flatMap(source => source.documentId ? [source.documentId] : []))
     return { section, course, sourceDocs }
   },
 })
@@ -269,11 +300,16 @@ export const markReady = internalMutation({
     const section = await ctx.db.get(args.sectionId)
     if (!section) return
 
+    const userId = LEARN_MEASUREMENT_CAPABILITIES.responses ? await requireAuth(ctx) : section.userId
+    if (section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
+    await assertBlockInputs(ctx, userId, args.contentBlocks)
     await ctx.db.patch(args.sectionId, {
       status: 'ready',
       contentBlocks: args.contentBlocks,
       failureNotice: args.failureNotice,
     })
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!])
   },
 })
 
@@ -296,6 +332,7 @@ export const markSectionFailed = internalMutation({
 export const finalizeSectionGeneration = mutation({
   args: {
     sectionId: v.id('courseSections'),
+    sourcePins: v.optional(teachingSourcePinsValidator),
     textContent: v.optional(v.string()),
     quizData: v.optional(v.object({
       title: v.string(),
@@ -339,6 +376,14 @@ export const finalizeSectionGeneration = mutation({
 
     const course = await ctx.db.get(section.courseId)
     if (!course || course.userId !== userId || course.status === 'deleting') throw new Error('Course not found')
+
+    await assertSectionTeaching(ctx, section)
+    const sources = await admitTeachingSourcePins(ctx, userId, args.sourcePins ?? [])
+    await teachingDocuments(ctx, userId, (args.quizData?.questions ?? []).flatMap(question => question.sourceDocumentId ? [question.sourceDocumentId] : []))
+    if (args.audioEntityId) await assertBlockInputs(ctx, userId, [{ type: 'audio', order: 0, entityId: args.audioEntityId }])
+    const limits = section.knowledgeType === 'factual' ? [5, 16] : section.knowledgeType === 'procedural' ? [10, 8] : [8, 12]
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && ((args.quizData?.questions.length ?? 0) > limits[0]! || (args.flashcardData?.cards.length ?? 0) > limits[1]!)) throw new Error('Section exceeds the requested publication size')
+    const outputs: Array<{ artifact: { kind: 'quiz_question', id: Id<'quizQuestions'> } | { kind: 'flashcard_version', id: Id<'flashcardRoomVersions'> }, key: string, sources: typeof sources }> = []
 
     const contentBlocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -388,7 +433,7 @@ export const finalizeSectionGeneration = mutation({
           if (normalized) resolvedDocId = normalized
         }
 
-        await ctx.db.insert('quizQuestions', {
+        const questionId = await ctx.db.insert('quizQuestions', {
           quizId,
           userId,
           order: q.order,
@@ -402,6 +447,7 @@ export const finalizeSectionGeneration = mutation({
           sourceChunkContent: q.sourceChunkContent,
           sourceFilename: q.sourceFilename,
         })
+        outputs.push({ artifact: { kind: 'quiz_question', id: questionId }, key: 'whole', sources })
       }
 
       contentBlocks.push({
@@ -460,6 +506,7 @@ export const finalizeSectionGeneration = mutation({
         })
       }
 
+      outputs.push({ artifact: { kind: 'flashcard_version', id: versionId }, key: 'whole', sources })
       await ctx.db.patch(roomId, { activeVersionId: versionId, currentCardCount: args.flashcardData.cards.length })
 
       contentBlocks.push({
@@ -489,11 +536,15 @@ export const finalizeSectionGeneration = mutation({
       failureNotice,
     })
 
+    await publishSections(ctx, userId, [(await ctx.db.get(args.sectionId))!], outputs, sources)
     return { status: 'ready' as const, blockCount: contentBlocks.length }
   },
 })
 
-export const getNextSection = query({
+const getNextSectionRead = defineTeachingRead({
+  name: 'courseSections.getNextSection',
+  scope: async(ctx,userId,args) => { const row = await ctx.db.query('courseSections').withIndex('by_courseId_and_order',q=>q.eq('courseId',args.courseId).eq('order',args.currentOrder+1)).unique(); return row ? await teachingReadScope(ctx,userId,[{kind:'section',id:row._id}]):null },
+
   args: {
     courseId: v.id('courses'),
     currentOrder: v.number(),
@@ -510,9 +561,13 @@ export const getNextSection = query({
       )
       .unique()
 
+    if (nextSection) await assertSectionTeaching(ctx, nextSection)
     return nextSection
   },
-})
+
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const getNextSection = query(getNextSectionRead.query)
+export const getNextSectionDelivery = mutation(getNextSectionRead.delivery)
 
 export const checkPreFetchStatus = query({
   args: {
@@ -661,6 +716,7 @@ export const completeSection = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
     if (section.status === 'completed') {
       return {
         practiceScore: section.practiceScore ?? args.practiceScore,
@@ -720,13 +776,17 @@ export const completeSection = mutation({
   },
 })
 
-export const getOfflineCachePayload = query({
+const getOfflineCachePayloadRead = defineTeachingRead({
+  name: 'courseSections.getOfflineCachePayload',
+  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'section', id: args.sectionId }]),
+
   args: { sectionId: v.id('courseSections') },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) return null
     if (section.status !== 'completed') return null
+    await assertSectionTeaching(ctx, section)
 
     const blocks: Array<{
       type: 'text' | 'quiz' | 'flashcard' | 'audio'
@@ -822,7 +882,10 @@ export const getOfflineCachePayload = query({
       contentBlocks: blocks,
     }
   },
-})
+
+}, { hasContent: value => Boolean(value?.contentBlocks.length) })
+export const getOfflineCachePayload = query(getOfflineCachePayloadRead.query)
+export const getOfflineCachePayloadDelivery = mutation(getOfflineCachePayloadRead.delivery)
 
 export const setOfflineAvailable = mutation({
   args: {
@@ -833,6 +896,7 @@ export const setOfflineAvailable = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    if (args.offlineAvailable) await assertSectionTeaching(ctx, section)
     await ctx.db.patch(args.sectionId, { offlineAvailable: args.offlineAvailable })
   },
 })
@@ -848,6 +912,7 @@ export const reviewSection = mutation({
     const userId = await requireAuth(ctx)
     const section = await ctx.db.get(args.sectionId)
     if (!section || section.userId !== userId) throw new Error('Section not found')
+    await assertSectionTeaching(ctx, section)
     if (section.status !== 'completed') {
       throw new Error('Section must be completed before reviewing')
     }

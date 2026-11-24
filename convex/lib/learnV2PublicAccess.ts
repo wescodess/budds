@@ -1,3 +1,4 @@
+import { LearnAccessError } from '../../shared/learn-v2-errors'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import type { LearnResponseTarget } from '../../shared/learn-v2-responses'
@@ -7,7 +8,7 @@ import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 
 type ReadContext = QueryCtx | MutationCtx
 type ResponseScope = Doc<'learnAssessmentOpportunities'> | Doc<'learnResponseSlots'> | Doc<'learnResponses'>
-function deny(): never { throw new Error('Learn access denied') }
+function deny(): never { throw new LearnAccessError('Learn access denied') }
 
 async function requireResponseScope(ctx: ReadContext, userId: string, row: ResponseScope) {
   if (row.userId !== userId) deny()

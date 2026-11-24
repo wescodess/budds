@@ -1,3 +1,5 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from './learn-v2-measurement-storage-manifest'
+import { LearnInputValidationError } from './learn-v2-errors'
 import { z } from 'zod'
 import {
   learnIdSchema, learnRevisionSchema, learnTimestampSchema, learnTextSchema, learnDigestSchema,
@@ -229,7 +231,10 @@ export function projectPostSealTeaching(input: unknown, context: LearnPostSealTe
       practice: source.practice && canReadPostSealPractice(value, source.practice.responseSlotId, source.practice.revision) ? source.practice : null,
     })
   }
-  catch { return unavailableLearnPostSealTeaching('disclosure_unknown') }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof z.ZodError)) throw error
+    return unavailableLearnPostSealTeaching('disclosure_unknown')
+  }
 }
 
 export function projectPracticeAssistanceAuthorization(input: unknown, request: z.infer<typeof learnAuthorizePracticeAssistanceSchema>, context: LearnPostSealTeachingContext): LearnPracticeAssistanceAuthorization {
@@ -251,5 +256,8 @@ export function projectPracticeAssistanceAuthorization(input: unknown, request: 
       || receipt.deliveredAt < value.disclosure.lifecycle.acceptedAt!) return deny('disclosure_unknown')
     return receipt
   }
-  catch { return deny('disclosure_unknown') }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof z.ZodError)) throw error
+    return deny('disclosure_unknown')
+  }
 }

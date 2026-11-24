@@ -15,7 +15,7 @@ import { retainsSafeAdaptiveRejection } from './lib/learnAdaptiveReceiptPrivacy'
 import { activityResponseTargets, digestLegacyFingerprint, legacySourceIds, privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { sourceSupportsGeneration } from './lib/learnV2BackingSource'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence } from './lib/learnV2MeasurementFacts'
-import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 
 // This deliberately stays below the account-deletion batch. Folder deletion
 // only has live lifecycle producers today; later producers must add their
@@ -143,7 +143,9 @@ async function jobDependsOnSource(ctx: MutationCtx, job: Doc<'learnJobs'>, sourc
         objectiveId = ctx.db.normalizeId('learnObjectives', value.objectiveId)
       }
     }
-    catch { /* Legacy jobs may not have a recoverable objective pin. */ }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof SyntaxError)) throw error
+    }
   }
   if (!objectiveId) return true
   return !!await ctx.db.query('learnObjectiveSources')

@@ -15,8 +15,14 @@ targetRules = ["generic-api-key"]
 paths = [
   '''(?:^|/)convex/[^/]+\.test\.ts$''',
   '''(?:^|/)server/(?:api|utils)/.*\.test\.ts$''',
+  '''(?:^|/)tests/fixtures/[^/]+\.ts$''',
   '''(?:^|/)\.github/workflows/test\.yml$''',
 ]
+
+[[allowlists]]
+description = "Scorer corpus fixtures hold SHA-256 content digests, not credentials"
+targetRules = ["generic-api-key"]
+paths = ['''(?:^|/)tests/fixtures/learn-v2-scorer/(?:corpus|manifest)\.v1\.json$''']
 
 [[allowlists]]
 description = "Stitch identifiers are public design asset references, not credentials"

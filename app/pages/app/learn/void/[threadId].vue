@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useTeachingQuery } from '~/composables/useTeachingQuery'
+
+import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { learnVoidRoute } from '~/utils/learn-void-routes'
@@ -12,17 +15,17 @@ const threadQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getThread, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
 const canvasQuery = import.meta.client
-  ? useConvexQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
-  : { data: ref(null), pending: ref(false) }
+  ? useTeachingQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const diagnosticQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptiveRecovery.getDiagnosticCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
 const artifactQuery = import.meta.client
-  ? useConvexQuery(api.learnAdaptive.getArtifactCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
-  : { data: ref(null), pending: ref(false) }
+  ? useTeachingQuery(api.learnAdaptive.getArtifactCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const reflectionQuery = import.meta.client
-  ? useConvexQuery(api.learnAdaptive.getReflectionCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
-  : { data: ref(null), pending: ref(false) }
+  ? useTeachingQuery(api.learnAdaptive.getReflectionCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const userQuery = import.meta.client
   ? useConvexQuery(api.users.getUser, {}, { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
@@ -418,6 +421,9 @@ const detailPending = computed(() => thread.value?.thread.authorityKind === 'v2_
   ? canvasQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value
   : thread.value?.thread.authorityKind === 'standalone' ? diagnosticQuery.pending.value || artifactQuery.pending.value || reflectionQuery.pending.value : false)
 const shellReady = computed(() => Boolean(thread.value))
+const detailQueries = computed(() => thread.value?.thread.authorityKind === 'v2_mission' ? [canvasQuery, artifactQuery, reflectionQuery] : thread.value?.thread.authorityKind === 'standalone' ? [artifactQuery, reflectionQuery] : [])
+const detailFailure = computed(() => detailQueries.value.map(query => query.failure.value).find(Boolean) ?? null)
+function retryDetail() { for (const query of detailQueries.value) if (query.failure.value) void query.refresh() }
 const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
 const checkBinding = computed(() => (canvas.value as { assessmentCheck?: CanvasCheckBinding | null } | null)?.assessmentCheck ?? null)
@@ -440,8 +446,8 @@ function activityRoute(activityId: string) {
 }
 const evidenceActivityId = computed(() => selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
 const evidenceQuery = import.meta.client
-  ? useConvexQuery(api.learnAdaptiveEvidence.getThreadActivityEvidence, computed(() => ({ threadId: threadId.value as never, activityId: evidenceActivityId.value ?? '' })), { enabled: computed(() => allowed.value && Boolean(thread.value && evidenceActivityId.value)) })
-  : { data: ref(null), pending: ref(false) }
+  ? useTeachingQuery(api.learnAdaptiveEvidence.getThreadActivityEvidence, computed(() => ({ threadId: threadId.value as never, activityId: evidenceActivityId.value ?? '' })), { enabled: computed(() => allowed.value && Boolean(thread.value && evidenceActivityId.value)) })
+  : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const evidence = computed(() => {
   const value = evidenceQuery.data.value
   return value && value.ownerId === ownerId.value && value.threadId === thread.value?.thread.id
@@ -606,6 +612,12 @@ function leave() { void router.push(safeDestination.value) }
           <div v-else-if="detailPending" data-testid="learn-adaptive-canvas-loading" class="rounded-lg border border-border p-5" role="status" aria-live="polite">
             <h2 class="font-dm-sans text-lg font-semibold">Loading current activity…</h2>
             <p class="mt-2 text-sm text-muted-foreground">Your Void and history are available while the activity loads.</p>
+          </div>
+          <div v-else-if="detailFailure && !detailFailure.retryable" data-testid="learn-adaptive-canvas-read-paused" class="flex items-start gap-2 rounded-lg border border-border p-5 text-sm leading-6 text-foreground" role="status"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ detailFailure.message }}</span></div>
+          <div v-else-if="detailFailure" data-testid="learn-adaptive-canvas-read-error" class="rounded-lg border border-border p-5" role="alert">
+            <h2 class="flex items-center gap-2 font-dm-sans text-lg font-semibold"><CircleAlert class="size-4 shrink-0 text-[var(--learn-error)]" aria-hidden="true" />Could not load the current activity</h2>
+            <p class="mt-2 text-sm text-muted-foreground">Your Void and activity history are saved.</p>
+            <button type="button" data-testid="learn-adaptive-canvas-read-retry" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]" @click="retryDetail">Try again</button>
           </div>
           <div v-else data-testid="learn-adaptive-canvas-fallback" class="rounded-lg border border-border p-5" role="status">
             <h2 class="font-dm-sans text-lg font-semibold">Current activity unavailable</h2>
