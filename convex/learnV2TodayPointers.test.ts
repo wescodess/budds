@@ -19,8 +19,10 @@ import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementR
 import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../shared/learn-v2-measurement-report'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import * as dedicatedChecks from './lib/learnV2DelayedDelivery'
+import * as canvasPreparation from './learnAdaptiveCanvas'
+import { LEARN_V2_MEASUREMENT_ADMISSION_REASONS } from '../shared/learn-v2-measurement'
 
-const policy = vi.hoisted(() => ({ pointers: true, responses: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
+const policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
   return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
@@ -32,7 +34,7 @@ vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
   return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES,
-    enrollment: true, delivery: true, scoring: true, get responses() { return policy.responses }, get reports() { return policy.reports },
+    get enrollment() { return policy.enrollment }, get delivery() { return policy.delivery }, scoring: true, get responses() { return policy.responses }, get reports() { return policy.reports },
     get todayCanvasChecks() { return policy.pointers } } }
 })
 vi.mock('./lib/learnV2MeasurementAssignment', async original => {
@@ -50,7 +52,7 @@ const NOW = Date.parse('2027-03-07T15:00:00Z')
 
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(NOW)
-  policy.pointers = true; policy.responses = true; policy.reports = false; policy.evidenceRows = 64; LEARN_REPORT_APPROVALS.splice(0)
+  policy.pointers = true; policy.responses = true; policy.enrollment = true; policy.delivery = true; policy.reports = false; policy.evidenceRows = 64; LEARN_REPORT_APPROVALS.splice(0)
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
 })
@@ -268,6 +270,106 @@ const measurementRows = (f: Awaited<ReturnType<typeof fixture>>) => Promise.all(
   f.opportunities().then(rows => rows.filter(row => row.assignmentId)),
 ])
 
+async function expectTeachingDelivery(f: Awaited<ReturnType<typeof fixture>>, studySessionId: Id<'studySessions'>, key: string) {
+  const delivered = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, {
+    studySessionId, idempotencyKey: `fallback_delivery_${key}` })
+  expect(delivered.admission.status).not.toBe('denied')
+  expect(delivered.value?.blocks.length).toBeGreaterThan(0)
+  expect(JSON.stringify(delivered)).toContain('TEACHING-CANARY')
+  return delivered
+}
+
+test.each([true, false])('initial protocol absence opens teaching only with Today Canvas checks enabled=%s', async enabled => {
+  const f = await fixture()
+  policy.pointers = enabled
+  policy.protocol = null
+  for (let retry = 0; retry < 2; retry++) {
+    expect(await f.start()).toMatchObject(enabled ? { status: 'in_progress' }
+      : { status: 'assessment', assessment: { kind: 'blocked', reasonCode: 'protocol_not_frozen', state: null } })
+    expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: enabled ? 'in_progress' : 'ready' })
+    if (enabled) await expectTeachingDelivery(f, f.graph.studySessionId, `missing_protocol_${retry}`)
+  }
+  for (const rows of (await measurementRows(f)).slice(0, 2)) expect(rows).toEqual([])
+})
+
+test.each(['protocol', 'enrollment', 'delivery', 'catalog', 'cold_inventory'] as const)(
+  'early %s unavailability settles an unanswered check before ordinary teaching', async failure => {
+    const f = await fixture()
+    await f.start()
+    const cold = await coldFor(f)
+    if (failure === 'protocol') policy.protocol = null
+    if (failure === 'enrollment') policy.enrollment = false
+    if (failure === 'delivery') policy.delivery = false
+    if (failure === 'catalog') await f.t.run(ctx => ctx.db.patch(f.graph.catalogId, { measurementCapability: { enabled: false } }))
+    if (failure === 'cold_inventory') await f.t.run(ctx => ctx.db.delete(cold._id))
+    expect(await f.start()).toMatchObject({ status: 'in_progress' })
+    await expectTeachingDelivery(f, f.graph.studySessionId, `early_${failure}`)
+    const settled = await f.t.run(ctx => ctx.db.get(cold._id))
+    if (failure === 'cold_inventory') expect(settled).toBeNull()
+    else expect(settled).toMatchObject({ phase: 'cancelled', operationalEligibility: 'blocked',
+      reasonCode: failure === 'protocol' ? 'protocol_not_frozen' : failure === 'catalog' ? 'unknown_history'
+        : failure === 'delivery' ? 'cold_after_teaching' : 'disabled' })
+  })
+
+const TRANSIENT_PREPARATION = ['disabled', 'protocol_not_frozen', 'session_unavailable', 'outside_window', 'evidence_unavailable', 'scorer_unavailable'] as const
+const PREPARATION_REASON_SWEEP = [...new Set([...TRANSIENT_PREPARATION, ...LEARN_V2_MEASUREMENT_ADMISSION_REASONS,
+  'pilot_not_admitted', 'response_format_unavailable', 'assessment_unavailable', 'canvas_not_admitted',
+  'outside_enrollment_window', 'protocol_horizon_mismatch'])]
+test.each(PREPARATION_REASON_SWEEP)('preparation reason %s always starts and delivers valid ordinary teaching', async reasonCode => {
+  const f = await fixture()
+  vi.spyOn(canvasPreparation, 'prepareCanvasSessionForOwner').mockResolvedValue({ kind: 'not_admitted', reasonCode, observations: 'no_observations' })
+  expect(await f.start()).toMatchObject({ status: 'in_progress' })
+  await expectTeachingDelivery(f, f.graph.studySessionId, `reason_${reasonCode}`)
+  const [assignments, facts, , opportunities] = await measurementRows(f)
+  if (TRANSIENT_PREPARATION.some(reason => reason === reasonCode)) {
+    expect(assignments).toEqual([])
+    expect(facts).toEqual([])
+  } else {
+    expect(assignments).toMatchObject([{ status: 'not_admitted', reasonCode }])
+    expect(facts).toMatchObject([{ fact: { kind: 'enrollment', status: 'not_admitted' } }])
+  }
+  expect(opportunities).toEqual([])
+})
+
+test.each(['preparing_pending', 'preparing_blocked', 'ready_blocked', 'test_open_blocked', 'ready_eligible'] as const)(
+  'a due unanswered %s check is settled before the later lesson starts and delivers', async state => {
+    const f = await fixture()
+    await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { scheduledEndAt: NOW + 30 * 60_000 }))
+    await f.start()
+    const cold = await coldFor(f)
+    const opening = await attach(f, cold)
+    expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opening.stage)).kind).toBe('accepted')
+    const savedCold = await f.t.run(ctx => ctx.db.get(cold._id))
+    const delayed = (await f.opportunities()).find(row => row.horizonDays === 7)!
+    vi.setSystemTime(delayed.openAt + 1000)
+    await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId,
+      idempotencyKey: `settled_prior_${state}` })
+    if (!state.startsWith('preparing')) {
+      await f.t.mutation(due, { userId, through: Date.now() })
+      if (state.startsWith('test_open')) await attach(f, (await f.opportunities()).find(row => row._id === delayed._id)!)
+    }
+    await revokeCanvas('entitlement', f)
+    if (state.endsWith('blocked')) await f.t.mutation(due, { userId, through: Date.now() })
+    const [phase, operationalEligibility] = state.startsWith('test_open') ? ['test_open', 'blocked'] : state.split('_')
+    expect(await f.t.run(ctx => ctx.db.get(delayed._id))).toMatchObject({ phase, operationalEligibility })
+    const later = await anotherTodayLesson(f)
+    await f.t.run(ctx => ctx.db.patch(later, { scheduledStartAt: Date.now() }))
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: later, assessment: { kind: 'teach' } })
+    expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: later, expectedSessionRevision: 2,
+      expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: `settled_start_${state}` })).toMatchObject({ status: 'in_progress' })
+    await expectTeachingDelivery(f, later, state)
+    expect(await f.t.run(ctx => ctx.db.get(delayed._id))).toMatchObject({ phase: 'cancelled', operationalEligibility: 'blocked', reasonCode: 'canvas_not_admitted' })
+    expect(await f.t.run(ctx => ctx.db.get(cold._id))).toEqual(savedCold)
+    const facts = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q =>
+      q.eq('userId', userId).eq('fact.assessmentOpportunityId', delayed._id)).take(16))
+    expect(facts.some(row => row.fact.kind === 'opportunity' && row.fact.status === 'blocked' && row.fact.reasonCode === 'canvas_not_admitted')).toBe(true)
+    expect(facts.some(row => row.fact.kind === 'opportunity' && row.fact.status === 'cancelled' && row.fact.reasonCode === 'canvas_not_admitted')).toBe(true)
+    expect(facts.some(row => row.fact.kind === 'opportunity' && row.fact.reasonCode === 'missed_window')).toBe(false)
+    expect((await f.opportunities()).filter(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind)
+      && row.submissionId === undefined && row.openAt <= Date.now() && row.closeAt > Date.now()
+      && ['preparing', 'ready', 'test_open'].includes(row.phase))).toEqual([])
+  })
+
 test.each(['scorer', 'evidence'] as const)('a transient %s preparation failure writes nothing and opens the Today lesson', async failure => {
   const f = await fixture()
   const scorer = policy.scorer
@@ -310,6 +412,7 @@ test.each(PERMANENT_PREPARATION)('a permanent %s preparation outcome records its
   if (reasonCode === 'protocol_horizon_mismatch') policy.protocol = { ...protocol, windows: protocol.windows.slice(0, 1) }
   if (reasonCode === 'unknown_history') await f.t.run(ctx => ctx.db.patch(f.graph.catalogId, { createdAt: NOW + 1 }))
   expect(await f.start()).toMatchObject({ status: 'in_progress' })
+  await expectTeachingDelivery(f, f.graph.studySessionId, `permanent_${reasonCode}`)
   const [assignments, facts, exposures, opportunities] = await measurementRows(f)
   expect(assignments).toMatchObject([{ status: 'not_admitted', reasonCode, flow: 'v2_today', entryPoint: 'today',
     checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } }])
@@ -321,6 +424,7 @@ test.each(PERMANENT_PREPARATION)('a permanent %s preparation outcome records its
   expect(await f.owner.query(api.learnV2Today.getToday, {})).not.toHaveProperty('assessment')
   expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: later, expectedSessionRevision: 2,
     expectedContentRevision: 1, idempotencyKey: `permanent_${reasonCode}_later`, entryPoint: 'today' })).toMatchObject({ status: 'in_progress' })
+  await expectTeachingDelivery(f, later, `permanent_later_${reasonCode}`)
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(4))).toHaveLength(1)
 })
 

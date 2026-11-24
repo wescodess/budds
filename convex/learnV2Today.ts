@@ -87,7 +87,8 @@ function coldOpen(opportunity: Doc<'learnAssessmentOpportunities'>, now: number)
 }
 
 function dueTodayChecks(checks: Doc<'learnAssessmentOpportunities'>[], now: number) {
-  return checks.filter(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind) && coldOpen(row, now) && row.openAt <= now)
+  return checks.filter(row => ['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(row.purpose.kind)
+    && row.submissionId === undefined && ['preparing', 'ready', 'test_open'].includes(row.phase) && row.openAt <= now && now < row.closeAt)
 }
 
 export async function settleUnplayableTodayChecks(ctx: MutationCtx, userId: string, assignment: AdmittedAssignment) {
@@ -95,10 +96,23 @@ export async function settleUnplayableTodayChecks(ctx: MutationCtx, userId: stri
     || !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return
   const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
     q.eq('userId', userId).eq('assignmentId', assignment._id)).take(8)
+  if (checks.length === 8) throw new Error('Learn Today check inventory limit')
   for (const row of dueTodayChecks(checks, Date.now())) {
-    if (row.purpose.kind === 'retained_transfer' || await readCanvasCheckPointerForOwner(ctx, userId, row)) continue
-    const reasonCode = await learnDelayedCheckBindingBlock(ctx, assignment, row) ?? 'assessment_unavailable'
+    if (await readCanvasCheckPointerForOwner(ctx, userId, row)) continue
+    const reasonCode = await learnDelayedCheckBindingBlock(ctx, assignment, row) ?? row.reasonCode ?? 'assessment_unavailable'
     await closeUnplayableLearnCheck(ctx, assignment, row, reasonCode)
+  }
+}
+
+export async function settleUnplayableTodaySession(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>) {
+  if (!todayCanvasChecksEnabled() || isTestOnlyMeasurementSession(session)) return
+  const plan = await ctx.db.get(session.studyPlanRevisionId)
+  if (!plan?.blueprintRevisionId || plan.userId !== userId) return
+  const assignments = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q =>
+    q.eq('userId', userId).eq('blueprintRevisionId', plan.blueprintRevisionId!).eq('objectiveId', session.primaryObjectiveId)).take(8)
+  if (assignments.length === 8) throw new Error('Learn Today assignment inventory limit')
+  for (const assignment of assignments) {
+    if (assignment.status === 'admitted') await settleUnplayableTodayChecks(ctx, userId, assignment)
   }
 }
 
@@ -122,7 +136,7 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
   }
   if (!LEARN_MEASUREMENT_CAPABILITIES.enrollment || !await measurementCatalogEnabled(ctx, userId)) return { kind: 'ordinary' }
   const protocol = getFrozenLearnMeasurementProtocol()
-  if (!protocol) return blocked('protocol_not_frozen')
+  if (!protocol) return todayCanvasChecksEnabled() ? { kind: 'ordinary' } : blocked('protocol_not_frozen')
   const plan = await ctx.db.get(session.studyPlanRevisionId)
   if (!plan?.blueprintRevisionId || plan.userId !== userId) return blocked('pins_mismatch')
   const assignmentKey = await privacyDigest(['learn-v2.measurement-episode.v1',
@@ -136,14 +150,16 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
   if (canvasChecks) {
     const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
       q.eq('userId', userId).eq('assignmentId', assignment._id)).take(8)
+    const unavailable = (reasonCode: string): TodayAssessment => todayCanvasChecksEnabled() && assignment.flow === 'v2_today'
+      ? { kind: 'ordinary' } : blocked(reasonCode)
     if (checks.length === 8) return blocked('assessment_inventory_limit')
-    const cold = checks.filter(row => row.purpose.kind === 'measurement_cold' && row.horizonDays === undefined)
-    if (cold.length !== 1 || checks.some(row => row.objectiveId !== session.primaryObjectiveId)) return blocked('pins_mismatch')
-    opportunity = cold[0]!
     for (const row of dueTodayChecks(checks, Date.now())) {
       const state = await assessmentState(ctx, userId, row)
       if (state.kind === 'check' || assignment.flow !== 'v2_today') return state
     }
+    const cold = checks.filter(row => row.purpose.kind === 'measurement_cold' && row.horizonDays === undefined)
+    if (cold.length !== 1 || checks.some(row => row.objectiveId !== session.primaryObjectiveId)) return unavailable('pins_mismatch')
+    opportunity = cold[0]!
     return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
   } else opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
     q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()

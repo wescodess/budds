@@ -54,7 +54,11 @@ The optional `checkSurface` binding on the assignment and non-calibration check 
 
 Canvas attachment grants with `flow: canvas`; canonical acceptance, sealing and saved-ID scoring retain that surface and the adaptive gates. Today grant/read calls return `flow_mismatch`. Today receives `status: assessment`, `deliveryGrant: null` and `assessment.check`; it receives no question or answer. Preparation validates the existing 32-claim/64-evidence-row lesson publication bounds and the full held-out inventory. It never uses the ordinary Canvas teaching-reference ceiling or a temporary teaching activity on this path. Direct ordinary Canvas preparation retains its original branch.
 
-Preparation never locks the lesson. Each outcome is either transient or permanent:
+Preparation never locks the lesson. With Today Canvas checks enabled, initial resolution without a frozen protocol also returns ordinary teaching, before preparation. With the capability off, C5 still returns `blocked / protocol_not_frozen`. Ownership, active-plan and Blueprint checks retain their authority requirements; inventory overflow and resource errors still propagate.
+
+Before an enabled ordinary start, an indexed lookup examines at most eight assignments for the lesson's owned Blueprint/objective. Its Canvas-bound Today assignments settle every due unanswered `preparing`, `ready` or `test_open` check, independent of operational eligibility. The same settlement runs on the post-check teaching path. A currently playable pointer or saved submission is never cancelled. Unplayable checks close in the start transaction with the current binder reason, or their existing scheduler reason when the binder has none, preserving the operational block and cancellation facts. Future placeholders remain scheduled. Disabled enrollment/catalog and missing protocol cannot leave an unseen open check blocking the lesson's delivery.
+
+Each preparation outcome is either transient or permanent:
 
 | Class | Reasons | Effect |
 | --- | --- | --- |

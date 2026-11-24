@@ -41,7 +41,7 @@ import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePr
 import { isTestOnlyMeasurementSession, measurementCanonical, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
 import { isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled } from "../shared/learn-v2-today-check";
-import { prepareTodayAssessment, resolveTodayAssessment, settleUnplayableTodayChecks, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
+import { prepareTodayAssessment, resolveTodayAssessment, settleUnplayableTodayChecks, settleUnplayableTodaySession, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
 import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses';
@@ -1456,6 +1456,7 @@ export const startStudySession = mutation({
       throw new LearnSessionContentInputError("Active Blueprint pointer is unavailable");
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
     const resolved = LEARN_MEASUREMENT_CAPABILITIES.responses ? await resolveTodayAssessment(ctx, userId, session) : null;
+    if (resolved?.kind === 'ordinary') await settleUnplayableTodaySession(ctx, userId, session);
     if (resolved && resolved.kind !== 'ordinary') {
       if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1
         || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new LearnSessionContentInputError('Expected session revision is invalid');

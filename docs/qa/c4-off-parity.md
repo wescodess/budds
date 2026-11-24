@@ -1,5 +1,7 @@
 # C4 capability-off parity sweep
 
+The final Today fallback controls pair the same missing-protocol start with the capability on and off. Enabled starts deliver ordinary teaching; disabled starts retain C5's `assessment / blocked / protocol_not_frozen` response and ready session across retries. New settlement on ordinary starts is capability-gated and leaves legacy C5 enrollment and disclosure behavior unchanged.
+
 ## #573 Today pointer amendment
 
 The B1 control enrolls through the real `prepareCanvasSession` entry with the capability off and asserts `entryPoint: canvas`. An ordinary Today lesson on that objective keeps C5's complete cold envelope (`flow_mismatch`, null state) and teach envelope (delivered refusal plus canonical own work). It does not patch entry attribution or enter the frozen Today cohort. The baseline goldens remain unchanged. Separate new-binding controls cover lesson preservation, later Today teaching after pass/fail, rollback and historical binding versions; C6's deliberate output change is pinned as v9 over dev v8.
