@@ -133,7 +133,7 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
     learnResponseEvidenceLinks: linkId, learnResponseIntegrityEvents: integrityId, learnResponseCommandReceipts: receiptId,
     learnScoringExecutions: executionId, learnMeasurementReportFacts: factId, learnMeasurementSourceWatermarks: watermarkId,
     learnMeasurementReportRuns: runId, learnMeasurementReportRows: rowId, learnMeasurementReportCells: cellId, learnMeasurementReportViewerGrants: viewerGrantId,
-  } satisfies { [Table in LearnMeasurementCollection]: Id<Table> }
+  } satisfies { [Table in Exclude<LearnMeasurementCollection, 'learnMeasurementDueWork'>]: Id<Table> }
   return { rows, folderId, documentId, learningVoidId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, threadId, activityId, studySessionId, scope, itemPins, scoringBinding, assistanceSnapshot, validitySnapshot, base, reportKeys }
 }
 

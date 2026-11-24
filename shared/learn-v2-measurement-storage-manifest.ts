@@ -27,6 +27,7 @@ type Entry = {
 // Child-first order also defines bounded account deletion. Exposure and case
 // identities survive aggregate deletion so deleting a Void cannot reset novelty.
 export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
+  { table: 'learnMeasurementDueWork', retention: 'owner_inventory', export: 'withheld', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'learningVoidId'], ['userId', 'key'], ['userId', 'state', 'dueAt'], ['state', 'nextAttemptAt'], ['nextAttemptAt'], ['inFlight']] },
   { table: 'learnArtifactSourceLinks', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'], ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'], ['userId', 'dependency.documentId', 'invalidatedAt'], ['userId', 'dependency.folderId', 'invalidatedAt']] },
   { table: 'learnArtifactCaseBindings', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'caseId']] },
   { table: 'learnArtifactLineageOrigins', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'originLineageId']] },

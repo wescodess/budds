@@ -20,6 +20,7 @@ import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 import { LEARN_DUE_WORK_LEASE_MS } from './learnV2MeasurementDueWork'
+import { enqueueLearnDueWork } from './lib/learnV2DueWorkQueue'
 
 const measurementItems = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
@@ -1687,6 +1688,7 @@ test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as cons
   const f = await fixture()
   await f.seal()
   const before = await f.opportunities()
+  const work = (await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId', q => q.eq('userId', userId)).first()))!
   const slot = before.find(row => row.horizonDays === 7)!
   vi.setSystemTime(slot.openAt)
   if (gate === 'protocol') policy.protocol = null
@@ -1711,6 +1713,17 @@ test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as cons
   expect(stopped.metrics.databaseQueries.used).toBe(0)
   expect(stopped.metrics.documentsWritten.used).toBe(0)
   expect(stopped.metrics.functionsScheduled.used).toBe(0)
+  const worker = makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:processDelayedCheckWork')
+  const continuation = makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:continueDelayedCheckSweep')
+  const durable = await f.t.mutation(async ctx => {
+    await ctx.runMutation(worker, { userId, workId: work._id, generation: work.generation })
+    await ctx.runMutation(continuation, { leaseId: 'disabled', target: Date.now() })
+    await enqueueLearnDueWork(ctx, { userId, key: 'disabled', kind: 'owner', dueAt: Date.now() })
+    return ctx.meta.getTransactionMetrics()
+  })
+  expect(durable.databaseQueries.used).toBe(0)
+  expect(durable.documentsWritten.used).toBe(0)
+  expect(durable.functionsScheduled.used).toBe(0)
 })
 
 async function measuredTick(f: { t: Awaited<ReturnType<typeof fixture>>['t'] }) {
@@ -1723,21 +1736,29 @@ async function measuredTick(f: { t: Awaited<ReturnType<typeof fixture>>['t'] }) 
 const pendingJobs = (f: { t: Awaited<ReturnType<typeof fixture>>['t'] }) => f.t.run(async ctx =>
   (await ctx.db.system.query('_scheduled_functions').take(512)).filter(row => row.state.kind === 'pending'))
 const ownerJobs = (rows: { name: string, args: unknown[] }[], owner = userId) =>
-  rows.filter(row => row.name.includes('materializeDelayedCheckEligibility') && row.args.some(arg => arg && typeof arg === 'object' && 'userId' in arg && arg.userId === owner))
+  rows.filter(row => row.name.includes('processDelayedCheckWork') && row.args.some(arg => arg && typeof arg === 'object' && 'userId' in arg && arg.userId === owner))
+
+async function seedDueOwner(f: { t: Awaited<ReturnType<typeof fixture>>['t'] }, owner: string) {
+  await f.t.run(async ctx => {
+    const now = Date.now()
+    await ctx.db.insert('learnAssessmentCatalogs', { userId: owner, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: now,
+      catalogRevision: 1, instrumentationEpoch: 'fixture.v1', historyCompleteness: 'prospective_complete', historyBasisVersion: 'fixture.v1',
+      historyCoverageWatermark: 'fixture.v1', measurementCapability: { enabled: true } })
+    await ctx.db.insert('learnMeasurementSourceWatermarks', { userId: owner, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: now,
+      sourceVersion: 'learn-v2.measurement-report-source.v4', sequence: 0, dueWorkThrough: null, historyCoverage: 'complete', updatedAt: now })
+    await enqueueLearnDueWork(ctx, { userId: owner, key: 'owner', kind: 'owner', dueAt: now })
+  })
+}
 
 test('due-work fan-out is bounded, single-flight and idempotent under duplicate ticks', async () => {
   const f = await fixture()
   await f.seal()
   const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
   vi.setSystemTime(slot.openAt)
-  await f.t.run(async ctx => {
-    const { _id: _id, _creationTime: _time, ...fields } = slot
-    for (let index = 0; index < 33; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...fields,
-      userId: `https://cron.example|bounded-${index}`, delayedCheckId: `bounded-${index}` })
-  })
+  for (let index = 0; index < 33; index++) await seedDueOwner(f, `https://cron.example|bounded-${index}`)
   const first = await measuredTick(f)
-  expect(first.value).toMatchObject({ status: 'scheduled', visited: 1, scheduledLearners: 1, continued: true })
-  expect(first.metrics.functionsScheduled.used).toBe(2)
+  expect(first.value).toMatchObject({ status: 'scheduled', visited: 16, scheduledLearners: 16, continued: true })
+  expect(first.metrics.functionsScheduled.used).toBe(17)
   expect(first.metrics.databaseQueries.used).toBeLessThanOrEqual(8)
   for (const tick of await Promise.all([measuredTick(f), measuredTick(f)])) {
     expect(tick.value).toMatchObject({ status: 'busy', scheduledLearners: 0 })
@@ -1780,7 +1801,7 @@ test('a due-work tick with nothing due schedules no learner work', async () => {
   expect(await f.t.run(ctx => ctx.db.query('learnMeasurementDueWorkCursors').take(2))).toEqual([expect.objectContaining({ through: Date.now(), leaseId: null })])
 })
 
-test('a learner with measurement disabled is visited once per due edge, not every tick', async () => {
+test('a disabled measurement catalogue retains work with backoff until it is enabled again', async () => {
   const f = await fixture()
   await f.seal()
   await runLearnDueCron(f.t)
@@ -1789,22 +1810,32 @@ test('a learner with measurement disabled is visited once per due edge, not ever
   const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
   vi.setSystemTime(slot.openAt)
   const due = await measuredTick(f)
-  expect(due.value).toMatchObject({ status: 'scheduled', scheduledLearners: 1 })
-  expect(ownerJobs(await pendingJobs(f))).toHaveLength(1)
+  expect(due.value).toMatchObject({ status: 'scheduled', scheduledLearners: 2 })
+  expect(ownerJobs(await pendingJobs(f))).toHaveLength(2)
   await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
-  expect((await f.opportunities()).find(row => row._id === slot._id)).toMatchObject({ phase: 'preparing', operationalEligibility: 'pending' })
-  for (let minute = 1; minute <= 3; minute++) {
-    vi.setSystemTime(Date.now() + 60_000)
-    const tick = await measuredTick(f)
-    expect(tick.value).toMatchObject({ status: 'complete', scheduledLearners: 0 })
-    expect(tick.metrics.functionsScheduled.used).toBe(0)
-  }
-  expect(await pendingJobs(f)).toEqual([])
+  expect((await f.opportunities()).find(row => row._id === slot._id)).toMatchObject({ phase: 'preparing', operationalEligibility: 'blocked', reasonCode: 'not_admitted' })
+  const pending = () => f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
+    q.eq('userId', userId).eq('state', 'pending')).take(8))
+  expect(await pending()).toHaveLength(1)
+  for (const row of await pending()) expect(row).toMatchObject({ attempts: 0, domainChecks: 1, nextAttemptAt: slot.openAt + 60_000 })
+  vi.setSystemTime(slot.openAt + 59_999)
+  expect((await measuredTick(f)).value).toMatchObject({ status: 'complete', scheduledLearners: 0 })
+  vi.setSystemTime(slot.openAt + 60_000)
+  await runLearnDueCron(f.t)
+  for (const row of await pending()) expect(row).toMatchObject({ attempts: 0, domainChecks: 2, nextAttemptAt: slot.openAt + 180_000 })
+  vi.setSystemTime(slot.openAt + 120_000)
+  expect((await measuredTick(f)).value).toMatchObject({ status: 'complete', scheduledLearners: 0 })
+  await f.t.run(ctx => ctx.db.patch(catalog._id, { measurementCapability: { enabled: true } }))
+  vi.setSystemTime(slot.openAt + 180_000)
+  await runLearnDueCron(f.t)
+  expect(await pending()).toEqual([])
+  expect((await f.opportunities()).find(row => row._id === slot._id)).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible' })
 })
 
 test('an expired due-work lease is taken over and the abandoned chain stops', async () => {
   const f = await fixture()
   await f.seal()
+  for (let index = 0; index < 17; index++) await seedDueOwner(f, `https://cron.example|takeover-${index}`)
   vi.setSystemTime((await f.opportunities()).find(row => row.horizonDays === 7)!.openAt)
   const started = await measuredTick(f)
   expect(started.value).toMatchObject({ status: 'scheduled', continued: true })

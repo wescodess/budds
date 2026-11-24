@@ -122,8 +122,8 @@ function savedClock(rows: Fact[]) {
 function slotDisposition(facts: Fact[], accepted: Awaited<ReturnType<typeof outcome>>): Episode['disposition'] {
   const latest = facts.at(-1)?.fact
   if (latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE) return 'missing_delayed'
-  if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (operational(facts) === 'blocked') return 'access_provider_blocked'
+  if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (latest?.kind === 'opportunity' && ['cancelled', 'abandoned'].includes(latest.status)) return 'abandoned'
   if (latest?.kind === 'opportunity' && ['invalid', 'reconciliation_required'].includes(latest.status)) return 'reconciliation_required'
   return accepted.acceptance && !accepted.result ? 'scoring_pending' : accepted.result ? 'valid_scored' : 'missing_delayed'

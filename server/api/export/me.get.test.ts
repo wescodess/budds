@@ -524,7 +524,7 @@ describe('GET /api/export/me', () => {
 
   test('ZIP and Convex share the classified collection inventory and preserve permitted work and withhold copies without source authority', async () => {
     expect(EXPORT_COLLECTIONS).toBe(PERSONAL_EXPORT_COLLECTIONS)
-    expect(EXPORT_COLLECTIONS).toHaveLength(126)
+    expect(EXPORT_COLLECTIONS).toHaveLength(127)
     expect(PERSONAL_EXPORT_CONTENT_COLLECTIONS).toHaveLength(39)
     expect(new Set(PERSONAL_EXPORT_CONTENT_CASES.map(([collection]) => collection))).toEqual(new Set(PERSONAL_EXPORT_CONTENT_COLLECTIONS))
     vi.stubEnv('LEARN_V2_ENABLED', 'false')
