@@ -935,6 +935,7 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
   const result = resultBy(row.result, cutoff)
   const timeEligible = localDateAt(row.clock.dueAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7)
     && (row.acceptance === null || localDateAt(row.acceptance.acceptedAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7))
+  const systemLate = row.unresolvedReason === LEARN_SYSTEM_DUE_WORK_LATE && row.acceptance === null
   const stateEligible = ['independent', 'retained'].includes(row.stateAtEligibility)
     && (row.stateAtAcceptance === null || ['independent', 'retained'].includes(row.stateAtAcceptance))
   const valid = timeEligible && stateEligible && row.unresolvedReason === null
@@ -942,18 +943,19 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
     && (row.stratum.familyId === null || result?.familyRevision === row.stratum.familyRevision)
     && row.stratum.familyValidationStatus !== 'quarantined'
   const reasons = endpointReasons(row.result, row.acceptance, cutoff, row.stratum.scorerConfiguration, row.clock)
-  const stateKnown = row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown'
+  // A check the system never made playable has no eligibility-time state; its outcome is simply missing.
+  const stateKnown = systemLate || (row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown')
   if (!stateKnown) reasons.push('unknown_prior_state')
-  if (!timeEligible || !stateEligible) reasons.push('invalid_item_novelty')
+  if (!timeEligible || (!stateEligible && !systemLate)) reasons.push('invalid_item_novelty')
   if (row.unresolvedReason) {
     reasons.push(row.unresolvedReason)
-    if (!LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)) reasons.push('reconciliation_required')
+    if (!systemLate && !LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)) reasons.push('reconciliation_required')
   }
   if (!valid && !row.acceptance) reasons.push('missing_delayed')
   const value = valid && result ? (result.scorePercent < result.thresholdPercent ? 1 : 0) : null
   return { learnerKey: row.learnerKey, band: reportBand(cold), stage: slotStage(row.clock, row.claim.firstIndependentAt, cutoff), known: stateKnown,
     reasons: [...new Set(reasons)], observation: { learnerKey: row.learnerKey, value, lower: value ?? 0, upper: value ?? 1 }, secondary: null,
-    disposition: reportDisposition(reasons, valid), eligible: stateEligible, acceptedCold: false, accepted: acceptedBy(row.acceptance, cutoff),
+    disposition: reportDisposition(reasons, valid), eligible: stateEligible && !systemLate, acceptedCold: false, accepted: acceptedBy(row.acceptance, cutoff),
     validCold: false, validDelayed: valid, replacementAccepted: false, replacementValid: false, primaryIncluded: false,
     paste: result?.pasteObserved ?? 'unknown', focus: result?.focusLossObserved ?? 'unknown', order: 'unknown', observedOrder: 'unknown', coldForm: 'unknown',
     delayedForm: 'unknown', observedColdForm: null, observedDelayedForm: acceptedBy(row.acceptance, cutoff) ? result?.formLabel ?? 'unknown' : null }

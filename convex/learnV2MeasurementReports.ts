@@ -26,6 +26,7 @@ import { readLearnReportFactPage, normalizeLearnReportInventory } from './lib/le
 import { learnReportInputSnapshotValidator, learnReportMetricValidator } from './lib/learnV2MeasurementReportContract'
 import { reportRunFields } from './lib/learnV2MeasurementStorage'
 import { readLearnMeasurementWatermarkSnapshot } from './lib/learnV2MeasurementFacts'
+import { extendLearnDueWorkCoverage } from './lib/learnV2MeasurementDueWork'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 
@@ -225,6 +226,7 @@ export const pinReportOwners = internalMutation({
         if (await hasAccountDeletionTombstone(ctx, userId)) throw new Error('source_invalidated')
         const watermark = await ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique()
         if (!watermark) throw new Error('missing_owner_watermark')
+        await extendLearnDueWorkCoverage(ctx, watermark, run.cutoff)
         rows.push({ userId, sourceWatermark: watermark.sequence, snapshot: await readLearnMeasurementWatermarkSnapshot(ctx, userId, run._id) })
       }
       await writeSources(ctx, run, run.rowCount + 1, rows)

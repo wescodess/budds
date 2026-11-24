@@ -611,3 +611,24 @@ it.each(['eligibility', 'acceptance'] as const)('uncaptured first-check %s state
   expect(report.missingOutcomeBounds).toBeNull()
   expect(report.reasonCodes).toContain('unknown_prior_state')
 })
+
+it('counts a never-playable first check as a missing outcome, distinct from a learner miss', async () => {
+  const late = await computationClaim(1, { score: null })
+  Object.assign(late.claim, { stateAtEligibility: 'unknown', unresolvedReason: 'system_due_work_late' })
+  const missed = await computationClaim(2, { score: null })
+  Object.assign(missed.claim, { unresolvedReason: null })
+  const lateCell = cell(await buildLearningMeasurementReport(await computationInput([late.watermark, late.claim])), 'false_mastery_next_delayed.v1')
+  const missedCell = cell(await buildLearningMeasurementReport(await computationInput([missed.watermark, missed.claim])), 'false_mastery_next_delayed.v1')
+  for (const value of [lateCell, missedCell]) {
+    expect(value.counts).toMatchObject({ maturedClaims: 1, checkedClaims: 0, failedClaims: 0,
+      dispositions: { missing_delayed: 1, reconciliation_required: 0, invalid_item_novelty: 0, abandoned: 0 } })
+    expect(value.populationState).toBe('known')
+    expect(value.reasonCodes).toContain('missing_delayed')
+    expect(value.reasonCodes).not.toContain('reconciliation_required')
+  }
+  expect(lateCell.missingOutcomeBounds).not.toBeNull()
+  expect(lateCell.missingOutcomeBounds).toEqual(missedCell.missingOutcomeBounds)
+  expect(lateCell.reasonCodes).toContain('system_due_work_late')
+  expect(lateCell.reasonCodes).not.toContain('unknown_prior_state')
+  expect(missedCell.reasonCodes).not.toContain('system_due_work_late')
+})

@@ -21,6 +21,29 @@ import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERS
 import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession, readLearnDelayedCheckBinding } from './learnV2DelayedDelivery'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
 
+export const LEARN_DUE_WORK_EDGE_PHASES = ['preparing', 'ready', 'test_open'] as const
+
+export function learnDueWorkEnabled() {
+  return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.enrollment
+    && LEARN_MEASUREMENT_CAPABILITIES.delivery && process.env.LEARN_V2_ENABLED === 'true' && getFrozenLearnMeasurementProtocol() !== null
+}
+
+// A complete owner sweep through `dueWorkThrough` applied every edge at or before it. Coverage extends to the
+// cutoff only when no open or close edge in between is still unapplied.
+export async function extendLearnDueWorkCoverage(ctx: MutationCtx, watermark: Doc<'learnMeasurementSourceWatermarks'>, cutoff: number) {
+  const from = watermark.dueWorkThrough
+  if (from === null || from >= cutoff || !learnDueWorkEnabled()) return
+  const opening = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_openAt', q =>
+    q.eq('userId', watermark.userId).eq('phase', 'preparing').gt('openAt', from).lte('openAt', cutoff)).first()
+  if (opening) return
+  for (const phase of LEARN_DUE_WORK_EDGE_PHASES) {
+    const closing = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', watermark.userId).eq('phase', phase).gt('closeAt', from).lte('closeAt', cutoff)).first()
+    if (closing) return
+  }
+  await ctx.db.patch(watermark._id, { dueWorkThrough: cutoff, updatedAt: Date.now() })
+}
+
 async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
   patch: Partial<Pick<Doc<'learnAssessmentOpportunities'>, 'phase' | 'operationalEligibility' | 'eligibleAt' | 'reasonCode' | 'replacementBinding'>>) {
   if (Object.entries(patch).every(([key, value]) => row[key as keyof typeof row] === value)) return

@@ -19,6 +19,7 @@ import { createResponsePrivacyReadContext, privacyRead } from './lib/learnV2Priv
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
+import { LEARN_DUE_WORK_LEASE_MS } from './learnV2MeasurementDueWork'
 
 const measurementItems = (anyApi as unknown as ApiFromModules<{ learnV2MeasurementItems: typeof import('./learnV2MeasurementItems') }>).learnV2MeasurementItems
 const mastery = (anyApi as unknown as ApiFromModules<{ learnV2Mastery: typeof import('./learnV2Mastery') }>).learnV2Mastery
@@ -1712,7 +1713,19 @@ test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as cons
   expect(stopped.metrics.functionsScheduled.used).toBe(0)
 })
 
-test('due-work fan-out is bounded, continues its index pages and is idempotent under duplicate ticks', async () => {
+async function measuredTick(f: { t: Awaited<ReturnType<typeof fixture>>['t'] }) {
+  const cron = learnDueCron()
+  return f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(cron.reference, cron.args)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+}
+const pendingJobs = (f: { t: Awaited<ReturnType<typeof fixture>>['t'] }) => f.t.run(async ctx =>
+  (await ctx.db.system.query('_scheduled_functions').take(512)).filter(row => row.state.kind === 'pending'))
+const ownerJobs = (rows: { name: string, args: unknown[] }[], owner = userId) =>
+  rows.filter(row => row.name.includes('materializeDelayedCheckEligibility') && row.args.some(arg => arg && typeof arg === 'object' && 'userId' in arg && arg.userId === owner))
+
+test('due-work fan-out is bounded, single-flight and idempotent under duplicate ticks', async () => {
   const f = await fixture()
   await f.seal()
   const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
@@ -1722,26 +1735,93 @@ test('due-work fan-out is bounded, continues its index pages and is idempotent u
     for (let index = 0; index < 33; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...fields,
       userId: `https://cron.example|bounded-${index}`, delayedCheckId: `bounded-${index}` })
   })
-  const cron = learnDueCron()
-  const first = await f.t.mutation(async ctx => {
-    const value = await ctx.runMutation(cron.reference, cron.args)
-    return { value, metrics: await ctx.meta.getTransactionMetrics() }
-  })
-  expect(first.value).toMatchObject({ visited: 16, scheduledLearners: 16, continued: true })
-  expect(first.metrics.databaseQueries.used).toBe(1)
-  expect(first.metrics.functionsScheduled.used).toBe(17)
-  await Promise.all([f.t.mutation(cron.reference, cron.args), f.t.mutation(cron.reference, cron.args)])
+  const first = await measuredTick(f)
+  expect(first.value).toMatchObject({ status: 'scheduled', visited: 1, scheduledLearners: 1, continued: true })
+  expect(first.metrics.functionsScheduled.used).toBe(2)
+  expect(first.metrics.databaseQueries.used).toBeLessThanOrEqual(8)
+  for (const tick of await Promise.all([measuredTick(f), measuredTick(f)])) {
+    expect(tick.value).toMatchObject({ status: 'busy', scheduledLearners: 0 })
+    expect(tick.metrics.functionsScheduled.used).toBe(0)
+    expect(tick.metrics.documentsWritten.used).toBe(0)
+  }
+  const chain = (await pendingJobs(f)).find(row => row.name.includes('continueDelayedCheckSweep'))!
+  const page = await f.t.mutation(makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:continueDelayedCheckSweep'), chain.args[0] as never)
+  expect(page).toMatchObject({ status: 'scheduled', visited: 16, scheduledLearners: 16, continued: true })
   await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
   const closed = await f.t.run(ctx => ctx.db.system.query('_scheduled_functions').take(256))
   expect(closed.filter(row => row.state.kind === 'pending' || row.state.kind === 'inProgress')).toEqual([])
   const visited = new Set(closed.flatMap(row => row.args.flatMap(arg => arg && typeof arg === 'object' && 'userId' in arg ? [arg.userId] : [])))
   expect(visited.has(userId)).toBe(true)
   for (let index = 0; index < 33; index++) expect(visited.has(`https://cron.example|bounded-${index}`)).toBe(true)
+  expect(closed.filter(row => row.name.includes('continueDelayedCheckSweep'))).toHaveLength(3)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementDueWorkCursors').take(2))).toEqual([expect.objectContaining({ through: slot.openAt, leaseId: null })])
   const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', q =>
     q.eq('userId', userId).eq('studyPlanRevisionId', f.graph.studyPlanRevisionId).eq('assessmentPurpose', 'measurement_delayed')).take(4))
   expect(sessions).toHaveLength(1)
   const events = await f.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId)).take(16))
   expect(events.filter(row => 'assessmentOpportunityId' in row && row.assessmentOpportunityId === slot._id)).toHaveLength(1)
+})
+
+test('a due-work tick with nothing due schedules no learner work', async () => {
+  const f = await fixture()
+  await f.seal()
+  await runLearnDueCron(f.t)
+  const before = await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique())
+  expect(before?.dueWorkThrough).toBe(Date.now())
+  for (let minute = 1; minute <= 3; minute++) {
+    vi.setSystemTime(Date.now() + 60_000)
+    const tick = await measuredTick(f)
+    expect(tick.value).toEqual({ status: 'complete', visited: 0, scheduledLearners: 0, continued: false })
+    expect(tick.metrics.functionsScheduled.used).toBe(0)
+    expect(tick.metrics.databaseQueries.used).toBeLessThanOrEqual(7)
+    expect(await pendingJobs(f)).toEqual([])
+  }
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique())).toEqual(before)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementDueWorkCursors').take(2))).toEqual([expect.objectContaining({ through: Date.now(), leaseId: null })])
+})
+
+test('a learner with measurement disabled is visited once per due edge, not every tick', async () => {
+  const f = await fixture()
+  await f.seal()
+  await runLearnDueCron(f.t)
+  const catalog = (await f.t.run(ctx => ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique()))!
+  await f.t.run(ctx => ctx.db.patch(catalog._id, { measurementCapability: { enabled: false } }))
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(slot.openAt)
+  const due = await measuredTick(f)
+  expect(due.value).toMatchObject({ status: 'scheduled', scheduledLearners: 1 })
+  expect(ownerJobs(await pendingJobs(f))).toHaveLength(1)
+  await f.t.finishAllScheduledFunctions(() => vi.runAllTimers())
+  expect((await f.opportunities()).find(row => row._id === slot._id)).toMatchObject({ phase: 'preparing', operationalEligibility: 'pending' })
+  for (let minute = 1; minute <= 3; minute++) {
+    vi.setSystemTime(Date.now() + 60_000)
+    const tick = await measuredTick(f)
+    expect(tick.value).toMatchObject({ status: 'complete', scheduledLearners: 0 })
+    expect(tick.metrics.functionsScheduled.used).toBe(0)
+  }
+  expect(await pendingJobs(f)).toEqual([])
+})
+
+test('an expired due-work lease is taken over and the abandoned chain stops', async () => {
+  const f = await fixture()
+  await f.seal()
+  vi.setSystemTime((await f.opportunities()).find(row => row.horizonDays === 7)!.openAt)
+  const started = await measuredTick(f)
+  expect(started.value).toMatchObject({ status: 'scheduled', continued: true })
+  const abandoned = (await pendingJobs(f)).find(row => row.name.includes('continueDelayedCheckSweep'))!
+  vi.setSystemTime(Date.now() + 60_000)
+  expect((await measuredTick(f)).value).toMatchObject({ status: 'busy' })
+  vi.setSystemTime(Date.now() + LEARN_DUE_WORK_LEASE_MS)
+  const resumed = await measuredTick(f)
+  expect(resumed.value).toMatchObject({ status: 'scheduled' })
+  const continueSweep = makeFunctionReference<'mutation'>('learnV2MeasurementDueWork:continueDelayedCheckSweep')
+  const stale = await f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(continueSweep, abandoned.args[0] as never)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(stale.value).toMatchObject({ status: 'stale', scheduledLearners: 0 })
+  expect(stale.metrics.documentsWritten.used).toBe(0)
+  expect(stale.metrics.functionsScheduled.used).toBe(0)
 })
 
 test('ordinary publication rejects source evidence above the serialized scoring request budget', async () => {

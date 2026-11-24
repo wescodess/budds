@@ -4,7 +4,7 @@ import { api, internal } from './_generated/api'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
-import { runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
+import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
@@ -170,10 +170,69 @@ test('system-late undelivered checks remain missing outcomes in a sealed C6 repo
     expect(cell.counts.dispositions.missing_delayed).toBe(5)
     expect(cell.reasonCodes).toContain('system_due_work_late')
   }
+  const claims = input.rows.filter(row => row.kind === 'first_check_claim_v2')
+  expect(claims).toHaveLength(5)
+  for (const claim of claims) expect(claim).toMatchObject({ firstSlot: { kind: 'linked', unresolvedReason: 'system_due_work_late', acceptance: null, result: null } })
+  const published = await buildPublishedLearningMeasurementReport(input)
+  for (const pages of [built.pages, published.pages]) {
+    const falseMastery = pages.flatMap(page => page.cells).filter(cell => cell.metric === 'false_mastery_next_delayed.v1' && cell.stratum.startingBand === 'all')
+    expect(falseMastery.length).toBeGreaterThan(0)
+    for (const cell of falseMastery) {
+      expect(cell.counts).toMatchObject({ maturedClaims: 5, checkedClaims: 0, failedClaims: 0, dispositions: { missing_delayed: 5,
+        reconciliation_required: 0, invalid_item_novelty: 0, abandoned: 0 } })
+      expect(cell.populationState).toBe('known')
+      expect(cell.missingOutcomeBounds).not.toBeNull()
+      expect(cell.reasonCodes).toContain('system_due_work_late')
+      expect(cell.reasonCodes).not.toContain('reconciliation_required')
+    }
+  }
+  expect(await f.t.run(ctx => ctx.db.get(reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+  const watermarks = () => f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').take(16))
+  const swept = await watermarks()
+  expect(swept).toHaveLength(5)
   vi.setSystemTime(Date.now() + 86_400_000)
+  const cron = learnDueCron()
+  const idle = await f.t.mutation(async ctx => {
+    const value = await ctx.runMutation(cron.reference, cron.args)
+    return { value, metrics: await ctx.meta.getTransactionMetrics() }
+  })
+  expect(idle.value).toMatchObject({ status: 'complete', scheduledLearners: 0 })
+  expect(idle.metrics.functionsScheduled.used).toBe(0)
+  expect(await watermarks()).toEqual(swept)
+  const later = await beginReport(f, cohort, 'system_late_later_report_1234567890')
+  const pinned = (await sealedMeasurementReportInput(f.t, later.reportRunId)).rows.filter(row => row.kind === 'owner_watermark')
+  expect(pinned).toHaveLength(5)
+  for (const row of pinned) expect(row).toMatchObject({ dueWorkThrough: Date.now(), historyCoverage: 'complete' })
+  expect(await f.t.run(ctx => ctx.db.get(later.reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+}, 30_000)
+
+test('report pinning leaves coverage unknown for an owner with an unapplied close edge', async () => {
+  const cohort = await cohortJourney(false, 5)
+  const f = cohort[0]!
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.closeAt + 86_400_000)
   await runLearnDueCron(f.t)
-  const watermark = await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', f.learnerId)).unique())
-  expect(watermark?.dueWorkThrough).toBe(Date.now())
+  const swept = (await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', f.learnerId)).unique()))!
+  vi.setSystemTime(Date.now() + 86_400_000)
+  const lagging = cohort[1]!
+  const stuck = (await lagging.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.run(ctx => ctx.db.patch(stuck._id, { phase: 'ready', closeAt: swept.dueWorkThrough! + 1000 }))
+  const protocol = syntheticDeliveryProtocol(START)
+  LEARN_REPORT_APPROVALS.push({ tokenIdentifier: viewerIdentity.tokenIdentifier, principalBindingVersion: 'integration.binding.v1', grantVersion: 'integration.grant.v1',
+    cohortVersion: protocol.cohortVersion, epoch: protocol.epoch, protocolVersion: protocol.version, baselineSha: protocol.baselineSha,
+    frozenAt: protocol.enrollmentStartAt - 1, owners: cohort.map(learner => learner.learnerId), replacementPolicy: { kind: 'secondary_only' } })
+  const grantId = await f.t.run(ctx => ctx.db.insert('learnMeasurementReportViewerGrants', { userId: viewerIdentity.tokenIdentifier,
+    storageVersion: 'learn-v2.measurement-storage.v1', createdAt: Date.now(), cohortVersion: protocol.cohortVersion, epoch: protocol.epoch,
+    principalBindingVersion: 'integration.binding.v1', grantVersion: 'integration.grant.v1', status: 'active', grantedAt: Date.now(), expiresAt: Date.now() + 86_400_000 }))
+  const report = await f.t.withIdentity(viewerIdentity).mutation(api.learnV2MeasurementReports.requestReport, { version: LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION,
+    viewerGrantId: grantId, idempotencyKey: 'lagging_owner_report_1234567890', enrollmentStartAt: protocol.enrollmentStartAt,
+    enrollmentEndAt: protocol.enrollmentEndAt, cutoff: Date.now() })
+  if (report.status !== 'requested') throw new Error('Expected report request')
+  await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: report.reportRunId })
+  const coverage = new Map((await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').take(16))).map(row => [row.userId, row.dueWorkThrough]))
+  for (const learner of cohort) expect(coverage.get(learner.learnerId)).toBe(learner === lagging ? swept.dueWorkThrough : Date.now())
+  const pinned = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', report.reportRunId)).take(8))
+  expect(pinned.filter(row => row.snapshot.kind === 'owner_watermark' && row.snapshot.dueWorkThrough === swept.dueWorkThrough)).toHaveLength(1)
 }, 30_000)
 
 test.each([{ reserve: false, score: 100 }, { reserve: false, score: 0 }, { reserve: true, score: 100 }])(

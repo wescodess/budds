@@ -1852,6 +1852,8 @@ export default defineSchema({
     .index('by_userId_and_submissionId', ['userId', 'submissionId'])
     .index('by_phase_and_dueAt', ['phase', 'dueAt'])
     .index('by_phase_and_openAt', ['phase', 'openAt'])
+    .index('by_phase_and_closeAt', ['phase', 'closeAt'])
+    .index('by_userId_and_phase_and_openAt', ['userId', 'phase', 'openAt'])
     .index('by_userId_and_phase_and_closeAt', ['userId', 'phase', 'closeAt'])
     .index('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', ['userId', 'firstCheckClaim.claimKey', 'checkSequence']),
   learnMeasurementAssignments: defineTable(measurementStorage.measurementAssignmentValidator)
@@ -1912,9 +1914,13 @@ export default defineSchema({
     .index('by_userId_and_fact_kind', ['userId', 'fact.kind'])
     .index('by_userId_and_fact_claimKey_and_fact_claimSequence', ['userId', 'fact.claimKey', 'fact.claimSequence']),
   learnMeasurementSourceWatermarks: defineTable(measurementStorage.reportWatermarkFields)
-    .index('by_dueWorkThrough', ['dueWorkThrough'])
+    .index('by_createdAt', ['createdAt'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_sequence', ['userId', 'sequence']),
+  learnMeasurementDueWorkCursors: defineTable({
+    key: v.literal('delayed_checks'), through: v.union(v.number(), v.null()),
+    leaseId: v.union(v.string(), v.null()), leaseExpiresAt: v.number(), updatedAt: v.number(),
+  }).index('by_key', ['key']),
   learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureFields)
     .index('by_userId', ['userId'])
     .index('by_userId_and_caseId_and_serverTime', ['userId', 'caseId', 'serverTime'])
