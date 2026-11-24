@@ -108,11 +108,22 @@ export async function settleUnplayableTodaySession(ctx: MutationCtx, userId: str
   if (!todayCanvasChecksEnabled() || isTestOnlyMeasurementSession(session)) return
   const plan = await ctx.db.get(session.studyPlanRevisionId)
   if (!plan?.blueprintRevisionId || plan.userId !== userId) return
-  const assignments = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q =>
-    q.eq('userId', userId).eq('blueprintRevisionId', plan.blueprintRevisionId!).eq('objectiveId', session.primaryObjectiveId)).take(8)
-  if (assignments.length === 8) throw new Error('Learn Today assignment inventory limit')
-  for (const assignment of assignments) {
-    if (assignment.status === 'admitted') await settleUnplayableTodayChecks(ctx, userId, assignment)
+  const now = Date.now()
+  const assignments = new Set<Doc<'learnMeasurementAssignments'>['_id']>()
+  for (const phase of ['preparing', 'ready', 'test_open'] as const) {
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(MAX_SESSIONS + 1)
+    if (rows.length > MAX_SESSIONS) throw new Error('Learn Today active check inventory limit')
+    for (const row of dueTodayChecks(rows, now)) {
+      if (row.assignmentId && row.learningVoidId === plan.learningVoidId && row.blueprintRevisionId === plan.blueprintRevisionId
+        && row.objectiveId === session.primaryObjectiveId) assignments.add(row.assignmentId)
+    }
+  }
+  for (const id of assignments) {
+    const assignment = await ctx.db.get(id)
+    if (assignment?.userId === userId && assignment.status === 'admitted'
+      && assignment.blueprintRevisionId === plan.blueprintRevisionId && assignment.objectiveId === session.primaryObjectiveId)
+      await settleUnplayableTodayChecks(ctx, userId, assignment)
   }
 }
 

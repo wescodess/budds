@@ -312,6 +312,27 @@ test.each(['protocol', 'enrollment', 'delivery', 'catalog', 'cold_inventory'] as
   })
 
 const TRANSIENT_PREPARATION = ['disabled', 'protocol_not_frozen', 'session_unavailable', 'outside_window', 'evidence_unavailable', 'scorer_unavailable'] as const
+test('historical non-admissions cannot impose a new teaching limit during protocol fallback', async () => {
+  const f = await fixture({ canvas: false })
+  await f.start()
+  await f.t.run(async ctx => {
+    const assignment = (await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId', q => q.eq('userId', userId)).unique())!
+    const { _id: _assignmentId, _creationTime: _created, ...fields } = assignment
+    for (let index = 1; index < 9; index++) await ctx.db.insert('learnMeasurementAssignments', { ...fields,
+      assignmentKey: `historical_non_admission_${index}`, epoch: `synthetic.history.${index}`, createdAt: NOW - index })
+    const practice = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+      q.eq('userId', userId).eq('contextPins.studySessionId', f.graph.studySessionId)).take(2)
+    for (const row of practice) await ctx.db.patch(row._id, { phase: 'cancelled' })
+    await ctx.db.patch(f.graph.studySessionId, { status: 'completed' })
+  })
+  const later = await anotherTodayLesson(f)
+  policy.protocol = null
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: later })
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: later, expectedSessionRevision: 2,
+    expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'historical_non_admission_lesson' })).toMatchObject({ status: 'in_progress' })
+  await expectTeachingDelivery(f, later, 'historical_non_admissions')
+})
+
 const PREPARATION_REASON_SWEEP = [...new Set([...TRANSIENT_PREPARATION, ...LEARN_V2_MEASUREMENT_ADMISSION_REASONS,
   'pilot_not_admitted', 'response_format_unavailable', 'assessment_unavailable', 'canvas_not_admitted',
   'outside_enrollment_window', 'protocol_horizon_mismatch'])]
