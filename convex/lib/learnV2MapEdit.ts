@@ -1,3 +1,4 @@
+import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { ConvexError, v, type Infer } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
@@ -32,7 +33,10 @@ export function rejectStaleMapEdit(): never {
 
 export function requireServerAssessmentContract(value: unknown): asserts value is LearnV2AssessmentContract {
   try { validateLearnV2AssessmentContract(value, 'objective') }
-  catch { rejectMapEdit('assessment_contract_unavailable') }
+  catch (error) {
+    if (!(error instanceof LearnInputValidationError)) throw error
+    rejectMapEdit('assessment_contract_unavailable')
+  }
 }
 
 export async function resolveMapEditCandidate(ctx: MutationCtx, userId: string, blueprintRevisionId: Id<'learnBlueprintRevisions'>,

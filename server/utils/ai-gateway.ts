@@ -28,6 +28,7 @@ export interface GenerateParams {
   maxRequestBytes?: number
   redactUpstreamErrorBody?: boolean
   captureScoringProvenance?: boolean
+  strictErrors?: boolean
   jsonSchema?: {
     name: string
     strict?: boolean
@@ -42,7 +43,15 @@ function cancelBody(body: { cancel: () => Promise<unknown> } | null | undefined)
   catch { /* Cleanup must not replace the observed outcome. */ }
 }
 
-async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
+async function gatewayResponseIo<T>(operation: () => Promise<T>, strictErrors: boolean): Promise<T> {
+  try { return await operation() }
+  catch (error) {
+    if (!strictErrors || !(error instanceof TypeError) && !(typeof DOMException !== 'undefined' && error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error
+    throw Object.assign(error, { aiGatewayFailureKind: 'outcome_unknown' })
+  }
+}
+
+async function readBoundedResponseText(response: Response, maximumBytes: number, strictErrors = false): Promise<string> {
   if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
     cancelBody(response.body)
     throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
@@ -63,7 +72,7 @@ async function readBoundedResponseText(response: Response, maximumBytes: number)
     let complete = false
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        const { done, value } = await gatewayResponseIo(() => reader.read(), strictErrors)
         if (done) { complete = true; break }
         total += value.byteLength
         if (total > maximumBytes) {
@@ -79,11 +88,11 @@ async function readBoundedResponseText(response: Response, maximumBytes: number)
     }
   }
   if (typeof response.text === 'function') {
-    const text = await response.text()
+    const text = await gatewayResponseIo(() => response.text(), strictErrors)
     if (new TextEncoder().encode(text).byteLength > maximumBytes) throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
     return text
   }
-  const text = JSON.stringify(await response.json())
+  const text = JSON.stringify(await gatewayResponseIo(() => response.json(), strictErrors))
   if (new TextEncoder().encode(text).byteLength > maximumBytes) throw providerError({ statusCode: 502, message: 'AI Gateway response exceeded the byte limit' }, 'invalid_response')
   return text
 }
@@ -235,14 +244,14 @@ export function validateGenerationMetadata(value: unknown): GatewayGenerationMet
 export async function lookupScoringGeneration(generationId: string, signal: AbortSignal): Promise<GatewayGenerationMetadata> {
   if (!observedLabel.safeParse(generationId).success || signal.aborted) throw providerError({ statusCode: 400, message: 'Invalid scoring metadata lookup' }, 'not_dispatched')
   const { headers } = getGatewayConfig()
-  const response = await fetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
+  const response = await gatewayFetch(`https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(generationId)}`, {
     method: 'GET', headers: { Authorization: headers.Authorization! }, signal, redirect: 'error',
   })
-  const body = await readBoundedResponseText(response, 32_000)
+  const body = await readBoundedResponseText(response, 32_000, true)
   if (!response.ok) throw providerError({ statusCode: response.status, message: 'Scoring metadata is unavailable' })
   let parsed: unknown
   try { parsed = JSON.parse(body) }
-  catch { throw providerError({ statusCode: 502, message: 'Invalid scoring generation metadata' }, 'invalid_response') }
+  catch (error) { if (!(error instanceof SyntaxError)) throw error; throw providerError({ statusCode: 502, message: 'Invalid scoring generation metadata' }, 'invalid_response') }
   const metadata = validateGenerationMetadata(parsed)
   if (metadata.generationId !== generationId) throw providerError({ statusCode: 502, message: 'Scoring generation ID mismatch' }, 'invalid_response')
   return metadata
@@ -266,6 +275,19 @@ function providerError(options: { statusCode: number, message: string }, failure
   const error = gatewayGlobals.createError?.(options)
     ?? Object.assign(new Error(options.message), { statusCode: options.statusCode })
   return Object.assign(error, { aiGatewayFailureKind: failureKind })
+}
+
+export function isKnownAiGatewayFailure(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'aiGatewayFailureKind' in error
+    && ['not_dispatched', 'definitive_failure', 'invalid_response', 'outcome_unknown'].includes(String(error.aiGatewayFailureKind))
+}
+
+async function gatewayFetch(...args: Parameters<typeof fetch>) {
+  try { return await fetch(...args) }
+  catch (error) {
+    if (!(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error
+    throw Object.assign(error, { aiGatewayFailureKind: 'outcome_unknown' })
+  }
 }
 
 export function classifyAiGatewayFailure(error: unknown): AiGatewayFailureKind {
@@ -384,7 +406,8 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     throw providerError({ statusCode: 500, message: 'Invalid AI Gateway response byte limit' }, 'not_dispatched')
   }
   if (params.signal?.aborted) throw providerError({ statusCode: 499, message: 'AI Gateway request aborted before send' }, 'not_dispatched')
-  const response = await fetch(url, {
+  const strictErrors = params.captureScoringProvenance === true || params.strictErrors === true
+  const response = await (strictErrors ? gatewayFetch : fetch)(url, {
     method: 'POST',
     headers,
     signal: params.signal,
@@ -397,7 +420,7 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
     // turn a possible execution into a known failure, or the reverse.
     const failure = response.status >= 500 ? 'outcome_unknown' : 'definitive_failure'
     const fallback = 'Upstream provider request failed'
-    const error = params.redactUpstreamErrorBody ? fallback : await readBoundedResponseText(response, maximumBytes).catch(() => fallback)
+    const error = params.redactUpstreamErrorBody ? fallback : await readBoundedResponseText(response, maximumBytes, strictErrors).catch((error) => { if (strictErrors && !isKnownAiGatewayFailure(error) && !(error instanceof TypeError) && !(error instanceof DOMException && ['AbortError', 'TimeoutError'].includes(error.name))) throw error; return fallback })
     if (params.redactUpstreamErrorBody) cancelBody(response.body)
     const options = { statusCode: response.status, message: `AI Gateway error: ${error}` }
     const retryAfter = response.headers?.get?.('retry-after')
@@ -406,12 +429,13 @@ export async function generateCompletion(params: GenerateParams): Promise<Genera
       Number.isFinite(delay) ? { retryAfterMs: Math.max(0, delay) } : {})
   }
 
-  const responseText = await readBoundedResponseText(response, maximumBytes)
+  const responseText = await readBoundedResponseText(response, maximumBytes, strictErrors)
   let parsed: unknown
   try {
     parsed = JSON.parse(responseText)
   }
-  catch {
+  catch (error) {
+    if (strictErrors && !(error instanceof SyntaxError)) throw error
     throw providerError({ statusCode: 502, message: 'AI Gateway returned invalid JSON' }, 'invalid_response')
   }
   const completion = validateGenerateResponse(parsed, params.captureScoringProvenance === true)

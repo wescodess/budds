@@ -8,9 +8,29 @@ import {
   FIFTH_LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   LEARN_ACTIVITY_EVENT_TAXONOMY_VERSION,
   validateLearnActivityEventInput,
-  type LearnActivityEventInput,
+  type LearnActivityEventInput, learnMeasurementEventSemanticKey, validateLearnMeasurementEventInput, type LearnMeasurementEventInput
 } from '../../shared/learn-adaptive-events'
 import { canonicalAdaptiveActivityJson } from '../../shared/learn-adaptive-activity-plan'
+import { privacyDigest } from './learnV2ResponsePrivacy'
+
+export async function writeLearnMeasurementEvent(ctx: MutationCtx, userId: string,
+  input: Omit<LearnMeasurementEventInput, 'semanticKey'>) {
+  const event = validateLearnMeasurementEventInput({ ...input, semanticKey: learnMeasurementEventSemanticKey(input) })
+  const opportunity = await ctx.db.get(event.assessmentOpportunityId)
+  if (!opportunity || opportunity.userId !== userId || opportunity.learningVoidId !== event.learningVoidId
+    || opportunity.blueprintRevisionId !== event.blueprintRevisionId || opportunity.objectiveId !== event.objectiveId
+    || event.submissionId && opportunity.submissionId !== event.submissionId
+    || event.attemptId && opportunity.authoritativeAttemptId !== event.attemptId) throw new Error('Learn event authority unavailable')
+  const dedupeKeyHash = await privacyDigest([event.taxonomyVersion, userId, event.semanticKey])
+  const prior = await ctx.db.query('learnActivityEvents').withIndex('by_userId_and_dedupeKeyHash', q => q.eq('userId', userId).eq('dedupeKeyHash', dedupeKeyHash)).unique()
+  const { semanticKey: _key, ...fields } = event
+  if (prior) {
+    const { _id: _id, _creationTime: _time, userId: _user, dedupeKeyHash: _hash, ...saved } = prior
+    if (canonicalAdaptiveActivityJson(saved) !== canonicalAdaptiveActivityJson(fields)) throw new Error('Learn event identity conflicts')
+    return prior._id
+  }
+  return await ctx.db.insert('learnActivityEvents', { userId, ...fields, dedupeKeyHash })
+}
 
 type WriteEventInput = LearnActivityEventInput & {
   userId: string

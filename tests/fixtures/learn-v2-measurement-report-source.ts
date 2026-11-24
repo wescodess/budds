@@ -98,7 +98,7 @@ export async function seedOrdinaryReportClaim(ctx: MutationCtx, f: Awaited<Retur
   const clock = { ...f.clock, anchorKind: 'first_independent' }
   const firstCheckOpportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, assignmentId: undefined,
     purpose: { kind: 'independent_application' }, delayedCheckId: 'ordinary-first',
-    createdAt: source.claim.claim.firstIndependentAt, submissionId: undefined, originalSlot: true, checkSequence: 1,
+    createdAt: source.claim.claim.firstIndependentAt, submissionId: undefined, originalSlot: true, checkSequence: 1, firstSlotEpoch: 'fixture-epoch',
     openAt: clock.openAt, closeAt: clock.closeAt, dueAt: clock.dueAt, horizonDays: undefined,
     assessmentPins: { kind: 'session_application', caseId: f.itemPins.caseId, promptDigest: 'fixture-prompt', rubricVersion: 'rubric.v1', rubricDigest: 'fixture-rubric', supportManifestDigest: 'fixture-support' } })
   const response = (await ctx.db.get(f.outcomes[0]!.submissionId))!

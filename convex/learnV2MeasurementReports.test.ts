@@ -12,10 +12,11 @@ import * as source from './lib/learnV2MeasurementReportSource'
 import * as reportAudit from './lib/learnV2MeasurementReportAudit'
 import { appendLearnMeasurementFact, writeLearnMeasurementEnrollmentFact } from './lib/learnV2MeasurementFacts'
 import {
-  LEARN_V2_MEASUREMENT_REPORT_VERSION as version, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION as queryVersion, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION as sourceVersion,
-  buildLearningMeasurementReport, buildPublishedLearningMeasurementReport, type LearnReportInputSnapshot, type LearnPublishedReportMetric,
+  LEARN_V2_MEASUREMENT_REPORT_VERSION as version, LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION as queryVersion,
+  buildLearningMeasurementReport, buildPublishedLearningMeasurementReport, type LearnPublishedReportMetric,
 } from '../shared/learn-v2-measurement-report'
 import { REPORT_NOW, REPORT_START, REPORT_END, seedReportSource, seedOrdinaryReportClaim, seedReportClaimLink } from '../tests/fixtures/learn-v2-measurement-report-source'
+import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
 import { STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import type { LearnV2ReportCells } from './lib/learnV2PublicContract'
 import type { Id } from './_generated/dataModel'
@@ -84,19 +85,7 @@ async function allCells(f: Awaited<ReturnType<typeof fixture>>, reportRunId: Id<
 }
 // Recomputes the unpublished cells from the sealed rows and proves the server released exactly their published form.
 async function computedCells(f: Awaited<ReturnType<typeof fixture>>, reportRunId: Id<'learnMeasurementReportRuns'>) {
-  const run = (await f.t.run(ctx => ctx.db.get(reportRunId)))!
-  const control = reportControl(run)
-  const rows: LearnReportInputSnapshot[] = []
-  while (rows.length < run.rowCount) {
-    rows.push(...(await f.t.query(internal.learnV2MeasurementReports.readSourcePage, { reportRunId, after: rows.length })).map(row => row.snapshot))
-  }
-  const input = { reportRunId, rows, roster: rows.slice(0, control.pinnedOwners).map(row => row.learnerKey),
-    query: { version: queryVersion, cohortVersion: run.cohortVersion, epoch: run.epoch, protocolVersion: run.protocolVersion,
-      enrollmentStartAt: run.enrollmentStartAt, enrollmentEndAt: run.enrollmentEndAt, cutoff: run.cutoff },
-    provenance: { kind: 'aggregate_snapshot' as const, sourceVersion, queryVersion, adapterVersion: run.adapterVersion, codeVersion: run.codeVersion,
-      rosterDigest: run.rosterDigest, inputDigest: run.inputDigest!, cutoff: run.cutoff, extractionStartedAt: run.extractionStartedAt,
-      extractionEndedAt: run.extractionEndedAt!, sourceCoverage: run.sourceCoverage, episodeCount: control.episodeCount,
-      inputBytes: run.inputBytes, bootstrapSeed: run.bootstrapSeed, bootstrapReplicates: 10_000 as const } }
+  const input = await sealedMeasurementReportInput(f.t, reportRunId)
   const published = await buildPublishedLearningMeasurementReport(input)
   expect(await allCells(f, reportRunId)).toEqual(published.pages.flatMap(page => page.cells))
   return (await buildLearningMeasurementReport(input)).pages.flatMap(page => page.cells)

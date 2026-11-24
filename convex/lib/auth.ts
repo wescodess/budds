@@ -1,3 +1,4 @@
+import { LearnAccessError } from '../../shared/learn-v2-errors'
 import type { ActionCtx, MutationCtx, QueryCtx } from '../_generated/server'
 import { internal } from '../_generated/api'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
@@ -10,12 +11,12 @@ export async function getOptionalAuthUserId(ctx: QueryCtx | MutationCtx | Action
     : (await ctx.runQuery(internal.accountDeletion.getDeletionTombstone, {
         userId: identity.tokenIdentifier,
       })) !== null
-  if (tombstoned) throw new Error('Account deletion is in progress')
+  if (tombstoned) throw new LearnAccessError('Account deletion is in progress')
   return identity.tokenIdentifier
 }
 
 export async function requireAuth(ctx: QueryCtx | MutationCtx | ActionCtx) {
   const userId = await getOptionalAuthUserId(ctx)
-  if (!userId) throw new Error('Unauthenticated')
+  if (!userId) throw new LearnAccessError('Unauthenticated')
   return userId
 }

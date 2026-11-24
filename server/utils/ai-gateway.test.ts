@@ -477,3 +477,21 @@ describe('generateCompletionStream', () => {
     ).rejects.toThrow('AI Gateway error: Service unavailable')
   })
 })
+
+test.each(['Too many index ranges read', 'Unexpected error-body failure'])('strict provider transport propagates an unexpected body error: %s', async message => {
+  const failure = new Error(message)
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(failure) } }), { status: 500 }))
+  await expect(generateCompletion({ model: 'fixture/model', messages: [{ role: 'user', content: 'Synthetic input' }], strictErrors: true }))
+    .rejects.toBe(failure)
+})
+
+test.each(['reset', 'abort', 'timeout', 'resource', 'unexpected'])('strict successful-response reads distinguish %s failures', async kind => {
+  const failure = kind === 'reset' ? new TypeError('Synthetic reset') : kind === 'abort' || kind === 'timeout'
+    ? new DOMException('Synthetic transport interruption', kind === 'abort' ? 'AbortError' : 'TimeoutError') : new Error(kind === 'resource' ? 'Too many index ranges read' : 'Unexpected body failure')
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(failure) } }), { status: 200 }))
+  const operation = generateCompletion({ model: 'fixture/model', messages: [{ role: 'user', content: 'Synthetic input' }], strictErrors: true })
+  if (kind === 'resource' || kind === 'unexpected') {
+    await expect(operation).rejects.toBe(failure)
+    expect(failure).not.toHaveProperty('aiGatewayFailureKind')
+  } else await expect(operation).rejects.toMatchObject({ aiGatewayFailureKind: 'outcome_unknown' })
+})

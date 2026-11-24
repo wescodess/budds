@@ -27,7 +27,10 @@ export async function privacyDigest(value: unknown) {
 export async function digestLegacyFingerprint(value: string) {
   if (/^sha256:[a-f0-9]{64}$/.test(value)) return value
   try { return await privacyDigest(JSON.parse(value)) }
-  catch { return await privacyDigest(value) }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return await privacyDigest(value)
+  }
 }
 
 export async function matchesLegacyFingerprint(stored: string | undefined, request: string) {
@@ -133,7 +136,10 @@ export function legacySourceIds(ctx: QueryCtx | MutationCtx, json: string | unde
     }
     return ids
   }
-  catch { return null }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return null
+  }
 }
 
 export async function retainedResponsePayload(ctx: QueryCtx | MutationCtx, userId: string, response: Doc<'learnResponses'>) {

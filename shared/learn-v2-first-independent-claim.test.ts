@@ -76,6 +76,17 @@ describe('first Independent claim v2', () => {
     expect(() => resolveLearnReportFirstSlotV2(claimFact, { ...linkFact, fact: { ...linkFact.fact, slot: early } })).toThrow()
   })
 
+  it.each([0, 1, 86_400_000])('accepts an honest late link at closeAt plus %s without moving the original clock', offset => {
+    const { claim, slot, claimFact, linkFact } = fixture()
+    const linkedAt = slot.clock.closeAt + offset
+    const late = { ...slot, linkedAt }
+    const appended = resolveLearnReportFirstSlotV2(claimFact, { ...linkFact, occurredAt: linkedAt, fact: { ...linkFact.fact, slot: late } })
+    const initial = resolveLearnReportFirstSlotV2({ ...claimFact, occurredAt: linkedAt, fact: { ...claim, firstSlot: late } })
+    expect(appended.firstSlot).toEqual(late)
+    expect(initial.firstSlot).toEqual(late)
+    expect(appended.firstSlot.kind === 'linked' && appended.firstSlot.clock).toEqual(slot.clock)
+  })
+
   it('resolves a late link without changing the original slot or its clock', () => {
     const { claimFact, linkFact } = fixture()
     const candidate = structuredClone(linkFact)

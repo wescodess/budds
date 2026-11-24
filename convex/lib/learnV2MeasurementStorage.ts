@@ -1,4 +1,5 @@
 import { v } from 'convex/values'
+import { masteryStateValidator } from '../../shared/learn-v2-mastery'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION } from '../../shared/learn-v2-measurement-report'
 import {
   learnReportMetricValidator, learnReportAssignmentSnapshotValidator as reportAssignmentSnapshot,
@@ -234,7 +235,9 @@ export const assessmentOpportunityFields = {
   deliveryGrantId: v.optional(v.id('learnAssessmentExposures')), submissionId: v.optional(v.id('learnResponses')),
   scoringJobId: v.optional(v.id('learnJobs')), authoritativeAttemptId: v.optional(v.id('masteryAttempts')),
   replacesOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), replacementReason: v.optional(v.string()),
+  replacementBinding: v.optional(v.object({ assessmentOpportunityId: v.id('learnAssessmentOpportunities'), itemPinsDigest: v.string() })),
   firstCheckClaim: v.optional(firstCheckClaim), checkSequence: v.number(), originalSlot: v.boolean(),
+  firstSlotEpoch: v.optional(v.string()),
   deliveryPins: v.optional(v.object({ version: v.literal(LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION), confidenceRequested: v.boolean() })),
 }
 export const assessmentExposureFields = {
@@ -259,6 +262,8 @@ const slotBase = {
 }
 export const responseSlotValidator = v.union(v.object({ ...slotBase, ...v2Scope }), v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }))
 const responseBase = {
+  masteryAtAcceptance: v.optional(v.object({ performanceTimezone: v.string(), opportunityRevision: v.number(), state: masteryStateValidator, recordRevision: v.number(),
+    firstIndependentLocalDate: v.union(v.string(), v.null()), firstIndependentTimezone: v.union(v.string(), v.null()) })),
   ...base, ...evidenceState, acceptedAt: v.number(), payloadDigest: v.string(), confidence: v.optional(v.number()),
   assistanceSnapshot, validitySnapshot, ...currentResponseState,
   responseContractVersion: v.string(), disclosurePolicyVersion: v.string(), receiptId: v.id('learnResponseCommandReceipts'),
@@ -342,7 +347,7 @@ export const reportFactFields = {
   factVersion: v.literal(LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION), occurredAt: v.number(),
   fact: v.union(
     v.object({ kind: v.literal('enrollment'), assignmentId: v.id('learnMeasurementAssignments'), recordRevision: v.number(), status: v.union(v.literal('considered'), v.literal('not_admitted'), v.literal('admitted')), snapshot: reportAssignmentSnapshot }),
-    v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean(), stateAtEligibility: v.optional(learnReportCapturedMasteryStateValidator) }),
+    v.object({ kind: v.literal('opportunity'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'), recordRevision: v.number(), status: v.string(), dueAt: v.union(v.number(), v.null()), closeAt: v.number(), clock: v.union(clock, v.null()), originalSlot: v.boolean(), stateAtEligibility: v.optional(learnReportCapturedMasteryStateValidator), reasonCode: v.optional(v.string()) }),
     v.object({ kind: v.literal('response'), submissionId: v.id('learnResponses'), acceptedAt: v.number(), measurementEligible: v.boolean(), masteryEligible: v.boolean(), assistanceSnapshot, validitySnapshot, stateAtAcceptance: v.optional(learnReportCapturedMasteryStateValidator) }),
     v.object({ kind: v.literal('score'), submissionId: v.id('learnResponses'), attemptId: v.id('masteryAttempts'), executionId: v.id('learnScoringExecutions'), scorePercent: v.number(), scoreCommittedAt: v.number(), snapshot: reportResultSnapshot }),
     v.object({ kind: v.literal('independent_claim'), ...firstCheckClaim.fields, firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.number(), stratum: learnReportFirstSlotStratumValidator }),

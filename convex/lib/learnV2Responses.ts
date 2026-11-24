@@ -1,3 +1,8 @@
+import { LearnAccessError, LearnInputValidationError, LearnScoringInputError } from '../../shared/learn-v2-errors'
+import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
+import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
+import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -30,6 +35,9 @@ import {
 } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } from '../../shared/learn-v2-assessment-disclosure'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
+import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
+import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import {
   appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readLearnFirstCheckFact, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
 } from './learnV2MeasurementFacts'
@@ -107,9 +115,12 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const context = pins.contextPins
   if (context.kind === 'calibration') return { pins, session: null, content: null }
   const [plan, revision] = await Promise.all([ctx.db.get(context.studyPlanId), ctx.db.get(context.studyPlanRevisionId)])
-  if (!plan || !revision || plan.activeRevisionId !== revision._id || revision.status !== 'accepted'
+  const frozenPlan = revision && 'purpose' in row && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
+    && await hasLearnReflowPlanAuthority(ctx, userId, revision, context.planRecordRevision)
+  if (!plan || !revision || !frozenPlan && (plan.activeRevisionId !== revision._id || revision.status !== 'accepted'
+      || revision.recordRevision !== context.planRecordRevision)
     || revision.blueprintRevisionId !== blueprint._id || revision.blueprintRecordRevision !== blueprint.recordRevision
-    || revision.revision !== context.planRevision || revision.recordRevision !== context.planRecordRevision) reject('pins_mismatch')
+    || revision.revision !== context.planRevision) reject('pins_mismatch')
   if (context.kind === 'planned_measurement') return { pins, session: null, content: null }
   const [session, content] = await Promise.all([ctx.db.get(context.studySessionId), ctx.db.get(context.sessionContentId)])
   if (!session || !content || session.status !== 'in_progress' || session.revision !== context.sessionRevision
@@ -171,14 +182,17 @@ async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awa
   const item = 'assessmentPins' in row && row.assessmentPins.kind === 'measurement' ? row.assessmentPins.itemPins : null
   if (item) {
     const claims = await ctx.db.query('learnMeasurementClaims')
-      .withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item.itemId)).take(33)
-    if (!claims.length || claims.length > 32) reject('evidence_unavailable')
+      .withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', item.itemId)).take(itemLimits.claims + 1)
+    if (!claims.length || claims.length > itemLimits.claims) reject('evidence_unavailable')
+    let evidenceRows = 0
     for (const claim of claims) {
       requireAvailable(claim)
       if (claim.scoringSpecId !== item.scoringSpecId) reject('pins_mismatch')
       const supports = await ctx.db.query('learnMeasurementSupports')
-        .withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(9)
-      if (!supports.length || supports.length > 8) reject('evidence_unavailable')
+        .withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(itemLimits.supportsPerClaim + 1)
+      evidenceRows += supports.length
+      if (evidenceRows > itemLimits.evidenceRows) reject('item_evidence_limit')
+      if (!supports.length || supports.length > itemLimits.supportsPerClaim) reject('evidence_unavailable')
       for (const support of supports) {
         requireAvailable(support)
         const excerpt = await ctx.db.get(support.sourceExcerptId)
@@ -191,7 +205,7 @@ async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awa
       }
     }
   }
-  if (content) {
+  if (content && !item) {
     const claims = await ctx.db.query('sessionContentClaims')
       .withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', content._id)).take(33)
     if (!claims.length || claims.length > 32) reject('evidence_unavailable')
@@ -273,8 +287,7 @@ async function matchingAssignment(ctx: ReadCtx, userId: string, row: Doc<'learnA
           ? allocation.kind === 'three_case' ? (purpose.horizonDays === 7 ? allocation.day7 : allocation.day30)
             : allocation.horizonDays === purpose.horizonDays ? allocation.delayed : null
           : null
-      if (!assigned || canonical(assigned) !== canonical(row.assessmentPins.itemPins)
-        || canonical(row.scoringBinding) !== canonical(assignment.scoringBinding)) reject('pins_mismatch')
+      if (!assigned || !await measurementAllocationMatches(ctx, userId, row, assignment)) reject('pins_mismatch')
     }
   }
   return assignment
@@ -323,7 +336,7 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
     const rubric: unknown = JSON.parse(authority.content.assessmentRubricSnapshot)
     const blocks = await ctx.db.query('sessionContentBlocks')
       .withIndex('by_userId_and_sessionContentId_and_order', q => q.eq('userId', userId).eq('sessionContentId', authority.content!._id)).take(16)
-    const prompts = blocks.filter(block => block.kind === 'transfer_challenge' && block.content)
+    const prompts = blocks.filter(block => (block.kind === 'independent_application' || block.kind === 'transfer_challenge') && block.content)
     if (prompts.length !== 1 || await digest(prompts[0]!.content) !== pins.promptDigest || await digest(rubric) !== pins.rubricDigest) reject('pins_mismatch')
   } else if (pins.assessmentContractDigest !== row.assessmentContractDigest || pins.assessmentContractVersion !== row.assessmentContractVersion) reject('pins_mismatch')
   const { record } = await getScopedMasteryRecord(ctx, userId, row.blueprintRevisionId, row.objectiveId)
@@ -387,6 +400,15 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const validity = assessment?.validity ?? parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
         status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['formative'] })
   if (entry.payload.kind !== 'text' && 'stage' in row) reject('invalid_payload')
+  if ('assessmentPins' in row && LEARN_MEASUREMENT_CAPABILITIES.responses) {
+    try {
+      await readLearnAssessmentScoringInput(ctx, userId, row, 'acceptance', measurementLearnerResponse(entry.payload))
+    } catch (error) {
+      if (error instanceof LearnScoringInputError) reject('evidence_unavailable')
+      if (!(error instanceof MeasurementItemBoundsError)) throw error
+      reject(error.code === 'response_payload_limit' ? 'payload_too_large' : error.code)
+    }
+  }
   if ('assessmentPins' in row && row.assessmentPins.kind === 'measurement') {
     const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
     const spec = item.responseSpec
@@ -428,6 +450,7 @@ async function saveRejection(ctx: MutationCtx, userId: string, row: Target, key:
 }
 
 export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: string, input: LearnV2AcceptResponseCommand): Promise<LearnResponseReceipt> {
+  ctx = measurementReadContext(ctx, userId)
   const request = parsePublicLearnRequest(acceptResponseCommandSchema, input)
   const entries = 'response' in request ? [request.response] : [request.teachBack, request.application]
   const rows: Target[] = []
@@ -436,9 +459,10 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
     if (LEARN_MEASUREMENT_CAPABILITIES.responses && !await liveResponseAggregate(ctx, userId, row)) return rejected('unavailable')
     if ('stage' in row && row.stage === 'diagnostic') {
       try { learnSerializedBytes(entry.payload, LEARN_V2_RESPONSE_LIMITS.maxDiagnosticBytes) }
-      catch {
+      catch (error) {
+        if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError)) throw error
         if (LEARN_MEASUREMENT_CAPABILITIES.responses) return await saveRejection(ctx, userId, row, request.idempotencyKey, await digest(request), 'payload_too_large')
-        throw new Error('Invalid Learn request')
+        throw new Error('Invalid Learn request', { cause: error })
       }
     }
     rows.push(row)
@@ -474,6 +498,8 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
     prepared = []
     for (let index = 0; index < entries.length; index++) prepared.push(await prepareResponse(ctx, userId, entries[index]!, rows[index]!, now))
   } catch (error) {
+    const payloadError = error instanceof LearnInputValidationError
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof ResponseRejection) && !(error instanceof z.ZodError) && !payloadError) throw error
     return await saveRejection(ctx, userId, main, request.idempotencyKey, requestDigest, error instanceof ResponseRejection ? error.code : 'invalid_payload')
   }
   const receiptId = await ctx.db.insert('learnResponseCommandReceipts', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION,
@@ -503,6 +529,7 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
         scoringBinding: value.row.scoringBinding, type: 'sealed_response_scoring', status: 'queued', revision: 1,
         idempotencyKey: `submission:${submissionId}`, requestFingerprint: value.payloadDigest, providerEnabled: false, attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.patch(value.row._id, { phase: 'submitted_sealed', submissionId, scoringJobId: jobId, revision: value.row.revision + 1 })
+      if (value.row.purpose.kind === 'measurement_delayed') await finalizeLearnDelayedCheckSession(ctx, userId, (await ctx.db.get(value.row._id))!)
     }
     await ctx.db.insert('learnResponseBodies', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
       ...aggregate(value.row), submissionId, payload: value.entry.payload, payloadBytes: value.payloadBytes, payloadDigest: value.payloadDigest })
@@ -544,7 +571,10 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
         try {
           const current = await snapshotDependency(ctx, userId, response.scopeKind === 'v2' ? response.learningVoidId : link.learningVoidId!, dependency.sourceSnapshotId, dependency.supportManifestDigest)
           if (canonical(current) !== canonical(dependency)) return unavailable
-        } catch { return unavailable }
+        } catch (error) {
+          if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof ResponseRejection)) throw error
+          return unavailable
+        }
       } else if (dependency.kind === 'document') {
         const document = await ctx.db.get(dependency.documentId)
         const folder = document && await ctx.db.get(document.folderId)
@@ -605,6 +635,7 @@ export async function terminalizeLearnResponseForOwner(ctx: MutationCtx, userId:
   if ('stage' in row) await ctx.db.patch(row._id, { status: 'terminal', terminalReason: result.reasonCode, revision: result.revision })
   else {
     await ctx.db.patch(row._id, { phase: result.reasonCode, reasonCode: result.reasonCode, revision: result.revision })
+    await finalizeLearnDelayedCheckSession(ctx, userId, { ...row, phase: result.reasonCode, reasonCode: result.reasonCode, revision: result.revision })
     const assignment = await matchingAssignment(ctx, userId, row)
     const firstCheck = await readLearnFirstCheckFact(ctx, userId, row)
     if (assignment && firstCheck && assignment.epoch !== firstCheck.epoch) throw new Error('Learn first-check epoch mismatch')
@@ -634,7 +665,10 @@ export async function prepareLearnResponseAssistanceForOwner(ctx: MutationCtx, u
       const response = await ctx.db.get(row.submissionId)
       if (!response || (await retainedBody(ctx, userId, response)).bodyAvailability !== 'available') return deny('unavailable')
     }
-  } catch { return deny('unavailable') }
+  } catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof LearnAccessError || error instanceof ResponseRejection || error instanceof z.ZodError)) throw error
+    return deny('unavailable')
+  }
   const denied = !row.submissionId && isLearnAssessmentTestOnly(parseLearnContract(learnAssessmentPurposeSchema, row.purpose))
   if (!row.submissionId && row.phase !== 'test_open') return deny('unavailable')
   const commit = async (): Promise<LearnV2AssistanceAuthorization> => {

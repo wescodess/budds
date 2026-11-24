@@ -190,7 +190,7 @@ describe('Node 24 offline measurement report CLI', () => {
     if (version === 'source') input.report.provenance.sourceVersion = 'learn-v2.measurement-report-source.v3'
     if (version === 'query') input.report.query.version = 'obsolete.v0'
     if (version === 'provenanceQuery') input.report.provenance.queryVersion = 'obsolete.v0'
-    if (version === 'code') input.report.provenance.codeVersion = 'learn-v2.report-code.c6.2.v5'
+    if (version === 'code') input.report.provenance.codeVersion = 'learn-v2.report-code.c6.2.v6'
     expect(replay(input).output).toMatchObject({ status: 'failed', reasonCodes: ['incompatible_version'], manifest: null, cells: [] })
   })
 

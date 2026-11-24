@@ -132,6 +132,7 @@ async function readyMissionFixture() {
     studySessionId: ids.studySessionId, expectedSessionRevision: 2,
     idempotencyKey: 'experiment-v2-ready-attachment-0001',
   })
+  if (attached.kind !== 'attached') throw new Error('Expected Canvas attachment')
   const planId = await t.mutation(internal.learnAdaptiveExperiment.freezeAnalysisPlan, { plan: SYNTHETIC_PLAN })
   await t.mutation(internal.learnAdaptiveExperiment.recordApproval, {
     planId, productAnalyticsReference: 'synthetic-analytics-approval',

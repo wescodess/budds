@@ -1,3 +1,4 @@
+import { LearnInputValidationError } from './learn-v2-errors'
 export const ADAPTIVE_FEEDBACK_TEMPLATE_VERSION = 'learn-adaptive.feedback-templates.v1' as const
 export const ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION = 'learn-adaptive.misconception-taxonomy.v1' as const
 
@@ -26,7 +27,7 @@ const TEMPLATE_COPY: Record<AdaptiveFeedbackTemplate, string> = {
 export function renderControlledFeedbackTemplate(template: AdaptiveFeedbackTemplate, criterionLabel?: string) {
   const copy = TEMPLATE_COPY[template]
   if (!copy.includes('{criterion}')) return copy
-  if (!criterionLabel?.trim() || criterionLabel.length > 160) throw new Error('Pinned criterion label is invalid')
+  if (!criterionLabel?.trim() || criterionLabel.length > 160) throw new LearnInputValidationError('Pinned criterion label is invalid')
   return copy.replace('{criterion}', criterionLabel.trim())
 }
 
@@ -69,7 +70,7 @@ export function projectControlledFeedback(input: {
   if (input.misconceptionTags.length > ADAPTIVE_MISCONCEPTION_TAGS.length
     || uniqueTags.size !== input.misconceptionTags.length
     || input.misconceptionTags.some(tag => !allowedTags.has(tag))) {
-    throw new Error('Provider misconception taxonomy is invalid')
+    throw new LearnInputValidationError('Provider misconception taxonomy is invalid')
   }
 
   const criteriaByKey = new Map(input.criteria.map(criterion => [criterion.key, criterion]))
@@ -78,14 +79,14 @@ export function projectControlledFeedback(input: {
     || input.criteria.length !== input.outcomes.length
     || input.criteria.some(criterion => !outcomesByKey.has(criterion.key))
     || input.outcomes.some(outcome => !criteriaByKey.has(outcome.key))) {
-    throw new Error('Provider outcomes do not match the pinned criteria')
+    throw new LearnInputValidationError('Provider outcomes do not match the pinned criteria')
   }
 
   return {
     templateVersion: ADAPTIVE_FEEDBACK_TEMPLATE_VERSION,
     taxonomyVersion: ADAPTIVE_MISCONCEPTION_TAXONOMY_VERSION,
     criterionResults: input.criteria.map((criterion) => {
-      if (!criterion.key.trim() || criterion.key.length > 64 || !criterion.label.trim() || criterion.label.length > 160) throw new Error('Pinned criterion label is invalid')
+      if (!criterion.key.trim() || criterion.key.length > 64 || !criterion.label.trim() || criterion.label.length > 160) throw new LearnInputValidationError('Pinned criterion label is invalid')
       const outcome = outcomesByKey.get(criterion.key)!
       const template = outcome.awarded ? 'criterion_met' as const : 'criterion_not_met' as const
       return { key: criterion.key, label: criterion.label.trim(), awarded: outcome.awarded, template, message: renderControlledFeedbackTemplate(template, criterion.label) }

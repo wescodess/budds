@@ -1,4 +1,7 @@
-import { classifyAiGatewayFailure, generateCompletion, lookupScoringGeneration, serializeCompletionRequest, validateGenerateResponse, type GenerateParams, type GenerateResponse, type ScoringGenerateResponse, type GatewayGenerationMetadata, type GatewayScoringProvenance } from './ai-gateway'
+import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-v2-measurement-item-limits'
+import { ZodError } from 'zod'
+import { LearnInputValidationError, LearnScoringProtocolError } from '../../shared/learn-v2-errors'
+import { isKnownAiGatewayFailure, classifyAiGatewayFailure, generateCompletion, lookupScoringGeneration, serializeCompletionRequest, validateGenerateResponse, type GenerateParams, type GenerateResponse, type ScoringGenerateResponse, type GatewayGenerationMetadata, type GatewayScoringProvenance } from './ai-gateway'
 import { ADAPTIVE_V2_PILOT_MANIFEST, validateAdaptiveProviderPayload } from '../../shared/adaptive-v2-pilot-policy'
 import { ADAPTIVE_MISCONCEPTION_TAGS } from '../../shared/adaptive-controlled-feedback'
 import { isLearnScoringReceiptCommittable, learnScoringExecutionReceiptSchema, type LearnScoringExecutionReceipt } from '../../shared/learn-v2-measurement'
@@ -16,6 +19,7 @@ const scorerResponseSchema = {
 export type BaselineMasteryScoringInput = {
   rubric: { version: string, criteria: Array<{ key: string, description?: string, weightPercent: number }> }
   challenge: string
+  declaredStimulus?: string | null
   evidence: Array<{ alias: string, claim: string, excerpt?: string }>
   learnerResponse: string
 }
@@ -54,6 +58,25 @@ export function parseBaselineMasteryScoringResponse(content: string) {
     return keys.length === 2 && keys[0] === 'awarded' && keys[1] === 'key' && typeof item.key === 'string' && typeof item.awarded === 'boolean' ? [{ key: item.key, awarded: item.awarded }] : []
   })
   if (normalizedCriteria.length !== result.criterionResults.length || result.misconceptionTags.some(tag => typeof tag !== 'string')) throw new Error('Mastery scorer returned invalid output')
+  return { criterionResults: normalizedCriteria, misconceptionTags: result.misconceptionTags as string[] }
+}
+
+export function parseMasteryScoringResponseV2(content: string) {
+  let parsed: unknown
+  try { parsed = JSON.parse(content) }
+  catch (error) { if (!(error instanceof SyntaxError)) throw error; throw new LearnScoringProtocolError('Mastery scorer returned invalid output') }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new LearnScoringProtocolError('Mastery scorer returned invalid output')
+  const result = parsed as { criterionResults?: unknown, misconceptionTags?: unknown }
+  const resultKeys = Object.keys(result).sort()
+  if (resultKeys.length !== 2 || resultKeys[0] !== 'criterionResults' || resultKeys[1] !== 'misconceptionTags') throw new LearnScoringProtocolError('Mastery scorer returned invalid output')
+  if (!Array.isArray(result.criterionResults) || !Array.isArray(result.misconceptionTags)) throw new LearnScoringProtocolError('Mastery scorer returned invalid output')
+  const normalizedCriteria = result.criterionResults.flatMap((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return []
+    const item = row as Record<string, unknown>
+    const keys = Object.keys(item).sort()
+    return keys.length === 2 && keys[0] === 'awarded' && keys[1] === 'key' && typeof item.key === 'string' && typeof item.awarded === 'boolean' ? [{ key: item.key, awarded: item.awarded }] : []
+  })
+  if (normalizedCriteria.length !== result.criterionResults.length || result.misconceptionTags.some(tag => typeof tag !== 'string')) throw new LearnScoringProtocolError('Mastery scorer returned invalid output')
   return { criterionResults: normalizedCriteria, misconceptionTags: result.misconceptionTags as string[] }
 }
 
@@ -112,17 +135,19 @@ function validCriteria(criteria: PreparedLearnScoringExecution['criteria']) {
     && criteria.reduce((sum, row) => sum + row.weightPercent, 0) === 100
 }
 
-function terminalVerdict(content: string, criteria: PreparedLearnScoringExecution['criteria']): CriterionVector | null {
+function terminalVerdict(content: string, criteria: PreparedLearnScoringExecution['criteria'], parse = parseMasteryScoringResponseV2): CriterionVector | null {
   try {
-    const verdict = parseBaselineMasteryScoringResponse(content)
+    const verdict = parse(content)
     if (!validCriteria(criteria) || verdict.criterionResults.length !== criteria.length
       || verdict.misconceptionTags.length > ADAPTIVE_MISCONCEPTION_TAGS.length
       || new Set(verdict.misconceptionTags).size !== verdict.misconceptionTags.length
       || verdict.misconceptionTags.some(tag => !ADAPTIVE_MISCONCEPTION_TAGS.includes(tag as never))) return null
+    const keys = new Set(verdict.criterionResults.map(row => row.key))
+    if (keys.size !== criteria.length || criteria.some(row => !keys.has(row.key))) return null
     scoreCriteria(criteria, verdict.criterionResults)
     return verdict
   }
-  catch { return null }
+  catch (error) { if (!(error instanceof LearnScoringProtocolError) && !(error instanceof LearnInputValidationError) && !(error instanceof ZodError)) throw error; return null }
 }
 
 function unknownIdentity(requestedScorerModel: string, observedAt: number): Extract<LearnScoringExecutionReceipt['observedIdentity'], { requestedScorerModel: string }> {
@@ -132,11 +157,11 @@ function unknownIdentity(requestedScorerModel: string, observedAt: number): Extr
 }
 
 async function finiteScoringIo<T>(timeoutMs: number, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error('Scoring deadline unavailable')
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new LearnScoringProtocolError('Scoring deadline unavailable')
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
   const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => { controller.abort(); reject(new Error('Scoring deadline exceeded')) }, timeoutMs)
+    timer = setTimeout(() => { controller.abort(); reject(Object.assign(new LearnScoringProtocolError('Scoring deadline exceeded'), { aiGatewayFailureKind: 'outcome_unknown' })) }, timeoutMs)
   })
   try { return await Promise.race([operation(controller.signal), deadline]) }
   finally { clearTimeout(timer) }
@@ -147,7 +172,11 @@ async function finiteScoringIo<T>(timeoutMs: number, operation: (signal: AbortSi
 export function createLearnMasteryScorerService(registry: LearnScorerRegistry, transport: {
   infer: (request: GenerateParams) => Promise<GenerateResponse | ScoringGenerateResponse>
   metadata: (generationId: string, signal: AbortSignal) => Promise<GatewayGenerationMetadata>
-} = { infer: generateCompletion, metadata: lookupScoringGeneration }, clock: () => number = Date.now) {
+} = { infer: generateCompletion, metadata: lookupScoringGeneration }, clock: () => number = Date.now, protocol?: {
+  request: (model: string, input: BaselineMasteryScoringInput, signal: AbortSignal) => GenerateParams
+  parse: typeof parseBaselineMasteryScoringResponse
+  read: (payload: string) => BaselineMasteryScoringInput
+}) {
   const handles = new WeakMap<PreparedLearnScoringExecution, { dispatched: boolean, metadataLookups: number, integrityDigest: string }>()
   let inFlight = false
   const limits = ADAPTIVE_V2_PILOT_MANIFEST.limits
@@ -159,14 +188,19 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
 
   async function verifyPrepared(prepared: PreparedLearnScoringExecution) {
     const binding = prepared.receipt.scoringBinding
-    if (binding.kind !== 'model') throw new Error('Model scorer binding required')
+    if (binding.kind !== 'model') throw new LearnScoringProtocolError('Model scorer binding required')
     await registry.verifySaved({ binding, frozenConfiguration: prepared.receipt.frozenConfiguration })
     const payload = prepared.request.messages[1]?.content
     let payloadCriteria: unknown
-    try { payloadCriteria = JSON.parse(payload ?? '').rubric.criteria }
-    catch { throw new Error('Scoring request integrity mismatch') }
-    if (typeof payload !== 'string') throw new Error('Scoring request integrity mismatch')
-    const expected = buildBaselineMasteryScoringRequest(binding.requestedModel, payload, prepared.request.signal!)
+    try {
+      const decoded: BaselineMasteryScoringInput = protocol ? protocol.read(payload ?? '') : JSON.parse(payload ?? '')
+      if (!decoded?.rubric || !Array.isArray(decoded.rubric.criteria)) throw new LearnScoringProtocolError('Scoring request integrity mismatch')
+      payloadCriteria = decoded.rubric.criteria
+    }
+    catch (error) { if (!(error instanceof SyntaxError) && !(error instanceof LearnScoringProtocolError) && !(error instanceof ZodError)) throw error; throw new LearnScoringProtocolError('Scoring request integrity mismatch') }
+    if (typeof payload !== 'string') throw new LearnScoringProtocolError('Scoring request integrity mismatch')
+    const expected = protocol ? protocol.request(binding.requestedModel, protocol.read(payload), prepared.request.signal!)
+      : buildBaselineMasteryScoringRequest(binding.requestedModel, payload, prepared.request.signal!)
     expected.captureScoringProvenance = true
     if (binding.routingMode === 'strict') expected.providerOrder = [binding.endpoint!]
     const body = serializeCompletionRequest(prepared.request)
@@ -180,7 +214,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
       || scorerCanonicalJson(payloadCriteria) !== scorerCanonicalJson(prepared.criteria)
       || prepared.receipt.requestBytes !== new TextEncoder().encode(body).byteLength
       || prepared.receipt.transportSettingsDigest !== await scorerDigest(scorerCanonicalJson(requestSettings(prepared.request)))
-      || !validCriteria(prepared.criteria)) throw new Error('Scoring request integrity mismatch')
+      || !validCriteria(prepared.criteria)) throw new LearnScoringProtocolError('Scoring request integrity mismatch')
     return binding
   }
 
@@ -191,7 +225,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
     if (metadataLease && (![metadataLease.startedAt, metadataLease.deadline, metadataLease.inferenceObservedAt].every(Number.isSafeInteger)
       || metadataLease.inferenceObservedAt < prepared.receipt.dispatchedAt || metadataLease.inferenceObservedAt > metadataLease.startedAt
       || metadataLease.startedAt >= metadataLease.deadline || metadataLease.deadline > metadataLease.startedAt + 10_000
-      || observedAt < metadataLease.startedAt || metadataLookups !== 1)) throw new Error('Invalid metadata lease')
+      || observedAt < metadataLease.startedAt || metadataLookups !== 1)) throw new LearnScoringProtocolError('Invalid metadata lease')
     const timely = metadataLease ? metadataLease.inferenceObservedAt < prepared.leaseExpiresAt && observedAt < metadataLease.deadline
       : observedAt < prepared.leaseExpiresAt
     const provenance = terminal.provenance
@@ -242,31 +276,33 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
       ...(validated && verdict ? { verdict: { ...verdict, scorePercent: scoreCriteria(prepared.criteria, verdict.criterionResults),
         responseDigest: prepared.receipt.responseDigest, verdictDigest: await scorerDigest(scorerCanonicalJson(verdict)) } } : {}),
     })
-    if (validated && !isLearnScoringReceiptCommittable(receipt, registry.identityPolicy)) throw new Error('Scoring receipt failed the frozen commit gate')
+    if (validated && !isLearnScoringReceiptCommittable(receipt, registry.identityPolicy)) throw new LearnScoringProtocolError('Scoring receipt failed the frozen commit gate')
     return { receipt, terminal, terminalDigest: await scorerDigest(scorerCanonicalJson({ execution: prepared.receipt, terminal })), metadataLookups, metadata,
       ...(metadataLease ? { metadataLease } : {}) }
   }
 
   return {
     async prepare(input: { saved: BoundLearnScorerConfiguration, context: ExecutionContext,
-      leaseExpiresAt: number, scoringInput: BaselineMasteryScoringInput }): Promise<PreparedLearnScoringExecution> {
+      leaseExpiresAt: number, scoringInput: BaselineMasteryScoringInput, inputAdmission?: 'sealed_response' }): Promise<PreparedLearnScoringExecution> {
       const saved = await registry.verifySaved(input.saved)
       const now = clock()
       if (!Number.isSafeInteger(input.leaseExpiresAt) || input.context.dispatchedAt > now || input.leaseExpiresAt <= now
         || input.leaseExpiresAt > input.context.dispatchedAt + limits.leaseMs
         || input.context.dispatchOrdinal < 1 || input.context.dispatchOrdinal > limits.maxDispatchAttemptsPerJob
-        || !validCriteria(input.scoringInput.rubric.criteria)) throw new Error('Invalid finite scorer dispatch')
+        || !validCriteria(input.scoringInput.rubric.criteria)) throw new LearnScoringProtocolError('Invalid finite scorer dispatch')
       const scoringInput = structuredClone(input.scoringInput)
+      if (input.inputAdmission !== 'sealed_response' && scoringInput.evidence.length > itemLimits.evidenceRows) throw new LearnScoringProtocolError('Scoring evidence exceeded the row limit')
       const privacy = validateAdaptiveProviderPayload({ learnerResponse: scoringInput.learnerResponse, challenge: scoringInput.challenge,
         evidence: scoringInput.evidence.map(row => `${row.alias}: ${row.claim}\n${row.excerpt ?? ''}`),
         rubric: scoringInput.rubric.criteria.map(row => `${row.key}: ${row.description ?? ''}`) })
-      if (!privacy.allowed) throw new Error('Scoring payload is unavailable under the privacy policy')
-      const request = buildBaselineMasteryScoringRequest(saved.binding.requestedModel, buildBaselineMasteryScoringPayload(scoringInput), new AbortController().signal)
+      if (!privacy.allowed) throw new LearnScoringProtocolError('Scoring payload is unavailable under the privacy policy')
+      const request = protocol ? protocol.request(saved.binding.requestedModel, scoringInput, new AbortController().signal)
+        : buildBaselineMasteryScoringRequest(saved.binding.requestedModel, buildBaselineMasteryScoringPayload(scoringInput), new AbortController().signal)
       request.captureScoringProvenance = true
       if (saved.binding.routingMode === 'strict') request.providerOrder = [saved.binding.endpoint!]
       const body = serializeCompletionRequest(request)
       const requestBytes = new TextEncoder().encode(body).byteLength
-      if (requestBytes > limits.maxRequestBytes) throw new Error('Scoring request exceeded the byte limit')
+      if (requestBytes > limits.maxRequestBytes) throw new LearnScoringProtocolError('Scoring request exceeded the byte limit')
       const receipt = learnScoringExecutionReceiptSchema.parse({ ...input.context, scoringBinding: saved.binding,
         frozenConfiguration: saved.frozenConfiguration, requestDigest: await scorerDigest(body), requestBytes,
         transportSettingsDigest: await scorerDigest(scorerCanonicalJson(requestSettings(request))),
@@ -279,7 +315,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
 
     async dispatch(prepared: PreparedLearnScoringExecution): Promise<LearnScoringExecutionResult> {
       const handle = handles.get(prepared)
-      if (!handle || handle.dispatched || inFlight || clock() >= prepared.leaseExpiresAt) throw new Error('Scorer dispatch unavailable')
+      if (!handle || handle.dispatched || inFlight || clock() >= prepared.leaseExpiresAt) throw new LearnScoringProtocolError('Scorer dispatch unavailable')
       handle.dispatched = true
       inFlight = true
       try {
@@ -289,11 +325,12 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
           const completion = await finiteScoringIo(Math.min(limits.timeoutMs, prepared.leaseExpiresAt - clock()), signal => transport.infer({ ...prepared.request, signal }))
           const checked = completion.scoringProvenance ? completion : validateGenerateResponse(completion, true)
           const content = checked.choices[0]!.message.content
-          if (new TextEncoder().encode(content).byteLength > limits.maxResponseBytes) throw Object.assign(new Error('Scoring response exceeded the byte limit'), { aiGatewayFailureKind: 'invalid_response' })
+          if (new TextEncoder().encode(content).byteLength > limits.maxResponseBytes) throw Object.assign(new LearnScoringProtocolError('Scoring response exceeded the byte limit'), { aiGatewayFailureKind: 'invalid_response' })
           terminal = { generationId: checked.id, returnedModel: checked.model, provenance: checked.scoringProvenance ?? null,
-            verdict: terminalVerdict(content, prepared.criteria), outputDigest: await scorerDigest(content), failure: null }
+            verdict: terminalVerdict(content, prepared.criteria, protocol?.parse), outputDigest: await scorerDigest(content), failure: null }
         }
         catch (error) {
+          if (!isKnownAiGatewayFailure(error)) throw error
           terminal = { generationId: null, returnedModel: null, provenance: null, verdict: null, outputDigest: null, failure: classifyAiGatewayFailure(error) }
         }
         return await evaluate(prepared, terminal, null, 0)
@@ -311,16 +348,16 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
         || saved.receipt.observedIdentity.status === 'deterministic'
         || saved.terminal.generationId === null
         || saved.terminalDigest !== await scorerDigest(scorerCanonicalJson({ execution: prepared.receipt, terminal: saved.terminal }))
-        || saved.receipt.requestDigest !== prepared.receipt.requestDigest) throw new Error('Scoring reconciliation unavailable')
+        || saved.receipt.requestDigest !== prepared.receipt.requestDigest) throw new LearnScoringProtocolError('Scoring reconciliation unavailable')
       const startedAt = clock()
       const deadline = Math.min(metadataDeadline ?? prepared.leaseExpiresAt, startedAt + 10_000)
-      if (!Number.isSafeInteger(deadline) || startedAt >= deadline) throw new Error('Scoring reconciliation unavailable')
+      if (!Number.isSafeInteger(deadline) || startedAt >= deadline) throw new LearnScoringProtocolError('Scoring reconciliation unavailable')
       const metadataLease = { startedAt, deadline, inferenceObservedAt: saved.receipt.observedIdentity.observedAt }
       handle.dispatched = true
       handle.metadataLookups += 1
       let metadata: GatewayGenerationMetadata
       try { metadata = await finiteScoringIo(deadline - clock(), signal => transport.metadata(saved.terminal.generationId!, signal)) }
-      catch { return { ...saved, metadataLookups: 1 } }
+      catch (error) { if (!isKnownAiGatewayFailure(error)) throw error; return { ...saved, metadataLookups: 1 } }
       return evaluate(prepared, saved.terminal, metadata, 1, clock(), metadataLease)
     },
 
@@ -334,7 +371,7 @@ export function createLearnMasteryScorerService(registry: LearnScorerRegistry, t
         const replay = await evaluate(prepared, result.terminal, result.metadata, result.metadataLookups, receipt.observedIdentity.observedAt, result.metadataLease)
         return scorerCanonicalJson(replay) === scorerCanonicalJson(result) && isLearnScoringReceiptCommittable(receipt, registry.identityPolicy)
       }
-      catch { return false }
+      catch (error) { if (!(error instanceof LearnScoringProtocolError) && !(error instanceof LearnInputValidationError) && !(error instanceof ZodError)) throw error; return false }
     },
   }
 }

@@ -1,14 +1,21 @@
+import { LearnAccessError, LearnBlueprintAuthorityError, LearnTeachingScopeError } from '../../shared/learn-v2-errors'
 import { ConvexError, convexToJson, v, type ObjectType, type PropertyValidators, type Validator, type Value } from 'convex/values'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
+import type { Id } from '../_generated/dataModel'
 import { getOptionalAuthUserId, requireAuth } from './auth'
 import { admitLearnHelpForOwner, hasOpenLearnHelp, inspectLearnHelpForOwner } from './learnV2HelpAdmission'
 import { LEARN_HELP_ADMISSION_VERSION, LEARN_HELP_LIMITS, LEARN_HELP_OPEN_PHASES, helpAdmissionKey, helpAdmissionValidator, type LearnHelpAdmission, type LearnHelpRequest } from './learnV2HelpContract'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { canonicalPrivacyJson, privacyDigest } from './learnV2ResponsePrivacy'
-import { createResponsePrivacyReadContext, privacyReadBudgetExhausted } from './learnV2PrivacyReadContext'
+import { createResponsePrivacyReadContext } from './learnV2PrivacyReadContext'
 import { requireAudioOverviewOrchestrationCredential } from './audioOverviewOrchestrationAuth'
 import { messageSigningSecret } from './learnV2MessageProvenance'
 import { isCurrentTeachingReadScope } from './learnV2TeachingReadScope'
+
+function unavailableScope(error: unknown): null {
+  if (!(error instanceof LearnAccessError) && !(error instanceof LearnBlueprintAuthorityError) && !(error instanceof LearnTeachingScopeError)) throw error
+  return null
+}
 
 type ReadScope = LearnHelpRequest['scope']
 type Definition<Args extends PropertyValidators, Result> = {
@@ -19,6 +26,7 @@ type Definition<Args extends PropertyValidators, Result> = {
   handler: (ctx: QueryCtx, args: ObjectType<Args>) => Promise<Result>
   metadataPreparation?: boolean
   anonymousShare?: boolean
+  baselineSessionContent?: (ctx: QueryCtx, userId: string, args: ObjectType<Args>) => Promise<Id<'sessionContent'> | null>
 }
 
 function readOnlyTeachingContext(ctx: MutationCtx): QueryCtx {
@@ -63,11 +71,12 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
   const request = async (ctx: QueryCtx, args: ObjectType<Args>, key: string, resolve = true) => {
     const userId = await getOptionalAuthUserId(ctx)
     if (!userId) {
-      if (definition.anonymousShare && resolve) return { userId: null, scope: await definition.scope(ctx, '', args).catch(() => null), input: null }
-      return { userId: null, scope: null, input: null }
+      if (definition.anonymousShare && resolve) return { userId: null, scope: await definition.scope(ctx, '', args).catch(unavailableScope), input: null, baselineSessionContent: null }
+      return { userId: null, scope: null, input: null, baselineSessionContent: null }
     }
-    const scope = resolve ? await definition.scope(ctx, userId, args).catch(() => null) : null
-    return { userId, scope, input: { version: LEARN_HELP_ADMISSION_VERSION, kind: 'replay' as const, scope: scope?.references.length ? scope : null,
+    const scope = resolve ? await definition.scope(ctx, userId, args).catch(unavailableScope) : null
+    const baselineSessionContent = await definition.baselineSessionContent?.(ctx, userId, args) ?? null
+    return { userId, scope, baselineSessionContent, input: { version: LEARN_HELP_ADMISSION_VERSION, kind: 'replay' as const, scope: scope?.references.length ? scope : null,
       idempotencyKey: await helpAdmissionKey(`${definition.name}:${await privacyDigest(args)}`, key) } }
   }
   const read = {
@@ -77,24 +86,21 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
       if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await definition.handler(ctx, args)
       const owner = await getOptionalAuthUserId(ctx)
       ctx = createResponsePrivacyReadContext(ctx, owner ?? 'anonymous_teaching_share').ctx
-      try {
-        const contextual = Boolean(owner && await hasOpenLearnHelp(ctx, owner))
-        let authorization = await request(ctx, args, 'query_read_admission', contextual)
-        const admission = LEARN_MEASUREMENT_CAPABILITIES.responses && authorization.userId && authorization.input
-          ? await inspectLearnHelpForOwner(ctx, authorization.userId, authorization.input)
-          : { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }
-        if (admission.status === 'denied') reject(admission)
-        const value = await definition.handler(ctx, args)
-        if (content(value) && !contextual) authorization = await request(ctx, args, 'query_read_admission')
-        if (content(value) && !isCurrentTeachingReadScope(authorization.scope)) reject({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' })
-        if (admission.status !== 'ordinary' && authorization.userId) {
-          reject(admission, await deliveryRevision(ctx, authorization.userId, definition.name, args, authorization.scope, value))
-        }
-        return value
-      } catch (error) {
-        if (privacyReadBudgetExhausted(ctx)) reject({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' })
-        throw error
+
+      const contextual = Boolean(owner && await hasOpenLearnHelp(ctx, owner))
+      let authorization = await request(ctx, args, 'query_read_admission', contextual)
+      const admission = LEARN_MEASUREMENT_CAPABILITIES.responses && authorization.userId && authorization.input
+        ? await inspectLearnHelpForOwner(ctx, authorization.userId, authorization.input, authorization.baselineSessionContent)
+        : { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }
+      if (admission.status === 'denied') reject(admission)
+      const value = await definition.handler(ctx, args)
+      if (content(value) && !contextual) authorization = await request(ctx, args, 'query_read_admission')
+      if (content(value) && !isCurrentTeachingReadScope(authorization.scope)) reject({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' })
+      if (admission.status !== 'ordinary' && authorization.userId) {
+        reject(admission, await deliveryRevision(ctx, authorization.userId, definition.name, args, authorization.scope, value))
       }
+      return value
+
     },
   }
   const deliver = async (ctx: MutationCtx, args: ObjectType<Args>, key: string, delivery: boolean) => {
@@ -103,7 +109,7 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
     const contextual = Boolean(owner && await hasOpenLearnHelp(ctx, owner))
     let authorization = await request(ctx, args, key, contextual)
     const admission = LEARN_MEASUREMENT_CAPABILITIES.responses && authorization.userId && authorization.input
-      ? await admitLearnHelpForOwner(ctx, authorization.userId, authorization.input)
+      ? await admitLearnHelpForOwner(ctx, authorization.userId, authorization.input, false, authorization.baselineSessionContent)
       : { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }
     if (admission.status === 'denied') return { admission, value: null }
     const result = await definition.handler(readOnlyTeachingContext(ctx), args)
@@ -111,7 +117,7 @@ export function defineTeachingRead<Args extends PropertyValidators, Result>(defi
     const { userId, input } = authorization
     if (content(result) && !isCurrentTeachingReadScope(authorization.scope)) return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'denied' as const, reasonCode: 'unavailable' as const }, value: null }
     if (delivery && content(result) && LEARN_MEASUREMENT_CAPABILITIES.responses && userId && input) {
-      const delivered = await admitLearnHelpForOwner(ctx, userId, input, true)
+      const delivered = await admitLearnHelpForOwner(ctx, userId, input, true, authorization.baselineSessionContent)
       if (delivered.status === 'denied') return { admission: delivered, value: null }
       return { admission: delivered, value: result }
     }
@@ -147,13 +153,13 @@ export function defineTeachingMutation<Args extends PropertyValidators, Result>(
     handler: async (ctx: MutationCtx, args: ObjectType<Args>) => {
       if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await definition.handler(ctx, args)
       const userId = await requireAuth(ctx)
-      const scope = await definition.scope(ctx, userId, args).catch(() => null)
+      const scope = await definition.scope(ctx, userId, args).catch(unavailableScope)
       const input = { version: LEARN_HELP_ADMISSION_VERSION, kind: 'replay' as const, scope: scope?.references.length ? scope : null,
         idempotencyKey: await helpAdmissionKey(definition.name, await privacyDigest(args)) }
       const admission = LEARN_MEASUREMENT_CAPABILITIES.responses ? await admitLearnHelpForOwner(ctx, userId, input) : { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }
       if (admission.status === 'denied') reject(admission)
       const value = await definition.handler(ctx, args)
-      const current = await definition.scope(ctx, userId, args).catch(() => null)
+      const current = await definition.scope(ctx, userId, args).catch(unavailableScope)
       const hasContent = options.hasContent ? options.hasContent(value) : value !== null && value !== undefined
       if (hasContent && !isCurrentTeachingReadScope(current)) reject({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode: 'unavailable' })
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && hasContent) {

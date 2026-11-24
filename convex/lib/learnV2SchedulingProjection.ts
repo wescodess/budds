@@ -63,5 +63,8 @@ export function projectSchedulingSnapshot(value: string | undefined, kind: 'inpu
     const parsed = schema.safeParse(raw)
     return parsed.success ? JSON.stringify(summary ? parsed.data : storedOrder(raw, parsed.data)) : undefined
   }
-  catch { return undefined }
+  catch (error) {
+    if (!(error instanceof SyntaxError)) throw error
+    return undefined
+  }
 }

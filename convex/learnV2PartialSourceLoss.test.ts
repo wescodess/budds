@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { legacyScoringModules, legacyMasteryAttempt, legacyCalibrationAttempt } from '../tests/fixtures/learn-v2-legacy-scoring'
 import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -6,7 +7,7 @@ import type { Doc, Id } from './_generated/dataModel'
 import schema from './schema'
 import { STORAGE_CANARIES, seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
 
-const modules = import.meta.glob('./**/*.ts')
+const modules = { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules }
 const identity = { tokenIdentifier: 'https://auth.example.com|partial-source-loss', name: 'Partial Loss Owner' }
 const userId = identity.tokenIdentifier
 const HASH = 'a'.repeat(64)
@@ -144,9 +145,9 @@ describe('objective with several supporting sources', () => {
     expect(content.lost?.assessmentRubricSnapshot).toBeUndefined()
     const scoring = await f.t.query(internal.learnV2Mastery.getMasteryScoringInput, surviving.request)
     expect(scoring).toMatchObject({ kind: 'score', sourceSnapshotIds: [f.ids[other(kind)].snapshot] })
-    await expect(f.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...surviving.request, scorerVerdict: verdict })).resolves.toMatchObject({ scorePercent: 100, replayed: false })
+    await expect(f.t.mutation(legacyMasteryAttempt, { ...surviving.request, scorerVerdict: verdict })).resolves.toMatchObject({ scorePercent: 100, replayed: false })
     await expect(f.t.query(internal.learnV2Mastery.getMasteryScoringInput, lost.request)).rejects.toThrow('Started session rubric is unavailable')
-    await expect(f.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...lost.request, scorerVerdict: verdict })).rejects.toThrow()
+    await expect(f.t.mutation(legacyMasteryAttempt, { ...lost.request, scorerVerdict: verdict })).rejects.toThrow()
   })
 
   test.each(KINDS)('calibration skips the lost %s link and records only surviving evidence', async kind => {
@@ -166,7 +167,7 @@ describe('objective with several supporting sources', () => {
     expect(input.objective.assessmentContract).toEqual(rubric)
     expect(input.sourceSnapshotIds).toEqual([survivor])
     expect(input.evidence).toHaveLength(1)
-    const saved = await f.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { ...request, idempotencyKey: 'calibration-direct', serverScorePercent: 80, rubricVersion: 'rubric.v1' })
+    const saved = await f.t.mutation(legacyCalibrationAttempt, { ...request, idempotencyKey: 'calibration-direct', serverScorePercent: 80, rubricVersion: 'rubric.v1' })
     const attempt = await f.t.run(ctx => ctx.db.get(saved.attemptId))
     expect(attempt?.sourceSnapshotIdsJson).toBe(JSON.stringify([survivor]))
   })
@@ -174,7 +175,7 @@ describe('objective with several supporting sources', () => {
   test('calibration skips a link whose conflict status is not clear, as generation does', async () => {
     const f = await seed()
     await f.t.run(ctx => ctx.db.patch(f.ids.url.snapshot, { conflictStatus: undefined }))
-    const saved = await f.t.mutation(internal.learnV2MapCalibration.recordCalibrationAttempt, { tokenIdentifier: userId, blueprintRevisionId: f.ids.blueprintRevisionId, objectiveId: f.ids.objectiveId, expectedBlueprintRecordRevision: 4, expectedVoidRevision: 5, response: 'Answer.', confidence: 3, usedHint: false, usedReveal: false, idempotencyKey: 'calibration-conflict', serverScorePercent: 80, rubricVersion: 'rubric.v1' })
+    const saved = await f.t.mutation(legacyCalibrationAttempt, { tokenIdentifier: userId, blueprintRevisionId: f.ids.blueprintRevisionId, objectiveId: f.ids.objectiveId, expectedBlueprintRecordRevision: 4, expectedVoidRevision: 5, response: 'Answer.', confidence: 3, usedHint: false, usedReveal: false, idempotencyKey: 'calibration-conflict', serverScorePercent: 80, rubricVersion: 'rubric.v1' })
     expect((await f.t.run(ctx => ctx.db.get(saved.attemptId)))?.sourceSnapshotIdsJson).toBe(JSON.stringify([f.ids.folder.snapshot]))
   })
 

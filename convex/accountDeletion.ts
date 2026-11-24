@@ -13,7 +13,8 @@ import { scheduleAudioOverviewDeletion } from './audioOverviews'
 import { isAccountDeletionActive } from './lib/accountDeletionTombstone'
 import { prepareSearchReservationForAccountDeletion } from './learnV2Search'
 import { preserveAdaptiveProductReservationOnDeletion } from './learnV2Mastery'
-import { LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
+import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS } from '../shared/learn-v2-measurement-storage-manifest'
+import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
 import { deleteMeasurementReportRunsBatch, invalidateMeasurementReportRowsBatch } from './lib/learnV2MeasurementRetention'
 import { ADAPTIVE_LEARN_ACCOUNT_DELETE_ORDER } from '../shared/adaptive-learn-storage-manifest'
 import { privateAdaptiveArtifactR2Key, queueAdaptiveArtifactDeletion } from './lib/learnAdaptiveArtifacts'
@@ -351,6 +352,11 @@ async function deleteDirectUserBatch(ctx: MutationCtx, table: DirectUserTable, u
 }
 
 async function deleteLearnV2Table<TableName extends LearnV2Table>(ctx: MutationCtx, table: TableName, userId: string) {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && table === 'learnAssessmentOpportunities') {
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE)
+    for (const row of rows) await finalizeLearnDelayedCheckSession(ctx, userId, { ...row, phase: 'cancelled', reasonCode: 'account_deleted' })
+    return await deleteRows(ctx, rows)
+  }
   if (table === 'learnMeasurementReportRuns') return await deleteMeasurementReportRunsBatch(ctx, userId)
   if (table === 'learnJobs') {
     const jobs = await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', userId)).take(DELETE_BATCH_SIZE)

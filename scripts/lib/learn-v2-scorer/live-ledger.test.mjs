@@ -133,7 +133,9 @@ mock.module(new URL('./adapters.mjs', import.meta.url).href, { namedExports: { .
   async liveMetadata(generationId, signal) {
     metadataCalls.push(generationId)
     assert.equal(signal.aborted, false)
-    if (metadataOutcome === 'unavailable') throw new Error('Synthetic metadata unavailable')
+    if (metadataOutcome === 'unexpected') throw new Error('Unexpected metadata failure')
+    if (metadataOutcome === 'exhausted') throw new Error('Too many index ranges read')
+    if (metadataOutcome === 'unavailable') throw Object.assign(new Error('Synthetic metadata unavailable'), { aiGatewayFailureKind: 'outcome_unknown' })
     return { generationId: metadataOutcome === 'contradictory' ? 'other-generation' : generationId,
       returnedModel: metadataOutcome === 'wrong-model' ? 'openai/gpt-other' : metadataOutcome === 'missing-model' ? null : 'openai/gpt-4.1',
       servingProvider: metadataOutcome === 'wrong-provider' ? 'Other' : metadataOutcome === 'missing-provider' ? null : 'OpenAI', upstreamRequestId: null,
@@ -1415,6 +1417,17 @@ test('missing metadata stays unknown while contradictory metadata resolves faile
     if (known) await dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct'))
     else await assert.rejects(dispatchLive(second.directory, second.plan[0].id, approve(second, 'distinct')), /requires reconciliation/)
     assert.equal(calls.length, inferenceCalls + Number(known))
+  })
+})
+
+test('unexpected metadata errors propagate without publishing an unavailable observation', async t => {
+  for (const [status, message] of [['unexpected', 'Unexpected metadata failure'], ['exhausted', 'Too many index ranges read']]) await t.test(status, async t => {
+    const { state, approval, id, inferenceCalls } = await pendingBaseline(t)
+    metadataOutcome = status
+    await assert.rejects(reconcileLive(state.directory, id, approval), error => error.message === message)
+    assert.equal(artifacts.exists(join(state.directory, `${id}.metadata-observation.json`)), false)
+    assert.equal(calls.length, inferenceCalls)
+    assert.equal(metadataCalls.length, 1)
   })
 })
 

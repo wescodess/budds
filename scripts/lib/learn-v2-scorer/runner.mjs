@@ -9,7 +9,7 @@ import { admitLive, verifySavedApproval } from './live-approval.mjs'
 import { authorizeWriteOff } from './write-off.mjs'
 import { WriteOffRefusalError } from './write-off-refusal.mjs'
 import { openLiveLedger, verifyLiveRun, reserveLiveDispatch, recordLiveResolution, unresolvedLiveDispatches } from './live-ledger.mjs'
-import { classifyAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
+import { classifyAiGatewayFailure, isKnownAiGatewayFailure } from '../../../server/utils/ai-gateway.ts'
 import { artifactName, reconciliationName, assertCurrent, openRun, evaluate, recordReconciliation, recordTerminal, liveOutcome, metadataOutcome, validateFixture, openRecoveryRun, verifyIntent, replayMetadata, reconcileObservation } from './run-state.mjs'
 
 // A backward wall-clock step must not seal a timestamp its predecessor rejects.
@@ -138,7 +138,10 @@ async function dispatch(state, item, options) {
             ? baselineExecution({ adapter, blind: item.blind, saved: state.pins.bindings.find(binding => binding.binding.configurationDigest === adapter.configuration),
                 registry: state.registry, startedAt, clock: now, infer }).then(value => value.raw)
             : Promise.resolve(infer())
-          raw = await Promise.race([operation.catch(error => ({ failure: classifyAiGatewayFailure(error) })), deadline])
+          raw = await Promise.race([operation.catch(error => {
+            if (!isKnownAiGatewayFailure(error)) throw error
+            return { failure: classifyAiGatewayFailure(error) }
+          }), deadline])
           // The baseline service can translate an inference rejection into a
           // transport result. A ledger gap must still abort this invocation.
           if (consistencyFailure) throw consistencyFailure
@@ -419,14 +422,14 @@ async function captureMetadata(state, item, intent, observation, lookup) {
     await reconcileObservation(state, item, intent, observation, async (generationId, signal) => {
       let metadata = null
       try { metadata = await liveMetadata(generationId, signal) }
-      catch { /* Persist an unavailable response if it arrives within the lease. */ }
-      if (!accepting || signal.aborted) throw new Error('Metadata lookup lease ended')
+      catch (error) { if (!isKnownAiGatewayFailure(error)) throw error }
+      if (!accepting || signal.aborted) throw Object.assign(new Error('Metadata lookup lease ended'), { aiGatewayFailureKind: 'outcome_unknown' })
       try {
         seal(state.directory, artifactName(item.blind.id, 'metadata-observation'), 'metadata_observation', state.pinsDigest,
           { lookupDigest: lookup.digest, metadata, observedAt: clock() })
       }
       catch (error) { publicationError = error; throw error }
-      if (metadata === null) throw new Error('Metadata unavailable')
+      if (metadata === null) throw Object.assign(new Error('Metadata unavailable'), { aiGatewayFailureKind: 'outcome_unknown' })
       return metadata
     }, clock, lookup.payload.deadline)
   }

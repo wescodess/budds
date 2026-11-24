@@ -4,7 +4,7 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 
 export const REPLAY_VERSION = 'learn-v2.measurement-report-replay.v2'
-export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v6'
+export const REDUCER_CODE_VERSION = 'learn-v2.report-code.c6.2.v7'
 const MAX_FILE_BYTES = 65 * 1024 * 1024
 
 // Node 24 strips types natively. Resolve only this worktree's shared module

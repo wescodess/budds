@@ -58,7 +58,7 @@ async function fixture(state: State = 'open') {
     await ctx.db.patch(f.rows.learnMeasurementItems, { assessmentContractDigest: digest, promptDigest: digest, scoringSpecDigest: digest, supportManifestDigest: digest })
     const assignment = await ctx.db.get(f.rows.learnMeasurementAssignments)
     if (!assignment || assignment.status !== 'admitted' || assignment.allocation.kind !== 'three_case') throw new Error('Missing fixture assignment')
-    await ctx.db.patch(assignment._id, { allocation: { ...assignment.allocation, cold: itemPins } })
+    await ctx.db.patch(assignment._id, { assessmentContractDigest: digest, allocation: { ...assignment.allocation, cold: itemPins } })
     await ctx.db.patch(f.rows.learnAssessmentExposures, { policyVersion: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, projectionDigest: digest,
       deliveryReceiptHash: digest, status: state === 'revoked' ? 'unknown' : 'granted' })
     await ctx.db.patch(f.rows.learnResponses, { ...scope, assessmentPins: { kind: 'measurement', itemPins } })
@@ -252,11 +252,13 @@ describe('registered assessment disclosure inventory', () => {
     }
   })
 
-  test.each(['source_loss', 'stale_pins', 'unknown_purpose', 'foreign_grant', 'same_owner_wrong_grant'] as const)('%s fails closed before historical evidence expansion', async failure => {
+  test.each(['source_loss', 'stale_pins', 'assignment_contract', 'assignment_scorer', 'unknown_purpose', 'foreign_grant', 'same_owner_wrong_grant'] as const)('%s fails closed before historical evidence expansion', async failure => {
     const s = await fixture('replaced')
     await s.t.run(async ctx => {
       if (failure === 'source_loss') await ctx.db.patch(s.f.sourceIdentityId, { tombstonedAt: Date.now() })
       else if (failure === 'stale_pins') await ctx.db.patch(s.f.scope.blueprintRevisionId, { recordRevision: 2 })
+      else if (failure === 'assignment_contract') await ctx.db.patch(s.f.rows.learnMeasurementAssignments, { assessmentContractDigest: `sha256:${'b'.repeat(64)}` })
+      else if (failure === 'assignment_scorer') await ctx.db.patch(s.f.rows.learnMeasurementAssignments, { scoringBinding: { ...s.f.scoringBinding, configurationDigest: 'b'.repeat(64) } })
       else if (failure === 'unknown_purpose') await ctx.db.patch(s.f.rows.learnAssessmentOpportunities, { purpose: { kind: 'measurement_cold', assignmentId: s.f.rows.learnMeasurementAssignments, protocolVersion: '' } })
       else if (failure === 'foreign_grant') await ctx.db.patch(s.f.rows.learnAssessmentExposures, { userId: foreign.tokenIdentifier })
       else await ctx.db.patch(s.f.rows.learnAssessmentExposures, { itemRevision: 2 })

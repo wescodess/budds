@@ -30,7 +30,7 @@ export async function inspectStoredMessageProof(userId: string, message: Doc<'me
     if (proof.version !== LEGACY_MESSAGE_PROVENANCE_VERSION || !Array.isArray(proof.references)) return { state: 'invalid' }
     signed = { version: proof.version, references: proof.references, signature: proof.signature }
   }
-  if (!await verifyMessageProvenance(messageSigningSecret(), userId, message.content, message.sources ?? [], signed, message.role).catch(() => false)) return { state: 'invalid' }
+  if (!await verifyMessageProvenance(messageSigningSecret(), userId, message.content, message.sources ?? [], signed, message.role)) return { state: 'invalid' }
   if (signed.version === MESSAGE_PROVENANCE_VERSION && signed.scope === 'independent') return { state: 'independent' }
   if ((signed.version === LEGACY_MESSAGE_PROVENANCE_VERSION || signed.scope === 'known') && signed.references?.some(reference => reference.kind === 'document')) {
     return { state: 'known', references: signed.references }

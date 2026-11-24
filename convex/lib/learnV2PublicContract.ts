@@ -1,3 +1,5 @@
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
+import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
@@ -285,7 +287,10 @@ export type LearnV2AggregateExport = Infer<typeof aggregateExportValidator>
 
 export function parsePublicLearnRequest<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
   try { return parseLearnContract(schema, input) }
-  catch { throw new Error('Invalid Learn request') }
+  catch (error) {
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnInputValidationError || error instanceof z.ZodError)) throw error
+    throw new LearnInputValidationError('Invalid Learn request')
+  }
 }
 
 export function validateLearnMasterySubmission(input: unknown, pins: Parameters<typeof validateLearnFinalResponseBundle>[1]) {

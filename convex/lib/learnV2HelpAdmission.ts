@@ -1,3 +1,4 @@
+import { LearnAccessError } from '../../shared/learn-v2-errors'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -181,22 +182,43 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
     provenanceVersion: LEARN_HELP_ADMISSION_VERSION })
 }
 
-export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false): Promise<LearnHelpAdmission> {
+const FUTURE_OPPORTUNITY_LIMIT = 64
+
+function futurePreparing(row: Doc<'learnAssessmentOpportunities'>, now: number) {
+  return row.phase === 'preparing' && Number.isFinite(row.openAt) && row.openAt > now
+}
+
+async function recordInterveningLearning(ctx: MutationCtx, userId: string, rows: Doc<'learnAssessmentOpportunities'>[], scopeDigest: string, now: number) {
+  for (const row of rows) {
+    const hash = await privacyDigest(['learn-v2.intervening-learning.v1', row._id])
+    const prior = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', hash)).unique()
+    if (prior) continue
+    // Help before a check opens is prior learning for its assignment, never assistance on that opportunity.
+    await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
+      learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId,
+      ...(row.assignmentId ? { assignmentId: row.assignmentId } : {}), purpose: 'practice', status: 'known',
+      projectionDigest: scopeDigest, deliveryReceiptHash: hash, serverTime: now, policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION,
+      provenanceVersion: 'learn-v2.intervening-learning.v1' })
+  }
+}
+
+export async function admitLearnHelpForOwner(ctx: MutationCtx, userId: string, input: LearnHelpRequest, delivery = false, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  return await admitLearnHelp(ctx, userId, input, delivery)
+  return await admitLearnHelp(ctx, userId, input, delivery, false, baselineSessionContent)
 }
 
 export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return false
   for (const phase of LEARN_HELP_OPEN_PHASES) {
-    if ((await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase)).take(1)).length) return true
+    if ((await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', Date.now())).take(1)).length) return true
   }
   return false
 }
 
-export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest): Promise<LearnHelpAdmission> {
+export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
-  return await admitLearnHelp(ctx, userId, input, false, true)
+  return await admitLearnHelp(ctx, userId, input, false, true, baselineSessionContent)
 }
 
 export async function admitLearnHelpForAudioJob(ctx: MutationCtx, job: Doc<'audioOverviewJobs'>): Promise<LearnHelpAdmission> {
@@ -209,31 +231,41 @@ export async function inspectLearnHelpForAudioJob(ctx: ReadCtx, job: Doc<'audioO
     idempotencyKey: `audio_read_${job._id}`, scope: { references: [{ kind: 'audio_job', id: job._id }] }, ordinaryOnly: true }, false, true)
 }
 
-async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false): Promise<LearnHelpAdmission> {
+async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
+  const now = Date.now()
   const request = parsePublicLearnRequest(admitHelpSchema, input)
   const deny = (reasonCode: 'test_open' | 'disclosure_unknown' | 'unavailable'): LearnHelpAdmission => ({ version: LEARN_HELP_ADMISSION_VERSION, status: 'denied', reasonCode })
   const record = async (row: Doc<'learnAssessmentOpportunities'>, reason: string, scopeDigest: string) => {
     if (!readOnly && isMutationContext(ctx)) await recordDenial(ctx, userId, row, request, reason, scopeDigest)
   }
   const open: Doc<'learnAssessmentOpportunities'>[] = []
+  const future: Doc<'learnAssessmentOpportunities'>[] = []
   for (const phase of LEARN_HELP_OPEN_PHASES) {
-    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q => q.eq('userId', userId).eq('phase', phase))
-      .take(LEARN_HELP_LIMITS.openOpportunities + 1 - open.length)
-    open.push(...rows)
+    const limit = LEARN_HELP_LIMITS.openOpportunities + 1 - open.length + (phase === 'preparing' ? FUTURE_OPPORTUNITY_LIMIT - future.length : 0)
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
+    if ((phase === 'preparing' || baselineSessionContent) && rows.length === limit) return deny('disclosure_unknown')
+    for (const row of rows) {
+      if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'
+        && row.contextPins.sessionContentId === baselineSessionContent) continue
+      if (futurePreparing(row, now)) future.push(row)
+      else open.push(row)
+    }
     if (open.length > LEARN_HELP_LIMITS.openOpportunities) return deny('disclosure_unknown')
   }
-  if (!open.length) return ordinary
+  if (!open.length && !future.length) return ordinary
   if (!request.scope) {
+    if (!open.length) return ordinary
     const scopeDigest = await privacyDigest({ kind: request.kind, scope: null })
     for (const row of open) await record(row, 'disclosure_unknown', scopeDigest)
     return deny('disclosure_unknown')
   }
   const matches: Doc<'learnAssessmentOpportunities'>[] = []
+  const resolver = scopeResolver(ctx, userId)
+  const scope = emptyScope()
   try {
-    const resolver = scopeResolver(ctx, userId)
-    const scope = emptyScope()
     for (const reference of request.scope.references) await resolver.reference(scope, reference)
     for (const row of open) {
       if (row.submissionId) throw new ScopeUnavailable()
@@ -243,14 +275,29 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
       if (relevant(scope, assessment)) matches.push(row)
     }
   } catch (error) {
+    if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+    if (!open.length) return ordinary
     const reason = error instanceof ScopeUnknown ? 'disclosure_unknown' : 'unavailable'
     const scopeDigest = await privacyDigest({ kind: request.kind, scope: request.scope })
     for (const row of open) await record(row, reason, scopeDigest)
     return deny(reason)
   }
-  if (!matches.length) return ordinary
+  const later: Doc<'learnAssessmentOpportunities'>[] = []
+  for (const row of future) {
+    const assessment = emptyScope()
+    try {
+      await resolver.learningVoid(assessment, row.learningVoidId)
+      if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(assessment, row.contextPins.canvas.threadId)
+    } catch (error) {
+      if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+      continue
+    }
+    if (relevant(scope, assessment)) later.push(row)
+  }
+  if (!matches.length && !later.length) return ordinary
   const scopeDigest = await privacyDigest({ kind: request.kind, scope: request.scope })
   if (request.ordinaryOnly) {
+    if (!matches.length) return ordinary
     const reason = matches.some(row => row.phase === 'test_open' && isLearnAssessmentTestOnly(row.purpose)) ? 'test_open' : 'unavailable'
     for (const row of matches) await record(row, reason, scopeDigest)
     return deny(reason)
@@ -265,7 +312,10 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   const preparations = []
   for (const row of matches) {
     const prepared = await prepareLearnResponseAssistanceForOwner(ctx, userId, { version: LEARN_V2_PUBLIC_API_VERSION,
-      kind: request.kind, idempotencyKey: key, assessmentOpportunityId: row._id }).catch(() => null)
+      kind: request.kind, idempotencyKey: key, assessmentOpportunityId: row._id }).catch((error) => {
+        if (!(error instanceof LearnAccessError)) throw error
+        return null
+      })
     preparations.push(prepared)
   }
   const unavailable = preparations.some(value => !value || 'status' in value)
@@ -284,5 +334,6 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
     if (result.status !== 'authorized') throw new Error('Help admission unavailable')
     authorizations.push({ assessmentOpportunityId: prepared.row._id, authorizationId: result.authorizationId })
   }
+  await recordInterveningLearning(ctx, userId, later, scopeDigest, now)
   return { version: LEARN_HELP_ADMISSION_VERSION, status: 'authorized', authorizations }
 }

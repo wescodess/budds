@@ -6,7 +6,7 @@ import {
   learnReportFactSchema, type LearnReportInputSnapshot, type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
-import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
+import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
 import { learnSerializedBytes } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS as limits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
@@ -121,6 +121,7 @@ function savedClock(rows: Fact[]) {
 }
 function slotDisposition(facts: Fact[], accepted: Awaited<ReturnType<typeof outcome>>): Episode['disposition'] {
   const latest = facts.at(-1)?.fact
+  if (latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE) return 'missing_delayed'
   if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (operational(facts) === 'blocked') return 'access_provider_blocked'
   if (latest?.kind === 'opportunity' && ['cancelled', 'abandoned'].includes(latest.status)) return 'abandoned'
@@ -184,6 +185,7 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
         || (replacement && replacement.opportunity.replacesOpportunityId !== delayed?.opportunity._id)) incomplete('invalid_replacement_link')
       const delayedOutcome = await outcome(ctx, userId, delayed?.opportunity ?? null, through, run.cutoff, run.epoch)
       const replacedOutcome = await outcome(ctx, userId, replacement?.opportunity ?? null, through, run.cutoff, run.epoch)
+      const delayedFact = delayed?.facts.at(-1)?.fact
       rows.push(learnReportEpisodeSnapshotSchema.parse({ ...common, horizonDays: horizon,
         clock: delayed ? savedClock(delayed.facts) : null,
         coldOpportunityId: cold?.opportunity._id ?? null, originalOpportunityId: delayed?.opportunity._id ?? null,
@@ -192,6 +194,7 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
         replacementAcceptance: replacedOutcome.acceptance, replacement: replacedOutcome.result, replacementPolicy: approval.replacementPolicy,
         operationalEligibility: delayed ? operational(delayed.facts) : 'pending',
         disposition: coldOutcome.assistanceState && coldOutcome.assistanceState !== 'unassisted' ? 'assisted_contaminated' : slotDisposition(delayed?.facts ?? [], delayedOutcome),
+        reasonCodes: delayedFact?.kind === 'opportunity' && delayedFact.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE ? [LEARN_SYSTEM_DUE_WORK_LATE] : [],
         mixedFlow: [coldOutcome, delayedOutcome].some(outcome => outcome.acceptance !== null && outcome.flow !== fact.snapshot.flow),
         treatmentEpochChanged: [coldOutcome, delayedOutcome].some(outcome => outcome.acceptance !== null && outcome.epoch !== fact.snapshot.epoch),
         coldReplacement: coldReplacement ? { assessmentOpportunityId: coldReplacement.opportunity._id,
@@ -259,11 +262,13 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
   const accepted = await outcome(ctx, userId, opportunity, through, run.cutoff, run.epoch)
   const eligibility = facts.find(row => row.fact.kind === 'opportunity' && row.fact.stateAtEligibility !== undefined)?.fact
   const disposition = slotDisposition(facts, accepted)
+  const latest = facts.at(-1)?.fact
   const snapshot = {
     firstCheckOpportunityId: opportunity._id, checkSequence: slot.checkSequence, clock,
     stateAtEligibility: eligibility?.kind === 'opportunity' ? eligibility.stateAtEligibility ?? 'unknown' : 'unknown',
     stateAtAcceptance: accepted.stateAtAcceptance, acceptance: accepted.acceptance, result: accepted.result,
-    unresolvedReason: ['valid_scored', 'missing_delayed'].includes(disposition) ? null : disposition }
+    unresolvedReason: latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE ? LEARN_SYSTEM_DUE_WORK_LATE
+      : ['valid_scored', 'missing_delayed'].includes(disposition) ? null : disposition }
   const keys = await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...opportunity })
   if (resolved?.firstSlot.kind === 'linked') {
     if (await privacyDigest(clock) !== await privacyDigest(resolved.firstSlot.clock)) incomplete('conflicting_first_slot')

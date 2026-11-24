@@ -96,6 +96,7 @@ async function factualFixture(twoSources = false) {
   const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, {
     studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'routing-factual-attach-0001',
   })
+  if (attached.kind !== 'attached') throw new Error('Expected Canvas attachment')
   return { t, owner, ids, attached }
 }
 

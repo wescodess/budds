@@ -1,6 +1,8 @@
+import { LearnBlueprintAuthorityError } from '../shared/learn-v2-errors'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks } from './lib/learnV2FixedChecks'
 import { v, type Infer } from 'convex/values'
 import { query, mutation } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -18,6 +20,8 @@ import { assessmentDeliveryValidator } from './lib/learnV2PublicContract'
 import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
 
 const MAX_VOIDS = 32
+const fixedCheckSummary = v.object({ ...sessionSummary.fields, assessmentPurpose: v.literal('measurement_delayed'),
+  assessmentOpportunityId: v.id('learnAssessmentOpportunities') })
 const MAX_SOURCES = 64
 const MAX_MILESTONES = 8
 const MAX_OBJECTIVES = 16
@@ -133,7 +137,7 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const roots = await ctx.db.query('studyPlans').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', voidRow._id)).take(2)
   if (roots.length > 1) throw new Error('Learn V2 study plan identity is ambiguous')
   const root = roots[0]
-  if (!root) return { root: null, preview: null, accepted: null, sessions: [] }
+  if (!root) return { root: null, preview: null, accepted: null, sessions: [], ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { fixedChecks: [] } : {}) }
   const revisions = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_studyPlanId_and_revision', q => q.eq('userId', userId).eq('studyPlanId', root._id)).order('desc').take(MAX_REVISIONS + 1)
   if (revisions.length > MAX_REVISIONS) throw new Error('Learn V2 plan revisions exceed their bounded contract')
   const preview = revisions.find(row => row.status === 'draft') ?? null
@@ -141,8 +145,11 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
   if (LEARN_MEASUREMENT_CAPABILITIES.responses && accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
+  const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses && accepted ? await readLearnFixedPlanChecks(ctx, userId, accepted, MAX_SESSIONS) : []
   return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview, true) : null,
-    accepted: accepted ? projectPlan(accepted, true) : null, sessions: sessions.map(row => projectFields(sessionSummary.fields, row)) }
+    accepted: accepted ? projectPlan(accepted, true) : null, sessions: sessions.filter(row => !isDedicatedLearnCheck(row)).map(row => projectFields(sessionSummary.fields, row)),
+    ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { fixedChecks: fixed.map(row => ({ ...projectFields(sessionSummary.fields, row),
+      assessmentPurpose: 'measurement_delayed' as const, assessmentOpportunityId: row.assessmentOpportunityId! })) } : {}) }
 }
 
 async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {
@@ -223,7 +230,8 @@ const journeyValidator = v.object({
   counts: v.object({ total: v.number(), accepted: v.number(), evaluated: v.number(), rejected: v.number(), unavailable: v.number(), pending: v.number() }) }),
   map: v.union(mapSummary, v.null()), calibration: v.object({ attempts: v.array(attemptSummary), completed: v.boolean(),
     items: v.array(v.object({ objectiveId: v.id('learnObjectives'), title: v.string(), capability: v.string(), prompt: v.union(v.string(), v.null()), assessment: v.union(assessmentDeliveryValidator, v.null()) })) }),
-  plan: v.object({ root: v.union(planRootSummary, v.null()), preview: v.union(planSummary, v.null()), accepted: v.union(planSummary, v.null()), sessions: v.array(sessionSummary) }),
+  plan: v.object({ root: v.union(planRootSummary, v.null()), preview: v.union(planSummary, v.null()), accepted: v.union(planSummary, v.null()), sessions: v.array(sessionSummary),
+    fixedChecks: v.optional(v.array(fixedCheckSummary)) }),
   mastery: v.array(v.object({ objectiveId: v.id('learnObjectives'), record: v.union(masterySummary, v.null()), attempts: v.array(attemptSummary) })),
 })
 
@@ -243,7 +251,8 @@ export const listHub = query({
       const blueprint = await currentBlueprint(ctx, userId, row)
       const sources = await sourceProjection(ctx, userId, blueprint, true)
       const plan = await planProjection(ctx, userId, row)
-      items.push({ _id: row._id, title: row.title, status: row.status, revision: row.revision, folderId: row.folderId, blueprintRevisionId: blueprint?._id ?? null, nextAction: nextAction(row, blueprint, sources, plan), nextScheduledAt: plan.sessions.filter(session => session.status === 'planned' || session.status === 'ready').map(session => session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null })
+      const scheduled = [...plan.sessions, ...(plan.fixedChecks ?? [])]
+      items.push({ _id: row._id, title: row.title, status: row.status, revision: row.revision, folderId: row.folderId, blueprintRevisionId: blueprint?._id ?? null, nextAction: nextAction(row, blueprint, sources, plan), nextScheduledAt: scheduled.filter(session => session.status === 'planned' || session.status === 'ready').map(session => session.scheduledStartAt).sort((a, b) => a - b)[0] ?? null })
     }
     return { items }
   },
@@ -295,9 +304,10 @@ export const getSessionCandidate = query({
     const session = await ctx.db.get(args.studySessionId)
     if (!session || session.userId !== userId) return null
     const plan = await ctx.db.get(session.studyPlanRevisionId)
-    if (!plan || plan.userId !== userId || plan.learningVoidId !== owned.row._id || plan.status !== 'accepted') return null
+    if (!plan || plan.userId !== userId || plan.learningVoidId !== owned.row._id || plan.status !== 'accepted' && !isDedicatedLearnCheck(session)) return null
     const stablePlan = await ctx.db.get(plan.studyPlanId)
-    if (!stablePlan || stablePlan.activeRevisionId !== plan._id) return null
+    if (!stablePlan || (stablePlan.activeRevisionId !== plan._id || plan.status !== 'accepted')
+      && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))) return null
     if (!plan.blueprintRevisionId) return null
     const blueprint = await ctx.db.get(plan.blueprintRevisionId)
     const objective = await ctx.db.get(session.primaryObjectiveId)
@@ -305,7 +315,10 @@ export const getSessionCandidate = query({
       || plan.blueprintRecordRevision !== blueprint.recordRevision
       || !objective || objective.userId !== userId || objective.blueprintRevisionId !== blueprint._id) return null
     try { await requireActiveBlueprint(ctx, userId, owned.row, blueprint._id) }
-    catch { return null }
+    catch (error) {
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !(error instanceof LearnBlueprintAuthorityError)) throw error
+      return null
+    }
     const content = session.status === 'in_progress' && session.startedSessionContentRevision !== undefined
       ? await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id).eq('revision', session.startedSessionContentRevision!)).unique()
       : await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q => q.eq('userId', userId).eq('studySessionId', session._id)).order('desc').first()

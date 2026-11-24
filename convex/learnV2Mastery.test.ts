@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { legacyScoringModules, legacyMasteryAttempt } from '../tests/fixtures/learn-v2-legacy-scoring'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest, type TestConvex } from 'convex-test'
 import type { FunctionArgs } from 'convex/server'
@@ -12,7 +13,7 @@ import schema from './schema'
 import { legacyBaselineRequest } from '../tests/fixtures/learn-v2-mastery-baseline'
 import { serializeCompletionRequest } from '../server/utils/ai-gateway'
 
-const modules = import.meta.glob('./**/*.ts')
+const modules = { ...import.meta.glob('./**/*.ts'), ...legacyScoringModules }
 const OWNER = { tokenIdentifier: 'https://auth.example.com|mastery-owner', name: 'Mastery Owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|mastery-other', name: 'Mastery Other' }
 const assessment = { version: 'learn-v2.assessment.v1' as const, kind: 'machine_checkable' as const, responseFormat: 'short_text' as const, instructions: 'Answer from the evidence.', passingScorePercent: 80 as const, criteria: [{ key: 'core', description: 'Core correctness.', weightPercent: 79 }, { key: 'boundary', description: 'Boundary correctness.', weightPercent: 1 }, { key: 'edge', description: 'Complete correctness.', weightPercent: 20 }] }
@@ -506,7 +507,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
     const beforeCommit = await fixture()
     await beforeCommit.t.run(ctx => ctx.db.patch(beforeCommit.ids.voidId, { activeBlueprintRevisionId: undefined }))
-    await expect(beforeCommit.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, beforeCommit.args('stale-before-commit', 80))).rejects.toThrow(/active Blueprint pointer/i)
+    await expect(beforeCommit.t.mutation(legacyMasteryAttempt, beforeCommit.args('stale-before-commit', 80))).rejects.toThrow(/active Blueprint pointer/i)
   })
 
   test('fails closed when scored evidence revisions drift before attempt commit', async () => {
@@ -520,7 +521,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     if (input.kind !== 'score') throw new Error('Expected scoring input')
     await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: reservation.jobId, leaseToken: reservation.leaseToken })
     await setup.t.run(ctx => ctx.db.patch(setup.ids.sourceId, { recordRevision: 2 }))
-    await expect(setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+    await expect(setup.t.mutation(legacyMasteryAttempt, {
       ...setup.args('evidence-drift', 80),
       scoringJobId: reservation.jobId,
       scoringLeaseToken: reservation.leaseToken,
@@ -538,7 +539,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       recordRevision: 7,
       updatedAt: 1,
     }))
-    const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('scoped-projection', 80))
+    const result = await t.mutation(legacyMasteryAttempt, args('scoped-projection', 80))
     expect(result).toMatchObject({ state: 'independent', replayed: false })
     const rows = await t.run(async (ctx) => ({
       legacy: await ctx.db.get(legacyRecordId),
@@ -575,7 +576,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     try {
       const { t, ids, args } = await fixture({ state: 'guided' })
       const request = args('purged-legacy-replay', 80)
-      const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)
+      const result = await t.mutation(legacyMasteryAttempt, request)
       const raw = JSON.stringify({ command: 'submitMasteryAttempt', studySessionId: String(request.studySessionId),
         expectedSessionRevision: request.expectedSessionRevision, expectedContentRevision: request.expectedContentRevision,
         expectedPlanRecordRevision: request.expectedPlanRecordRevision, expectedBlueprintRecordRevision: request.expectedBlueprintRecordRevision,
@@ -585,16 +586,16 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await t.mutation(internal.learnV2Retention.purgeSourceEvidence, { userId: request.tokenIdentifier, sourceIdentityId: source.sourceIdentityId })
       await t.finishAllScheduledFunctions(vi.runAllTimers)
       expect((await t.run(ctx => ctx.db.get(result.attemptId!)))?.requestFingerprint).toMatch(/^sha256:/)
-      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, request)).resolves.toMatchObject({ attemptId: result.attemptId, scorePercent: 80 })
-      await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...request, response: 'Changed work' })).rejects.toThrow('Idempotency key was already used for a different request')
+      await expect(t.mutation(legacyMasteryAttempt, request)).resolves.toMatchObject({ attemptId: result.attemptId, scorePercent: 80 })
+      await expect(t.mutation(legacyMasteryAttempt, { ...request, response: 'Changed work' })).rejects.toThrow('Idempotency key was already used for a different request')
     }
     finally { vi.useRealTimers() }
   })
 
   test('appends one scoped before-and-after transition history row and replays it', async () => {
     const { t, ids, args } = await fixture({ state: 'guided' })
-    const first = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('transition-history', 80))
-    const replay = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('transition-history', 80))
+    const first = await t.mutation(legacyMasteryAttempt, args('transition-history', 80))
+    const replay = await t.mutation(legacyMasteryAttempt, args('transition-history', 80))
     const attempts = await t.run(ctx => ctx.db.query('masteryAttempts')
       .withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId))
       .take(2))
@@ -625,8 +626,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
       return sessionId
     })
     const [first, second] = await Promise.allSettled([
-      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('scope-race-a', 80)),
-      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...setup.args('scope-race-b', 80), studySessionId: secondSessionId }),
+      setup.t.mutation(legacyMasteryAttempt, setup.args('scope-race-a', 80)),
+      setup.t.mutation(legacyMasteryAttempt, { ...setup.args('scope-race-b', 80), studySessionId: secondSessionId }),
     ])
     expect([first.status, second.status]).toEqual(['fulfilled', 'fulfilled'])
     const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, setup.ids.blueprintIdRevision, setup.ids.objectiveId)
@@ -657,7 +658,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const setup = await fixture()
     const [assistance, scoring] = await Promise.allSettled([
       setup.owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: setup.ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' }),
-      setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, setup.args('assistance-score-race', 100)),
+      setup.t.mutation(legacyMasteryAttempt, setup.args('assistance-score-race', 100)),
     ])
     expect([assistance.status, scoring.status].filter(status => status === 'fulfilled')).toHaveLength(1)
     const state = await setup.t.run(async ctx => ({
@@ -666,7 +667,8 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }))
     if (state.attempts.length === 1) {
       expect(state.attempts[0]).toMatchObject({ usedHint: false, masteryStateAfter: 'independent' })
-      expect(state.session).toMatchObject({ status: 'completed', substantiveHintUsedAt: undefined })
+      expect(state.session).toMatchObject({ status: 'completed' })
+      expect(state.session?.substantiveHintUsedAt).toBeUndefined()
     }
     else {
       expect(state.session).toMatchObject({ status: 'in_progress', substantiveHintUsedAt: expect.any(Number) })
@@ -675,10 +677,10 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
   test('does not let confidence or observational client fields raise mastery', async () => {
     const confidence = await fixture()
-    await expect(confidence.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...confidence.args('high-confidence-fail', 79), confidence: 5 })).resolves.toMatchObject({ state: 'needs_review' })
+    await expect(confidence.t.mutation(legacyMasteryAttempt, { ...confidence.args('high-confidence-fail', 79), confidence: 5 })).resolves.toMatchObject({ state: 'needs_review' })
 
     const observations = await fixture()
-    await expect(observations.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+    await expect(observations.t.mutation(legacyMasteryAttempt, {
       ...observations.args('observations-only', 100),
       timeOnPageMs: 60_000,
       clickCount: 12,
@@ -742,7 +744,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('replays a completed attempt carrying the exact legacy raw fingerprint without provider I/O', async () => {
     const { t, owner, args } = await fixture()
     const internalArgs = args('legacy-completed-attempt', 80)
-    const recorded = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, internalArgs)
+    const recorded = await t.mutation(legacyMasteryAttempt, internalArgs)
     await t.run(ctx => ctx.db.patch(recorded.attemptId, {
       requestFingerprint: legacyFingerprint(internalArgs),
       criterionResultsJson: JSON.stringify(internalArgs.scorerVerdict.criterionResults.map(row => ({ ...row, rationale: 'Legacy provider prose must not replay.' }))),
@@ -859,7 +861,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       expect(await t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', attempt.idempotencyKey)).unique())).toBeNull()
 
       const completed = args('adaptive-replay-after-revocation', 80)
-      await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, completed)
+      await t.mutation(legacyMasteryAttempt, completed)
       await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: false })
       const { tokenIdentifier: _completedToken, scorerVerdict: _completedVerdict, ...completedAttempt } = completed
       const revokedReplay = await owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'adaptive-scored-1', ...completedAttempt })
@@ -1139,7 +1141,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await ctx.db.patch(activity.activityDocumentId, { status: 'scoring', scoringJobId: acquired.jobId, submittedResponse: request.response })
     })
     await setup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: acquired.jobId, leaseToken: acquired.leaseToken })
-    const result = await setup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, {
+    const result = await setup.t.mutation(legacyMasteryAttempt, {
       ...command,
       scorerVerdict: { ...command.scorerVerdict, misconceptionTags: ['missing_required_step'] },
       scoringJobId: acquired.jobId,
@@ -1152,12 +1154,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
       templateVersion: 'learn-adaptive.feedback-templates.v1',
       taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1',
       misconceptionTags: ['missing_required_step'],
-      criterionResults: expect.arrayContaining([expect.objectContaining({ label: 'Core correctness.', template: 'criterion_met', message: 'Core correctness.: criterion met.' })]),
+      criterionResults: verdict(80).criterionResults.map(row => expect.objectContaining(row)),
     })
     const state = await setup.t.run(async ctx => ({ activity: await ctx.db.get(activity.activityDocumentId), attempt: await ctx.db.get(result.attemptId) }))
     expect(state.activity).toMatchObject({ status: 'feedback', scoringJobId: acquired.jobId, masteryAttemptId: result.attemptId, feedbackProjection: result.feedback })
     expect(state.attempt).toMatchObject({ misconceptionTagsJson: JSON.stringify(['missing_required_step']), feedbackTemplateVersion: 'learn-adaptive.feedback-templates.v1', misconceptionTaxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1' })
     expect(JSON.parse(state.attempt!.criterionResultsJson!)).toEqual(command.scorerVerdict.criterionResults)
+    expect(JSON.stringify(result.feedback)).toContain('Core correctness.')
     expect(JSON.stringify(state)).not.toContain('provider-response-private')
     const committedEvents = await setup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(8))
     expect(committedEvents.map(event => event.eventType)).toEqual(['activity_completed', 'representative_pass'])
@@ -1229,7 +1232,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await ctx.db.patch(retainedActivity.activityDocumentId, { status: 'scoring', scoringJobId: retainedJob.jobId, submittedResponse: retainedRequest.response })
     })
     await retainedSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: retainedJob.jobId, leaseToken: retainedJob.leaseToken })
-    await retainedSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...retainedCommand, scoringJobId: retainedJob.jobId, scoringLeaseToken: retainedJob.leaseToken, scoredSourceSnapshotIds: retainedInput.sourceSnapshotIds, scoredContentRevisionPins: retainedInput.contentRevisionPins })
+    await retainedSetup.t.mutation(legacyMasteryAttempt, { ...retainedCommand, scoringJobId: retainedJob.jobId, scoringLeaseToken: retainedJob.leaseToken, scoredSourceSnapshotIds: retainedInput.sourceSnapshotIds, scoredContentRevisionPins: retainedInput.contentRevisionPins })
     expect((await retainedSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', retainedActivity.threadId)).take(8))).map(event => event.eventType)).toEqual([
       'activity_completed', 'representative_pass', 'delayed_check_eligible', 'delayed_check_attempt', 'retained',
     ])
@@ -1249,7 +1252,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await ctx.db.patch(assistedActivity.activityDocumentId, { status: 'scoring', scoringJobId: assistedJob.jobId, submittedResponse: assistedRequest.response })
     })
     await assistedSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: assistedJob.jobId, leaseToken: assistedJob.leaseToken })
-    await assistedSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...assistedCommand, scoringJobId: assistedJob.jobId, scoringLeaseToken: assistedJob.leaseToken, scoredSourceSnapshotIds: assistedInput.sourceSnapshotIds, scoredContentRevisionPins: assistedInput.contentRevisionPins })
+    await assistedSetup.t.mutation(legacyMasteryAttempt, { ...assistedCommand, scoringJobId: assistedJob.jobId, scoringLeaseToken: assistedJob.leaseToken, scoredSourceSnapshotIds: assistedInput.sourceSnapshotIds, scoredContentRevisionPins: assistedInput.contentRevisionPins })
     const assistedEvents = await assistedSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', assistedActivity.threadId)).take(8))
     expect(assistedEvents.map(event => event.eventType)).toEqual(['assistance', 'activity_completed', 'representative_pass', 'delayed_check_attempt'])
     expect(assistedEvents.at(-1)).toMatchObject({ reasonCode: 'assisted_delayed_check_committed' })
@@ -1270,7 +1273,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
       await ctx.db.patch(remediationActivity.activityDocumentId, { status: 'scoring', scoringJobId: remediationJob.jobId, submittedResponse: remediationRequest.response })
     })
     await remediationSetup.t.mutation(internal.learnV2Mastery.markMasteryScoringDispatched, { tokenIdentifier: OWNER.tokenIdentifier, jobId: remediationJob.jobId, leaseToken: remediationJob.leaseToken })
-    await remediationSetup.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...remediationCommand, scoringJobId: remediationJob.jobId, scoringLeaseToken: remediationJob.leaseToken, scoredSourceSnapshotIds: remediationInput.sourceSnapshotIds, scoredContentRevisionPins: remediationInput.contentRevisionPins })
+    await remediationSetup.t.mutation(legacyMasteryAttempt, { ...remediationCommand, scoringJobId: remediationJob.jobId, scoringLeaseToken: remediationJob.leaseToken, scoredSourceSnapshotIds: remediationInput.sourceSnapshotIds, scoredContentRevisionPins: remediationInput.contentRevisionPins })
     expect((await remediationSetup.t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', remediationActivity.threadId)).take(8))).map(event => event.eventType)).toEqual([
       'activity_completed', 'representative_fail', 'remediation',
     ])
@@ -1382,13 +1385,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('enforces exact started content/session/active-plan pins and rejects purged evidence', async () => {
     const stale = await fixture()
     await stale.t.run(ctx => ctx.db.patch(stale.ids.planId, { activeRevisionId: undefined }))
-    await expect(stale.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, stale.args('stale-plan'))).rejects.toThrow(/pin is no longer current/)
+    await expect(stale.t.mutation(legacyMasteryAttempt, stale.args('stale-plan'))).rejects.toThrow(/pin is no longer current/)
     const wrongContentRevision = await fixture()
-    await expect(wrongContentRevision.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...wrongContentRevision.args('stale-content'), expectedContentRevision: 10 })).rejects.toThrow(/revision conflict/)
+    await expect(wrongContentRevision.t.mutation(legacyMasteryAttempt, { ...wrongContentRevision.args('stale-content'), expectedContentRevision: 10 })).rejects.toThrow(/revision conflict/)
     const purged = await fixture()
     await purged.t.run(ctx => ctx.db.patch(purged.ids.sourceId, { evidencePurgedAt: Date.now() }))
     await expect(purged.owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'blocked', reason: 'content_evidence_unavailable' })
-    await expect(purged.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, purged.args('purged-evidence'))).rejects.toThrow(/evidence is unavailable/)
+    await expect(purged.t.mutation(legacyMasteryAttempt, purged.args('purged-evidence'))).rejects.toThrow(/evidence is unavailable/)
   })
 
   test('allows same-day early starts, keeps future-day sessions scheduled, and requires the exact started-content id', async () => {
@@ -1441,11 +1444,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('uses 79/80 boundary, persists remediation, and appends exactly one replay-safe attempt', async () => {
     const { t, owner, ids, args } = await fixture()
     await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ status: 'ready', sessionId: ids.sessionId, sessionRevision: 7, timezone: 'America/Toronto', content: { revision: 11 }, plan: { recordRevision: 5, blueprintRecordRevision: 3 } })
-    const first = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))
+    const first = await t.mutation(legacyMasteryAttempt, args('same-key', 79))
     expect(first).toMatchObject({ scorePercent: 79, state: 'needs_review', replayed: false })
-    expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 79))).toMatchObject({ attemptId: first.attemptId, replayed: true })
-    expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, args('same-key', 80))).toMatchObject({ attemptId: first.attemptId, scorePercent: 79, replayed: true })
-    await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('same-key', 80), response: 'changed' })).rejects.toThrow(/different request/)
+    expect(await t.mutation(legacyMasteryAttempt, args('same-key', 79))).toMatchObject({ attemptId: first.attemptId, replayed: true })
+    expect(await t.mutation(legacyMasteryAttempt, args('same-key', 80))).toMatchObject({ attemptId: first.attemptId, scorePercent: 79, replayed: true })
+    await expect(t.mutation(legacyMasteryAttempt, { ...args('same-key', 80), response: 'changed' })).rejects.toThrow(/different request/)
     const scopeKey = await masteryScopeKey(OWNER.tokenIdentifier, ids.blueprintIdRevision, ids.objectiveId)
     const rows = await t.run(async ctx => ({ attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_blueprintRevisionId_objectiveId_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', ids.blueprintIdRevision).eq('objectiveId', ids.objectiveId)).take(3), record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_scopeKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('scopeKey', scopeKey)).unique(), sessions: await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(4), jobs: await ctx.db.query('learnJobs').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', `mastery-followup:${first.attemptId}`)).unique(), calendar: await ctx.db.query('calendarProjections').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2) }))
     expect(rows.attempts).toHaveLength(1)
@@ -1456,7 +1459,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(rows.calendar).toEqual([])
     await expect(owner.query(api.learnV2Today.getToday, {})).resolves.toMatchObject({ sessionId: rows.sessions.find(row => row._id !== ids.sessionId)!._id })
     const boundary = await fixture()
-    await expect(boundary.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, boundary.args('boundary', 80))).resolves.toMatchObject({ scorePercent: 80, state: 'independent' })
+    await expect(boundary.t.mutation(legacyMasteryAttempt, boundary.args('boundary', 80))).resolves.toMatchObject({ scorePercent: 80, state: 'independent' })
   })
 
   test('caps assisted passes without downgrading established independence', async () => {
@@ -1464,7 +1467,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const activity = await addAdaptiveActivity({ t, owner, ids, args }, 'adaptive-assistance')
     await owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
     await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 7, kind: 'substantive_hint' })
-    const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('assisted'), expectedSessionRevision: 8 })
+    const result = await t.mutation(legacyMasteryAttempt, { ...args('assisted'), expectedSessionRevision: 8 })
     expect(result).toMatchObject({ scorePercent: 100, state: 'independent' })
     expect(await t.run(ctx => ctx.db.get(ids.sessionId))).toMatchObject({ substantiveHintUsedAt: expect.any(Number), status: 'completed' })
     expect(await t.run(ctx => ctx.db.query('learnActivityEvents').withIndex('by_userId_and_threadId_and_occurredAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('threadId', activity.threadId)).take(2))).toEqual([
@@ -1485,13 +1488,13 @@ describe('LA2-12 server-scored mastery attempts', () => {
   test('caps an answer-revealed pass at guided and commits only controlled feedback', async () => {
     const { t, owner, ids, args } = await fixture()
     await owner.mutation(api.learnV2Mastery.recordAssistanceUse, { studySessionId: ids.sessionId, expectedSessionRevision: 7, kind: 'answer_reveal' })
-    await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('unsafe-rationale'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), criterionResults: verdict(100).criterionResults.map(row => ({ ...row, rationale: 'Provider prose.' })) } })).rejects.toThrow()
-    await expect(t.mutation(internal.learnV2Mastery.recordMasteryAttempt, { ...args('unsafe-tag'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), misconceptionTags: ['explain-boundary'] } })).rejects.toThrow(/verdict is invalid/i)
+    await expect(t.mutation(legacyMasteryAttempt, { ...args('unsafe-rationale'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), criterionResults: verdict(100).criterionResults.map(row => ({ ...row, rationale: 'Provider prose.' })) } })).rejects.toThrow()
+    await expect(t.mutation(legacyMasteryAttempt, { ...args('unsafe-tag'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), misconceptionTags: ['explain-boundary'] } })).rejects.toThrow(/verdict is invalid/i)
     const command = { ...args('revealed'), expectedSessionRevision: 8, scorerVerdict: { ...verdict(100), misconceptionTags: ['evidence_mismatch'] } }
-    const result = await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, command)
-    expect(result).toMatchObject({ scorePercent: 100, state: 'guided', nextReviewAt: expect.any(Number), feedback: { templateVersion: 'learn-adaptive.feedback-templates.v1', taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1', misconceptionTags: ['evidence_mismatch'], criterionResults: expect.arrayContaining([expect.objectContaining({ template: 'criterion_met', message: expect.stringContaining('criterion met') })]) } })
+    const result = await t.mutation(legacyMasteryAttempt, command)
+    expect(result).toMatchObject({ scorePercent: 100, state: 'guided', nextReviewAt: expect.any(Number), feedback: { templateVersion: 'learn-adaptive.feedback-templates.v1', taxonomyVersion: 'learn-adaptive.misconception-taxonomy.v1', misconceptionTags: ['evidence_mismatch'], criterionResults: verdict(100).criterionResults.map(row => expect.objectContaining(row)) } })
     expect(JSON.stringify(result)).not.toContain('Provider prose')
-    expect(await t.mutation(internal.learnV2Mastery.recordMasteryAttempt, command)).toMatchObject({ replayed: true, feedback: { misconceptionTags: ['evidence_mismatch'] } })
+    expect(await t.mutation(legacyMasteryAttempt, command)).toMatchObject({ replayed: true, feedback: { misconceptionTags: ['evidence_mismatch'] } })
     const sessions = await t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', ids.planRevisionId)).take(3))
     expect(sessions.filter(row => row._id !== ids.sessionId)).toHaveLength(1)
   })
@@ -1501,9 +1504,9 @@ describe('LA2-12 server-scored mastery attempts', () => {
     vi.setSystemTime(new Date('2026-03-08T16:00:00.000Z')) // Toronto's first DST Sunday.
     try {
       const day6 = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-03-02' })
-      await expect(day6.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, day6.args('day-six'))).rejects.toThrow(/seven calendar days/)
+      await expect(day6.t.mutation(legacyMasteryAttempt, day6.args('day-six'))).rejects.toThrow(/seven calendar days/)
       const day7 = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-03-01', sessionTimezone: 'Pacific/Auckland' })
-      await expect(day7.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, day7.args('day-seven'))).resolves.toMatchObject({ state: 'retained' })
+      await expect(day7.t.mutation(legacyMasteryAttempt, day7.args('day-seven'))).resolves.toMatchObject({ state: 'retained' })
       const attempt = await day7.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_objectiveId_and_attemptedAt', q => q.eq('userId', OWNER.tokenIdentifier).eq('objectiveId', day7.ids.objectiveId)).unique())
       expect(attempt).toMatchObject({ attemptLocalDate: '2026-03-08', attemptTimezone: 'America/Toronto' })
     }
@@ -1512,11 +1515,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
   test('rejects malformed timezone and independent-date pins before writing history', async () => {
     const invalidZone = await fixture({ sessionTimezone: 'Not/A_Zone' })
-    await expect(invalidZone.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, invalidZone.args('invalid-zone'))).rejects.toThrow()
+    await expect(invalidZone.t.mutation(legacyMasteryAttempt, invalidZone.args('invalid-zone'))).rejects.toThrow()
     expect(await invalidZone.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'invalid-zone')).take(1))).toEqual([])
 
     const invalidDate = await fixture({ placementKind: 'retained_review', state: 'independent', firstDate: '2026-02-30' })
-    await expect(invalidDate.t.mutation(internal.learnV2Mastery.recordMasteryAttempt, invalidDate.args('invalid-date'))).rejects.toThrow(/local date/i)
+    await expect(invalidDate.t.mutation(legacyMasteryAttempt, invalidDate.args('invalid-date'))).rejects.toThrow(/local date/i)
     const state = await invalidDate.t.run(async ctx => ({
       attempts: await ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', OWNER.tokenIdentifier).eq('idempotencyKey', 'invalid-date')).take(1),
       record: await ctx.db.query('masteryRecords').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q => q.eq('userId', OWNER.tokenIdentifier).eq('blueprintRevisionId', invalidDate.ids.blueprintIdRevision).eq('objectiveId', invalidDate.ids.objectiveId)).unique(),

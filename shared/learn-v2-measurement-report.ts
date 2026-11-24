@@ -4,7 +4,7 @@ import {
   learnRevisionSchema, learnScoreSchema, learnObservationSchema, learnReasonCodesSchema, learnTimezoneSchema,
   learnAssistanceSnapshotSchema, learnValiditySnapshotSchema, parseLearnContract, learnSerializedBytes,
 } from './learn-v2-responses'
-import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema, isLearnRetainedPromotionTimeEligible } from './learn-v2-delayed-check'
+import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema, isLearnRetainedPromotionTimeEligible, LEARN_SYSTEM_DUE_WORK_LATE } from './learn-v2-delayed-check'
 import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistoryStatusSchema, learnFamilyStatusSchema, learnMeasurementHorizonSchema, LEARN_V2_FORM_ORDERS } from './learn-v2-measurement'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 import { addCalendarDays, localDateAt } from './learn-v2-mastery'
@@ -19,7 +19,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v6' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v7' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -397,7 +397,7 @@ export const learnReportFactPayloadSchema = z.discriminatedUnion('kind', [
     .refine(value => value.status === value.snapshot.status, 'Enrollment status must match the assignment snapshot'),
   z.strictObject({ kind: z.literal('opportunity'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(), recordRevision: learnRevisionSchema,
     status: learnReportOpportunityStatusSchema, dueAt: learnTimestampSchema.nullable(), closeAt: learnTimestampSchema, clock: learnAssessmentClockSchema.nullable(), originalSlot: z.boolean(),
-    stateAtEligibility: learnReportCapturedMasteryStateSchema.optional() }),
+    stateAtEligibility: learnReportCapturedMasteryStateSchema.optional(), reasonCode: learnCodeSchema.optional() }),
   z.strictObject({ kind: z.literal('response'), submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: learnTimestampSchema,
     measurementEligible: z.boolean(), masteryEligible: z.boolean(), assistanceSnapshot: learnAssistanceSnapshotSchema, validitySnapshot: learnValiditySnapshotSchema,
     stateAtAcceptance: learnReportCapturedMasteryStateSchema.optional() }),
@@ -867,6 +867,7 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
   const assigned = horizon === 7 ? assignment.assignedDay7 : assignment.assignedDay30
   const stage = assigned ? slotStage(row.clock, assignment.anchorAt, cutoff) : 'not_assigned'
   const reasons = [
+    ...(row.reasonCodes.includes(LEARN_SYSTEM_DUE_WORK_LATE) ? [LEARN_SYSTEM_DUE_WORK_LATE] : []),
     ...endpointReasons(selectedCold, selectedColdAcceptance, cutoff, configuration, coldWindow),
     ...endpointReasons(selectedDelayed, selectedDelayedAcceptance, cutoff, configuration, selectedClock),
   ]
@@ -934,6 +935,7 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
   const result = resultBy(row.result, cutoff)
   const timeEligible = localDateAt(row.clock.dueAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7)
     && (row.acceptance === null || localDateAt(row.acceptance.acceptedAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7))
+  const systemLate = row.unresolvedReason === LEARN_SYSTEM_DUE_WORK_LATE && row.acceptance === null
   const stateEligible = ['independent', 'retained'].includes(row.stateAtEligibility)
     && (row.stateAtAcceptance === null || ['independent', 'retained'].includes(row.stateAtAcceptance))
   const valid = timeEligible && stateEligible && row.unresolvedReason === null
@@ -941,18 +943,19 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
     && (row.stratum.familyId === null || result?.familyRevision === row.stratum.familyRevision)
     && row.stratum.familyValidationStatus !== 'quarantined'
   const reasons = endpointReasons(row.result, row.acceptance, cutoff, row.stratum.scorerConfiguration, row.clock)
-  const stateKnown = row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown'
+  // A check the system never made playable has no eligibility-time state; its outcome is simply missing.
+  const stateKnown = systemLate || (row.stateAtEligibility !== 'unknown' && row.stateAtAcceptance !== 'unknown')
   if (!stateKnown) reasons.push('unknown_prior_state')
-  if (!timeEligible || !stateEligible) reasons.push('invalid_item_novelty')
+  if (!timeEligible || (!stateEligible && !systemLate)) reasons.push('invalid_item_novelty')
   if (row.unresolvedReason) {
     reasons.push(row.unresolvedReason)
-    if (!LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)) reasons.push('reconciliation_required')
+    if (!systemLate && !LEARN_V2_REPORT_DISPOSITIONS.includes(row.unresolvedReason as z.infer<typeof learnReportDispositionSchema>)) reasons.push('reconciliation_required')
   }
   if (!valid && !row.acceptance) reasons.push('missing_delayed')
   const value = valid && result ? (result.scorePercent < result.thresholdPercent ? 1 : 0) : null
   return { learnerKey: row.learnerKey, band: reportBand(cold), stage: slotStage(row.clock, row.claim.firstIndependentAt, cutoff), known: stateKnown,
     reasons: [...new Set(reasons)], observation: { learnerKey: row.learnerKey, value, lower: value ?? 0, upper: value ?? 1 }, secondary: null,
-    disposition: reportDisposition(reasons, valid), eligible: stateEligible, acceptedCold: false, accepted: acceptedBy(row.acceptance, cutoff),
+    disposition: reportDisposition(reasons, valid), eligible: stateEligible && !systemLate, acceptedCold: false, accepted: acceptedBy(row.acceptance, cutoff),
     validCold: false, validDelayed: valid, replacementAccepted: false, replacementValid: false, primaryIncluded: false,
     paste: result?.pasteObserved ?? 'unknown', focus: result?.focusLossObserved ?? 'unknown', order: 'unknown', observedOrder: 'unknown', coldForm: 'unknown',
     delayedForm: 'unknown', observedColdForm: null, observedDelayedForm: acceptedBy(row.acceptance, cutoff) ? result?.formLabel ?? 'unknown' : null }

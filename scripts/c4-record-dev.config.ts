@@ -15,5 +15,5 @@ export default defineConfig({
     if (!/^(convex|server|shared|workers|app)\//.test(path) || /\.test\./.test(path) || path === 'convex/schema.ts' || !files.has(path)) return
     return execFileSync('git', ['show', `${pin}:${path}`], { cwd: root, encoding: 'utf8', maxBuffer: 4_000_000 })
   } }],
-  test: { ...base.test, silent: false, disableConsoleIntercept: true, env: { C4_RECORD_DEV: pin === devPin ? devPin : '' }, include: ['convex/learnV2DisclosureOffParity.test.ts', 'server/api/disclosure-off-parity.test.ts'], maxWorkers: 1 },
+  test: { ...base.test, silent: false, disableConsoleIntercept: true, env: { C4_RECORD_DEV: pin === devPin ? devPin : '', C5_RECORD_DEV: pin === '427bd0fa7f0542732a6597f89da89763d7faf57f' ? pin : '' }, include: ['convex/learnV2DisclosureOffParity.test.ts', 'server/api/disclosure-off-parity.test.ts', ...(pin === devPin ? [] : ['convex/learnV2C5OffParity.test.ts'])], maxWorkers: 1 },
 })

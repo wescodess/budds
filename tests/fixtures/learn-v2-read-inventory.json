@@ -288,6 +288,10 @@
     "handling": "delivery"
   },
   {
+    "path": "learnAdaptiveCanvas.listDueChecks",
+    "handling": "summary_or_own_work"
+  },
+  {
     "path": "learnAdaptiveClarifications.getInitialDecision",
     "handling": "summary_or_own_work"
   },
