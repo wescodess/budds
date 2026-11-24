@@ -6,7 +6,9 @@ import { getFrozenLearnMeasurementProtocol } from './learnV2MeasurementAssignmen
 export const LEARN_DUE_WORK_MAX_ATTEMPTS = 8
 export const LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS = 3
 export const LEARN_DUE_WORK_LEASE_MS = 5 * 60_000
-export const learnDueWorkBackoff = (attempts: number) => Math.min(60_000 * 2 ** Math.max(0, attempts - 1), 3_600_000)
+export const LEARN_DUE_WORK_HOUR_MS = 3_600_000
+export const learnDueWorkBackoff = (attempts: number) => Math.min(60_000 * 2 ** Math.max(0, attempts - 1), LEARN_DUE_WORK_HOUR_MS)
+export const learnDueWorkRecoveryBackoff = (recoveryAttempts: number) => Math.min(LEARN_DUE_WORK_HOUR_MS * 2 ** Math.max(0, recoveryAttempts - 1), 24 * LEARN_DUE_WORK_HOUR_MS)
 
 export function learnDueWorkEnabled() {
   return LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.enrollment
@@ -54,6 +56,13 @@ export async function retireLearnOwnerFault(ctx: MutationCtx, userId: string) {
   if (!learnDueWorkEnabled()) return
   const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q => q.eq('userId', userId).eq('key', 'owner')).unique()
   if (work && ['parked', 'terminal'].includes(work.state)) await ctx.db.delete(work._id)
+}
+
+export async function learnOpportunityFaultedInWindow(ctx: QueryCtx | MutationCtx, row: Doc<'learnAssessmentOpportunities'>) {
+  if (!learnDueWorkEnabled()) return false
+  const work = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+    q.eq('userId', row.userId).eq('key', `${row._id}:open`)).unique()
+  return work?.windowFaultAt !== undefined && work.windowFaultAt < row.closeAt
 }
 
 export async function hasUnresolvedLearnDueWork(ctx: QueryCtx | MutationCtx, userId: string, cutoff: number) {

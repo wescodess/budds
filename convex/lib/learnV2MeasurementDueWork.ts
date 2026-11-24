@@ -18,13 +18,16 @@ import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } fro
 import { parseLearnContract } from '../../shared/learn-v2-responses'
 import { learnMeasurementAllocationSchema, learnMeasurementItemPinsSchema } from '../../shared/learn-v2-measurement'
 import { learnMeasurementEventInputSchema, LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION } from '../../shared/learn-adaptive-events'
-import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession, readLearnDelayedCheckBinding } from './learnV2DelayedDelivery'
+import { bindLearnDelayedCheck, finalizeLearnDelayedCheckSession, learnDelayedCheckBindingBlock, readLearnDelayedCheckBinding } from './learnV2DelayedDelivery'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
-import { enqueueLearnDueWork, enqueueLearnOpportunityEdges, hasUnresolvedLearnDueWork, learnDueWorkEnabled, retireLearnAssignmentFault, retireLearnOwnerFault } from './learnV2DueWorkQueue'
+import { enqueueLearnDueWork, enqueueLearnOpportunityEdges, hasUnresolvedLearnDueWork, learnDueWorkEnabled, learnOpportunityFaultedInWindow, retireLearnAssignmentFault, retireLearnOwnerFault } from './learnV2DueWorkQueue'
 
 export { learnDueWorkEnabled } from './learnV2DueWorkQueue'
 
 export const LEARN_DUE_WORK_EDGE_PHASES = ['preparing', 'ready', 'test_open'] as const
+// Archived Voids are terminal, deleted Void/folder ids never return, an assignment's protocol pins are immutable and its
+// cold slot is written with it. These results cannot change without a deployment or operator requeue.
+const LEARN_DUE_WORK_SETTLED_ASSIGNMENT_RESULTS: string[] = ['aggregate_unavailable', 'protocol_pins_mismatch', 'missing_cold_opportunity']
 
 // A complete owner sweep through `dueWorkThrough` applied every edge at or before it. Coverage extends to the
 // cutoff only when no open or close edge in between is still unapplied.
@@ -73,6 +76,23 @@ async function emitEligibility(ctx: MutationCtx, assignment: AdmittedAssignment,
   await ctx.db.insert('learnActivityEvents', { userId: assignment.userId, ...fields, dedupeKeyHash })
 }
 
+async function openingBlockReason(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol, row: Doc<'learnAssessmentOpportunities'>) {
+  const catalogs = learnDueWorkEnabled()
+    ? await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', assignment.userId)).take(2) : null
+  return catalogs && (catalogs.length !== 1 || catalogs[0]?.measurementCapability?.enabled !== true) ? 'not_admitted'
+    : assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
+    : await measurementScopeReason(ctx, assignment.userId, row)
+      ?? await measurementFlowReason(ctx, assignment.userId, assignment.flow, row, protocol)
+      ?? (row.assessmentPins.kind !== 'measurement' ? 'pins_mismatch'
+        : await measurementItemReason(ctx, assignment.userId, parseLearnContract(learnMeasurementItemPinsSchema, row.assessmentPins.itemPins), row, assignment.scoringBinding)
+          ?? (await measurementCaseExposed(ctx, assignment.userId, row.assessmentPins.itemPins.caseId, row._id) ? 'novel_item_unavailable' : null))
+}
+
+async function closingBlockReason(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol, row: Doc<'learnAssessmentOpportunities'>) {
+  return await openingBlockReason(ctx, assignment, protocol, row)
+    ?? (LEARN_MEASUREMENT_CAPABILITIES.delivery ? await learnDelayedCheckBindingBlock(ctx, assignment, row) : null)
+}
+
 export async function processLearnMeasurementDueOpportunity(ctx: MutationCtx, assignment: AdmittedAssignment, protocol: LearnMeasurementProtocol,
   row: Doc<'learnAssessmentOpportunities'>, through: number) {
   ctx = measurementReadContext(ctx, assignment.userId)
@@ -85,20 +105,14 @@ export async function processLearnMeasurementDueOpportunity(ctx: MutationCtx, as
   if (observedAt >= row.closeAt) {
     const playable = !LEARN_MEASUREMENT_CAPABILITIES.responses || row.deliveryGrantId !== undefined || row.eligibleAt !== undefined && row.eligibleAt < row.closeAt
       && await readLearnDelayedCheckBinding(ctx, assignment.userId, row) !== null
-    const reasonCode = LEARN_MEASUREMENT_CAPABILITIES.responses && row.operationalEligibility === 'blocked' && row.reasonCode ? row.reasonCode
-      : playable ? 'missed_window' : LEARN_SYSTEM_DUE_WORK_LATE
+    const unblocked = playable ? 'missed_window' : LEARN_SYSTEM_DUE_WORK_LATE
+    const blocked = LEARN_MEASUREMENT_CAPABILITIES.responses && row.operationalEligibility === 'blocked' && row.reasonCode
+    const reasonCode = !blocked ? unblocked : !learnDueWorkEnabled() ? row.reasonCode!
+      : await learnOpportunityFaultedInWindow(ctx, row) ? unblocked : await closingBlockReason(ctx, assignment, protocol, row) ?? unblocked
     await updateOpportunity(ctx, assignment, row, { phase: 'abandoned', operationalEligibility: 'blocked', reasonCode })
     return
   }
-  const catalogs = learnDueWorkEnabled()
-    ? await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', assignment.userId)).take(2) : null
-  const reason = catalogs && (catalogs.length !== 1 || catalogs[0]?.measurementCapability?.enabled !== true) ? 'not_admitted'
-    : assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined ? 'evidence_unavailable'
-    : await measurementScopeReason(ctx, assignment.userId, row)
-      ?? await measurementFlowReason(ctx, assignment.userId, assignment.flow, row, protocol)
-      ?? (row.assessmentPins.kind !== 'measurement' ? 'pins_mismatch'
-        : await measurementItemReason(ctx, assignment.userId, parseLearnContract(learnMeasurementItemPinsSchema, row.assessmentPins.itemPins), row, assignment.scoringBinding)
-          ?? (await measurementCaseExposed(ctx, assignment.userId, row.assessmentPins.itemPins.caseId, row._id) ? 'novel_item_unavailable' : null))
+  const reason = await openingBlockReason(ctx, assignment, protocol, row)
   if (reason) {
     await updateOpportunity(ctx, assignment, row, { operationalEligibility: 'blocked', reasonCode: reason })
     await enqueueLearnDueWork(ctx, { userId: row.userId, learningVoidId: row.learningVoidId, assignmentId: assignment._id,
@@ -254,7 +268,7 @@ export async function materializeLearnMeasurementDueBatch(ctx: MutationCtx, user
   for (const assignment of page.page) {
     if (assignment.status !== 'admitted') continue
     const result = await materializeLearnMeasurementAssignment(ctx, assignment, protocol, input.through)
-    if (['protocol_pins_mismatch', 'missing_cold_opportunity', 'aggregate_unavailable'].includes(result)) complete = false
+    if (!learnDueWorkEnabled() && LEARN_DUE_WORK_SETTLED_ASSIGNMENT_RESULTS.includes(result)) complete = false
   }
   const { watermark, sequence } = await nextLearnMeasurementSourceSequence(ctx, userId)
   // Completeness is established only by a full sweep. Unknown history stays unknown.

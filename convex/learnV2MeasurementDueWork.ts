@@ -1,9 +1,9 @@
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import { makeFunctionReference } from 'convex/server'
-import { internalMutation, type MutationCtx } from './_generated/server'
+import { internalMutation, internalQuery, type MutationCtx } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
 import { materializeLearnMeasurementAssignment, materializeLearnMeasurementDueBatch, extendLearnDueWorkCoverage, processLearnMeasurementDueOpportunity } from './lib/learnV2MeasurementDueWork'
-import { learnDueWorkEnabled, learnDueWorkBackoff, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { learnDueWorkEnabled, learnDueWorkBackoff, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_HOUR_MS, LEARN_DUE_WORK_LEASE_MS, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 
@@ -33,7 +33,7 @@ async function runSweepStep(ctx: MutationCtx, chain: Chain): Promise<SweepResult
     const generation = work.generation + 1
     const recovering = work.state === 'parked' || work.state === 'terminal' || work.attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
     const scheduledFunctionId = await ctx.scheduler.runAfter(0, ownerWork, { userId: work.userId, workId: work._id, generation, recovering })
-    await ctx.db.patch(work._id, { state: recovering ? 'parked' : 'pending', generation, scheduledFunctionId, inFlight: true,
+    await ctx.db.patch(work._id, { state: work.state === 'terminal' ? 'terminal' : recovering ? 'parked' : 'pending', generation, scheduledFunctionId, inFlight: true,
       previousScheduledFunctionId: work.inFlight ? work.scheduledFunctionId : undefined,
       nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
   }
@@ -72,26 +72,33 @@ export const continueDelayedCheckSweep = internalMutation({
   },
 })
 
-async function waitForDomain(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, closeAt?: number, restartOwner = false) {
+async function waitForDomain(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, closeAt: number) {
   const domainChecks = Math.min((work.domainChecks ?? 0) + 1, 7)
   await ctx.db.patch(work._id, { state: 'pending', inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined,
-    domainChecks, nextAttemptAt: Math.min(Date.now() + learnDueWorkBackoff(domainChecks), closeAt ?? Number.MAX_SAFE_INTEGER), updatedAt: Date.now(),
-    ...(restartOwner ? { cursor: undefined, through: undefined, expectedSequence: undefined, coverageComplete: undefined } : {}) })
+    domainChecks, nextAttemptAt: Math.min(Date.now() + learnDueWorkBackoff(domainChecks), closeAt), updatedAt: Date.now() })
 }
 
-async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, recovering: boolean) {
+const errorClass = (error: unknown) => {
+  if (!(error instanceof Error)) return typeof error
+  if (error instanceof ConvexError) return 'ConvexError'
+  return error.name !== 'Error' ? error.name : /^(?:Uncaught )?([A-Z][A-Za-z]{0,63}Error):/u.exec(error.message)?.[1] ?? 'Error'
+}
+
+async function recordFault(ctx: MutationCtx, work: Doc<'learnMeasurementDueWork'>, recovering: boolean, cause: string) {
+  const now = Date.now()
   const attempts = recovering ? work.attempts : Math.min(work.attempts + 1, LEARN_DUE_WORK_MAX_ATTEMPTS)
-  const recoveryAttempts = (work.recoveryAttempts ?? 0) + (recovering ? 1 : 0)
   const parked = recovering || attempts >= LEARN_DUE_WORK_MAX_ATTEMPTS
-  const terminal = recoveryAttempts >= LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS
   const row = work.assessmentOpportunityId ? await ctx.db.get(work.assessmentOpportunityId) : null
   const closeAt = row?.userId === work.userId ? row.closeAt : null
-  const nextAttemptAt = terminal ? Number.MAX_SAFE_INTEGER : parked && !recovering
-    ? closeAt === null ? Date.now() + 3_600_000 : Math.max(Date.now(), closeAt)
-    : Date.now() + learnDueWorkBackoff(recovering ? recoveryAttempts : attempts)
-  await ctx.db.patch(work._id, { state: terminal ? 'terminal' : parked ? 'parked' : 'pending', attempts, recoveryAttempts,
-    inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined, nextAttemptAt,
-    reasonCode: parked ? 'retries_exhausted' : undefined, updatedAt: Date.now() })
+  const inWindow = closeAt !== null && now < closeAt
+  const recoveryAttempts = (work.recoveryAttempts ?? 0) + (recovering && !inWindow ? 1 : 0)
+  const state = recoveryAttempts >= LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS ? 'terminal' : parked ? 'parked' : 'pending'
+  const delay = !parked ? learnDueWorkBackoff(attempts) : inWindow ? LEARN_DUE_WORK_HOUR_MS : learnDueWorkRecoveryBackoff(recoveryAttempts + 1)
+  const nextAttemptAt = inWindow ? Math.min(now + delay, closeAt) : now + delay
+  await ctx.db.patch(work._id, { state, attempts, recoveryAttempts, inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined,
+    nextAttemptAt, reasonCode: parked ? 'retries_exhausted' : undefined, windowFaultAt: work.windowFaultAt ?? (inWindow ? now : undefined), updatedAt: now })
+  console.error(`learn_due_work_fault ${JSON.stringify({ workId: work._id, kind: work.kind, assignmentId: work.assignmentId ?? null,
+    assessmentOpportunityId: work.assessmentOpportunityId ?? null, errorClass: cause, state, attempts, recoveryAttempts, nextAttemptAt })}`)
 }
 
 export const processDelayedCheckWork = internalMutation({
@@ -103,12 +110,12 @@ export const processDelayedCheckWork = internalMutation({
     if (work.previousScheduledFunctionId) {
       const previous = await ctx.db.system.get(work.previousScheduledFunctionId)
       if (previous?.state.kind === 'failed') {
-        await recordFault(ctx, work, input.recovering === true)
+        await recordFault(ctx, work, input.recovering === true, 'scheduled_function_failed')
         return null
       }
     }
     try { await ctx.runMutation(applyWork, input) }
-    catch { await recordFault(ctx, work, input.recovering === true) }
+    catch (error) { await recordFault(ctx, work, input.recovering === true, errorClass(error)) }
     return null
   },
 })
@@ -131,25 +138,16 @@ export const applyDelayedCheckWork = internalMutation({
           generation, scheduledFunctionId, previousScheduledFunctionId: undefined, nextAttemptAt: Date.now() + LEARN_DUE_WORK_LEASE_MS, updatedAt: Date.now() })
         return null
       }
-      if (!result.complete) { await waitForDomain(ctx, work, undefined, true); return null }
+      if (!result.complete) throw new Error('Learn due-work owner scan is incomplete')
     } else {
       const assignment = work.assignmentId ? await ctx.db.get(work.assignmentId) : null
       if (assignment && assignment.userId !== work.userId) throw new Error('Learn due-work assignment scope conflicts')
       if (assignment?.status === 'admitted') {
         const opportunity = work.assessmentOpportunityId ? await ctx.db.get(work.assessmentOpportunityId) : null
         if (opportunity && (opportunity.userId !== work.userId || opportunity.assignmentId !== assignment._id)) throw new Error('Learn due-work opportunity scope conflicts')
-        if (input.recovering && opportunity && Date.now() < opportunity.closeAt && !opportunity.submissionId
-          && ['preparing', 'ready', 'test_open'].includes(opportunity.phase)) {
-          await ctx.db.patch(work._id, { state: 'parked', inFlight: false, scheduledFunctionId: undefined,
-            nextAttemptAt: opportunity.closeAt, updatedAt: Date.now() })
-          return null
-        }
         if (opportunity?.purpose.kind === 'measurement_delayed') {
           await processLearnMeasurementDueOpportunity(ctx, assignment, getFrozenLearnMeasurementProtocol()!, opportunity, Date.now())
-        } else {
-          const result = await materializeLearnMeasurementAssignment(ctx, assignment, getFrozenLearnMeasurementProtocol()!, Date.now())
-          if (!['processed', 'anchor_not_started'].includes(result)) { await waitForDomain(ctx, work); return null }
-        }
+        } else await materializeLearnMeasurementAssignment(ctx, assignment, getFrozenLearnMeasurementProtocol()!, Date.now())
         const current = opportunity ? await ctx.db.get(opportunity._id) : null
         if (current && !current.submissionId && ['preparing', 'ready', 'test_open'].includes(current.phase)
           && current.operationalEligibility === 'blocked' && Date.now() < current.closeAt) { await waitForDomain(ctx, work, current.closeAt); return null }
@@ -175,5 +173,39 @@ export const materializeDelayedCheckEligibility = internalMutation({
     const result = await materializeLearnMeasurementDueBatch(ctx, input.userId, { cursor: input.cursor ?? null, through, expectedSequence: input.expectedSequence, coverageComplete: input.coverageComplete })
     if (result.cursor) await ctx.scheduler.runAfter(0, continuation, { userId: input.userId, cursor: result.cursor, through, expectedSequence: result.sequence, coverageComplete: result.coverageComplete, ...(input.fromCron ? { fromCron: true } : {}) })
     return result
+  },
+})
+
+const faultState = v.union(v.literal('parked'), v.literal('terminal'))
+const OPERATOR_PAGE = 100
+
+export const listDelayedCheckFaults = internalQuery({
+  args: { state: faultState, limit: v.optional(v.number()) },
+  returns: v.array(v.object({ workId: v.id('learnMeasurementDueWork'), kind: v.union(v.literal('owner'), v.literal('assignment'), v.literal('open'), v.literal('close')),
+    state: faultState, assignmentId: v.union(v.id('learnMeasurementAssignments'), v.null()), assessmentOpportunityId: v.union(v.id('learnAssessmentOpportunities'), v.null()),
+    attempts: v.number(), recoveryAttempts: v.number(), dueAt: v.number(), nextAttemptAt: v.number(), windowFaultAt: v.union(v.number(), v.null()), updatedAt: v.number() })),
+  handler: async (ctx, input) => {
+    const rows = await ctx.db.query('learnMeasurementDueWork').withIndex('by_state_and_nextAttemptAt', q => q.eq('state', input.state))
+      .take(Math.max(1, Math.min(Math.floor(input.limit ?? OPERATOR_PAGE), OPERATOR_PAGE)))
+    return rows.map(row => ({ workId: row._id, kind: row.kind, state: input.state, assignmentId: row.assignmentId ?? null,
+      assessmentOpportunityId: row.assessmentOpportunityId ?? null, attempts: row.attempts, recoveryAttempts: row.recoveryAttempts ?? 0,
+      dueAt: row.dueAt, nextAttemptAt: row.nextAttemptAt, windowFaultAt: row.windowFaultAt ?? null, updatedAt: row.updatedAt }))
+  },
+})
+
+export const requeueDelayedCheckWork = internalMutation({
+  args: { workIds: v.array(v.id('learnMeasurementDueWork')) }, returns: v.object({ requeued: v.number() }),
+  handler: async (ctx, input) => {
+    if (input.workIds.length > OPERATOR_PAGE) throw new Error('Requeue at most 100 records per call')
+    if (!learnDueWorkEnabled()) return { requeued: 0 }
+    let requeued = 0
+    for (const workId of new Set(input.workIds)) {
+      const work = await ctx.db.get(workId)
+      if (!work || !['parked', 'terminal'].includes(work.state)) continue
+      await ctx.db.patch(work._id, { state: 'pending', attempts: 0, recoveryAttempts: 0, reasonCode: undefined, generation: work.generation + 1,
+        inFlight: false, scheduledFunctionId: undefined, previousScheduledFunctionId: undefined, nextAttemptAt: Date.now(), updatedAt: Date.now() })
+      requeued++
+    }
+    return { requeued }
   },
 })

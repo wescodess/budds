@@ -5,7 +5,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasLearnV2Access } from './learnV2Access'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
-import { enqueueLearnOpportunityEdges, retireLearnOpportunityDueWork } from './learnV2DueWorkQueue'
+import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, retireLearnOpportunityDueWork } from './learnV2DueWorkQueue'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
@@ -204,6 +204,13 @@ async function enrollmentHistory(ctx: ReadCtx, userId: string, scope: Measuremen
   return { status: 'prospectively_unexposed' as const, catalog }
 }
 
+const canonicalJson = (value: unknown) => JSON.stringify(value ?? null, (_key, nested: unknown) => nested && typeof nested === 'object' && !Array.isArray(nested)
+  ? Object.fromEntries(Object.entries(nested).sort(([a], [b]) => a.localeCompare(b))) : nested)
+function sameOpportunityFact(previous: Record<string, unknown>, next: Record<string, unknown>) {
+  const keys = ['assessmentOpportunityId', 'status', 'dueAt', 'closeAt', 'clock', 'originalSlot', 'reasonCode', 'stateAtEligibility']
+  return keys.every(key => canonicalJson(previous[key]) === canonicalJson(next[key]))
+}
+
 export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignment: Pick<AdmittedAssignment, 'userId' | 'epoch' | 'learningVoidId'>, row: Doc<'learnAssessmentOpportunities'>) {
   const previous = await ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', assignment.userId).eq('fact.assessmentOpportunityId', row._id)).order('desc').first()
   if (previous?.fact.kind === 'opportunity' && previous.fact.recordRevision === row.revision) {
@@ -219,12 +226,16 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
     stateAtEligibility = first?.fact.kind === 'opportunity' ? first.fact.stateAtEligibility ?? 'unknown'
       : history.length === 8 ? 'unknown' : (await getScopedMasteryRecord(ctx, assignment.userId, row.blueprintRevisionId, row.objectiveId)).record?.state ?? 'unseen'
   }
-  const sequence = await appendLearnMeasurementFact(ctx, assignment.userId, { epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId,
-    fact: { kind: 'opportunity', assessmentOpportunityId: row._id, recordRevision: row.revision,
-      status: ['cancelled', 'abandoned', 'invalid'].includes(row.phase) ? row.phase : row.operationalEligibility, dueAt: row.dueAt ?? null, closeAt: row.closeAt,
-      clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot,
-      ...(LEARN_MEASUREMENT_CAPABILITIES.responses && row.reasonCode ? { reasonCode: row.reasonCode } : {}),
-      ...(stateAtEligibility !== undefined ? { stateAtEligibility } : {}) } })
+  const fact = { kind: 'opportunity' as const, assessmentOpportunityId: row._id, recordRevision: row.revision,
+    status: ['cancelled', 'abandoned', 'invalid'].includes(row.phase) ? row.phase as 'cancelled' | 'abandoned' | 'invalid' : row.operationalEligibility,
+    dueAt: row.dueAt ?? null, closeAt: row.closeAt, clock: 'clock' in row.purpose ? row.purpose.clock : null, originalSlot: row.originalSlot,
+    ...(LEARN_MEASUREMENT_CAPABILITIES.responses && row.reasonCode ? { reasonCode: row.reasonCode } : {}),
+    ...(stateAtEligibility !== undefined ? { stateAtEligibility } : {}) }
+  if (previous?.fact.kind === 'opportunity' && learnDueWorkEnabled() && sameOpportunityFact(previous.fact, fact)) {
+    await retireLearnOpportunityDueWork(ctx, row)
+    return previous.sequence
+  }
+  const sequence = await appendLearnMeasurementFact(ctx, assignment.userId, { epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId, fact })
   await retireLearnOpportunityDueWork(ctx, row)
   return sequence
 }

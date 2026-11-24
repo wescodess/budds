@@ -1931,6 +1931,7 @@ export default defineSchema({
     domainChecks: v.optional(v.number()), recoveryAttempts: v.optional(v.number()), inFlight: v.optional(v.boolean()),
     previousScheduledFunctionId: v.optional(v.id('_scheduled_functions')),
     scheduledFunctionId: v.optional(v.id('_scheduled_functions')), reasonCode: v.optional(v.literal('retries_exhausted')),
+    windowFaultAt: v.optional(v.number()),
     cursor: v.optional(v.string()), through: v.optional(v.number()), expectedSequence: v.optional(v.number()), coverageComplete: v.optional(v.boolean()),
   }).index('by_userId', ['userId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])

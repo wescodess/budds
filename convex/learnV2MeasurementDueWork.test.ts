@@ -8,7 +8,7 @@ import { v } from 'convex/values'
 import schema from './schema'
 import * as workFunctions from './learnV2MeasurementDueWork'
 import * as dueWork from './lib/learnV2MeasurementDueWork'
-import { enqueueLearnDueWork, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
+import { enqueueLearnDueWork, hasUnresolvedLearnDueWork, learnDueWorkRecoveryBackoff, LEARN_DUE_WORK_MAX_ATTEMPTS, LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS } from './lib/learnV2DueWorkQueue'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
 
@@ -186,35 +186,40 @@ test('the first enabled tick after downtime drains more than one page without a 
   expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(2)
 })
 
-test.each([false, true])('an incomplete owner scan waits without spending the fault budget: repaired=%s', async repaired => {
-  const f = await materialized()
-  const assignment = (await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').withIndex('by_userId', q => q.eq('userId', userId)).first()))!
-  const incompleteIds = await f.t.run(async ctx => {
-    const { _id: _id, _creationTime: _time, ...fields } = assignment
-    const ids = []
-    for (let index = 0; index < 2; index++) ids.push(await ctx.db.insert('learnMeasurementAssignments', { ...fields, assignmentKey: `missing_cold_fixture:${index}` }))
-    await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: Date.now() })
-    return ids
-  })
-  await runLearnDueCron(f.t)
-  let pending = (await f.work()).find(row => row.kind === 'owner')!
-  expect(pending).toMatchObject({ state: 'pending', attempts: 0, domainChecks: 1 })
-  if (repaired) {
-    await f.t.run(async ctx => { for (const id of incompleteIds) await ctx.db.delete(id) })
-    vi.setSystemTime(pending.nextAttemptAt)
+test.each(['archived_void', 'missing_cold_opportunity', 'protocol_pins_mismatch'] as const)(
+  'a permanently unavailable %s assignment settles its due work and resolves coverage', async reason => {
+    const f = await fixture()
+    expect(await f.enroll()).toMatchObject({ status: 'admitted' })
+    const assignment = (await f.t.run(ctx => ctx.db.query('learnMeasurementAssignments').withIndex('by_userId', q => q.eq('userId', userId)).first()))!
+    await f.t.run(async ctx => {
+      if (reason === 'archived_void') await ctx.db.patch(assignment.learningVoidId, { status: 'archived' })
+      else if (reason === 'protocol_pins_mismatch') await ctx.db.patch(assignment._id, { protocolVersion: 'superseded.protocol.v0' })
+      else {
+        const { _id: _id, _creationTime: _time, ...fields } = assignment
+        const orphan = await ctx.db.insert('learnMeasurementAssignments', { ...fields, assignmentKey: 'missing_cold_fixture' })
+        await enqueueLearnDueWork(ctx, { userId, assignmentId: orphan, learningVoidId: assignment.learningVoidId, key: `assignment:${orphan}`, kind: 'assignment', dueAt: Date.now() })
+      }
+      await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: Date.now() })
+    })
+    vi.setSystemTime(START + 1)
     await runLearnDueCron(f.t)
-    expect((await f.work()).some(row => row.kind === 'owner')).toBe(false)
-  } else {
-    for (let attempt = 2; attempt <= LEARN_DUE_WORK_MAX_ATTEMPTS; attempt++) {
-      vi.setSystemTime(pending.nextAttemptAt)
+    const remaining = await f.work()
+    expect(remaining.filter(row => row.kind === 'owner' || row.kind === 'assignment')).toEqual([])
+    expect(remaining.every(row => row.state === 'scheduled')).toBe(true)
+    const watermark = await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', userId)).unique())
+    expect(watermark?.dueWorkThrough).toBe(START + 1)
+    expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(reason === 'missing_cold_opportunity' ? 2 : 0)
+    for (const row of remaining) {
+      vi.setSystemTime(row.nextAttemptAt)
       await runLearnDueCron(f.t)
-      pending = (await f.work()).find(row => row.kind === 'owner')!
-      expect(pending.attempts).toBe(0)
     }
-    expect(pending).toMatchObject({ state: 'pending', domainChecks: 7 })
-    expect(pending.nextAttemptAt - Date.now()).toBeLessThanOrEqual(3_600_000)
-  }
-})
+    vi.setSystemTime(START + 120 * 86_400_000)
+    await runLearnDueCron(f.t)
+    expect(await f.work()).toEqual([])
+    expect(await tick(f)).toMatchObject({ status: 'complete', scheduledLearners: 0 })
+    expect(await f.t.run(ctx => hasUnresolvedLearnDueWork(ctx, userId, Date.now()))).toBe(false)
+  },
+)
 
 test('an access block cleared after more than two hours still opens its check', async () => {
   const f = await materialized()
@@ -302,7 +307,7 @@ test('a poisoned recovery cannot block a healthy learner and is parked after bou
     parked = (await f.work()).find(row => row._id === poisoned._id)!
     expect(parked.recoveryAttempts).toBe(attempt)
   }
-  expect(parked).toMatchObject({ state: 'terminal', nextAttemptAt: Number.MAX_SAFE_INTEGER })
+  expect(parked).toMatchObject({ state: 'terminal', nextAttemptAt: Date.now() + learnDueWorkRecoveryBackoff(LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS + 1) })
   expect(failure.mock.calls.filter(call => call[3]._id === slot._id)).toHaveLength(LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS)
   vi.setSystemTime(Date.now() + 3_600_000)
   expect(await tick(f)).toMatchObject({ scheduledLearners: 0 })
@@ -395,4 +400,203 @@ test('registered workers never read global queue ranges or the dispatch cursor',
   expect(forbidden).toEqual([])
   expect((await f.work()).filter(row => row.state === 'pending')).toEqual([])
   expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(2)
+})
+
+const operator = {
+  list: makeFunctionReference<'query', { state: 'parked' | 'terminal', limit?: number }, Array<{ workId: string, kind: string, state: string, attempts: number }>>('learnV2MeasurementDueWork:listDelayedCheckFaults'),
+  requeue: makeFunctionReference<'mutation', { workIds: string[] }, { requeued: number }>('learnV2MeasurementDueWork:requeueDelayedCheckWork'),
+}
+const slotFacts = (f: Awaited<ReturnType<typeof fixture>>, id: string) => f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts')
+  .withIndex('by_userId_and_fact_assessmentOpportunityId', q => q.eq('userId', userId).eq('fact.assessmentOpportunityId', id as never)).take(16))
+
+test.each([false, true])('faults after a cleared block retry hourly in the window and never close as the old block: recovered=%s', async recovered => {
+  const f = await materialized()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+  vi.setSystemTime(slot.openAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ operationalEligibility: 'blocked', reasonCode: 'not_admitted' })
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
+  const failure = vi.spyOn(dueWork, 'processLearnMeasurementDueOpportunity').mockRejectedValue(new Error('synthetic_cleared_block_fault'))
+  const key = `${slot._id}:open`
+  let work = (await f.work()).find(row => row.key === key)!
+  for (let attempt = 1; attempt <= LEARN_DUE_WORK_MAX_ATTEMPTS; attempt++) {
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.key === key)!
+  }
+  expect(work).toMatchObject({ state: 'parked', attempts: LEARN_DUE_WORK_MAX_ATTEMPTS, recoveryAttempts: 0 })
+  expect(work.windowFaultAt).toBeLessThan(slot.closeAt)
+  const retryAt = Date.now() + 3_600_000
+  expect(work.nextAttemptAt).toBe(retryAt)
+  expect(retryAt).toBeLessThan(slot.closeAt - 12 * 3_600_000)
+  if (recovered) {
+    failure.mockRestore()
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', eligibleAt: retryAt })
+    expect((await f.work()).some(row => row.key === key)).toBe(false)
+    return
+  }
+  let retries = 0
+  while (work.nextAttemptAt < slot.closeAt) {
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.key === key)!
+    expect(work).toMatchObject({ state: 'parked', recoveryAttempts: 0 })
+    expect(work.nextAttemptAt - Date.now()).toBeLessThanOrEqual(3_600_000)
+    retries++
+  }
+  expect(retries).toBeLessThanOrEqual(24)
+  failure.mockRestore()
+  vi.setSystemTime(slot.closeAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  expect((await slotFacts(f, slot._id)).at(-1)?.fact).toMatchObject({ status: 'abandoned', reasonCode: 'system_due_work_late' })
+  expect((await f.work()).filter(row => row.assessmentOpportunityId === slot._id)).toEqual([])
+})
+
+test.each([['cleared', 'system_due_work_late'], ['changed', 'evidence_unavailable'], ['held', 'not_admitted']] as const)(
+  'a block %s just before close is re-evaluated at closure', async (change, reasonCode) => {
+    const f = await materialized()
+    const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+    await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+    vi.setSystemTime(slot.openAt)
+    await runLearnDueCron(f.t)
+    let work = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+    while (work.nextAttemptAt < slot.closeAt) {
+      vi.setSystemTime(work.nextAttemptAt)
+      await runLearnDueCron(f.t)
+      work = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+    }
+    expect(slot.closeAt - Date.now()).toBeLessThanOrEqual(3_600_000)
+    vi.setSystemTime(slot.closeAt - 30 * 60_000)
+    if (change !== 'held') await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: true })
+    if (change === 'changed') await f.t.run(ctx => ctx.db.patch(slot.assignmentId!, { evidenceStatus: 'evidence_unavailable' }))
+    expect(await tick(f)).toMatchObject({ scheduledLearners: 0 })
+    expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'preparing', reasonCode: 'not_admitted' })
+    vi.setSystemTime(slot.closeAt)
+    await runLearnDueCron(f.t)
+    expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode })
+    expect((await slotFacts(f, slot._id)).at(-1)?.fact).toMatchObject({ status: 'abandoned', reasonCode })
+  },
+)
+
+test('swallowed faults are logged without payloads and operators can list and requeue parked work', async () => {
+  const f = await fixture()
+  expect(await f.enroll()).toMatchObject({ status: 'admitted' })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const failure = vi.spyOn(dueWork, 'materializeLearnMeasurementAssignment').mockRejectedValue(new Error('PRIVATE-LEARNER-CANARY'))
+  let work = (await f.work()).find(row => row.kind === 'assignment')!
+  for (let attempt = 1; attempt <= LEARN_DUE_WORK_MAX_ATTEMPTS; attempt++) {
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.kind === 'assignment')!
+  }
+  expect(work).toMatchObject({ state: 'parked', reasonCode: 'retries_exhausted' })
+  const lines = log.mock.calls.map(call => String(call[0])).filter(line => line.startsWith('learn_due_work_fault '))
+  const entries = lines.filter(line => line.includes(`"workId":"${work._id}"`))
+  expect(entries).toHaveLength(LEARN_DUE_WORK_MAX_ATTEMPTS)
+  for (const line of lines) {
+    expect(line).not.toContain('PRIVATE-LEARNER-CANARY')
+    expect(line).not.toContain(userId)
+  }
+  expect(JSON.parse(entries.at(-1)!.slice('learn_due_work_fault '.length))).toEqual({ workId: work._id, kind: 'assignment', assignmentId: work.assignmentId,
+    assessmentOpportunityId: null, errorClass: 'Error', state: 'parked', attempts: LEARN_DUE_WORK_MAX_ATTEMPTS, recoveryAttempts: 0, nextAttemptAt: work.nextAttemptAt })
+  const listed = await f.t.query(operator.list, { state: 'parked' })
+  expect(listed).toEqual(expect.arrayContaining([expect.objectContaining({ workId: work._id, kind: 'assignment', state: 'parked', attempts: LEARN_DUE_WORK_MAX_ATTEMPTS })]))
+  expect(listed.every(row => row.state === 'parked')).toBe(true)
+  expect(JSON.stringify(listed)).not.toContain(userId)
+  expect(await f.t.query(operator.list, { state: 'terminal' })).toEqual([])
+  failure.mockRestore()
+  const workIds = listed.map(row => row.workId)
+  expect(await f.t.mutation(operator.requeue, { workIds })).toEqual({ requeued: workIds.length })
+  expect((await f.work()).find(row => row._id === work._id)).toMatchObject({ state: 'pending', attempts: 0, recoveryAttempts: 0, nextAttemptAt: Date.now() })
+  expect(await f.t.mutation(operator.requeue, { workIds })).toEqual({ requeued: 0 })
+  await runLearnDueCron(f.t)
+  expect((await f.work()).filter(row => workIds.includes(row._id) && row.state !== 'scheduled')).toEqual([])
+  expect(await f.t.query(operator.list, { state: 'parked' })).toEqual([])
+  expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(2)
+})
+
+test.each(['owner', 'assignment'] as const)('a terminal %s record recovers automatically after the incident ends', async kind => {
+  const f = await fixture()
+  expect(await f.enroll()).toMatchObject({ status: 'admitted' })
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const failure = kind === 'owner'
+    ? vi.spyOn(dueWork, 'materializeLearnMeasurementDueBatch').mockRejectedValue(new Error('synthetic_incident'))
+    : vi.spyOn(dueWork, 'materializeLearnMeasurementAssignment').mockRejectedValue(new Error('synthetic_incident'))
+  if (kind === 'owner') await f.t.run(async ctx => {
+    const records = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId', q => q.eq('userId', userId)).take(8)
+    for (const row of records.filter(row => row.kind !== 'owner')) await ctx.db.delete(row._id)
+  })
+  let work = (await f.work()).find(row => row.kind === kind)!
+  const started = Date.now()
+  while (work.state !== 'terminal') {
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.kind === kind)!
+  }
+  expect(work.recoveryAttempts).toBe(LEARN_DUE_WORK_MAX_RECOVERY_ATTEMPTS)
+  expect(Date.now() - started).toBeGreaterThan(9 * 3_600_000)
+  const backoffs = []
+  for (let index = 0; index < 3; index++) {
+    backoffs.push(work.nextAttemptAt - Date.now())
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.kind === kind)!
+    expect(work).toMatchObject({ state: 'terminal' })
+  }
+  expect(backoffs).toEqual([8, 16, 24].map(hours => hours * 3_600_000))
+  expect(work.nextAttemptAt - Date.now()).toBe(24 * 3_600_000)
+  expect(await f.t.run(ctx => hasUnresolvedLearnDueWork(ctx, userId, Date.now()))).toBe(true)
+  failure.mockRestore()
+  vi.setSystemTime(work.nextAttemptAt)
+  await runLearnDueCron(f.t)
+  expect((await f.work()).some(row => row.kind === kind)).toBe(false)
+  expect((await f.opportunities()).filter(row => row.horizonDays)).toHaveLength(2)
+  const pending = (await f.work()).filter(row => row.state !== 'scheduled')
+  expect(pending).toEqual([])
+  expect(await f.t.run(ctx => hasUnresolvedLearnDueWork(ctx, userId, Date.now()))).toBe(false)
+})
+
+test('faults on closing work after close keep their exponential backoff', async () => {
+  const f = await materialized()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  vi.spyOn(dueWork, 'processLearnMeasurementDueOpportunity').mockRejectedValue(new Error('synthetic_close_fault'))
+  vi.setSystemTime(slot.closeAt)
+  for (const attempts of [1, 2, 3]) {
+    await runLearnDueCron(f.t)
+    const work = (await f.work()).find(row => row.key === `${slot._id}:close`)!
+    expect(work).toMatchObject({ state: 'pending', attempts })
+    expect(work.windowFaultAt).toBeUndefined()
+    expect(work.nextAttemptAt - Date.now()).toBe(60_000 * 2 ** (attempts - 1))
+    vi.setSystemTime(work.nextAttemptAt)
+  }
+})
+
+test('an in-window fault is attributed to the scheduler even when a block is also recorded at close', async () => {
+  const f = await materialized()
+  const slot = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: userId, enabled: false })
+  vi.setSystemTime(slot.openAt)
+  await runLearnDueCron(f.t)
+  vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  const failure = vi.spyOn(dueWork, 'processLearnMeasurementDueOpportunity').mockRejectedValueOnce(new Error('synthetic_blocked_fault'))
+  let work = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  vi.setSystemTime(work.nextAttemptAt)
+  await runLearnDueCron(f.t)
+  expect(failure).toHaveBeenCalledOnce()
+  work = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  expect(work).toMatchObject({ state: 'pending', attempts: 1, windowFaultAt: Date.now() })
+  while (work.nextAttemptAt < slot.closeAt) {
+    vi.setSystemTime(work.nextAttemptAt)
+    await runLearnDueCron(f.t)
+    work = (await f.work()).find(row => row.key === `${slot._id}:open`)!
+  }
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'preparing', reasonCode: 'not_admitted' })
+  vi.setSystemTime(slot.closeAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(slot._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
 })
