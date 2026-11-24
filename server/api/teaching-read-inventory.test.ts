@@ -13,10 +13,14 @@ test('each public Convex query has an explicit C4 read audit entry', () => {
       if (!ts.isVariableStatement(statement) || !statement.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword)) continue
       for (const declaration of statement.declarationList.declarations) {
         const initializer = declaration.initializer
-        if (initializer && ts.isCallExpression(initializer) && initializer.expression.getText(source) === 'query') queries.push(`${file.slice(0, -3)}.${declaration.name.getText(source)}`)
+        if (!initializer || !ts.isCallExpression(initializer)) continue
+        const path = `${file.slice(0, -3)}.${declaration.name.getText(source)}`
+        if (initializer.expression.getText(source) === 'query'
+          || initializer.expression.getText(source) === 'mutation' && inventory.some(entry => entry.path === path && entry.functionType === 'mutation')) queries.push(path)
       }
     }
   }
   expect(queries.sort()).toEqual(inventory.map(entry => entry.path).sort())
   expect(inventory.every(entry => entry.handling.length > 0)).toBe(true)
+  expect(inventory).toContainEqual({ path: 'learnV2Assistance.authorizePracticeAssistance', functionType: 'mutation', handling: 'post_seal_practice_authorization' })
 })

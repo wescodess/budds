@@ -216,6 +216,35 @@ export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
   return false
 }
 
+export async function relevantOpenLearnCheck(ctx: ReadCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>): Promise<'yes' | 'no' | 'unknown'> {
+  const resolver = scopeResolver(ctx, userId)
+  const scope = emptyScope()
+  const rows: Doc<'learnAssessmentOpportunities'>[] = []
+  for (const phase of LEARN_HELP_OPEN_PHASES) {
+    const candidates = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q =>
+      q.eq('userId', userId).eq('phase', phase)).take(LEARN_HELP_LIMITS.openOpportunities + 1 - rows.length)
+    rows.push(...candidates)
+    if (rows.length > LEARN_HELP_LIMITS.openOpportunities) return 'unknown'
+  }
+  try {
+    await resolver.learningVoid(scope, opportunity.learningVoidId)
+    for (const row of rows) {
+      if (row._id === opportunity._id) continue
+      if (row.submissionId) return 'unknown'
+      if (row.phase !== 'test_open' && (row.openAt > Date.now() || row.closeAt <= Date.now())) continue
+      if (row.assignmentId && row.assignmentId === opportunity.assignmentId) return 'yes'
+      const other = emptyScope()
+      await resolver.learningVoid(other, row.learningVoidId)
+      if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(other, row.contextPins.canvas.threadId)
+      if (relevant(scope, other)) return 'yes'
+    }
+    return 'no'
+  } catch (error) {
+    if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+    return 'unknown'
+  }
+}
+
 export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
   return await admitLearnHelp(ctx, userId, input, false, true, baselineSessionContent)

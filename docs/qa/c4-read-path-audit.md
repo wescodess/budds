@@ -169,7 +169,8 @@ The original C4 inventory below lists 128 public query names. C5 and C6 addition
 | `learnV2Assessments.getAssessment` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getAssessmentState` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getFeatureReadiness` | `assessment_or_own_response` | Always on original access and fixed projection |
-| `learnV2Assessments.getPostSealTeaching` | `assessment_or_own_response` | Always on original access and fixed projection |
+| `learnV2Assessments.getPostSealTeaching` | `post_seal_teaching` | Owned sealed submission, current grant, pins, evidence, publication and relevant open checks; fixed unavailable result while responses are off |
+| `learnV2Assistance.authorizePracticeAssistance` | `post_seal_practice_authorization` | Same check authority plus the immutable separate-case binding, live practice revision and renewed help receipt authority; atomic practice exposure and accounting |
 | `learnV2Blueprints.getBlueprintGenerationJob` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Blueprints.getBlueprintMap` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Calendar.getStatus` | `summary_or_own_work` | Always on original access and fixed projection |
@@ -322,7 +323,7 @@ The frozen baseline payload builder, request builder, parser v1 and mastery arit
 | Due-window expiry and replacement invalidation | The shared due-work opportunity update closes the binding when the phase becomes terminal. `markExpiredSessionsMissed` also closes unanswered started checks at the window boundary; the existing explicit missed-session command already leaves a terminal session. |
 | Void/account deletion | Each bounded opportunity-deletion transaction closes its owned dedicated binding before deleting the opportunity. The existing deletion fences and child-before-parent order remain in force. |
 
-Post-seal teaching remains a dependency on [C5.6 #535](https://github.com/wescodess/budds/issues/535): `getPostSealTeaching`, `authorizePracticeAssistance` and the separate-case practice binding must land before Canvas collection is admitted. Sealed Canvas retains its saved/submitted/scoring/scored status; teaching override controls remain unavailable. This change supplies no teaching continuation and enables no collection.
+The [C5.6 runtime](c5-post-seal-runtime.md) supplies `getPostSealTeaching`, `authorizePracticeAssistance` and the separate-case practice binding behind unchanged default-off capabilities. Canvas integration and collection admission remain separate gates. No UI or collection is enabled by the runtime.
 
 | Entry point | Handling | Capability |
 | --- | --- | --- |

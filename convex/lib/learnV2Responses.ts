@@ -3,6 +3,7 @@ import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { postSealPracticeAcceptanceAuthority, postSealPracticeResponseDependencies } from './learnV2PostSealTeaching'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -21,6 +22,7 @@ import {
   LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, LEARN_V2_RESPONSE_LIMITS,
   learnSerializedBytes, parseLearnContract, learnAssistanceSnapshotSchema, learnValiditySnapshotSchema,
   learnResponseSlotPinsSchema, learnResponseDependencySchema, learnResponseReceiptSchema, learnResponseTerminalizedResultSchema,
+  learnPracticeSlotAssistanceStorageSchema,
   resolveLearnInstrumentation, validateLearnAcceptResponseRequest, validateLearnFinalResponseBundle,
   learnIdSchema, learnTimestampSchema, learnCodeSchema, learnVersionSchema,
   type LearnResponseTarget, type LearnResponseReceipt, type LearnAssistanceSnapshot,
@@ -94,6 +96,10 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const pins = scope(row)
   requireAvailable(row)
   if (!await liveResponseAggregate(ctx, userId, row)) reject('unavailable')
+  if ('stage' in row && row.scopeKind === 'v2' && row.stage === 'practice' && row.slotKey.startsWith('post-seal:')) {
+    if (!await postSealPracticeAcceptanceAuthority(ctx, userId, row)) reject('unavailable')
+    return { pins, session: null, content: null }
+  }
   if (pins.scopeKind === 'standalone') {
     const [thread, activity] = await Promise.all([ctx.db.get(pins.threadId), ctx.db.get(pins.activityId)])
     if (!thread || !activity || thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle)) reject('unavailable')
@@ -176,6 +182,9 @@ async function threadDependencies(ctx: ReadCtx, userId: string, thread: Doc<'lea
 
 async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awaited<ReturnType<typeof currentScope>>, row: Target): Promise<Dependency[]> {
   const { pins, content } = authority
+  if ('stage' in row && row.scopeKind === 'v2' && row.stage === 'practice' && row.slotKey.startsWith('post-seal:')) {
+    return await postSealPracticeResponseDependencies(ctx, userId, row)
+  }
   if (pins.scopeKind === 'standalone') return await threadDependencies(ctx, userId, (await ctx.db.get(pins.threadId))!, pins.threadRevision)
   const sources = new Set<Id<'learnSourceSnapshots'>>()
   const supportPins: unknown[] = []
@@ -382,13 +391,20 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const historyKnown = catalog?.historyCompleteness === 'prospective_complete' && !!catalog.historyCoverageWatermark
   // Planned measurement and calibration have no session revision. Catalogue
   // coverage supplies history, but never resolves a pending exposure.
-  const assistanceHistoryKnown = session ? session.assistanceRevision !== undefined : historyKnown
-  const hint = session?.substantiveHintUsedAt ?? null
-  const reveal = session?.answerRevealedAt ?? null
+  const practiceAssistance = 'stage' in row && row.stage === 'practice' ? row.practiceAssistance : undefined
+  if (practiceAssistance) parseLearnContract(learnPracticeSlotAssistanceStorageSchema, practiceAssistance)
+  const lastPracticeHelp = practiceAssistance ? await ctx.db.get(practiceAssistance.lastAuthorizationId) : null
+  if (practiceAssistance && (!lastPracticeHelp || !('stage' in row) || lastPracticeHelp.userId !== userId
+    || lastPracticeHelp.status !== 'granted' || lastPracticeHelp.practiceHelp?.responseSlotId !== row._id
+    || lastPracticeHelp.practiceHelp.assistanceSequence !== practiceAssistance.deliveryCount
+    || lastPracticeHelp.serverTime !== practiceAssistance.lastDeliveredAt)) reject('pins_mismatch')
+  const assistanceHistoryKnown = practiceAssistance !== undefined || (session ? session.assistanceRevision !== undefined : historyKnown)
+  const hint = lastPracticeHelp?.practiceHelp?.kind === 'hint' ? lastPracticeHelp.serverTime : session?.substantiveHintUsedAt ?? null
+  const reveal = lastPracticeHelp?.practiceHelp?.kind === 'worked_example' ? lastPracticeHelp.serverTime : session?.answerRevealedAt ?? null
   const assistance = parseLearnContract(learnAssistanceSnapshotSchema, {
-    policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: actualHelp || hint !== null || reveal !== null ? 'assisted'
+    policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: practiceAssistance !== undefined || actualHelp || hint !== null || reveal !== null ? 'assisted'
       : unresolvedExposure || !assistanceHistoryKnown ? 'unknown' : 'unassisted',
-    assistanceRevision: session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
+    assistanceRevision: practiceAssistance?.revision ?? session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
     priorExposure: 'unknown', outsideHelp: 'unknown', pasteObserved: observation.pasteObserved, focusLossObserved: observation.focusLossObserved,
     instrumentationVersion: observation.version, instrumentationProvenance: entry.instrumentation ? 'client_observation.v1' : 'missing_instrumentation.v1',
   })

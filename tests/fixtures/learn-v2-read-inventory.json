@@ -341,7 +341,12 @@
   },
   {
     "path": "learnV2Assessments.getPostSealTeaching",
-    "handling": "assessment_or_own_response"
+    "handling": "post_seal_teaching"
+  },
+  {
+    "path": "learnV2Assistance.authorizePracticeAssistance",
+    "functionType": "mutation",
+    "handling": "post_seal_practice_authorization"
   },
   {
     "path": "learnV2Blueprints.getBlueprintGenerationJob",

@@ -50,6 +50,7 @@ import { resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
 import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
+import { stampPostSealTeachingAttempt } from './lib/learnV2PostSealStamp'
 import { requireSavedLearnScoringInput, reserveSavedLearnScoring, readSavedLearnScoringState, prepareSavedLearnModelScoring,
   deterministicLearnScoringReceipt, saveLearnScoringExecution, saveLearnModelScoringResult, receiptFields, getLearnMeasurementScorer } from './lib/learnV2MeasurementScoring'
 import type { LearnScoringExecutionResult } from '../server/utils/learn-v2-mastery-scorer'
@@ -1377,6 +1378,7 @@ export const commitSealedMasteryAttempt = internalMutation({
     await ctx.db.patch(execution._id, { authoritativeAttemptId: attemptId, committedAt: now })
     await ctx.db.patch(job._id, { status: 'succeeded', leaseToken: undefined, leaseExpiresAt: undefined, revision: job.revision + 1, updatedAt: now })
     await ctx.db.patch(opportunity._id, { authoritativeAttemptId: attemptId, phase: scorePercent >= 80 ? 'scored_pass' : 'scored_fail', revision: opportunity.revision + 1 })
+    if (LEARN_MEASUREMENT_CAPABILITIES.responses) await stampPostSealTeachingAttempt(ctx, opportunity, attemptId)
     let followUp: { sessionId: Id<'studySessions'>, scheduledStartAt: number } | null = null
     if (outcome && kind !== 'calibration' && pins.kind !== 'calibration') {
       const plan = await ctx.db.get(pins.studyPlanRevisionId)

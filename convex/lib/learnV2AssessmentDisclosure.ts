@@ -171,7 +171,7 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, id: Id<'learnSource
     && source.conflictStatus === 'clear' && await canReadSourceEvidence(ctx, source))
 }
 
-export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>): Promise<LearnAssessmentDisclosureContext | null> {
+export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>, acceptedInvalid = false): Promise<LearnAssessmentDisclosureContext | null> {
   const userId = await requireAuth(ctx)
   if (LEARN_MEASUREMENT_CAPABILITIES.responses) ctx = responsePrivacyReadContext(ctx, userId)
   const row = await ctx.db.get(assessmentOpportunityId)
@@ -191,7 +191,7 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
     && blueprint.learningVoidId === voidRow._id && objective.blueprintRevisionId === blueprint._id
   let accessAvailable = Boolean(owned && (await ctx.db.get(voidRow!.folderId))?.userId === userId)
   let pinsMatch = Boolean(owned && blueprint!.recordRevision === row.blueprintRecordRevision
-    && objective!.depth === row.depth && !['invalid', 'cancelled'].includes(row.phase) && row.invalidatedAt === undefined)
+    && objective!.depth === row.depth && row.phase !== 'cancelled' && (row.phase !== 'invalid' || acceptedInvalid && row.submissionId !== undefined) && row.invalidatedAt === undefined)
   let evidenceAvailable = row.evidenceStatus === 'available' && row.invalidatedAt === undefined
   const contextPins = row.contextPins
   if (contextPins.kind !== 'calibration') {
