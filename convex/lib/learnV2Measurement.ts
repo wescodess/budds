@@ -24,6 +24,7 @@ import { learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, resolveLearnReportFirstSlotV2, type LearnReportIndependentClaimV2 } from '../../shared/learn-v2-measurement-report'
 import { localDateAt } from '../../shared/learn-v2-mastery'
 import { adaptiveV2PilotDecision, validateAdaptiveProviderPayload } from '../../shared/adaptive-v2-pilot-policy'
+import { todayCanvasChecksEnabled } from '../../shared/learn-v2-today-check'
 
 type ReadCtx = QueryCtx | MutationCtx
 export type MeasurementFlow = 'v2_today' | 'v2_canvas'
@@ -247,7 +248,7 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
     assessmentContractDigest: await privacyDigest(objective.assessmentContract), depth: objective.depth, contextPins }
   const canvasActivityId = request.canvasActivityId
   scope = await withMeasurementCanvasScope(ctx, userId, scope, session, canvasActivityId)
-  const flow = request.entryPoint === 'canvas' || canvasActivityId ? 'v2_canvas' as const : 'v2_today' as const
+  const flow = todayCanvasChecksEnabled() || request.entryPoint === 'canvas' || canvasActivityId ? 'v2_canvas' as const : 'v2_today' as const
   const history = await enrollmentHistory(ctx, userId, scope, session)
   const family = request.familyId ? await ctx.db.get(request.familyId) : null
   if (family && (family.userId !== userId || family.learningVoidId !== learningVoid._id || family.objectiveId !== objective._id || family.blueprintRevisionId !== blueprint._id)) throw new Error('Learn measurement family unavailable')

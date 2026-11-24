@@ -3,6 +3,7 @@ import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
+import { LEARN_TODAY_CHECK_POINTER_VERSION } from '../../shared/learn-v2-today-check'
 import type { learnResponseReceiptSchema} from '../../shared/learn-v2-responses';
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
@@ -34,6 +35,15 @@ const nullableNumber = v.union(v.number(), v.null())
 const nullableString = v.union(v.string(), v.null())
 const observation = v.union(v.boolean(), v.literal('unknown'))
 const phase = literals(LEARN_V2_ASSESSMENT_PHASES)
+export const todayCheckPointerValidator = v.object({
+  version: v.literal(LEARN_TODAY_CHECK_POINTER_VERSION), reference: v.string(),
+  state: literals(['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready', 'closed']),
+  destination: v.object({ kind: v.literal('canvas'), threadId: v.id('learningThreads'), route: v.string() }),
+})
+export const todayCheckPointersValidator = v.object({
+  status: literals(['available', 'unavailable', 'disabled']), reasonCode: nullableString, checks: v.array(todayCheckPointerValidator),
+  isDone: v.boolean(), continueCursor: nullableString,
+})
 export const responseTargetValidator = v.union(
   v.object({ responseSlotId: v.id('learnResponseSlots') }),
   v.object({ assessmentOpportunityId: v.id('learnAssessmentOpportunities') }),

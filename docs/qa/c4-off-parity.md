@@ -1,5 +1,11 @@
 # C4 capability-off parity sweep
 
+## #573 Today pointer amendment
+
+The new `todayCanvasChecks` capability defaults off. With it off, the existing Today list, content/read/delivery/start, enrollment flow selection and Canvas preparation registrations take their original dev branches, including responses-enabled C5 behavior. Responses off also dominates the new capability. No existing return acquires `checkPointers` or `assessment.check` while off. The new `learnV2Today.getCheckPointers` registration returns only `{ status: disabled, reasonCode: disabled, checks: [], isDone: true, continueCursor: null }` before discovery reads. The public Canvas preparation wrapper retains its original arguments, fingerprint and output.
+
+`convex/learnV2TodayPointers.test.ts` checks the original Today grant contract with the amendment off and serialized Today equality with responses off. Existing Today/Canvas/C6 integration suites retain the dev path without changed expectations. `convex/learnV2DisclosureOffParity.test.ts`, `server/api/disclosure-off-parity.test.ts` and `convex/learnV2C5OffParity.test.ts` continue to read their unchanged frozen goldens. No baseline regeneration, schema narrowing, scheduler change or production capability activation is included. The enabled contract and its independent proof limits are recorded in the [API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas).
+
 Baseline: `58d2ae62238a86b60ce467716c121e6829813fcd` (`origin/dev` when this sweep ran). Scope: the full production diff from `origin/dev` through PR #514 production head `5b780e86d066ec2eaf802756b71aadfe66542c33` (later commits change only docs and tests), including Convex, Nitro, actions, worker callers, shared modules and app callers. No worker implementation files differ from this baseline; their changed callers are listed below. Test-only changes are excluded from the behavior inventory.
 
 The inventory groups a check and its associated result/error together; separate entry points and separate kinds of bounds are separate rows. Counts: **141 gated, 19 proven-same, 13 C4.1 always-on, 1 writer-compatible scheduling projection**, plus **8 #515 always-on** map-contract entries. These are code-review dispositions, not a claim of exhaustive state-space testing.

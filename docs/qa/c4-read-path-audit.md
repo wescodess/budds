@@ -1,5 +1,17 @@
 # C4 teaching read audit
 
+## #573 Today pointer amendment
+
+The [serial API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas) supersedes the C5 Today delivery descriptions below only when both responses and the new default-off `todayCanvasChecks` capability are enabled. `learnV2Today.getCheckPointers` and `getToday.checkPointers` are `summary_or_own_work`: a closed opaque reference/state/owned Canvas destination projection, without question, answer, key, rubric, score or feedback. Discovery is independent of active sessions, so sealing a dedicated check does not remove its pointer. It reads at most 32 opportunities from the existing owner index per page, returning `isDone` and `continueCursor`. Follow continuation pages even when a page has no valid pointers; historical results never exhaust a lifetime candidate cap.
+
+Today preparation records the real Today/deep-link entry point and `v2_canvas` execution flow without a grant. Canvas attachment, canonical sealing and saved-ID scoring retain their existing admission and flow checks. Today session-content reads return no check body or saved answer. Missing Canvas admission produces no pointer or destination and records prospective non-admission; historical flows are never rebound. Current owner/thread/activity/replay, pilot, source, protocol and disclosure authority are rechecked. Lost Canvas authority removes the pointer; unavailable saved-result authority yields an unconfirmed state while the destination remains valid.
+
+The changed readers share C5's invocation-local measurement context. No catch is added, resource exceptions propagate, and the existing item/evidence/request bounds remain. No schema or stored version validator changes. Registered journey, refresh, dedicated-session closure, no-Canvas, flow, bounds and off controls are in `convex/learnV2TodayPointers.test.ts`. Existing C4 golden files remain unchanged; production admission and post-seal teaching remain separately gated.
+
+| Public query | Handling | Capability |
+| --- | --- | --- |
+| `learnV2Today.getCheckPointers` | `summary_or_own_work` | Responses and `todayCanvasChecks`; owned Canvas authority; no grant or content. |
+
 Scope: public Convex query registrations and content-bearing mutation/action/HTTP results for PR #514, following the 2026-11-21 capability-off compatibility decision. This inventory describes code and local regression coverage; it is not a deployment or provider validation.
 
 The responses capability remains default-off; enabling it remains gated by #559. While it is off, existing teaching reads, chat history, shares and exports follow `dev`, including legacy content without retained provenance and copies whose sources are no longer present. The fixed C4.1 assessment projections and #515 map-edit contract remain always on. Existing ownership, publication, retention and personal-export checks from `dev` still apply. New signing is optional while off and never changes visible content. RAG streams bypass the new provenance buffering and limits while off; the existing provider chunks remain unchanged.

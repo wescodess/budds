@@ -41,6 +41,7 @@ import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePr
 import { isTestOnlyMeasurementSession, measurementCanonical, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
 import { prepareTodayAssessment, resolveTodayAssessment, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
+import { todayCanvasChecksEnabled } from '../shared/learn-v2-today-check';
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
 import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses';
@@ -257,8 +258,8 @@ async function todayAssessmentEnvelope(ctx: QueryCtx | MutationCtx, userId: stri
   const content = await todaySessionContentRow(ctx, userId, session);
   if (!content) return null;
   const opportunity = assessment.kind === 'check' || assessment.kind === 'teach' ? assessment.opportunity : null;
-  const delivered = opportunity ? await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'today') : null;
-  const response = opportunity?.submissionId ? await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id }) : null;
+  const delivered = opportunity && !todayCanvasChecksEnabled() ? await readLearnAssessmentForOwner(ctx, userId, opportunity._id, 'today') : null;
+  const response = opportunity?.submissionId && !todayCanvasChecksEnabled() ? await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id }) : null;
   return { _id: content._id, studySessionId: session._id, studyPlanRevisionId: content.studyPlanRevisionId,
     blueprintRevisionId: content.blueprintRevisionId, objectiveId: content.objectiveId, revision: content.revision, status: 'published' as const,
     blocks: [], claims: [], supports: [], assessment: todayAssessmentSummary(assessment, reasonCode), delivered,
@@ -1477,6 +1478,9 @@ export const startStudySession = mutation({
       if (assessment.kind === 'blocked' || assessment.kind === 'unprepared') return receipt(assessment);
       if (assessment.kind === 'check') {
         const opportunity = assessment.opportunity;
+        if (todayCanvasChecksEnabled()) return { ...receipt(assessment),
+          sessionContentId: opportunity.contextPins.kind === 'session' ? opportunity.contextPins.sessionContentId : content._id,
+          sessionContentRevision: opportunity.contextPins.kind === 'session' ? opportunity.contextPins.contentRevision : content.revision };
         if (opportunity.submissionId) return receipt(assessment);
         const grant = opportunity.deliveryGrantId && opportunity.phase === 'test_open'
           ? { version: LEARN_V2_PUBLIC_API_VERSION, status: 'granted' as const, assessmentOpportunityId: opportunity._id,

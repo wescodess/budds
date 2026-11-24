@@ -6,6 +6,39 @@ The accepted [baseline](https://github.com/wescodess/budds/issues/359#issuecomme
 
 ## Registered boundaries
 
+### #573 serial amendment: Today points to Canvas
+
+The owner decision of 2026-11-24 retains [Today points](../design/learn-delayed-check/decision.md). `todayCanvasChecks` is a separate default-off capability in the measurement manifest; responses must also be enabled. Existing delivery, enrollment, protocol, entitlement, scorer, source and pilot gates remain conjunctive. This amendment changes no production setting and rewrites no historical assignment or flow.
+
+`learnV2Today.getCheckPointers({ cursor? })` has the declared return validator `todayCheckPointersValidator`. When enabled, `getToday({})` also carries the identical `checkPointers` envelope independently of its session `status`, including `empty`. The envelope is `{ status: available | unavailable | disabled, reasonCode: string | null, checks: LearnTodayCheckPointer[], isDone: boolean, continueCursor: string | null }`. Disabled results have an empty array, `isDone: true` and a null cursor. Discovery pages the existing owner index in descending creation order, with at most 32 opportunities per page. Empty pages may have a continuation because some opportunities have no valid pointer. Follow the returned cursor until `isDone`; an accumulated history never causes a lifetime-limit denial. `getToday` carries the first page, and `getCheckPointers` supplies continuation pages. The shared semantic contract is `shared/learn-v2-today-check.ts`; pointer fields are closed:
+
+```ts
+{
+  version: 'learn-v2.today-check-pointer.v1',
+  reference: string,
+  state: 'ready' | 'saved_scoring' | 'result_unconfirmed' | 'result_ready' | 'closed',
+  destination: { kind: 'canvas', threadId: Id<'learningThreads'>, route: string }
+}
+```
+
+`reference` is the existing opaque check identity, never an item identity or an authorization. The route is exactly `/app/learn/void/${encodeURIComponent(threadId)}`. It comes only from the check's current owned, replay-validated Canvas binding. It is never derived from a title, inferred from an ordinary session, or invented for an owner without adaptive access. Pointer reads recheck live Canvas, pilot, flow, disclosure and evidence authority. A missing/unavailable unsubmitted question has no pointer. A saved check whose result cannot currently be confirmed reports `result_unconfirmed` while its destination remains owned and valid. Deleted or inaccessible Canvas bindings have no pointer.
+
+| State | Meaning |
+| --- | --- |
+| `ready` | The assigned, available check is ready or already open on Canvas. Refresh does not consume another grant. |
+| `saved_scoring` | A canonical answer is sealed; scoring is pending or retryable. No result is implied. |
+| `result_unconfirmed` | Reconciliation is required, current result authority is unavailable, or a scored phase lacks its owned committed result. |
+| `result_ready` | An owned committed result is available on Canvas. Today gives no outcome, score or feedback. |
+| `closed` | The check is invalid, cancelled, abandoned, or its unanswered window has closed. |
+
+`startStudySession` retains its argument envelope. With this capability enabled it prepares the same Canvas-owned cold check, recording `today` or `session_deep_link` as the entry point, and returns `status: assessment`, `deliveryGrant: null`, and `assessment.check` with the pointer. Its legacy `assessment.state` field is null: raw pass/fail phases and attempt identities are not Today status. It does not start the check session or consume its item. A subsequent Canvas attachment grants with `flow: canvas`; canonical acceptance and saved-ID scoring preserve that flow and the adaptive gates. Plain Today grant/read calls still return `flow_mismatch` for Canvas-owned checks. Canonical mastery commands derive their flow from saved authority; switching endpoints cannot erase it or bypass adaptive admission. C6 enrollment snapshots preserve entry point separately from `v2_canvas` execution.
+
+If no Canvas can be admitted, prospective consideration records `not_admitted` under the requested Canvas flow and retains its exclusion reasons. It creates no measurement opportunity or check destination. Ordinary learning remains on its existing path. Existing `v2_today` assignments are not rebound; they cannot acquire a Canvas pointer by navigation.
+
+The pointer is discovered from opportunities independently of active sessions. It survives the atomic completion of dedicated check sessions at sealing and remains available after refresh, including when Today has no next session. Today session-content envelopes withhold the check prompt, answer, score and feedback; Canvas retains its canonical recovery. The existing post-seal teaching dependency remains #535. No storage schema, version validator, scorer identity, migration, scheduler file or UI changes are part of this amendment.
+
+When `todayCanvasChecks` or responses is off, existing endpoints follow the dev path byte-for-byte; `getCheckPointers` returns only its disabled envelope. Existing C4 goldens are retained unchanged. Registered journey, pagination and boundary evidence is in `convex/learnV2TodayPointers.test.ts`; provider and publication adapters are synthetic, and independent review, deployed behavior and learner experience remain separate proof boundaries.
+
 Argument and return validators live in `convex/lib/learnV2PublicContract.ts`. They are importable by application and server adapters and contain no private scorer or source loader. Existing shared schemas supply semantic validation, including original-envelope bytes, finite numbers, exact response text, code-unit limits and URL-safe command keys. Invalid wire input produces a bounded generic error. The new public functions accept no owner, cohort, scorer, phase, trusted grant object or draft payload.
 
 Authentication derives ownership from `tokenIdentifier` through `requireAuth`, including the account-deletion tombstone. Targeted calls check the record and its owning Void/Blueprint/objective/plan/session or standalone thread/activity. Canvas attribution retains the additional adaptive access conjunction; a wrapper cannot remove it. Unauthenticated, foreign, missing or mismatched authority is denied without returning stored payloads. A new handler never returns a successful save, grant, terminalization, score or report from an unimplemented operation.

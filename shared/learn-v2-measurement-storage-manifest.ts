@@ -10,6 +10,7 @@ export const LEARN_MEASUREMENT_STORAGE_LIMITS = {
 // These are storage capabilities, not runtime switches or admission authority.
 export const LEARN_MEASUREMENT_CAPABILITIES = {
   enrollment: false, delivery: false, responses: false, scoring: false, reports: false,
+  todayCanvasChecks: false,
 } as const
 
 type Entry = {

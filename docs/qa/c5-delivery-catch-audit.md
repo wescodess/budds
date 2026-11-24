@@ -1,5 +1,9 @@
 # C5 delivery catch audit
 
+## #573 Today pointer amendment
+
+No catch site is added or broadened. Today-to-Canvas preparation uses the existing Canvas validation catch, which handles only `MeasurementValidationError`, `MeasurementItemBoundsError` and `ZodError`. Pointer discovery and projection catch nothing. Native transaction/read-budget failures, unexpected database failures, replay failures that throw and schema exceptions propagate. Ordinary unavailable authority remains an explicit domain result. The new default-off path shares the existing measurement invocation context and C5 item/evidence/request ceilings. Disabled existing paths perform no pointer discovery, and C4 goldens remain unchanged. The registered pointer suite includes a maximum 64-row inventory under native transaction limits; existing C5 resource/rollback regressions remain in place.
+
 Scope: the complete backend TypeScript C5 diff from dev 0bd19ee6 and its local import/registered-call dependency closure. The closure over-approximates execution: importing an ingestion, calendar, deletion or bootstrap module does not execute all of its functions. Each such catch is listed separately below.
 
 The starting head has 190 sites across 149 dependency files. The final tree has 213 sites across 162 files. Schema `.catch` defaults and HTTP cleanup are distinguished from operation-result handlers. Adding `crons.ts` to the diff also includes unrelated Blueprint and report job modules in this conservative closure; the delayed-check cron does not invoke those jobs.
