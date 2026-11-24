@@ -41,7 +41,7 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers()
 })
 
-async function fixture(options: { canvas?: boolean, inventory?: { claims: number, supports: number, sources: number },
+async function fixture(options: { canvas?: boolean, inventory?: { claims: number, supports: number, sources: number, backingDocuments?: boolean }, reserveCount?: number,
   test?: Awaited<ReturnType<typeof canvasFamilyFixture>>['t'], fixtureKey?: string, teaching?: DeliveryTeachingShape } = {}) {
   const definition = { configurationId: 'today-canvas.synthetic.v1', configurationVersion: 'today-canvas.synthetic.v1', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
@@ -59,7 +59,7 @@ async function fixture(options: { canvas?: boolean, inventory?: { claims: number
     modelPolicies: [{ model: 'synthetic/model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
     productControls: { ...originalManifest.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
     rollback: { ...originalManifest.rollback, ownerSubjectHash: await privacyDigest(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', userId]) } })
-  const f = await canvasFamilyFixture(saved.binding, { rubric: true, inventory: options.inventory, test: options.test, fixtureKey: options.fixtureKey })
+  const f = await canvasFamilyFixture(saved.binding, { rubric: true, inventory: options.inventory, reserveCount: options.reserveCount, test: options.test, fixtureKey: options.fixtureKey })
   if (options.canvas !== false) await f.t.run(async ctx => {
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
     await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: NOW } })
@@ -73,7 +73,20 @@ async function fixture(options: { canvas?: boolean, inventory?: { claims: number
     const today = await f.owner.query(api.learnV2Today.getToday, {})
     if (!('checkPointers' in today)) throw new Error('Expected pointer projection')
     expect(today.checkPointers.status).toBe('available')
-    return today.checkPointers.checks
+    const checks = [...today.checkPointers.checks]
+    let isDone = today.checkPointers.isDone
+    let cursor = today.checkPointers.continueCursor
+    let pages = 1
+    while (!isDone) {
+      expect(cursor).toBeTruthy()
+      const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: cursor! })
+      expect(page.status).toBe('available')
+      checks.push(...page.checks)
+      isDone = page.isDone
+      cursor = page.continueCursor
+      expect(++pages).toBeLessThan(100)
+    }
+    return checks
   }
   return { ...f, start, opportunities, read }
 }
@@ -226,16 +239,42 @@ test.each(['entitlement', 'pilot', 'thread', 'void'] as const)('refresh never in
   expect(await f.read()).toEqual([])
 })
 
-test('a routing pointer does not authorize item delivery after source revocation', async () => {
-  const f = await fixture()
+test.each(([false, true] as const).flatMap(opened =>
+  (['source_purge', 'source_rights', 'document_access', 'claim_loss', 'support_loss', 'excerpt_loss'] as const).map(loss => ({ opened, loss }))))(
+  '$loss removes an unplayable ready pointer, already opened=$opened', async ({ opened, loss }) => {
+  const f = await fixture({ inventory: { claims: 3, supports: 1, sources: 2, backingDocuments: true } })
   await f.start()
+  const row = (await f.opportunities())[0]!
+  if (opened) await attach(f, row)
   const pointers = await f.read()
-  await f.t.run(ctx => ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW }))
-  expect(await f.read()).toEqual(pointers)
+  expect(pointers).toEqual([expect.objectContaining({ state: 'ready' })])
+  await f.t.run(async ctx => {
+    if (loss === 'source_purge') await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW })
+    if (loss === 'source_rights') await ctx.db.patch(f.graph.sourceSnapshotId, { rightsStatus: 'prohibited' })
+    if (loss === 'document_access') {
+      const identity = (await ctx.db.get(f.graph.sourceIdentityId))!
+      const document = (await ctx.db.get(identity.folderDocumentId!))!
+      await ctx.db.patch(document.folderId, { userId: 'foreign-owner' })
+    }
+    if (loss === 'excerpt_loss') await ctx.db.patch(f.graph.sourceExcerptId, { excerpt: undefined })
+    if (row.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement pins')
+    const itemId = row.assessmentPins.itemPins.itemId
+    if (loss === 'claim_loss') {
+      const claim = (await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemId)).first())!
+      await ctx.db.patch(claim._id, { evidenceStatus: 'evidence_unavailable' })
+    }
+    if (loss === 'support_loss') {
+      const support = (await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_itemId', q => q.eq('userId', userId).eq('itemId', itemId)).first())!
+      await ctx.db.patch(support._id, { evidenceStatus: 'evidence_unavailable' })
+    }
+  })
+  expect(await f.read()).toEqual([])
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [] })
+  const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
   expect(await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: f.graph.studySessionId,
-    expectedSessionRevision: 2, idempotencyKey: 'revoked_pointer_attach_1234567890' })).toMatchObject({ kind: 'not_admitted', reasonCode: 'evidence_unavailable' })
-  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(3))).toEqual([])
-  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: pointers[0]!.destination.threadId })).toMatchObject({ responsePrompt: null })
+    expectedSessionRevision: session.revision, idempotencyKey: 'revoked_pointer_attach_1234567890' })).toMatchObject({ kind: 'not_admitted' })
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(3))).toHaveLength(opened ? 1 : 0)
+  expect((await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: pointers[0]!.destination.threadId }))?.responsePrompt ?? null).toBeNull()
 })
 
 test('pointer readers propagate an exhausted shared read budget', async () => {
@@ -247,14 +286,23 @@ test('pointer readers propagate an exhausted shared read budget', async () => {
   await expect(f.owner.query(api.learnV2Today.getToday, {})).rejects.toThrow('Learn source validation budget exhausted')
 })
 
+test('ready-pointer validation propagates exhaustion inside its full authority check', async () => {
+  const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  await f.start()
+  const original = privacyContext.createResponsePrivacyReadContext
+  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 64, options))
+  await expect(f.owner.query(api.learnV2Today.getCheckPointers, {})).rejects.toThrow('Learn source validation budget exhausted')
+})
+
 test('Today defers pointer discovery before its remaining budget is insufficient', async () => {
   const f = await fixture()
   await f.start()
   const original = privacyContext.createResponsePrivacyReadContext
-  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 70, options))
+  const budget = vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 70, options))
   expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'empty', checkPointers: {
     status: 'unavailable', reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null,
   } })
+  budget.mockRestore()
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready' })] })
 })
 
@@ -276,6 +324,16 @@ test('pointer reads and Canvas attachment fit the shared 64-row inventory bound 
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toEqual('checkPointers' in today ? today.checkPointers : null)
 })
 
+test('a playable six-form family fits the ready-pointer reservation with native limits', async () => {
+  const f = await fixture({ reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  await f.start()
+  const original = privacyContext.createResponsePrivacyReadContext
+  const budget = vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 2048, options))
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready' })] })
+  budget.mockRestore()
+  await attach(f, (await f.opportunities())[0]!)
+})
+
 test('bounded discovery pages retain an older check after more than 32 later records', async () => {
   const f = await fixture()
   await f.start()
@@ -294,7 +352,7 @@ test('bounded discovery pages retain an older check after more than 32 later rec
     page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })
     expect(await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })).toEqual(page)
     checks.push(...page.checks)
-    expect(++pages).toBeLessThan(10)
+    expect(++pages).toBeLessThan(40)
   }
   expect(pages).toBe(Math.ceil(33 / LEARN_TODAY_CHECK_LIMIT))
   expect(checks).toEqual([expect.objectContaining({ state: 'ready' })])

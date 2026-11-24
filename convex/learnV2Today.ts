@@ -24,8 +24,8 @@ import { todayCheckPointersValidator } from './lib/learnV2PublicContract'
 
 const MAX_SESSIONS = 128
 const MAX_CLAIMS = 32
-// Includes 32 reflow ancestors and owned routing metadata.
-const POINTER_READ_RESERVE = 64
+// Includes full ready-check authority and bounded reflow ancestry.
+const POINTER_READ_RESERVE = 2048
 const ACTIVE_SESSION_STATUSES: Array<Doc<'studySessions'>['status']> = ['in_progress', 'ready', 'blocked', 'generation_failed', 'planned']
 
 function rank(session: { assessmentPurpose?: string, placementKind?: string, schedulingPriority?: string, scheduledStartAt: number }, record: { state: string, nextReviewAt?: number } | null, now = Date.now()) {

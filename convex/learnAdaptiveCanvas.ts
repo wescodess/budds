@@ -720,6 +720,7 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
   opportunity: Doc<'learnAssessmentOpportunities'>): Promise<LearnTodayCheckPointer | null> {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || opportunity.contextPins.kind !== 'session'
     || !opportunity.contextPins.canvas || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return null
+  ctx = measurementReadContext(ctx, userId)
   const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
   if (!todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return null
   const scope = await canvasAssessmentScope(ctx, userId, opportunity.contextPins.canvas.threadId, false)
@@ -762,6 +763,25 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
       || ['scored_pass', 'scored_fail'].includes(opportunity.phase) && !resultReady ? 'result_unconfirmed'
       : resultReady ? 'result_ready'
         : opportunity.submissionId ? 'saved_scoring' : 'ready'
+  if (phase === 'ready') {
+    const playable = await privacyRead(ctx, userId, ['canvas-check-playable', opportunity._id, opportunity.revision], false, async ctx => {
+      if (!LEARN_MEASUREMENT_CAPABILITIES.delivery) return false
+      const current = await canvasAssessmentScope(ctx, userId, scope.thread._id)
+      if (!current || current.content.status !== 'published' || !current.content.inputDigest || !current.content.generatorVersion
+        || !opportunity.deliveryGrantId && current.session.status !== 'ready') return false
+      if (opportunity.assessmentPins.kind === 'measurement') {
+        const parsed = learnMeasurementItemPinsSchema.safeParse(opportunity.assessmentPins.itemPins)
+        if (!parsed.success) return false
+        const pins = parsed.data
+        const item = await ctx.db.get(pins.itemId)
+        if (!item || item.responseSpec.kind !== 'bounded_rubric' || !assessmentPrimitive(item.prompt).ok
+          || await measurementItemReason(ctx, userId, pins, opportunity, opportunity.scoringBinding)) return false
+      }
+      const state = await readLearnAssessmentStateForOwner(ctx, userId, opportunity._id, 'canvas')
+      return state.status === 'available' && (opportunity.deliveryGrantId ? state.capabilities.canSubmit : state.capabilities.canDeliver)
+    })
+    if (!playable) return null
+  }
   const threadId = scope.thread._id
   return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,
     state: phase, destination: { kind: 'canvas', threadId, route: `/app/learn/void/${encodeURIComponent(threadId)}` } })
