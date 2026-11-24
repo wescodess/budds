@@ -1,5 +1,5 @@
 import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits'
-import { LearnScoringInputError } from '../shared/learn-v2-errors'
+import { LearnAccessError, LearnScoringInputError } from '../shared/learn-v2-errors'
 import { ZodError } from 'zod'
 import { MeasurementValidationError, getValidatedMeasurementFamily } from './lib/learnV2MeasurementItems'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
@@ -28,6 +28,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-s
 import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 import { adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
+import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner, readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, type LearnResponsePayload } from '../shared/learn-v2-responses'
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses'
@@ -38,7 +39,8 @@ import { getFrozenLearnMeasurementProtocol, learnMeasurementProtocolSchema } fro
 import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInventory'
 import { readSavedLearnScoringState } from './lib/learnV2MeasurementScoring'
 import { readMeasurementClaims } from './lib/learnV2MeasurementEvidenceReads'
-import { LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnTodayCheckPointerSchema, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { requireAuth } from './lib/auth'
+import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema, learnTodayCheckRoute, todayCanvasChecksEnabled, type LearnCanvasCheckReceipt, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -719,11 +721,108 @@ async function canvasPilotAllowed(userId: string, scope: NonNullable<Awaited<Ret
     activity.evaluationContract.version, canvas.pilotConfigurationVersion))
 }
 
+async function savedCanvasCheckForOwner(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || !opportunity.submissionId
+    || opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas
+    || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return null
+  ctx = measurementReadContext(ctx, userId)
+  return await privacyRead(ctx, userId, ['saved-canvas-check', opportunity._id, opportunity.revision], null, async ctx => {
+    const response = await ctx.db.get(opportunity.submissionId!)
+    if (!response || response.userId !== userId || response.scopeKind !== 'v2' || !('assessmentOpportunityId' in response)
+      || response.assessmentOpportunityId !== opportunity._id || response.flow !== 'canvas'
+      || response.contextPins.kind !== 'session' || !response.contextPins.canvas
+      || opportunity.contextPins.kind !== 'session' || response.contextPins.canvas.threadId !== opportunity.contextPins.canvas?.threadId) return null
+    const pins = response.contextPins
+    const thread = await ctx.db.get(pins.canvas!.threadId)
+    if (!thread || thread.userId !== userId || thread.authorityKind !== 'v2_mission' || thread.deletionStartedAt !== undefined) return null
+    const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
+    if (!todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return null
+    let body: LearnCanvasCheckReceipt['body'] = { bodyAvailability: 'unavailable', reasonCode: 'evidence_unavailable' }
+    let confidence: number | undefined
+    try {
+      const own = await getLearnResponseStateForOwner(ctx, userId, { assessmentOpportunityId: opportunity._id })
+      if (own.status === 'available' && own.work?.submissionId === response._id) { body = own.work.body; confidence = own.work.confidence }
+    } catch (error) {
+      if (!(error instanceof LearnAccessError)) throw error
+    }
+    const revoked = ['invalid', 'cancelled', 'abandoned'].includes(opportunity.phase)
+      || !assignment || assignment.userId !== userId || assignment.status !== 'admitted' || assignment.flow !== 'v2_canvas'
+      || assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined
+      || opportunity.evidenceStatus !== 'available' || opportunity.invalidatedAt !== undefined
+      || response.evidenceStatus !== 'available' || response.invalidatedAt !== undefined
+      || response.currentEligibility !== 'eligible' || response.validitySnapshot.status !== 'valid' || !response.validitySnapshot.measurementEligible
+      || thread.evidenceState === 'invalidated' || ['ended', 'rollback'].includes(thread.lifecycle)
+      || !await hasAdaptiveExperienceAccess(ctx, userId)
+    const itemPins = opportunity.assessmentPins.kind === 'measurement' ? learnMeasurementItemPinsSchema.safeParse(opportunity.assessmentPins.itemPins) : null
+    const reason = revoked ? 'closed' : await measurementScopeReason(ctx, userId, opportunity)
+      ?? (itemPins?.success ? await measurementItemReason(ctx, userId, itemPins.data, opportunity, opportunity.scoringBinding) : 'pins_mismatch')
+    let state: LearnCanvasCheckReceipt['state'] = 'closed'
+    let result: Extract<LearnCanvasCheckReceipt, { state: 'result_ready' }>['result'] | undefined
+    if (!reason) {
+      const claimedResult = !!opportunity.authoritativeAttemptId || ['scored_pass', 'scored_fail'].includes(opportunity.phase)
+      const attempt = opportunity.authoritativeAttemptId ? await ctx.db.get(opportunity.authoritativeAttemptId) : null
+      const committed = attempt?.userId === userId && attempt.submissionId === response._id
+        && typeof attempt.scoreCommittedAt === 'number' && Number.isFinite(attempt.scoreCommittedAt) && attempt.scoreCommittedAt >= 0
+        && typeof attempt.serverScorePercent === 'number' && Number.isFinite(attempt.serverScorePercent)
+        && attempt.serverScorePercent >= 0 && attempt.serverScorePercent <= 100
+      let saved: Awaited<ReturnType<typeof readSavedLearnScoringState>> | null = null
+      if (!claimedResult || committed) {
+        try { saved = await readSavedLearnScoringState(ctx, userId, response._id) }
+        catch (error) {
+          if (!(error instanceof LearnScoringInputError) && !(error instanceof MeasurementItemBoundsError) && !(error instanceof LearnAccessError)) throw error
+        }
+      }
+      state = opportunity.phase === 'reconciliation_required' ? 'result_unconfirmed'
+        : saved?.status === 'scored' ? 'result_ready'
+          : claimedResult ? 'result_unconfirmed'
+            : saved?.status === 'reconciliation_required' ? 'result_unconfirmed'
+              : saved?.status === 'scoring_pending' || saved?.status === 'retryable_failure' ? 'saved_scoring' : 'closed'
+      if (state === 'result_ready' && saved?.status === 'scored') result = saved.result
+    }
+    const receipt = learnCanvasCheckReceiptSchema.parse({ version: LEARN_CANVAS_CHECK_RECEIPT_VERSION,
+      reference: opportunity.delayedCheckId, state, submissionId: response._id, acceptedAt: response.acceptedAt,
+      ...(confidence === undefined ? {} : { confidence }), ...(result === undefined ? {} : { result }), body })
+    return { thread, response, opportunity, receipt }
+  })
+}
+
+async function savedCanvasCheckForThread(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, reference?: string) {
+  if (reference !== undefined && (!reference.length || reference.length > 256)) return null
+  const thread = await ctx.db.get(threadId)
+  if (!thread || thread.userId !== userId || thread.deletionStartedAt !== undefined || thread.authorityKind !== 'v2_mission') return null
+  if (reference !== undefined) {
+    const opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_delayedCheckId', q =>
+      q.eq('userId', userId).eq('delayedCheckId', reference)).unique()
+    if (opportunity?.contextPins.kind !== 'session' || opportunity.contextPins.canvas?.threadId !== threadId) return null
+    return await savedCanvasCheckForOwner(ctx, userId, opportunity)
+  }
+  const activity = thread.currentActivityId ? await ctx.db.get(thread.currentActivityId) : null
+  const content = activity?.userId === userId && activity.sessionContentId ? await ctx.db.get(activity.sessionContentId) : null
+  const opportunity = content?.userId === userId && content.assessmentOpportunityId ? await ctx.db.get(content.assessmentOpportunityId) : null
+  if (opportunity?.submissionId) return await savedCanvasCheckForOwner(ctx, userId, opportunity)
+  const responses = await ctx.db.query('learnResponses').withIndex('by_userId_and_contextPins_canvas_threadId_and_acceptedAt', q =>
+    q.eq('userId', userId).eq('contextPins.canvas.threadId', threadId)).order('desc').take(4)
+  for (const response of responses) {
+    if (!('assessmentOpportunityId' in response)) continue
+    const previous = await ctx.db.get(response.assessmentOpportunityId)
+    const saved = previous && await savedCanvasCheckForOwner(ctx, userId, previous)
+    if (saved) return saved
+  }
+  return null
+}
+
 export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx, userId: string,
   opportunity: Doc<'learnAssessmentOpportunities'>): Promise<LearnTodayCheckPointer | null> {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || opportunity.contextPins.kind !== 'session'
     || !opportunity.contextPins.canvas || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return null
   ctx = measurementReadContext(ctx, userId)
+  if (opportunity.submissionId) {
+    const saved = await savedCanvasCheckForOwner(ctx, userId, opportunity)
+    if (!saved) return null
+    const threadId = saved.thread._id
+    return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,
+      state: saved.receipt.state, destination: { kind: 'canvas', threadId, route: learnTodayCheckRoute(threadId, opportunity.delayedCheckId) } })
+  }
   const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
   if (!todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return null
   const scope = await canvasAssessmentScope(ctx, userId, opportunity.contextPins.canvas.threadId, false)
@@ -749,23 +848,9 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
       && assignment?.status === 'admitted' && protocol !== null && assignment.protocolVersion === protocol.version && assignment.epoch === protocol.epoch
       && protocol.flows.includes('v2_canvas')
   }
-  const response = opportunity.submissionId ? await ctx.db.get(opportunity.submissionId) : null
-  if (opportunity.submissionId) available &&= response?.userId === userId && 'assessmentOpportunityId' in response
-    && response.assessmentOpportunityId === opportunity._id && response.flow === 'canvas' && response.evidenceStatus === 'available'
-    && response.invalidatedAt === undefined && response.currentEligibility === 'eligible'
-  const closed = ['invalid', 'cancelled', 'abandoned'].includes(opportunity.phase) || !opportunity.submissionId && Date.now() >= opportunity.closeAt
-  if (!opportunity.submissionId && !closed && (!available || opportunity.operationalEligibility !== 'eligible' || !['ready', 'test_open'].includes(opportunity.phase))) return null
-  if (!opportunity.submissionId && Date.now() < opportunity.openAt) return null
-  const attempt = available && ['scored_pass', 'scored_fail'].includes(opportunity.phase) && opportunity.authoritativeAttemptId
-    ? await ctx.db.get(opportunity.authoritativeAttemptId) : null
-  const resultReady = attempt?.userId === userId && attempt.submissionId === opportunity.submissionId
-    && typeof attempt.scoreCommittedAt === 'number' && typeof attempt.serverScorePercent === 'number'
-    && Number.isFinite(attempt.serverScorePercent) && attempt.serverScorePercent >= 0 && attempt.serverScorePercent <= 100
-  let phase: LearnTodayCheckPointer['state'] = closed ? 'closed'
-    : !available || opportunity.phase === 'reconciliation_required'
-      || ['scored_pass', 'scored_fail'].includes(opportunity.phase) && !resultReady ? 'result_unconfirmed'
-      : resultReady ? 'result_ready'
-        : opportunity.submissionId ? 'saved_scoring' : 'ready'
+  if (!available || opportunity.operationalEligibility !== 'eligible' || !['ready', 'test_open'].includes(opportunity.phase)
+    || Date.now() < opportunity.openAt || Date.now() >= opportunity.closeAt) return null
+  const phase = 'ready' as const
   if (phase === 'ready') {
     const playable = await privacyRead(ctx, userId, ['canvas-check-playable', opportunity._id, opportunity.revision], false, async ctx => {
       if (!LEARN_MEASUREMENT_CAPABILITIES.delivery) return false
@@ -784,24 +869,10 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
       return state.status === 'available' && (opportunity.deliveryGrantId ? state.capabilities.canSubmit : state.capabilities.canDeliver)
     })
     if (!playable) return null
-  } else {
-    if (!opportunity.submissionId) return null
-    const canvas = await loadAssessmentCanvas(ctx, userId, scope.thread._id, {})
-    if (!canvas || canvas.status === 'blocked' || canvas.assessment?.bodyAvailability !== 'available') return null
-    let saved
-    try { saved = await readSavedLearnScoringState(ctx, userId, opportunity.submissionId) }
-    catch (error) {
-      if (!(error instanceof LearnScoringInputError) && !(error instanceof MeasurementItemBoundsError)) throw error
-      return null
-    }
-    if (canvas.status === 'feedback' && saved.status === 'scored') phase = 'result_ready'
-    else if (canvas.status === 'reconciling' && saved.status === 'reconciliation_required') phase = 'result_unconfirmed'
-    else if (['submitted', 'scoring'].includes(canvas.status) && ['scoring_pending', 'retryable_failure'].includes(saved.status)) phase = 'saved_scoring'
-    else return null
   }
   const threadId = scope.thread._id
   return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,
-    state: phase, destination: { kind: 'canvas', threadId, route: `/app/learn/void/${encodeURIComponent(threadId)}` } })
+    state: phase, destination: { kind: 'canvas', threadId, route: learnTodayCheckRoute(threadId, opportunity.delayedCheckId) } })
 }
 
 async function canvasPilotDecision(userId: string, binding: Doc<'learnAssessmentOpportunities'>['scoringBinding'], contractVersion: string, evaluationVersion: string, manifestVersion: string | undefined) {
@@ -822,7 +893,10 @@ async function hasCanvasAssessment(ctx: QueryCtx | MutationCtx, userId: string, 
     || content?.assessmentPurpose || activity?.reasonCode === 'assessment_check' || LEARN_MEASUREMENT_CAPABILITIES.responses && session?.placementKind === 'retained_review')
 }
 
-type CanvasProjection = NonNullable<Awaited<ReturnType<typeof loadLegacyReadyCanvas>>> & {
+type LegacyCanvasProjection = NonNullable<Awaited<ReturnType<typeof loadLegacyReadyCanvas>>>
+type CanvasProjection = Omit<LegacyCanvasProjection, 'session'> & {
+  session: Omit<LegacyCanvasProjection['session'], 'scheduledStartAt' | 'timezone'> & { scheduledStartAt: number | null, timezone: string | null },
+  checkReceipt?: LearnCanvasCheckReceipt,
   declaredStimulus?: string | null,
   responseSpec?: Extract<LearnV2AssessmentDelivery, { status: 'delivered' }>['responseSpec'] | null,
   assessment?: { assessmentOpportunityId: Id<'learnAssessmentOpportunities'>, phase: Doc<'learnAssessmentOpportunities'>['phase'], revision: number,
@@ -833,6 +907,58 @@ type CanvasProjection = NonNullable<Awaited<ReturnType<typeof loadLegacyReadyCan
 function assessmentPrimitive(prompt: string | undefined) {
   return validateAdaptiveActivityPrimitive({ type: 'independent_application', action: 'submit_response',
     props: { prompt, responseFormat: 'short_text', draftPersistence: false } })
+}
+
+async function loadSavedCheckCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>,
+  options: { includeSavedResponse?: boolean, checkReference?: string } = {}): Promise<CanvasProjection | null> {
+  ctx = measurementReadContext(ctx, userId)
+  const saved = await savedCanvasCheckForThread(ctx, userId, threadId, options.checkReference)
+  if (!saved) return null
+  const { thread, response, opportunity } = saved
+  if (response.contextPins.kind !== 'session' || !response.contextPins.canvas) return null
+  const pins = response.contextPins
+  const [owner, activity, session] = await Promise.all([
+    ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique(),
+    ctx.db.get(pins.canvas!.activityId), ctx.db.get(pins.studySessionId),
+  ])
+  if (!owner) return null
+  const receipt = options.includeSavedResponse === false ? learnCanvasCheckReceiptSchema.parse({
+    version: saved.receipt.version, reference: saved.receipt.reference, state: saved.receipt.state,
+    submissionId: response._id, acceptedAt: response.acceptedAt,
+    ...(saved.receipt.state === 'result_ready' ? { result: saved.receipt.result } : {}),
+    body: { bodyAvailability: 'unavailable', reasonCode: 'evidence_unavailable' },
+  }) : saved.receipt
+  const status = receipt.state === 'closed' ? 'blocked' as const
+    : receipt.state === 'result_unconfirmed' ? 'reconciling' as const
+      : receipt.state === 'result_ready' ? 'feedback' as const
+        : opportunity.phase === 'scoring_pending' ? 'scoring' as const : 'submitted' as const
+  const purpose = 'Complete the assigned check.'
+  const ownedActivity = activity?.userId === userId && activity.threadId === threadId ? activity : null
+  const ownedSession = session?.userId === userId ? session : null
+  const payload = receipt.body.bodyAvailability === 'available' ? receipt.body.payload : null
+  const recoverable = receipt.state === 'closed' || receipt.state === 'result_unconfirmed'
+  return {
+    status, ownerId: owner._id, checkReceipt: receipt,
+    thread: { id: thread._id, outcome: 'Assigned check', intent: thread.intent, revision: thread.revision },
+    recoveryState: receipt.state === 'closed' ? 'invalidated' : null, recoveryEvidenceIssue: null, recovery: null,
+    activity: { id: ownedActivity?.activityId ?? String(pins.canvas!.activityId), status: 'blocked', purpose, reasonCode: 'assessment_check',
+      planRevision: pins.canvas!.activityRevision, draftKind: null,
+      evidenceScope: { version: 'learn-adaptive.canvas-evidence-scope.v1', integrityState: 'blocked', sourceRefs: [] },
+      controls: projectAdaptiveControls({ activityClass: 'factual', activityStatus: 'blocked', lifecycle: thread.lifecycle,
+        evidenceReady: false, sourceCount: 0, currentTime: thread.availableTime, purpose, reasonCode: 'assessment_check', sourceState: 'blocked' }),
+      primitive: null,
+      fallback: { version: 'learn-adaptive.text-card-fallback.v1', kind: 'text_card', testId: 'learn-activity-fallback',
+        title: 'Assigned check', body: '', primaryAction: { type: 'continue_safe', label: 'Continue' } },
+      requiredAction: { kind: 'submit_response', label: 'Submit response' } },
+    session: { studySessionId: pins.studySessionId, revision: ownedSession?.revision ?? pins.sessionRevision,
+      contentRevision: pins.contentRevision, planRecordRevision: pins.planRecordRevision, blueprintRecordRevision: response.blueprintRecordRevision,
+      scheduledStartAt: ownedSession?.scheduledStartAt ?? null, scheduledEndAt: ownedSession?.scheduledEndAt ?? null, timezone: ownedSession?.timezone ?? null },
+    responsePrompt: null, declaredStimulus: null, responseSpec: null,
+    savedResponse: receipt.confidence !== undefined && (payload?.kind === 'text' || payload?.kind === 'source_comparison')
+      ? { response: payload.kind === 'text' ? payload.text : encodeSourceComparisonResponse(payload.sourceRef, payload.comparison), confidence: receipt.confidence } : null,
+    ...(!recoverable ? { assessment: { assessmentOpportunityId: opportunity._id, phase: opportunity.phase, revision: opportunity.revision,
+      submissionId: response._id, bodyAvailability: receipt.body.bodyAvailability, currentEligibility: response.currentEligibility, reasonCode: null } } : {}),
+  }
 }
 
 async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, options: { includeSavedResponse?: boolean }): Promise<CanvasProjection | null> {
@@ -884,30 +1010,44 @@ async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string,
   }
 }
 
-export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, options: { includeSavedResponse?: boolean } = {}): Promise<CanvasProjection | null> {
+export async function loadReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string, threadId: Id<'learningThreads'>, options: { includeSavedResponse?: boolean, checkReference?: string } = {}): Promise<CanvasProjection | null> {
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses) {
+    const saved = await loadSavedCheckCanvas(ctx, userId, threadId, options)
+    if (saved) return saved
+  }
+  if (options.checkReference !== undefined) {
+    const scope = await canvasAssessmentScope(ctx, userId, threadId, false)
+    if (scope?.opportunity.delayedCheckId !== options.checkReference) return null
+  }
   if (await hasCanvasAssessment(ctx, userId, threadId)) return await loadAssessmentCanvas(ctx, userId, threadId, options)
   return await loadLegacyReadyCanvas(ctx, userId, threadId, options)
 }
 
 const getCanvasRead = defineTeachingRead({name:'learnAdaptiveCanvas.getCanvas',scope:async(ctx,userId,args)=>await teachingReadScope(ctx,userId,[{kind:'thread',id:args.threadId}]),
-  args: { threadId: v.id('learningThreads') },
+  args: canvasCheckReadArgs,
   handler: async (ctx, args) => {
     const userId = await requireAdaptiveQueryAccess(ctx)
-    return await loadReadyCanvas(createResponsePrivacyReadContext(ctx, userId).ctx, userId, args.threadId)
+    return await loadReadyCanvas(createResponsePrivacyReadContext(ctx, userId).ctx, userId, args.threadId, args)
   },
 }, {hasContent:value=>Boolean(value?.activity.primitive)})
 export const getCanvas = query({ ...getCanvasRead.query, handler: async (ctx, args) => {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.query.handler(ctx, args)
+  const ownerId = await requireAuth(ctx)
+  const saved = await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args)
+  if (saved) return saved
   const userId = await requireAdaptiveQueryAccess(ctx)
-  if (await hasCanvasAssessment(ctx, userId, args.threadId)) return await loadReadyCanvas(ctx, userId, args.threadId)
+  if (await hasCanvasAssessment(ctx, userId, args.threadId)) return await loadReadyCanvas(ctx, userId, args.threadId, args)
   return await getCanvasRead.query.handler(ctx, args)
 } })
 export const getCanvasDelivery = mutation({ ...getCanvasRead.delivery, handler: async (ctx, args) => {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await getCanvasRead.delivery.handler(ctx, args)
+  const ownerId = await requireAuth(ctx)
+  const saved = await loadSavedCheckCanvas(ctx, ownerId, args.threadId, args)
+  if (saved) return { admission: { version: 'learn-v2.help-admission.v1' as const, status: 'ordinary' as const }, value: saved }
   const userId = await requireAdaptiveMutationAccess(ctx)
   if (await hasCanvasAssessment(ctx, userId, args.threadId)) return {
     admission: { version: 'learn-v2.help-admission.v1' as const, status: 'ordinary' as const },
-    value: await loadReadyCanvas(ctx, userId, args.threadId),
+    value: await loadReadyCanvas(ctx, userId, args.threadId, args),
   }
   return await getCanvasRead.delivery.handler(ctx, args)
 } })

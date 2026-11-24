@@ -1827,6 +1827,8 @@ export default defineSchema({
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnResponses: defineTable(measurementStorage.responseValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_assessmentPins_kind_and_acceptedAt', ['userId', 'flow', 'assessmentPins.kind', 'acceptedAt'])
+    .index('by_userId_and_contextPins_canvas_threadId_and_acceptedAt', ['userId', 'contextPins.canvas.threadId', 'acceptedAt'])
     .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
     .index('by_userId_and_responseSlotId', ['userId', 'responseSlotId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])

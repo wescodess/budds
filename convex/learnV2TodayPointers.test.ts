@@ -6,7 +6,7 @@ import { canvasFamilyFixture, canvasIdentity } from '../tests/fixtures/learn-v2-
 import { publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
-import { learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
+import { learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
@@ -129,7 +129,7 @@ test.each(['today', 'session_deep_link'] as const)('%s records its entry while t
   const [pointer] = await f.read()
   expect(learnTodayCheckPointerSchema.parse(pointer)).toEqual(pointer)
   expect(pointer).toMatchObject({ reference: row.delayedCheckId, state: 'ready', destination: { kind: 'canvas',
-    route: `/app/learn/void/${row.contextPins.kind === 'session' ? row.contextPins.canvas!.threadId : ''}` } })
+    route: `/app/learn/void/${row.contextPins.kind === 'session' ? row.contextPins.canvas!.threadId : ''}?check=${encodeURIComponent(row.delayedCheckId)}` } })
   expect(await f.t.run(ctx => ctx.db.get(row.assignmentId!))).toMatchObject({ flow: 'v2_canvas', entryPoint })
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(4))).toEqual([])
   const { attached, canvas, stage } = await attach(f, row)
@@ -182,42 +182,225 @@ test('a dedicated delayed check remains on Today after sealing and refresh', asy
   expect((await f.read()).find(row => row.reference === pointer.reference)).toEqual({ ...pointer, state: 'result_ready' })
 })
 
-test.each((['saved_scoring', 'result_unconfirmed', 'result_ready', 'closed'] as const).flatMap(state =>
-  (['source_purge', 'claim_loss'] as const).map(loss => ({ state, loss }))))('$state is omitted when Canvas recovery loses $loss', async ({ state, loss }) => {
+const recoveryChanges = ['none', 'claim_loss', 'source_purge', 'claim_revoked', 'assignment_revoked', 'validity_revoked', 'response_excluded', 'retryable_failure',
+  'reconciliation_required', 'invalid', 'cancelled', 'abandoned', 'missing_result', 'entitlement', 'pilot'] as const
+
+test.each(([false, true] as const).flatMap(scored => recoveryChanges.map(change => ({ scored, change }))))(
+  'saved recovery policy: scored=$scored change=$change', async ({ scored, change }) => {
+    const f = await fixture()
+    await f.start()
+    const row = (await f.opportunities())[0]!
+    const opened = await attach(f, row)
+    const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+    if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+    if (scored) {
+      vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+      await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+        submissionId: accepted.submissionId, idempotencyKey: 'recovery_matrix_score_1234567890' })
+    }
+    await f.t.run(async ctx => {
+      if (change === 'source_purge') await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW })
+      if (change === 'claim_loss' || change === 'claim_revoked') {
+        if (row.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement pins')
+        const itemId = row.assessmentPins.itemPins.itemId
+        const claim = (await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemId)).first())!
+        await ctx.db.patch(claim._id, change === 'claim_loss' ? { evidenceStatus: 'evidence_unavailable' } : { invalidatedAt: NOW })
+      }
+      if (change === 'assignment_revoked') await ctx.db.patch(row.assignmentId!, { invalidatedAt: NOW })
+      if (change === 'validity_revoked') {
+        const response = (await ctx.db.get(accepted.submissionId))!
+        await ctx.db.patch(accepted.submissionId, { validitySnapshot: { ...response.validitySnapshot, status: 'excluded', measurementEligible: false, masteryEligible: false, exclusionReasons: ['evidence_unavailable'] } })
+      }
+      if (change === 'response_excluded') await ctx.db.patch(accepted.submissionId, { currentEligibility: 'excluded' })
+      if (['retryable_failure', 'reconciliation_required', 'invalid', 'cancelled', 'abandoned'].some(phase => phase === change)) {
+        await ctx.db.patch(row._id, { phase: change as 'retryable_failure' | 'reconciliation_required' | 'invalid' | 'cancelled' | 'abandoned' })
+      }
+      if (change === 'missing_result') await ctx.db.patch(row._id, { phase: 'scored_pass', authoritativeAttemptId: undefined })
+      if (change === 'entitlement') {
+        const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
+        await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: false, updatedAt: NOW } })
+      }
+    })
+    if (change === 'pilot') Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: false })
+    const closed = ['claim_loss', 'source_purge', 'claim_revoked', 'assignment_revoked', 'validity_revoked', 'response_excluded', 'invalid', 'cancelled', 'abandoned', 'entitlement'].includes(change)
+      || change === 'pilot' && !scored
+    const expected = closed ? 'closed' : ['missing_result', 'reconciliation_required'].includes(change) || change === 'pilot'
+      ? 'result_unconfirmed' : scored ? 'result_ready' : 'saved_scoring'
+    const pointers = await f.read()
+    expect(pointers).toEqual([expect.objectContaining({ reference: row.delayedCheckId, state: expected })])
+    const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })
+    expect(learnCanvasCheckReceiptSchema.parse(canvas?.checkReceipt)).toEqual(canvas?.checkReceipt)
+    expect(canvas).toMatchObject({ status: expected === 'closed' ? 'blocked' : expected === 'result_unconfirmed' ? 'reconciling'
+      : expected === 'result_ready' ? 'feedback' : 'submitted', checkReceipt: {
+      version: 'learn-v2.canvas-check-receipt.v1', reference: row.delayedCheckId, state: expected, submissionId: accepted.submissionId,
+    }, responsePrompt: null, declaredStimulus: null, responseSpec: null, activity: { primitive: null, evidenceScope: { sourceRefs: [] } } })
+    expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })).toEqual(canvas)
+    if (change === 'entitlement') {
+      await expect(f.owner.query(api.learnV2Responses.getResponseState, { version: LEARN_V2_PUBLIC_API_VERSION,
+        target: { assessmentOpportunityId: row._id } })).rejects.toThrow('Learn access denied')
+      expect(canvas!.checkReceipt!.body.bodyAvailability).toBe('unavailable')
+    } else {
+      const canonical = await f.owner.query(api.learnV2Responses.getResponseState, { version: LEARN_V2_PUBLIC_API_VERSION,
+        target: { assessmentOpportunityId: row._id } })
+      if (canonical.status !== 'available' || !canonical.work) throw new Error('Expected accepted response')
+      expect(canonical.state).toBe('accepted')
+      expect(canvas!.checkReceipt!.body).toEqual(canonical.work.body)
+    }
+    expect(JSON.stringify(pointers)).not.toMatch(/Hypothetical|PRIVATE|A saved learner answer|scorePercent|feedbackCodes|scored_pass|scored_fail/)
+    expect(JSON.stringify(canvas)).not.toMatch(/Hypothetical|PRIVATE|criterionResults/)
+    if (expected === 'result_ready') {
+      const read = await f.owner.query(internal.learnV2Mastery.getMasterySubmissionScoringState, { version: LEARN_V2_PUBLIC_API_VERSION,
+        submissionId: accepted.submissionId, idempotencyKey: 'matrix_result_read_1234567890' })
+      if (read.status !== 'scored' || canvas?.checkReceipt?.state !== 'result_ready') throw new Error('Expected authoritative result')
+      expect(canvas.checkReceipt.result).toEqual(read.result)
+    } else expect(JSON.stringify(canvas)).not.toMatch(/scorePercent|feedbackCodes/)
+    if (expected === 'closed' || expected === 'result_unconfirmed') expect(JSON.stringify(canvas)).not.toMatch(/scored_pass|scored_fail|authoritativeAttemptId/)
+    if (expected === 'closed' || expected === 'result_unconfirmed') {
+      expect(await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId, idempotencyKey: 'receipt_delivery_matrix_1234567890' }))
+        .toEqual({ admission: { version: 'learn-v2.help-admission.v1', status: 'ordinary' }, value: canvas })
+    }
+  })
+
+test.each([false, true])('owned saved work keeps its addressed receipt after routing changes, scored=%s', async scored => {
   const f = await fixture()
   await f.start()
   const row = (await f.opportunities())[0]!
-  const pointer = (await f.read())[0]!
-  let submissionId: Doc<'learnResponses'>['_id'] | undefined
-  if (state === 'closed') vi.setSystemTime(row.closeAt)
-  else {
+  const opened = await attach(f, row)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  if (scored) {
+    vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+    await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+      submissionId: accepted.submissionId, idempotencyKey: 'routing_recovery_score_1234567890' })
+  }
+  await f.t.run(ctx => ctx.db.patch(opened.attached.threadId, { currentActivityId: undefined, revision: opened.canvas.thread.revision + 1 }))
+  const expected = scored ? 'result_unconfirmed' : 'closed'
+  const [pointer] = await f.read()
+  expect(pointer).toMatchObject({ reference: row.delayedCheckId, state: expected })
+  const route = new URL(pointer!.destination.route, 'https://example.test')
+  expect(route.searchParams.get('check')).toBe(row.delayedCheckId)
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: pointer!.destination.threadId, checkReference: route.searchParams.get('check')! })
+  expect(canvas?.checkReceipt).toMatchObject({ state: expected, submissionId: accepted.submissionId })
+  expect(JSON.stringify(canvas)).not.toMatch(/Hypothetical|PRIVATE|scorePercent|feedbackCodes|scored_pass|scored_fail/)
+})
+
+test.each(([false, true] as const).flatMap(scored => (['deleted', 'deleting', 'foreign'] as const).map(change => ({ scored, change }))))(
+  'saved work has no destination after thread $change, scored=$scored', async ({ scored, change }) => {
+    const f = await fixture()
+    await f.start()
+    const row = (await f.opportunities())[0]!
     const opened = await attach(f, row)
-    const saved = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
-    if (saved.kind !== 'accepted') throw new Error('Expected seal')
-    submissionId = saved.submissionId
-    if (state === 'result_unconfirmed') await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'reconciliation_required' }))
-    if (state === 'result_ready') {
+    const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+    if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+    if (scored) {
       vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
       await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
-        submissionId, idempotencyKey: 'recovery_pointer_score_1234567890' })
+        submissionId: accepted.submissionId, idempotencyKey: 'deleted_recovery_score_1234567890' })
     }
-    expect(await f.read()).toEqual([expect.objectContaining({ state })])
+    await f.t.run(async ctx => {
+      if (change === 'deleted') await ctx.db.delete(opened.attached.threadId)
+      else await ctx.db.patch(opened.attached.threadId, change === 'deleting' ? { deletionStartedAt: NOW } : { userId: 'different-owner' })
+    })
+    expect(await f.read()).toEqual([])
+    expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })).toBeNull()
+  })
+
+test('a check reference cannot address another owned Canvas', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  const other = await fixture({ test: f.t, fixtureKey: 'other-receipt' })
+  await other.start()
+  const next = (await other.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+    q.eq('userId', userId).eq('contextPins.studySessionId', other.graph.studySessionId)).unique()))!
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: next.delayedCheckId })).toBeNull()
+})
+
+test.each(['invalid', 'cancelled', 'abandoned'] as const)('an unanswered %s check still has no row', async phase => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase }))
+  expect(await f.read()).toEqual([])
+})
+
+test('terminal discovery is recent while direct owned receipt recovery has no expiry', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'invalid' }))
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'closed' })])
+  vi.setSystemTime(NOW + 91 * 86_400_000)
+  expect(await f.read()).toEqual([])
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .toMatchObject({ checkReceipt: { state: 'closed' } })
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'submitted_sealed' }))
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'closed' })])
+})
+
+test.each([false, true])('historical saved Canvas labels remain discoverable beyond terminal recency, scored=%s', async scored => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  if (scored) {
+    vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+    await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+      submissionId: accepted.submissionId, idempotencyKey: 'historical_recovery_score_1234567890' })
   }
   await f.t.run(async ctx => {
-    if (loss === 'source_purge') await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW })
-    else {
-      if (row.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement pins')
-      const itemId = row.assessmentPins.itemPins.itemId
-      const claim = (await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemId)).first())!
-      await ctx.db.patch(claim._id, { evidenceStatus: 'evidence_unavailable' })
-    }
+    const current = (await ctx.db.get(row._id))!
+    if (current.contextPins.kind !== 'session' || !current.contextPins.canvas) throw new Error('Expected Canvas pins')
+    await ctx.db.patch(row._id, { contextPins: { ...current.contextPins, canvas: { ...current.contextPins.canvas, planVersion: 'historical-plan' } } })
+    const response = (await ctx.db.get(accepted.submissionId))!
+    if (response.scopeKind !== 'v2' || response.contextPins.kind !== 'session' || !response.contextPins.canvas) throw new Error('Expected saved Canvas pins')
+    await ctx.db.patch(accepted.submissionId, { contextPins: { ...response.contextPins, canvas: { ...response.contextPins.canvas, planVersion: 'historical-plan' } } })
   })
-  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: pointer.destination.threadId })
-  expect(canvas?.status ?? 'blocked').toBe('blocked')
-  if (submissionId) await expect(f.owner.query(internal.learnV2Mastery.getMasterySubmissionScoringState, {
-    version: LEARN_V2_PUBLIC_API_VERSION, submissionId, idempotencyKey: 'recovery_pointer_state_1234567890',
-  })).rejects.toThrow('Learn scoring evidence unavailable')
-  expect(await f.read()).toEqual([])
+  vi.setSystemTime(NOW + 91 * 86_400_000)
+  const expected = scored ? 'result_unconfirmed' : 'closed'
+  expect(await f.read()).toEqual([expect.objectContaining({ reference: row.delayedCheckId, state: expected })])
+  expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .toMatchObject({ checkReceipt: { state: expected } })
+})
+
+test('a lost scoring response keeps a readable unconfirmed receipt without redispatch', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  const network = vi.fn(async () => { throw new TypeError('lost provider receipt') })
+  vi.stubGlobal('fetch', network)
+  const request = { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'recovery_lost_score_1234567890' }
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'blocked', code: 'reconciliation_required', retryable: false })
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, request)).toMatchObject({ kind: 'blocked', code: 'reconciliation_required', retryable: false })
+  expect(network).toHaveBeenCalledTimes(1)
+  expect(await f.read()).toEqual([expect.objectContaining({ state: 'result_unconfirmed' })])
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(canvas?.checkReceipt).toMatchObject({ state: 'result_unconfirmed', submissionId: accepted.submissionId,
+    body: { bodyAvailability: 'available', payload: { kind: 'text', text: opened.stage.response } } })
+  expect(JSON.stringify(canvas)).not.toMatch(/Hypothetical|PRIVATE|scorePercent|feedbackCodes|scored_pass|scored_fail/)
+})
+
+test('saved receipt reads propagate resource exhaustion instead of relabelling it', async () => {
+  const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  await f.start()
+  const row = (await f.opportunities())[0]!
+  const opened = await attach(f, row)
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  const original = privacyContext.createResponsePrivacyReadContext
+  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 64, options))
+  await expect(f.owner.query(api.learnV2Today.getCheckPointers, {})).rejects.toThrow('Learn source validation budget exhausted')
+  await expect(f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .rejects.toThrow('Learn source validation budget exhausted')
 })
 
 test.each(['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required', 'scored_pass', 'scored_fail', 'invalid', 'cancelled', 'abandoned'] as const)(
@@ -229,12 +412,12 @@ test.each(['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconcil
     const saved = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
     if (saved.kind !== 'accepted') throw new Error('Expected seal')
     await f.t.run(ctx => ctx.db.patch(row._id, { phase }))
-    const unavailable = ['invalid', 'cancelled', 'abandoned', 'scored_pass', 'scored_fail'].includes(phase)
-    const expected = phase === 'reconciliation_required' ? 'result_unconfirmed' : 'saved_scoring'
+    const closed = ['invalid', 'cancelled', 'abandoned'].includes(phase)
+    const expected = closed ? 'closed' : ['reconciliation_required', 'scored_pass', 'scored_fail'].includes(phase) ? 'result_unconfirmed' : 'saved_scoring'
     const pointers = await f.read()
-    expect(pointers).toEqual(unavailable ? [] : [expect.objectContaining({ state: expected })])
+    expect(pointers).toEqual([expect.objectContaining({ state: expected })])
     const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })
-    expect(canvas?.status ?? 'blocked').toBe(unavailable ? 'blocked' : phase === 'reconciliation_required' ? 'reconciling' : phase === 'scoring_pending' ? 'scoring' : 'submitted')
+    expect(canvas?.status ?? 'blocked').toBe(closed ? 'blocked' : expected === 'result_unconfirmed' ? 'reconciling' : phase === 'scoring_pending' ? 'scoring' : 'submitted')
     expect(await f.read()).toEqual(pointers)
     expect(JSON.stringify(pointers)).not.toMatch(/Hypothetical|PRIVATE|payload|score|feedback|submissionId|deliveryGrantId/)
   })
@@ -457,11 +640,11 @@ test('saved-work read caches invalidate after body and source revocation', async
     const read = async () => readCanvasCheckPointerForOwner(ctx, userId, (await ctx.db.get(row._id))!)
     expect(await read()).toMatchObject({ state: 'saved_scoring' })
     await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: NOW })
-    expect(await read()).toBeNull()
+    expect(await read()).toMatchObject({ state: 'closed' })
     await ctx.db.patch(f.graph.sourceSnapshotId, { evidencePurgedAt: undefined })
     expect(await read()).toMatchObject({ state: 'saved_scoring' })
     await ctx.db.patch(saved.submissionId, { bodyAvailability: 'purged', bodyPurgedAt: NOW })
-    expect(await read()).toBeNull()
+    expect(await read()).toMatchObject({ state: 'closed' })
   })
 })
 
@@ -531,7 +714,7 @@ test.each([6, 12])('%s maximum-sized families return bounded pointer pages witho
 test('overflow continues across saved, ready and both scored phases without exposing their phases', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []
   const references: string[] = []
-  for (const [index, state] of ['ready', 'scored_pass', 'saved_scoring', 'result_unconfirmed', 'scored_fail', 'ready', 'saved_scoring'].entries()) {
+  for (const [index, state] of ['ready', 'scored_pass', 'invalid', 'result_unconfirmed', 'scored_fail', 'ready', 'cancelled'].entries()) {
     const f = await fixture({ test: families[0]?.t, fixtureKey: `overflow-state-${index}` })
     await f.start()
     const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
@@ -542,6 +725,7 @@ test('overflow continues across saved, ready and both scored phases without expo
       const saved = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
       if (saved.kind !== 'accepted') throw new Error('Expected seal')
       if (state === 'result_unconfirmed') await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'reconciliation_required' }))
+      if (state === 'invalid' || state === 'cancelled') await f.t.run(ctx => ctx.db.patch(row._id, { phase: state }))
       if (state.startsWith('scored_')) {
         vi.stubGlobal('fetch', vi.fn(async () => modelReply(state === 'scored_pass')))
         await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
@@ -557,6 +741,7 @@ test('overflow continues across saved, ready and both scored phases without expo
   expect(today.checkPointers).toMatchObject({ status: 'available', isDone: false, checks: expect.any(Array) })
   expect(today.checkPointers.checks).toHaveLength(4)
   expect(today.checkPointers.continueCursor).toBeTruthy()
+  vi.setSystemTime(NOW + 1_000)
   const next = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: today.checkPointers.continueCursor! })
   expect(next).toMatchObject({ status: 'available', isDone: true, continueCursor: null })
   expect(next.checks).toHaveLength(3)
@@ -629,6 +814,79 @@ test('four maximum mixed-state checks appear on the first Today page', async () 
     documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ status: 'available', isDone: true, continueCursor: null })
   expect('checkPointers' in result.today && result.today.checkPointers.checks.map(pointer => pointer.state).sort()).toEqual(['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready'].sort())
+  expect(result.metrics.databaseQueries.used).toBeLessThan(3072)
+}, 60_000)
+
+test('historical Canvas version batches continue without dropping saved checks', async () => {
+  const families: Awaited<ReturnType<typeof fixture>>[] = []
+  const references: string[] = []
+  for (let index = 0; index < 6; index++) {
+    const f = await fixture({ test: families[0]?.t, fixtureKey: `version-batch-${index}` })
+    await f.start()
+    const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+      q.eq('userId', userId).eq('contextPins.studySessionId', f.graph.studySessionId)).unique()))!
+    const opened = await attach(f, row)
+    const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+    if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+    if (index > 0) await f.t.run(async ctx => {
+      const opportunity = (await ctx.db.get(row._id))!
+      const response = (await ctx.db.get(accepted.submissionId))!
+      if (opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas || response.scopeKind !== 'v2'
+        || response.contextPins.kind !== 'session' || !response.contextPins.canvas) throw new Error('Expected Canvas pins')
+      await ctx.db.patch(row._id, { contextPins: { ...opportunity.contextPins, canvas: { ...opportunity.contextPins.canvas, planVersion: `historical-${index}` } } })
+      await ctx.db.patch(accepted.submissionId, { contextPins: { ...response.contextPins, canvas: { ...response.contextPins.canvas, planVersion: `historical-${index}` } } })
+    })
+    references.push(row.delayedCheckId)
+    families.push(f)
+  }
+  const f = families[0]!
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  if (!('checkPointers' in today)) throw new Error('Expected pointers')
+  expect(today.checkPointers.checks).toHaveLength(4)
+  const next = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: today.checkPointers.continueCursor! })
+  expect(next).toMatchObject({ isDone: true, continueCursor: null })
+  expect([...today.checkPointers.checks, ...next.checks].map(pointer => pointer.reference).sort()).toEqual(references.sort())
+})
+
+test('recent deleted checks cannot displace four owned closed receipts from the first page', async () => {
+  const families: Awaited<ReturnType<typeof fixture>>[] = []
+  const references: string[] = []
+  for (let index = 0; index < 16; index++) {
+    const f = await fixture({ test: families[0]?.t, fixtureKey: `closed-history-${index}` })
+    await f.start()
+    const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+      q.eq('userId', userId).eq('contextPins.studySessionId', f.graph.studySessionId)).unique()))!
+    const opened = await attach(f, row)
+    await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+    await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'invalid' }))
+    if (index >= 4) await f.t.run(ctx => ctx.db.delete(opened.attached.threadId))
+    else references.push(row.delayedCheckId)
+    families.push(f)
+  }
+  const today = await families[0]!.owner.query(api.learnV2Today.getToday, {})
+  expect('checkPointers' in today && today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
+  expect('checkPointers' in today && today.checkPointers.checks.map(pointer => pointer.reference).sort()).toEqual(references.sort())
+})
+
+test('four maximum closed receipts appear on the first Today page', async () => {
+  const families: Awaited<ReturnType<typeof fixture>>[] = []
+  for (let index = 0; index < 4; index++) {
+    const f = await fixture({ test: families[0]?.t, fixtureKey: `closed-maximum-${index}`, reserveCount: 3,
+      inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+    await f.start()
+    const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+      q.eq('userId', userId).eq('contextPins.studySessionId', f.graph.studySessionId)).unique()))!
+    const opened = await attach(f, row)
+    await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+    await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'invalid' }))
+    families.push(f)
+  }
+  const f = families[0]!
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  console.info('today-pointer-read-budget', JSON.stringify({ checks: 'closed-4', queries: result.metrics.databaseQueries.used,
+    documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
+  expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
+  expect('checkPointers' in result.today && result.today.checkPointers.checks.map(pointer => pointer.state)).toEqual(['closed', 'closed', 'closed', 'closed'])
   expect(result.metrics.databaseQueries.used).toBeLessThan(3072)
 }, 60_000)
 
