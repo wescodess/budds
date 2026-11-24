@@ -134,7 +134,7 @@ export async function seedMeasurementStorage(ctx: Pick<MutationCtx, 'db'>, userI
     learnResponseEvidenceLinks: linkId, learnResponseIntegrityEvents: integrityId, learnResponseCommandReceipts: receiptId,
     learnScoringExecutions: executionId, learnMeasurementReportFacts: factId, learnMeasurementSourceWatermarks: watermarkId,
     learnMeasurementReportRuns: runId, learnMeasurementReportRows: rowId, learnMeasurementReportCells: cellId, learnMeasurementReportViewerGrants: viewerGrantId,
-  } satisfies { [Table in Exclude<LearnMeasurementCollection, `learnPostSeal${string}`>]: Id<Table> }
+  } satisfies { [Table in Exclude<LearnMeasurementCollection, `learnPostSeal${string}` | 'learnMeasurementDueWork'>]: Id<Table> }
   return { rows, folderId, documentId, learningVoidId, sourceIdentityId, sourceSnapshotId, sourceExcerptId, threadId, activityId, studySessionId, scope, itemPins, scoringBinding, assistanceSnapshot, validitySnapshot, base, reportKeys }
 }
 
@@ -143,7 +143,10 @@ export async function seedCompleteMeasurementStorage(ctx: Pick<MutationCtx, 'db'
   const postSeal = await seedPostSealStorage(ctx, { base: f.base, learningVoidId: f.learningVoidId,
     assessmentOpportunityId: f.rows.learnAssessmentOpportunities, submissionId: f.rows.learnResponses,
     sourceSnapshotId: f.sourceSnapshotId, checkCaseId: f.itemPins.caseId, slotId: f.rows.learnResponseSlots })
-  const rows = { ...f.rows, learnPostSealTeachingSources: postSeal.teachingSourceId, learnPostSealPracticeBindings: postSeal.practiceBindingId,
+  const dueWorkId = await ctx.db.insert('learnMeasurementDueWork', { ...f.base, learningVoidId: f.learningVoidId,
+    assignmentId: f.rows.learnMeasurementAssignments, key: 'fixture', kind: 'assignment', state: 'pending',
+    dueAt: f.base.createdAt, nextAttemptAt: f.base.createdAt, attempts: 0, generation: 0, updatedAt: f.base.createdAt })
+  const rows = { ...f.rows, learnMeasurementDueWork: dueWorkId, learnPostSealTeachingSources: postSeal.teachingSourceId, learnPostSealPracticeBindings: postSeal.practiceBindingId,
     learnPostSealHelpReceipts: postSeal.helpReceiptId, learnPostSealSourceLinks: postSeal.sourceLinkIds[0]!,
   } satisfies { [Table in LearnMeasurementCollection]: Id<Table> }
   return { ...f, rows, postSeal }

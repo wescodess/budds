@@ -4,6 +4,8 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } from '../../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { readPostSealSourceLinks, purgePostSealSourceLink } from './learnV2PostSealRetention'
+import { learnDueWorkEnabled } from './learnV2DueWorkQueue'
+import { retireLearnMeasurementDueWork } from './learnV2Measurement'
 
 const BATCH_SIZE = LEARN_MEASUREMENT_STORAGE_LIMITS.pageSize
 export const measurementSourceValidator = v.union(
@@ -115,10 +117,11 @@ export async function invalidateMeasurementSourceBatch(ctx: MutationCtx, userId:
   return references.length > 0
 }
 
-type VoidChild = 'learnPostSealSourceLinks' | 'learnPostSealHelpReceipts' | 'learnPostSealPracticeBindings' | 'learnPostSealTeachingSources' | 'learnMeasurementReportRows' | 'learnResponseBodies' | 'learnResponseEvidenceLinks' | 'learnResponseIntegrityEvents' | 'learnResponseCommandReceipts' | 'learnScoringExecutions' | 'learnResponses' | 'learnResponseSlots' | 'learnAssessmentOpportunities' | 'learnMeasurementAssignments' | 'learnMeasurementSupports' | 'learnMeasurementClaims' | 'learnMeasurementScoringSpecs' | 'learnMeasurementItems' | 'learnMeasurementFamilies' | 'learnMeasurementValidations' | 'learnMeasurementReportFacts'
-const VOID_CHILDREN: VoidChild[] = ['learnPostSealSourceLinks', 'learnPostSealHelpReceipts', 'learnPostSealPracticeBindings', 'learnPostSealTeachingSources', 'learnMeasurementReportRows', 'learnResponseBodies', 'learnResponseEvidenceLinks', 'learnResponseIntegrityEvents', 'learnResponseCommandReceipts', 'learnScoringExecutions', 'learnResponses', 'learnResponseSlots', 'learnAssessmentOpportunities', 'learnMeasurementAssignments', 'learnMeasurementSupports', 'learnMeasurementClaims', 'learnMeasurementScoringSpecs', 'learnMeasurementItems', 'learnMeasurementFamilies', 'learnMeasurementValidations', 'learnMeasurementReportFacts']
+type VoidChild = 'learnMeasurementDueWork' | 'learnPostSealSourceLinks' | 'learnPostSealHelpReceipts' | 'learnPostSealPracticeBindings' | 'learnPostSealTeachingSources' | 'learnMeasurementReportRows' | 'learnResponseBodies' | 'learnResponseEvidenceLinks' | 'learnResponseIntegrityEvents' | 'learnResponseCommandReceipts' | 'learnScoringExecutions' | 'learnResponses' | 'learnResponseSlots' | 'learnAssessmentOpportunities' | 'learnMeasurementAssignments' | 'learnMeasurementSupports' | 'learnMeasurementClaims' | 'learnMeasurementScoringSpecs' | 'learnMeasurementItems' | 'learnMeasurementFamilies' | 'learnMeasurementValidations' | 'learnMeasurementReportFacts'
+const VOID_CHILDREN: VoidChild[] = ['learnMeasurementDueWork', 'learnPostSealSourceLinks', 'learnPostSealHelpReceipts', 'learnPostSealPracticeBindings', 'learnPostSealTeachingSources', 'learnMeasurementReportRows', 'learnResponseBodies', 'learnResponseEvidenceLinks', 'learnResponseIntegrityEvents', 'learnResponseCommandReceipts', 'learnScoringExecutions', 'learnResponses', 'learnResponseSlots', 'learnAssessmentOpportunities', 'learnMeasurementAssignments', 'learnMeasurementSupports', 'learnMeasurementClaims', 'learnMeasurementScoringSpecs', 'learnMeasurementItems', 'learnMeasurementFamilies', 'learnMeasurementValidations', 'learnMeasurementReportFacts']
 export async function readMeasurementVoidDescendants(ctx: QueryCtx | MutationCtx, userId: string, learningVoidId: Id<'learningVoids'>, table: VoidChild): Promise<Reference[]> {
   switch (table) {
+    case 'learnMeasurementDueWork': return (await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)).map(row => ({ collection: table, id: row._id }))
     case 'learnPostSealSourceLinks': return (await ctx.db.query('learnPostSealSourceLinks').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)).map(row => ({ collection: table, id: row._id }))
     case 'learnPostSealHelpReceipts': return (await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)).map(row => ({ collection: table, id: row._id }))
     case 'learnPostSealPracticeBindings': return (await ctx.db.query('learnPostSealPracticeBindings').withIndex('by_userId_and_learningVoidId', q => q.eq('userId', userId).eq('learningVoidId', learningVoidId)).take(BATCH_SIZE)).map(row => ({ collection: table, id: row._id }))
@@ -150,6 +153,12 @@ export async function deleteMeasurementVoidBatch(ctx: MutationCtx, userId: strin
   for (const table of VOID_CHILDREN) {
     const rows = await readMeasurementVoidDescendants(ctx, userId, learningVoidId, table)
     for (const row of rows) {
+      if (learnDueWorkEnabled() && row.collection === 'learnMeasurementDueWork') {
+        const id = ctx.db.normalizeId('learnMeasurementDueWork', row.id)
+        const work = id && await ctx.db.get(id)
+        if (work?.userId === userId) await retireLearnMeasurementDueWork(ctx, work)
+        continue
+      }
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && row.collection === 'learnAssessmentOpportunities') {
         const id = ctx.db.normalizeId('learnAssessmentOpportunities', row.id)
         const opportunity = id && await ctx.db.get(id)

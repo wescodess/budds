@@ -52,48 +52,61 @@ export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId:
   return status
 }
 
-export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
-  target?: Doc<'studySessions'>): Promise<Binding> {
-  const blocked = (reasonCode: string): Binding => ({ kind: 'blocked', reasonCode })
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery || !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return blocked('disabled')
+export async function learnDelayedCheckBindingBlock(ctx: MutationCtx | QueryCtx, assignment: AdmittedAssignment,
+  row: Doc<'learnAssessmentOpportunities'>): Promise<string | null> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery || !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return 'disabled'
   const protocol = getFrozenLearnMeasurementProtocol()
-  if (!protocol) return blocked('protocol_not_frozen')
-  if (assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined) return blocked('evidence_unavailable')
+  if (!protocol) return 'protocol_not_frozen'
+  if (assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined) return 'evidence_unavailable'
   if (assignment.protocolVersion !== protocol.version || assignment.epoch !== protocol.epoch
-    || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)) return blocked('protocol_not_frozen')
+    || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)) return 'protocol_not_frozen'
   if (row.userId !== assignment.userId || row.assignmentId !== assignment._id || row.purpose.kind !== 'measurement_delayed'
-    || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
+    || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return 'pins_mismatch'
   if (row.horizonDays !== row.purpose.horizonDays || row.openAt !== row.purpose.clock.openAt || row.closeAt !== row.purpose.clock.closeAt
-    || row.dueAt !== row.purpose.clock.dueAt || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return blocked('pins_mismatch')
+    || row.dueAt !== row.purpose.clock.dueAt || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return 'pins_mismatch'
   const userId = assignment.userId
   try { await requireMeasurementCapability(ctx, userId) } catch (error) {
     if (!(error instanceof MeasurementValidationError)) throw error
-    return blocked('unknown_history')
+    return 'unknown_history'
   }
   const reason = await measurementScopeReason(ctx, userId, row)
     ?? await measurementFlowReason(ctx, userId, assignment.flow, row, protocol)
     ?? await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(row.assessmentPins.itemPins), row, row.scoringBinding)
     ?? (await measurementCaseExposed(ctx, userId, row.assessmentPins.itemPins.caseId, row._id) ? 'novel_item_unavailable' : null)
-  if (reason) return blocked(reason)
-  if (row.submissionId || ['invalid', 'abandoned', 'cancelled'].includes(row.phase)) return blocked(row.reasonCode ?? 'assessment_unavailable')
+  if (reason) return reason
+  if (row.submissionId || ['invalid', 'abandoned', 'cancelled'].includes(row.phase)) return row.reasonCode ?? 'assessment_unavailable'
   const existing = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.studySessionId) : null
   const priorContent = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
   if (row.contextPins.kind === 'session' && existing?.userId === userId && existing.assessmentOpportunityId === row._id && priorContent?.assessmentOpportunityId === row._id) {
-    if (!['ready', 'in_progress'].includes(existing.status) || priorContent.status !== 'published'
+    return !['ready', 'in_progress'].includes(existing.status) || priorContent.status !== 'published'
       || existing.revision !== row.contextPins.sessionRevision || priorContent.revision !== row.contextPins.contentRevision
-      || priorContent.inputDigest !== row.contextPins.contentInputDigest || priorContent.generatorVersion !== row.contextPins.generatorVersion) return blocked('pins_mismatch')
-    return { kind: 'ready', sessionId: existing._id, scheduledStartAt: existing.scheduledStartAt }
+      || priorContent.inputDigest !== row.contextPins.contentInputDigest || priorContent.generatorVersion !== row.contextPins.generatorVersion ? 'pins_mismatch' : null
   }
-  if (row.deliveryGrantId) return blocked('disclosure_unknown')
+  if (row.deliveryGrantId) return 'disclosure_unknown'
   const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
-  if (assignment.flow === 'v2_canvas' && (item.responseSpec.kind !== 'bounded_rubric' || row.contextPins.kind !== 'session' || !row.contextPins.canvas)) return blocked('response_format_unavailable')
+  if (assignment.flow === 'v2_canvas' && (item.responseSpec.kind !== 'bounded_rubric' || row.contextPins.kind !== 'session' || !row.contextPins.canvas)) return 'response_format_unavailable'
   if (assignment.flow === 'v2_canvas') {
     const canvas = row.contextPins.kind === 'session' ? row.contextPins.canvas : null
     if (!canvas || canvas.pilotConfigurationVersion !== process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
       || !adaptiveV2PilotDecision(canvas.pilotConfigurationVersion, { model: row.scoringBinding.kind === 'model' ? row.scoringBinding.requestedModel : '', now: Date.now(),
         activityContractVersion: 'learn-adaptive.activity-contract.v1', evaluationContractVersion: 'learn-adaptive.evaluation.v1',
-        learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) return blocked('canvas_not_admitted')
+        learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) return 'canvas_not_admitted'
   }
+  return null
+}
+
+export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
+  target?: Doc<'studySessions'>): Promise<Binding> {
+  const blocked = (reasonCode: string): Binding => ({ kind: 'blocked', reasonCode })
+  const reason = await learnDelayedCheckBindingBlock(ctx, assignment, row)
+  if (reason) return blocked(reason)
+  if (row.purpose.kind !== 'measurement_delayed' || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
+  const userId = assignment.userId
+  const existing = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.studySessionId) : null
+  const priorContent = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
+  if (row.contextPins.kind === 'session' && existing?.userId === userId && existing.assessmentOpportunityId === row._id && priorContent?.assessmentOpportunityId === row._id)
+    return { kind: 'ready', sessionId: existing._id, scheduledStartAt: existing.scheduledStartAt }
+  const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
   if (target && (target.userId !== userId || target.primaryObjectiveId !== row.objectiveId
     || target.placementKind !== 'retained_review' || !['planned', 'blocked'].includes(target.status))) return blocked('pins_mismatch')
   if (target && target.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId) {

@@ -15,6 +15,7 @@ import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../
 import { learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins, learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
+import { enqueueLearnDueWork, hasUnresolvedLearnDueWork } from './learnV2DueWorkQueue'
 
 type FactInput = Omit<LearnReportSourceFact, 'factVersion' | 'sequence'> & {
   learningVoidId?: Id<'learningVoids'>
@@ -64,9 +65,12 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
     dueWorkThrough: watermark?.dueWorkThrough ?? null, historyCoverage: watermark?.historyCoverage ?? 'unknown',
   })
   if (watermark) await ctx.db.patch(watermark._id, state)
-  else await ctx.db.insert('learnMeasurementSourceWatermarks', {
-    ...state, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
-  })
+  else {
+    await ctx.db.insert('learnMeasurementSourceWatermarks', {
+      ...state, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
+    })
+    await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: now })
+  }
   return sequence
 }
 
@@ -285,6 +289,9 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
     ? parseLearnContract(learnReportAssignmentSnapshotSchema, previous.fact.snapshot) : null
   if (previous?.fact.kind === 'enrollment' && previous.fact.status === assignment.status
     && JSON.stringify(previousSnapshot) === JSON.stringify(snapshot)) return previous.sequence
+  await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: Date.now() })
+  await enqueueLearnDueWork(ctx, { userId, learningVoidId: assignment.learningVoidId,
+    assignmentId: assignment._id, key: `assignment:${assignment._id}`, kind: 'assignment', dueAt: Date.now() })
   const recordRevision = previous?.fact.kind === 'enrollment' ? previous.fact.recordRevision + 1 : 1
   return await appendLearnMeasurementFact(ctx, userId, {
     epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId,
@@ -347,9 +354,10 @@ export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId:
 
 export async function readLearnMeasurementWatermarkSnapshot(ctx: QueryCtx | MutationCtx, userId: string, reportRunId: Id<'learnMeasurementReportRuns'>) {
   const { watermark } = await nextLearnMeasurementSourceSequence(ctx, userId)
+  const unresolved = await hasUnresolvedLearnDueWork(ctx, userId, Date.now())
   return parseLearnContract(learnReportWatermarkSnapshotSchema, {
     kind: 'owner_watermark', learnerKey: await deriveLearnReportLearnerKey(reportRunId, userId),
-    sequence: watermark?.sequence ?? 0, dueWorkThrough: watermark?.dueWorkThrough ?? null,
+    sequence: watermark?.sequence ?? 0, dueWorkThrough: unresolved ? null : watermark?.dueWorkThrough ?? null,
     historyCoverage: watermark?.historyCoverage ?? 'unknown', legacyIndependentAudit: { sourceCoverage: 'unknown', unknownCount: null },
   })
 }

@@ -1953,6 +1953,29 @@ export default defineSchema({
     key: v.literal('delayed_checks'), through: v.union(v.number(), v.null()),
     leaseId: v.union(v.string(), v.null()), leaseExpiresAt: v.number(), updatedAt: v.number(),
   }).index('by_key', ['key']),
+  learnMeasurementDueWork: defineTable({
+    userId: v.string(), storageVersion: v.literal('learn-v2.measurement-storage.v1'), createdAt: v.number(), updatedAt: v.number(),
+    learningVoidId: v.optional(v.id('learningVoids')), assignmentId: v.optional(v.id('learnMeasurementAssignments')),
+    assessmentOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), key: v.string(),
+    kind: v.union(v.literal('owner'), v.literal('assignment'), v.literal('open'), v.literal('close')),
+    state: v.union(v.literal('scheduled'), v.literal('pending'), v.literal('parked'), v.literal('terminal')),
+    dueAt: v.number(), nextAttemptAt: v.number(), attempts: v.number(), generation: v.number(),
+    domainChecks: v.optional(v.number()), recoveryAttempts: v.optional(v.number()), inFlight: v.optional(v.boolean()),
+    previousScheduledFunctionId: v.optional(v.id('_scheduled_functions')),
+    scheduledFunctionId: v.optional(v.id('_scheduled_functions')), reasonCode: v.optional(v.literal('retries_exhausted')),
+    windowFaultAt: v.optional(v.number()),
+    lastDispatchedAt: v.optional(v.number()), lastDispatchedGeneration: v.optional(v.number()),
+    lastDispatchedFunctionId: v.optional(v.id('_scheduled_functions')),
+    lastProcessedAt: v.optional(v.number()), lastProcessedGeneration: v.optional(v.number()),
+    undeliveredDispatchAt: v.optional(v.number()),
+    cursor: v.optional(v.string()), through: v.optional(v.number()), expectedSequence: v.optional(v.number()), coverageComplete: v.optional(v.boolean()),
+  }).index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_key', ['userId', 'key'])
+    .index('by_userId_and_state_and_dueAt', ['userId', 'state', 'dueAt'])
+    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt'])
+    .index('by_nextAttemptAt', ['nextAttemptAt'])
+    .index('by_inFlight', ['inFlight']),
   learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureValidator)
     .index('by_userId', ['userId'])
     .index('by_userId_and_practiceHelp_responseSlotId', ['userId', 'practiceHelp.responseSlotId'])
