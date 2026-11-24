@@ -9,7 +9,7 @@ import { learnMeasurementItemPinsSchema, learnAssessmentBoundSurface } from '../
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../../shared/learn-v2-responses'
 import { getFrozenLearnMeasurementProtocol, measurementWindowPolicyDigest } from './learnV2MeasurementAssignment'
-import { measurementCaseExposed, measurementFlowReason, measurementItemReason, measurementScopeReason, writeMeasurementOpportunityFact, type AdmittedAssignment } from './learnV2Measurement'
+import { measurementCanvasReason, measurementCaseExposed, measurementFlowReason, measurementItemReason, measurementScopeReason, writeMeasurementOpportunityFact, type AdmittedAssignment } from './learnV2Measurement'
 import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWork'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
@@ -55,57 +55,80 @@ export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId:
   return status
 }
 
-export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
-  target?: Doc<'studySessions'>, canvasPreparation?: { providerModel?: string, pilotConfigurationVersion: string }): Promise<Binding> {
-  const blocked = (reasonCode: string): Binding => ({ kind: 'blocked', reasonCode })
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery || !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return blocked('disabled')
+type CanvasPreparation = { providerModel?: string, pilotConfigurationVersion: string }
+
+export function learnCheckUsesCanvasSurface(assignment: Pick<AdmittedAssignment, 'flow' | 'checkSurface'>) {
+  return assignment.checkSurface ? assignment.checkSurface.surface === 'canvas' : assignment.flow === 'v2_canvas'
+}
+
+export async function learnDelayedCheckBindingBlock(ctx: MutationCtx | QueryCtx, assignment: AdmittedAssignment,
+  row: Doc<'learnAssessmentOpportunities'>, canvasPreparation?: CanvasPreparation): Promise<string | null> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.delivery || !LEARN_MEASUREMENT_CAPABILITIES.enrollment) return 'disabled'
   const protocol = getFrozenLearnMeasurementProtocol()
-  if (!protocol) return blocked('protocol_not_frozen')
-  if (assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined) return blocked('evidence_unavailable')
+  if (!protocol) return 'protocol_not_frozen'
+  if (assignment.evidenceStatus !== 'available' || assignment.invalidatedAt !== undefined) return 'evidence_unavailable'
   if (assignment.protocolVersion !== protocol.version || assignment.epoch !== protocol.epoch
-    || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)) return blocked('protocol_not_frozen')
+    || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)) return 'protocol_not_frozen'
   const cold = row.purpose.kind === 'measurement_cold' && assignment.checkSurface?.surface === 'canvas'
   if (row.userId !== assignment.userId || row.assignmentId !== assignment._id || row.purpose.kind !== 'measurement_delayed' && !cold
-    || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
+    || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return 'pins_mismatch'
   if (row.purpose.kind === 'measurement_delayed' && (row.horizonDays !== row.purpose.horizonDays || row.openAt !== row.purpose.clock.openAt
     || row.closeAt !== row.purpose.clock.closeAt || row.dueAt !== row.purpose.clock.dueAt)
-    || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return blocked('pins_mismatch')
+    || !await measurementAllocationMatches(ctx, assignment.userId, row, assignment)) return 'pins_mismatch'
   const userId = assignment.userId
-  const canvasSurface = assignment.checkSurface?.surface === 'canvas' || assignment.flow === 'v2_canvas'
-  if (assignment.checkSurface && learnAssessmentBoundSurface(assignment, row.contextPins) !== assignment.checkSurface.surface) return blocked('flow_mismatch')
-  if (assignment.checkSurface && canvasSurface && !await hasAdaptiveExperienceAccess(ctx, userId)) return blocked('canvas_not_admitted')
-  const timezone = row.purpose.kind === 'measurement_delayed' ? row.purpose.clock.timezone : assignment.enrollmentTimezone
-  const purpose = cold ? 'measurement_cold' as const : 'measurement_delayed' as const
+  const canvasSurface = learnCheckUsesCanvasSurface(assignment)
+  if (assignment.checkSurface && learnAssessmentBoundSurface(assignment, row.contextPins) !== assignment.checkSurface.surface) return 'flow_mismatch'
+  if (canvasSurface && !await hasAdaptiveExperienceAccess(ctx, userId)) return 'canvas_not_admitted'
   try { await requireMeasurementCapability(ctx, userId) } catch (error) {
     if (!(error instanceof MeasurementValidationError)) throw error
-    return blocked('unknown_history')
+    return 'unknown_history'
   }
   const reason = await measurementScopeReason(ctx, userId, row)
     ?? await measurementFlowReason(ctx, userId, assignment.flow, row, protocol)
     ?? await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(row.assessmentPins.itemPins), row, row.scoringBinding)
     ?? (await measurementCaseExposed(ctx, userId, row.assessmentPins.itemPins.caseId, row._id) ? 'novel_item_unavailable' : null)
-  if (reason) return blocked(reason)
-  if (row.submissionId || ['invalid', 'abandoned', 'cancelled'].includes(row.phase)) return blocked(row.reasonCode ?? 'assessment_unavailable')
+  if (reason) return reason
+  if (row.submissionId || ['invalid', 'abandoned', 'cancelled'].includes(row.phase)) return row.reasonCode ?? 'assessment_unavailable'
   const existing = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.studySessionId) : null
   const priorContent = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
   if (row.contextPins.kind === 'session' && existing?.userId === userId && existing.assessmentOpportunityId === row._id && priorContent?.assessmentOpportunityId === row._id) {
     if (!['ready', 'in_progress'].includes(existing.status) || priorContent.status !== 'published'
       || existing.revision !== row.contextPins.sessionRevision || priorContent.revision !== row.contextPins.contentRevision
-      || priorContent.inputDigest !== row.contextPins.contentInputDigest || priorContent.generatorVersion !== row.contextPins.generatorVersion) return blocked('pins_mismatch')
-    return { kind: 'ready', sessionId: existing._id, scheduledStartAt: existing.scheduledStartAt }
+      || priorContent.inputDigest !== row.contextPins.contentInputDigest || priorContent.generatorVersion !== row.contextPins.generatorVersion) return 'pins_mismatch'
+    return canvasSurface && assignment.checkSurface ? await measurementCanvasReason(ctx, userId, row) : null
   }
-  if (row.deliveryGrantId) return blocked('disclosure_unknown')
+  if (row.deliveryGrantId) return 'disclosure_unknown'
   const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
-  if (canvasSurface && (item.responseSpec.kind !== 'bounded_rubric' || !canvasPreparation && (row.contextPins.kind !== 'session' || !row.contextPins.canvas))) return blocked('response_format_unavailable')
-  const pilotConfigurationVersion = canvasPreparation?.pilotConfigurationVersion
-    ?? (row.contextPins.kind === 'session' ? row.contextPins.canvas?.pilotConfigurationVersion : undefined)
+  if (canvasSurface && (item.responseSpec.kind !== 'bounded_rubric' || !canvasPreparation && (row.contextPins.kind !== 'session' || !row.contextPins.canvas))) return 'response_format_unavailable'
   if (canvasSurface) {
-    const canvas = row.contextPins.kind === 'session' ? row.contextPins.canvas : null
-    if (!canvas && !canvasPreparation || pilotConfigurationVersion !== process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
+    const pilotConfigurationVersion = canvasPreparation?.pilotConfigurationVersion
+      ?? (row.contextPins.kind === 'session' ? row.contextPins.canvas?.pilotConfigurationVersion : undefined)
+    if (pilotConfigurationVersion === undefined || pilotConfigurationVersion !== process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST
       || !adaptiveV2PilotDecision(pilotConfigurationVersion, { model: row.scoringBinding.kind === 'model' ? row.scoringBinding.requestedModel : '', now: Date.now(),
         activityContractVersion: 'learn-adaptive.activity-contract.v1', evaluationContractVersion: 'learn-adaptive.evaluation.v1',
-        learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) return blocked(assignment.checkSurface ? 'pilot_not_admitted' : 'canvas_not_admitted')
+        learnerHash: await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId]) }).allowed) return assignment.checkSurface ? 'pilot_not_admitted' : 'canvas_not_admitted'
   }
+  return null
+}
+
+export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>,
+  target?: Doc<'studySessions'>, canvasPreparation?: CanvasPreparation): Promise<Binding> {
+  const blocked = (reasonCode: string): Binding => ({ kind: 'blocked', reasonCode })
+  const reason = await learnDelayedCheckBindingBlock(ctx, assignment, row, canvasPreparation)
+  if (reason) return blocked(reason)
+  const cold = row.purpose.kind === 'measurement_cold' && assignment.checkSurface?.surface === 'canvas'
+  if (row.purpose.kind !== 'measurement_delayed' && !cold || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
+  const userId = assignment.userId
+  const canvasSurface = learnCheckUsesCanvasSurface(assignment)
+  const existing = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.studySessionId) : null
+  const priorContent = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
+  if (row.contextPins.kind === 'session' && existing?.userId === userId && existing.assessmentOpportunityId === row._id && priorContent?.assessmentOpportunityId === row._id)
+    return { kind: 'ready', sessionId: existing._id, scheduledStartAt: existing.scheduledStartAt }
+  const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
+  const timezone = row.purpose.kind === 'measurement_delayed' ? row.purpose.clock.timezone : assignment.enrollmentTimezone
+  const purpose = cold ? 'measurement_cold' as const : 'measurement_delayed' as const
+  const pilotConfigurationVersion = canvasPreparation?.pilotConfigurationVersion
+    ?? (row.contextPins.kind === 'session' ? row.contextPins.canvas?.pilotConfigurationVersion : undefined)
   if (target && (target.userId !== userId || target.primaryObjectiveId !== row.objectiveId
     || target.placementKind !== 'retained_review' || !['planned', 'blocked'].includes(target.status))) return blocked('pins_mismatch')
   if (target && target.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId) {

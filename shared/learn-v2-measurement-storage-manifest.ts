@@ -1,4 +1,5 @@
 export const LEARN_MEASUREMENT_STORAGE_VERSION = 'learn-v2.measurement-storage.v1' as const
+export const LEARN_V2_POST_SEAL_STORAGE_VERSION = 'learn-v2.post-seal-storage.v1' as const
 export const LEARN_MEASUREMENT_STORAGE_LIMITS = {
   pageSize: 8, maxSourceDependencies: 64, rejectionRetentionDays: 90,
   maxResponseCodeUnits: 12_000, maxResponseBytes: 48 * 1024, maxEnvelopeBytes: 64 * 1024,
@@ -23,11 +24,26 @@ type Entry = {
   threadDeletion: 'delete_standalone' | 'detach' | 'preserve'
   indexes: readonly (readonly string[])[]
   optionalFrozenStates?: readonly string[]
+  immutability?: 'attempt_stamp_and_atomic_publication_or_purge' | 'immutable_except_purge' | 'dependency_tombstone'
+  publicationUpdates?: readonly string[]
+  pendingSourceDependencyCount?: 0
+  sourcePurge?: 'redact_content' | 'redact_dependency'
+  telemetry?: 'omitted'
+  maxEnvelopeBytes?: number
+  maxPayloadBytes?: number
+  maxSourceDependencies?: number
+  uniqueBy?: readonly string[]
+  fingerprint?: { keyField: string, requestField: string, version: string }
 }
 
 // Child-first order also defines bounded account deletion. Exposure and case
 // identities survive aggregate deletion so deleting a Void cannot reset novelty.
 export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
+  { table: 'learnMeasurementDueWork', retention: 'owner_inventory', export: 'withheld', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'learningVoidId'], ['userId', 'key'], ['userId', 'state', 'dueAt'], ['state', 'nextAttemptAt'], ['nextAttemptAt'], ['inFlight']] },
+  { table: 'learnPostSealSourceLinks', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', immutability: 'dependency_tombstone', sourcePurge: 'redact_dependency', telemetry: 'omitted', maxEnvelopeBytes: 64 * 1024, indexes: [['userId', 'learningVoidId'], ['userId', 'target.teachingSourceId'], ['userId', 'target.practiceBindingId'], ['userId', 'target.helpReceiptId'], ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'], ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'], ['userId', 'dependency.documentId', 'invalidatedAt'], ['userId', 'dependency.folderId', 'invalidatedAt']] },
+  { table: 'learnPostSealHelpReceipts', parentField: 'practiceBindingId', parentIndex: 'by_userId_and_practiceBindingId', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', immutability: 'immutable_except_purge', sourcePurge: 'redact_content', telemetry: 'omitted', maxEnvelopeBytes: 64 * 1024, maxPayloadBytes: 48 * 1024, maxSourceDependencies: 64, uniqueBy: ['userId', 'idempotencyKeyHash'], fingerprint: { keyField: 'idempotencyKeyHash', requestField: 'requestDigest', version: 'learn-v2.practice-help-fingerprint.v1' }, indexes: [['userId', 'learningVoidId'], ['userId', 'assessmentOpportunityId'], ['userId', 'submissionId'], ['userId', 'responseSlotId', 'assistanceSequence'], ['userId', 'practiceBindingId'], ['userId', 'idempotencyKeyHash'], ['userId', 'authorizationId']] },
+  { table: 'learnPostSealPracticeBindings', parentField: 'submissionId', parentIndex: 'by_userId_and_submissionId', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', immutability: 'immutable_except_purge', sourcePurge: 'redact_content', telemetry: 'omitted', maxEnvelopeBytes: 64 * 1024, maxPayloadBytes: 48 * 1024, maxSourceDependencies: 64, uniqueBy: ['userId', 'submissionId'], indexes: [['userId', 'learningVoidId'], ['userId', 'assessmentOpportunityId'], ['userId', 'submissionId'], ['userId', 'responseSlotId'], ['userId', 'practiceCaseId']] },
+  { table: 'learnPostSealTeachingSources', parentField: 'submissionId', parentIndex: 'by_userId_and_submissionId', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', immutability: 'attempt_stamp_and_atomic_publication_or_purge', publicationUpdates: ['content', 'sourceDependencyCount', 'sourceLinks'], pendingSourceDependencyCount: 0, sourcePurge: 'redact_content', telemetry: 'omitted', maxEnvelopeBytes: 64 * 1024, maxPayloadBytes: 48 * 1024, maxSourceDependencies: 64, uniqueBy: ['userId', 'submissionId'], indexes: [['userId', 'learningVoidId'], ['userId', 'assessmentOpportunityId'], ['userId', 'submissionId'], ['userId', 'attemptId']] },
   { table: 'learnArtifactSourceLinks', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'], ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'], ['userId', 'dependency.documentId', 'invalidatedAt'], ['userId', 'dependency.folderId', 'invalidatedAt']] },
   { table: 'learnArtifactCaseBindings', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'caseId']] },
   { table: 'learnArtifactLineageOrigins', parentField: 'lineageId', parentIndex: 'by_userId_and_lineageId', retention: 'artifact_lineage', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'lineageId'], ['userId', 'originLineageId']] },
@@ -54,7 +70,7 @@ export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
   { table: 'learnMeasurementValidations', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'subject.caseId'], ['userId', 'subject.itemId'], ['userId', 'subject.familyId'], ['userId', 'subject.scoringSpecId'], ['userId', 'learningVoidId']] },
   { table: 'learnMeasurementReportFacts', optionalFrozenStates: ['opportunity.stateAtEligibility', 'response.stateAtAcceptance'], retention: 'report_source', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'sequence'], ['userId', 'fact.kind', 'sequence'], ['userId', 'epoch', 'sequence'], ['userId', 'learningVoidId'], ['userId', 'fact.assignmentId'], ['userId', 'fact.assessmentOpportunityId'], ['userId', 'fact.submissionId'], ['fact.claimKey'], ['fact.basisAttemptId'], ['userId', 'fact.objectiveId', 'fact.stratum.epoch'], ['fact.firstCheckOpportunityId'], ['fact.firstSlot.firstCheckOpportunityId'], ['fact.slot.firstCheckOpportunityId'], ['userId', 'fact.kind'], ['userId', 'fact.claimKey', 'fact.claimSequence']] },
   { table: 'learnMeasurementSourceWatermarks', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'sequence'], ['createdAt']] },
-  { table: 'learnAssessmentExposures', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'detach', threadDeletion: 'detach', indexes: [['userId', 'caseId', 'serverTime'], ['userId', 'assessmentOpportunityId'], ['userId', 'deliveryReceiptHash'], ['userId', 'learningVoidId'], ['userId', 'threadId']] },
+  { table: 'learnAssessmentExposures', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'detach', threadDeletion: 'detach', indexes: [['userId', 'practiceHelp.responseSlotId'], ['userId', 'practiceHelp.practiceBindingId'], ['userId', 'caseId', 'serverTime'], ['userId', 'assessmentOpportunityId'], ['userId', 'deliveryReceiptHash'], ['userId', 'learningVoidId'], ['userId', 'threadId']] },
   { table: 'learnAssessmentCases', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [['userId', 'caseKey'], ['userId', 'scenarioFingerprint'], ['userId', 'solutionFingerprint'], ['userId', 'usageClass'], ['userId', 'reservedAt'], ['userId', 'scenarioFingerprint', 'solutionFingerprint']] },
   { table: 'learnAssessmentCatalogs', retention: 'owner_inventory', export: 'metadata_only', voidDeletion: 'preserve', threadDeletion: 'preserve', indexes: [] },
 ] as const satisfies readonly Entry[]
@@ -71,6 +87,10 @@ export function isLearnMeasurementCollection(value: string): value is LearnMeasu
 }
 
 export const LEARN_MEASUREMENT_SOURCE_REGISTRATIONS = [
+  { table: 'learnPostSealSourceLinks', field: 'dependency.sourceSnapshotId', index: 'by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt' },
+  { table: 'learnPostSealSourceLinks', field: 'dependency.sourceExcerptId', index: 'by_userId_and_dependency_sourceExcerptId_and_invalidatedAt' },
+  { table: 'learnPostSealSourceLinks', field: 'dependency.documentId', index: 'by_userId_and_dependency_documentId_and_invalidatedAt' },
+  { table: 'learnPostSealSourceLinks', field: 'dependency.folderId', index: 'by_userId_and_dependency_folderId_and_invalidatedAt' },
   { table: 'learnArtifactSourceLinks', field: 'dependency.sourceSnapshotId', index: 'by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt' },
   { table: 'learnArtifactSourceLinks', field: 'dependency.sourceExcerptId', index: 'by_userId_and_dependency_sourceExcerptId_and_invalidatedAt' },
   { table: 'learnArtifactSourceLinks', field: 'dependency.documentId', index: 'by_userId_and_dependency_documentId_and_invalidatedAt' },

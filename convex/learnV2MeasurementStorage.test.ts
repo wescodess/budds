@@ -5,7 +5,7 @@ import { convexTest } from 'convex-test'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import schema from './schema'
-import { seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
+import { seedCompleteMeasurementStorage as seedMeasurementStorage, STORAGE_CANARIES } from '../tests/fixtures/learn-v2-measurement-storage'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST, learnMeasurementIndexName, type LearnMeasurementCollection } from '../shared/learn-v2-measurement-storage-manifest'
 import { readMeasurementSourceDescendants, readMeasurementVoidDescendants } from './lib/learnV2MeasurementRetention'
 import { initiateAdaptiveThreadDeletion } from './learnAdaptiveCommands'
@@ -92,7 +92,7 @@ describe('inactive Phase C storage boundaries', () => {
       await ctx.db.patch(f.rows.learnResponseSlots, { confidenceRequested: false })
       await ctx.db.patch(f.rows.learnAssessmentOpportunities, { deliveryPins })
     })
-    expect(await readAll(t, owner, 'learnResponseSlots')).toMatchObject([{ confidenceRequested: false }])
+    expect((await readAll(t, owner, 'learnResponseSlots')).find(row => row._id === slot?._id)).toMatchObject({ confidenceRequested: false })
     expect(await readAll(t, owner, 'learnAssessmentOpportunities')).toMatchObject([{ deliveryPins }])
     expect(resolveLearnResponseConfidenceRequested((await t.run(ctx => ctx.db.get(f.rows.learnAssessmentOpportunities))) ?? {})).toBe(true)
   })

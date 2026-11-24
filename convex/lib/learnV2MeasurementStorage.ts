@@ -1,4 +1,5 @@
-import { v } from 'convex/values'
+import { v, type Infer, type Validator } from 'convex/values'
+import { practiceSlotAssistanceValidator, practiceHelpExposureValidator } from './learnV2PostSealStorageContract'
 import { masteryStateValidator } from '../../shared/learn-v2-mastery'
 import { LEARN_V2_MEASUREMENT_REPORT_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION } from '../../shared/learn-v2-measurement-report'
 import {
@@ -7,6 +8,8 @@ import {
   learnReportFirstSlotStratumValidator, learnReportCapturedMasteryStateValidator,
 } from './learnV2MeasurementReportContract'
 import { LEARN_V2_RESPONSE_CONTEXT_VERSION, LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, LEARN_V2_RESPONSE_TERMINALIZATION_VERSION } from '../../shared/learn-v2-responses'
+
+export { postSealTeachingSourceValidator, postSealPracticeBindingFields, postSealHelpReceiptFields, postSealSourceLinkFields } from './learnV2PostSealStorageContract'
 
 // Storage shapes only. Admission, payload limits and command validators are
 // supplied by the following serial contracts; no current player writes these.
@@ -255,15 +258,28 @@ export const assessmentExposureFields = {
   projectionDigest: v.string(), deliveryReceiptHash: v.string(), serverTime: v.number(), observedAt: v.optional(v.number()),
   policyVersion: v.string(), provenanceVersion: v.string(),
 }
+const { assessmentOpportunityId: _assessmentOpportunityId, ...practiceExposureFields } = assessmentExposureFields
+const legacyExposureValidator = v.object(assessmentExposureFields)
+const practiceExposureValidator = v.object({
+  ...practiceExposureFields, purpose: v.literal('practice'), status: v.literal('granted'),
+  practiceHelp: practiceHelpExposureValidator,
+})
+export const assessmentExposureValidator: Validator<Infer<typeof legacyExposureValidator>
+  & { practiceHelp?: Infer<typeof practiceHelpExposureValidator> }, 'required', string>
+  = v.union(legacyExposureValidator, practiceExposureValidator)
 const slotBase = {
-  ...base, ...evidenceState, stage: v.union(v.literal('retrieval'), v.literal('prediction'), v.literal('practice'), v.literal('teach_back'), v.literal('diagnostic')),
+  ...base, ...evidenceState,
   slotKey: v.string(), blockId: v.string(), promptDigest: v.string(), promptRevision: v.number(), responseFormatVersion: v.string(),
   deliveryExposureId: v.id('learnAssessmentExposures'), revision: v.number(),
   status: v.union(v.literal('open'), v.literal('accepted'), v.literal('terminal')),
   confidenceRequested: v.optional(v.boolean()),
   terminalReason: v.optional(v.string()), submissionId: v.optional(v.id('learnResponses')),
 }
-export const responseSlotValidator = v.union(v.object({ ...slotBase, ...v2Scope }), v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }))
+export const responseSlotValidator = v.union(
+  v.object({ ...slotBase, ...v2Scope, stage: v.union(v.literal('retrieval'), v.literal('prediction'), v.literal('teach_back'), v.literal('diagnostic')) }),
+  v.object({ ...slotBase, ...v2Scope, stage: v.literal('practice'), practiceAssistance: v.optional(practiceSlotAssistanceValidator) }),
+  v.object({ ...slotBase, ...standaloneScope, stage: v.literal('diagnostic') }),
+)
 const responseBase = {
   masteryAtAcceptance: v.optional(v.object({ performanceTimezone: v.string(), opportunityRevision: v.number(), state: masteryStateValidator, recordRevision: v.number(),
     firstIndependentLocalDate: v.union(v.string(), v.null()), firstIndependentTimezone: v.union(v.string(), v.null()) })),
