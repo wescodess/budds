@@ -36,10 +36,10 @@ function track<T>(target: T): T {
     })
   } else if (target instanceof Map) {
     const entries = [...target]
-    scope.undo.set(target, () => { target.clear(); for (const [key, value] of entries) target.set(key, value) })
+    scope.undo.set(target, () => { Map.prototype.clear.call(target); for (const [key, value] of entries) Map.prototype.set.call(target, key, value) })
   } else if (target instanceof Set) {
     const entries = [...target]
-    scope.undo.set(target, () => { target.clear(); for (const value of entries) target.add(value) })
+    scope.undo.set(target, () => { Set.prototype.clear.call(target); for (const value of entries) Set.prototype.add.call(target, value) })
   } else if (object.__v_isRef === true) {
     const value = object.value
     scope.undo.set(target, () => { object.value = value })
@@ -113,13 +113,20 @@ export function createTimeoutScope(signal?: AbortSignal) {
   const scope: Scope = { lifetime: { active: true }, signal, undo: new Map(), wrappers: new Set(), env: new Map(), globals: new Map() }
   return {
     run<T>(callback: () => T): T { return scopes.run(scope, callback) },
-    dispose() { for (const unmount of [...scope.wrappers]) unmount() },
+    dispose() {
+      const errors: unknown[] = []
+      for (const unmount of [...scope.wrappers]) { try { unmount() } catch (error) { errors.push(error) } }
+      if (errors.length) throw new AggregateError(errors, 'Component cleanup failed')
+    },
     close() {
       if (!scope.lifetime.active) return
-      for (const unmount of [...scope.wrappers]) unmount()
       scope.lifetime.active = false
-      restoreStubs(scope)
-      for (const restore of [...scope.undo.values()].reverse()) restore()
+      const errors: unknown[] = []
+      for (const unmount of [...scope.wrappers]) { try { unmount() } catch (error) { errors.push(error) } }
+      try { restoreStubs(scope) } catch (error) { errors.push(error) }
+      for (const restore of [...scope.undo.values()].reverse()) { try { restore() } catch (error) { errors.push(error) } }
+      scope.undo.clear()
+      if (errors.length) throw new AggregateError(errors, 'Test isolation cleanup failed')
     },
     scope,
   }
@@ -239,8 +246,9 @@ aroundEach(async (runTest, context) => {
     await owner.run(runTest)
   } finally {
     setFn(context.task, original)
-    owner.close()
-    if (!fakeTimers && vi.isFakeTimers()) vi.useRealTimers()
+    try { owner.close() } finally {
+      if (!fakeTimers && vi.isFakeTimers()) vi.useRealTimers()
+    }
   }
 })
 

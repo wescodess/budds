@@ -56,6 +56,14 @@ export function timeoutIsolationPlugin(): Plugin {
           if ((ts.isPropertyAccessExpression(operand) || ts.isElementAccessExpression(operand))) wrap(node, `(${runtime}.track(${operand.expression.getText(file)}), `)
           else if (ts.isIdentifier(operand) && shared.has(operand.text)) wrap(node, `(${runtime}.scalar(${JSON.stringify(`${path}:${operand.text}`)}, (() => { const value = ${operand.text}; return () => { ${operand.text} = value } })()), `)
         }
+        if (inFunction && ts.isCallExpression(node)) {
+          const name = node.expression.getText(file)
+          const callbackIndex = /^(setTimeout|setInterval|setImmediate|queueMicrotask|requestAnimationFrame)$/.test(name)
+            || /\.(then|catch|finally|mockImplementation|mockImplementationOnce)$/.test(name) ? 0
+            : /\.(addEventListener|on|once)$/.test(name) ? 1 : -1
+          const callback = node.arguments[callbackIndex]
+          if (callback && (ts.isIdentifier(callback) || ts.isPropertyAccessExpression(callback))) wrap(callback, `${runtime}.bind(`)
+        }
         if (inFunction && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
           const call = node.expression
           if (['Object.assign', 'Object.defineProperty', 'Object.defineProperties', 'Reflect.set', 'Reflect.deleteProperty', 'Reflect.defineProperty'].includes(call.getText(file)) && node.arguments[0]) wrap(node.arguments[0], `${runtime}.track(`)
