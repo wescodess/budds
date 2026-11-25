@@ -85,6 +85,8 @@ vi.stubGlobal('fetch', fetchMock)
 
 const { default: handler, EXPORT_COLLECTIONS } = await import('./me.get')
 
+await Promise.all([import('../../../convex/documents'), import('../../../convex/documentActions')])
+
 function mockExportData(data: Record<string, any>) {
   getExportMetadataMock.mockResolvedValue({ userId: data.userId, user: data.user })
   getUserDataPageMock.mockImplementation(({ collection }: { collection: string }) => ({

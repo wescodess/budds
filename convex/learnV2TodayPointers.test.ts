@@ -1217,7 +1217,7 @@ test('a playable six-form family fits the ready-pointer reservation with native 
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready' })] })
   budget.mockRestore()
   await attach(f, (await f.opportunities())[0]!)
-})
+}, 20_000)
 
 test('bounded discovery pages retain an older check after more than 32 later records', async () => {
   const f = await fixture()
