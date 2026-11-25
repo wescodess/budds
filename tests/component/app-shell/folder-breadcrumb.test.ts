@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { beforeAll, describe, it, expect, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 const mockAllFolders = ref<any[]>([])
@@ -17,6 +17,12 @@ mockNuxtImport('useFolders', () => {
 
 mockNuxtImport('useRoute', () => {
   return () => mockRoute.value
+})
+
+beforeAll(async () => {
+  await import('~/layouts/default.vue')
+  const warmup = await mountSuspended({ render: () => null })
+  warmup.unmount()
 })
 
 describe('App Shell Layout — AC4: Folder Breadcrumb Navigation', () => {

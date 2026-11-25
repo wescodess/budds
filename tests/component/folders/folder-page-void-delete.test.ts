@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { defineComponent, h } from 'vue'
 
@@ -54,6 +54,12 @@ const FolderShellStub = defineComponent({
 })
 
 const pagePath = ['~', 'pages', 'app', 'folders', '[id].vue'].join('/')
+
+beforeAll(async () => {
+  await import(pagePath)
+  const warmup = await mountSuspended({ render: () => null })
+  warmup.unmount()
+})
 
 describe('folder page Void deletion', () => {
   it('names a V1 record course in the deletion description and toast', async () => {
