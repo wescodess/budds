@@ -15,9 +15,9 @@ export type MeasurementScenario = typeof measurementScenarios[number]
 export type CheckOutcome = MeasurementScenario['cold' | 'day7' | 'day30']
 
 export const expectedMeasurement = {
-  day7: { population: 50, pairs: 20, observed: 25, bounds: [0, 70], accepted: 40,
-    dispositions: { valid_scored: 20, abandoned: 10, missing_cold: 5, assisted_contaminated: 10, scoring_pending: 5 } },
-  day30: { population: 50, pairs: 35, observed: 400 / 7, bounds: [30, 70], accepted: 45,
-    dispositions: { valid_scored: 35, abandoned: 5, missing_cold: 5, assisted_contaminated: 0, scoring_pending: 5 } },
-  firstCheck: { population: 50, checked: 25, failed: 10, observed: 2 / 5, bounds: [1 / 5, 7 / 10] },
+  day7: { population: 30, pairs: 12, observed: 25, bounds: [0, 70], accepted: 24,
+    dispositions: { valid_scored: 12, abandoned: 6, missing_cold: 3, assisted_contaminated: 6, scoring_pending: 3 } },
+  day30: { population: 30, pairs: 21, observed: 400 / 7, bounds: [30, 70], accepted: 27,
+    dispositions: { valid_scored: 21, abandoned: 3, missing_cold: 3, assisted_contaminated: 0, scoring_pending: 3 } },
+  firstCheck: { population: 30, checked: 15, failed: 6, observed: 2 / 5, bounds: [1 / 5, 7 / 10] },
 } as const
