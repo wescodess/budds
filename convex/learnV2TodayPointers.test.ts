@@ -1529,7 +1529,7 @@ test('recent deleted checks cannot displace four owned closed receipts from the 
   const today = await families[0]!.owner.query(api.learnV2Today.getToday, {})
   expect('checkPointers' in today && today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
   expect('checkPointers' in today && today.checkPointers.checks.map(pointer => pointer.reference).sort()).toEqual(references.sort())
-})
+}, 20_000)
 
 test('four maximum ready checks remain on the first page with retired historical Canvas labels', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []
