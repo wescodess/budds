@@ -16,7 +16,7 @@ import { readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { prepareSavedLearnModelScoring } from './lib/learnV2MeasurementScoring'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
-import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION } from '../shared/learn-v2-measurement-report'
+import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, learnReportFactPayloadSchema } from '../shared/learn-v2-measurement-report'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import * as dedicatedChecks from './lib/learnV2DelayedDelivery'
 import * as canvasPreparation from './learnAdaptiveCanvas'
@@ -85,7 +85,7 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique())!
     await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: NOW } })
   })
-  await publishDeliveryTeaching(f, options.teaching)
+  const contentId = await publishDeliveryTeaching(f, options.teaching)
   const start = (entryPoint: 'today' | 'session_deep_link' = 'today') => f.owner.mutation(api.learnV2SessionContent.startStudySession, {
     studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
     idempotencyKey: `today_pointer_start_${entryPoint}`, entryPoint })
@@ -109,7 +109,7 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
     }
     return checks
   }
-  return { ...f, start, opportunities, read }
+  return { ...f, contentId, baselineScorer: { registry, saved: baselineSaved }, start, opportunities, read }
 }
 
 async function attach(f: Awaited<ReturnType<typeof fixture>>, opportunity: Doc<'learnAssessmentOpportunities'>) {
@@ -125,9 +125,9 @@ async function attach(f: Awaited<ReturnType<typeof fixture>>, opportunity: Doc<'
     confidence: 3, idempotencyKey: `pointer_save_${opportunity._id}` } }
 }
 
-function modelReply(awarded = true) {
+function modelReply(awarded = true, key = 'private-criterion') {
   return new Response(JSON.stringify({ id: 'synthetic-execution', model: 'synthetic/model', choices: [{ index: 0, finish_reason: 'stop',
-    message: { role: 'assistant', content: JSON.stringify({ criterionResults: [{ key: 'private-criterion', awarded }], misconceptionTags: [] }) } }],
+    message: { role: 'assistant', content: JSON.stringify({ criterionResults: [{ key, awarded }], misconceptionTags: [] }) } }],
     usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
       endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } }))
 }
@@ -634,6 +634,48 @@ test('C6 pins Today treatment and honest entry strata in frozen Canvas-check sou
     q.eq('userId', userId).eq('fact.assignmentId', cold.assignmentId!)).first())
   expect(enrollment?.fact).toMatchObject({ kind: 'enrollment', snapshot: { flow: 'v2_today', checkSurface: 'canvas' } })
   expect(episodes.find(row => row.horizonDays === 7)).toMatchObject({ cold: { scorePercent: 100 }, delayed: { scorePercent: 100 } })
+})
+
+test('bound Today first-Independent commit persists its claim and first slot after Canvas cold scoring', async () => {
+  const f = await fixture()
+  await f.start()
+  const cold = await coldFor(f)
+  const opened = await attach(f, cold)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply(false)))
+  await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'bound_claim_cold_score_1234567890' })
+  vi.setSystemTime(cold.closeAt + 1)
+  const content = await f.t.run(ctx => ctx.db.get(f.contentId))
+  expect(await f.start()).toMatchObject({ status: 'in_progress' })
+  const delivery = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, {
+    studySessionId: f.graph.studySessionId, idempotencyKey: 'bound_claim_teaching_1234567890' })
+  expect(JSON.stringify(delivery)).toContain('TEACHING-CANARY-explanation')
+  policy.scorer = f.baselineScorer
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply(true, 'accuracy')))
+  const request = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 3, expectedContentRevision: 1,
+    expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1, response: 'Separate ordinary application.', confidence: 3,
+    idempotencyKey: 'bound_claim_independent_1234567890' }
+  const result = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, request)
+  expect(result).toMatchObject({ status: 'completed', state: 'independent', scorePercent: 100 })
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, request)).toEqual({ ...result, replayed: true })
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', userId)).take(8))
+  expect(attempts).toHaveLength(2)
+  const basis = attempts.find(row => row.kind === 'independent_application')!
+  expect(basis).toMatchObject({ masteryStateAfter: 'independent' })
+  const claims = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_kind_and_sequence', q =>
+    q.eq('userId', userId).eq('fact.kind', 'independent_claim_v2')).take(8))
+  expect(claims).toHaveLength(1)
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  expect(learnReportFactPayloadSchema.parse(claims[0]!.fact)).toEqual(claims[0]!.fact)
+  expect(claims[0]!.fact).toMatchObject({ basisAttemptId: basis._id, firstIndependentAt: Date.now(),
+    stratum: { flow: 'v2_today', checkSurface: 'canvas', entryPoint: 'today' },
+    firstSlot: { kind: 'linked', firstCheckOpportunityId: day7._id, stratum: { flow: 'v2_today', checkSurface: 'canvas' } } })
+  expect(day7).toMatchObject({ originalSlot: true, firstCheckClaim: { basisAttemptId: basis._id } })
+  expect(await f.t.run(ctx => ctx.db.query('masteryRecords').withIndex('by_userId', q => q.eq('userId', userId)).take(1)))
+    .toEqual([expect.objectContaining({ state: 'independent' })])
+  expect(await f.t.run(ctx => ctx.db.get(f.contentId))).toEqual(content)
 })
 
 test('off-state parity uses a real Canvas-entered assignment through an ordinary Today lesson', async () => {
