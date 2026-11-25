@@ -151,7 +151,10 @@ async function teachingJob(f: Fixture, content: string) {
     expectedVoidRevision: 2, expectedBlueprintRecordRevision: 1, expectedSessionRevision: 1, attempts: 1, leaseToken: 'teaching-lease', leaseExpiresAt: Date.now() + 60_000,
     dispatchSupportingSourceSnapshotIds: [f.graph.sourceSnapshotId] }))
   const candidate = { version: 'learn-v2.session-content.v1', generatorVersion: 'fixture.teaching.v1', assessmentRubric: rubric,
-    blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content, claimOrders: [0] })),
+    blocks: LEARN_V2_MASTERY_LOOP_BLOCKS.map((kind, order) => ({ order, kind, content: kind === 'faded_example'
+      ? 'A workshop has four rows with eight chairs each. Calculate the seating capacity.'
+      : kind === 'independent_application'
+        ? 'Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.' : content, claimOrders: [0] })),
     claims: [{ order: 0, claim: 'The synthetic source supports multiplication.', supportSourceSnapshotIds: [String(f.graph.sourceSnapshotId)] }] }
   return { tokenIdentifier: userId, jobId, leaseToken: 'teaching-lease', expectedRevision: 1, candidateJson: JSON.stringify(candidate),
     verifierDecisionsJson: JSON.stringify({ version: 'learn-v2.entailment.v2', decisions: [{ claimOrder: 0, sourceSnapshotId: String(f.graph.sourceSnapshotId),

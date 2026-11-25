@@ -41,7 +41,8 @@ import { getLearnMeasurementScorer } from './lib/learnV2MeasurementScorerInvento
 import { readSavedLearnScoringState } from './lib/learnV2MeasurementScoring'
 import { readMeasurementClaims } from './lib/learnV2MeasurementEvidenceReads'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
-import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema, learnTodayCheckRoute, todayCanvasChecksEnabled, type LearnCanvasCheckReceipt, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, type LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema, learnTodayCheckRoute, todayCanvasChecksEnabled, type LearnCanvasCheckReceipt, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -842,7 +843,8 @@ async function savedCanvasCheckForThread(ctx: QueryCtx | MutationCtx, userId: st
 }
 
 export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx, userId: string,
-  opportunity: Doc<'learnAssessmentOpportunities'>): Promise<LearnTodayCheckPointer | null> {
+  opportunity: Doc<'learnAssessmentOpportunities'>,
+  pointerVersion: typeof LEARN_TODAY_CHECK_POINTER_VERSION | typeof LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION = LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION): Promise<LearnTodayCheckPointer | null> {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || opportunity.contextPins.kind !== 'session'
     || !opportunity.contextPins.canvas || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return null
   ctx = measurementReadContext(ctx, userId)
@@ -850,7 +852,7 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
     const saved = await savedCanvasCheckForOwner(ctx, userId, opportunity)
     if (!saved) return null
     const threadId = saved.thread._id
-    return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,
+    return learnTodayCheckPointerSchema.parse({ ...await todayCheckLabel(ctx, userId, opportunity, pointerVersion), reference: opportunity.delayedCheckId,
       state: saved.receipt.state, destination: { kind: 'canvas', threadId, route: learnTodayCheckRoute(threadId, opportunity.delayedCheckId) } })
   }
   const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
@@ -902,7 +904,7 @@ export async function readCanvasCheckPointerForOwner(ctx: QueryCtx | MutationCtx
     if (!playable) return null
   }
   const threadId = scope.thread._id
-  return learnTodayCheckPointerSchema.parse({ version: LEARN_TODAY_CHECK_POINTER_VERSION, reference: opportunity.delayedCheckId,
+  return learnTodayCheckPointerSchema.parse({ ...await todayCheckLabel(ctx, userId, opportunity, pointerVersion), reference: opportunity.delayedCheckId,
     state: phase, destination: { kind: 'canvas', threadId, route: learnTodayCheckRoute(threadId, opportunity.delayedCheckId) } })
 }
 

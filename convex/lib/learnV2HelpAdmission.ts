@@ -184,8 +184,8 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
 
 const FUTURE_OPPORTUNITY_LIMIT = 64
 
-function futurePreparing(row: Doc<'learnAssessmentOpportunities'>, now: number) {
-  return row.phase === 'preparing' && Number.isFinite(row.openAt) && row.openAt > now
+function futureUnopened(row: Doc<'learnAssessmentOpportunities'>, now: number) {
+  return row.phase !== 'test_open' && row.openAt > now
 }
 
 async function recordInterveningLearning(ctx: MutationCtx, userId: string, rows: Doc<'learnAssessmentOpportunities'>[], scopeDigest: string, now: number) {
@@ -216,6 +216,25 @@ export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
   return false
 }
 
+export async function relevantOpenLearnCheck(ctx: ReadCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>): Promise<'yes' | 'no' | 'unknown'> {
+  const resolver = scopeResolver(ctx, userId)
+  const scope = emptyScope()
+  const collected = await collectOpenChecks(ctx, userId, Date.now(), null)
+  if (collected.kind === 'limit') return 'unknown'
+  try {
+    await resolver.learningVoid(scope, opportunity.learningVoidId)
+    if (opportunity.contextPins.kind === 'session' && opportunity.contextPins.canvas) await resolver.thread(scope, opportunity.contextPins.canvas.threadId)
+    for (const row of collected.open) {
+      if (row._id === opportunity._id) continue
+      if (await matchesOpenCheck(resolver, scope, row, opportunity.assignmentId)) return 'yes'
+    }
+    return 'no'
+  } catch (error) {
+    if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+    return 'unknown'
+  }
+}
+
 export async function inspectLearnHelpForOwner(ctx: QueryCtx, userId: string, input: LearnHelpRequest, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   if (await requireAuth(ctx) !== userId) throw new Error('Learn access denied')
   return await admitLearnHelp(ctx, userId, input, false, true, baselineSessionContent)
@@ -237,23 +256,25 @@ async function collectOpenChecks(ctx: ReadCtx, userId: string, now: number, base
   const open: Doc<'learnAssessmentOpportunities'>[] = []
   const future: Doc<'learnAssessmentOpportunities'>[] = []
   for (const phase of LEARN_HELP_OPEN_PHASES) {
-    const limit = LEARN_HELP_LIMITS.openOpportunities + 1 - open.length + (phase === 'preparing' ? FUTURE_OPPORTUNITY_LIMIT - future.length : 0)
+    const limit = LEARN_HELP_LIMITS.openOpportunities + FUTURE_OPPORTUNITY_LIMIT + 1 - open.length - future.length + Number(baselineSessionContent !== null)
     const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
       q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
-    const limited = (phase === 'preparing' || baselineSessionContent) && rows.length === limit
+    const limited = rows.length === limit
     for (const row of rows) {
       if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'
         && row.contextPins.sessionContentId === baselineSessionContent) continue
-      if (futurePreparing(row, now)) future.push(row)
+      if (!Number.isFinite(row.openAt) || !Number.isFinite(row.closeAt)) return { kind: 'limit', open, future }
+      if (futureUnopened(row, now)) future.push(row)
       else open.push(row)
     }
-    if (limited || open.length > LEARN_HELP_LIMITS.openOpportunities) return { kind: 'limit', open, future }
+    if (limited || open.length > LEARN_HELP_LIMITS.openOpportunities || future.length > FUTURE_OPPORTUNITY_LIMIT) return { kind: 'limit', open, future }
   }
   return { kind: 'rows', open, future }
 }
 
-async function matchesOpenCheck(resolver: ReturnType<typeof scopeResolver>, scope: Scope, row: Doc<'learnAssessmentOpportunities'>) {
+async function matchesOpenCheck(resolver: ReturnType<typeof scopeResolver>, scope: Scope, row: Doc<'learnAssessmentOpportunities'>, assignmentId?: Id<'learnMeasurementAssignments'>) {
   if (row.submissionId) throw new ScopeUnavailable()
+  if (assignmentId && row.assignmentId === assignmentId) return true
   const assessment = emptyScope()
   await resolver.learningVoid(assessment, row.learningVoidId)
   if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(assessment, row.contextPins.canvas.threadId)

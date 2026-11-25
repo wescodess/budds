@@ -14,6 +14,7 @@ import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/l
 import { requireAuth } from './lib/auth'
 import { recordLearnResponseIntegrityForOwner } from './lib/learnV2Responses'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { measurementCaseExposed } from './lib/learnV2Measurement'
 import { freezeFirstIndependentClaimForOwner, recordLearnMeasurementInstructionForOwner, registerLearnFirstSlotForOwner, type EnrollmentRequest } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementDueBatch, replaceLearnMeasurementOpportunityForOwner } from './lib/learnV2MeasurementDueWork'
 import { learnMeasurementProtocolSchema, measurementClock, type LearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
@@ -464,6 +465,49 @@ test('reserve is linked, secondary and idempotent; original exclusion and later 
   vi.setSystemTime(original.closeAt)
   await f.work()
   expect((await f.opportunities()).find(row => row.replacesOpportunityId === original._id)?.phase).toBe('abandoned')
+})
+
+test.each(['granted', 'acknowledged', 'requested_denied'] as const)('enrollment selection accounts for practice exposure without an opportunity: %s', async status => {
+  const f = await fixture()
+  await f.t.run(async ctx => {
+    const item = (await ctx.db.get(f.f.itemIds[0]!))!
+    await ctx.db.insert('learnAssessmentExposures', { ...f.f.base, serverTime: NOW,
+      learningVoidId: f.f.capability.learningVoidId, blueprintRevisionId: f.f.capability.blueprintRevisionId,
+      objectiveId: f.f.capability.objectiveId, caseId: item.caseId, purpose: 'practice', status,
+      projectionDigest: HASH, deliveryReceiptHash: HASH, policyVersion: 'synthetic.practice.v1', provenanceVersion: 'synthetic.practice.v1' })
+  })
+  const result = await f.owner.mutation(enroll, f.request)
+  if (status === 'requested_denied') expect(result).toMatchObject({ status: 'admitted', reasonCodes: [] })
+  else expect(result).toMatchObject({ status: 'not_admitted', reasonCodes: expect.arrayContaining(['novel_item_unavailable']) })
+})
+
+test.each(['granted', 'acknowledged'] as const)('replacement selection rejects a practiced reserve without an opportunity: %s', async status => {
+  const f = await fixture(3, true)
+  await f.admitted()
+  await f.work()
+  const original = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(original.openAt)
+  await f.t.run(async ctx => {
+    await ctx.db.patch(original._id, { reasonCode: 'novel_item_unavailable', operationalEligibility: 'blocked' })
+    const item = (await ctx.db.get(f.f.itemIds[3]!))!
+    await ctx.db.insert('learnAssessmentExposures', { ...f.f.base, serverTime: Date.now(), learningVoidId: original.learningVoidId,
+      blueprintRevisionId: original.blueprintRevisionId, objectiveId: original.objectiveId, caseId: item.caseId, purpose: 'practice', status,
+      projectionDigest: HASH, deliveryReceiptHash: HASH, policyVersion: 'synthetic.practice.v1', provenanceVersion: 'synthetic.practice.v1' })
+  })
+  expect(await f.owner.mutation(replace, { assessmentOpportunityId: original._id, reason: 'novel_item_unavailable' }))
+    .toEqual({ status: 'novel_item_unavailable' })
+  expect((await f.opportunities()).filter(row => row.replacesOpportunityId === original._id)).toEqual([])
+})
+
+test('only an explicitly supplied opportunity excludes its own delivery from novelty', async () => {
+  const f = await fixture()
+  await f.admitted()
+  const cold = (await f.opportunities())[0]!
+  await f.grant(cold._id)
+  if (cold.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement')
+  const caseId = cold.assessmentPins.itemPins.caseId
+  expect(await f.t.run(ctx => measurementCaseExposed(ctx, OWNER.tokenIdentifier, caseId, cold._id))).toBe(false)
+  expect(await f.t.run(ctx => measurementCaseExposed(ctx, OWNER.tokenIdentifier, caseId))).toBe(true)
 })
 
 test('exhausted reserves and wrong answers cannot reroll a case', async () => {

@@ -68,6 +68,7 @@ import type * as learnV2Lifecycle from "../learnV2Lifecycle.js";
 import type * as learnV2MapCalibration from "../learnV2MapCalibration.js";
 import type * as learnV2Mastery from "../learnV2Mastery.js";
 import type * as learnV2Plans from "../learnV2Plans.js";
+import type * as learnV2PostSealTeaching from "../learnV2PostSealTeaching.js";
 import type * as learnV2Retention from "../learnV2Retention.js";
 import type * as learnV2Search from "../learnV2Search.js";
 import type * as learnV2SearchActions from "../learnV2SearchActions.js";
@@ -176,6 +177,7 @@ declare const fullApi: ApiFromModules<{
   learnV2MapCalibration: typeof learnV2MapCalibration;
   learnV2Mastery: typeof learnV2Mastery;
   learnV2Plans: typeof learnV2Plans;
+  learnV2PostSealTeaching: typeof learnV2PostSealTeaching;
   learnV2Retention: typeof learnV2Retention;
   learnV2Search: typeof learnV2Search;
   learnV2SearchActions: typeof learnV2SearchActions;

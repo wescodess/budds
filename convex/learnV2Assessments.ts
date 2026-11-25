@@ -1,6 +1,5 @@
 import { query, mutation } from './_generated/server'
 import { requireAuth } from './lib/auth'
-import { requireOwnedResponseTarget } from './lib/learnV2PublicAccess'
 import {
   assessmentReferenceArgs, assessmentReferenceSchema, assessmentDeliveryValidator, assessmentStateValidator,
   grantAssessmentDeliveryArgs, grantAssessmentDeliverySchema, grantAssessmentDeliveryValidator,
@@ -8,7 +7,7 @@ import {
   type LearnV2FeatureReadiness, type LearnV2DeliveryGrant, type LearnV2AssessmentDelivery, type LearnV2AssessmentState,
   postSealTeachingArgs, postSealTeachingReferenceSchema, postSealTeachingValidator, type LearnV2PostSealTeaching,
 } from './lib/learnV2PublicContract'
-import { unavailableLearnPostSealTeaching } from '../shared/learn-v2-assessment-disclosure'
+import { readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner, readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 
 export const getFeatureReadiness = query({
@@ -58,7 +57,6 @@ export const getPostSealTeaching = query({
   handler: async (ctx, args): Promise<LearnV2PostSealTeaching> => {
     const userId = await requireAuth(ctx)
     const request = parsePublicLearnRequest(postSealTeachingReferenceSchema, args)
-    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
-    return unavailableLearnPostSealTeaching('disabled')
+    return await readPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
   },
 })

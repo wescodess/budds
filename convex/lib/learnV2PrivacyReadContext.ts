@@ -13,7 +13,7 @@ function readScope(ctx: ReadCtx): Scope | undefined {
 }
 
 // Construct at a handler boundary. Nothing is retained outside this context;
-// callers that write must start a new scope before reading changed authority.
+// callers that write must invalidate changed authority before further reads.
 export function createResponsePrivacyReadContext<T extends ReadCtx>(ctx: T, userId: string, limit = RESPONSE_PRIVACY_READ_BUDGET - 16, options: { throwOnBudgetExhaustion?: boolean } = {}) {
   // Authentication at the handler boundary uses at most sixteen ranges.
   limit = Math.min(limit, RESPONSE_PRIVACY_READ_BUDGET - 16)
@@ -54,7 +54,14 @@ export function createResponsePrivacyReadContext<T extends ReadCtx>(ctx: T, user
     },
   })
   const scoped = new Proxy(ctx, { get: (target, property) => property === scopeKey ? state : property === 'db' ? db : Reflect.get(target, property) })
-  return { ctx: scoped, get reads() { return reads } }
+  return { ctx: scoped, get reads() { return reads }, afterWrite: (id?: string) => {
+    // Indexed authority can change after any write; other point reads stay valid.
+    if (id === undefined) documents.clear()
+    else documents.delete(JSON.stringify([userId, id]))
+    state.memo.clear()
+    reads = 0
+    invalidateResponsePrivacyReadContext(ctx)
+  } }
 }
 
 export function invalidateResponsePrivacyReadContext(ctx: ReadCtx) {

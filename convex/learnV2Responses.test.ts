@@ -27,6 +27,7 @@ import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { deriveLearnScorerConfiguration } from '../shared/learn-v2-measurement'
 import { LEARN_HELP_ADMISSION_VERSION } from './lib/learnV2HelpContract'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { POST_SEAL_HELP_DELIVERY_LIMIT } from './lib/learnV2PostSealTeaching'
 
 const policy = vi.hoisted(() => ({ responses: true }))
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal => {
@@ -187,6 +188,27 @@ test('ordinary assessment acceptance still requires its session-content claims',
     for (const claim of claims) await ctx.db.delete(claim._id)
   })
   expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission })).toMatchObject({ kind: 'rejected', reasonCode: 'evidence_unavailable' })
+})
+
+test('a full practice-help slot leaves the Void exposure budget available for an unrelated cold objective', async () => {
+  const f = await fixture('measurement')
+  expect(POST_SEAL_HELP_DELIVERY_LIMIT).toBe(8)
+  await f.t.run(async ctx => {
+    const objective = (await ctx.db.get(f.capability.objectiveId))!
+    const { _id: _objectiveId, _creationTime: _objectiveTime, ...objectiveFields } = objective
+    const objectiveId = await ctx.db.insert('learnObjectives', { ...objectiveFields, title: 'A different capability' })
+    const caseId = await ctx.db.insert('learnAssessmentCases', { ...f.f.base, caseKey: 'prior-practice-case',
+      scenarioFingerprint: 'separate-scenario', solutionFingerprint: 'separate-solution', identityPolicyVersion: 'identity.v1', usageClass: 'instructional', identityValidationId: f.f.rows.learnMeasurementValidations })
+    for (let index = 0; index <= POST_SEAL_HELP_DELIVERY_LIMIT; index++) await ctx.db.insert('learnAssessmentExposures', {
+      ...f.f.base, learningVoidId: f.f.learningVoidId, blueprintRevisionId: f.capability.blueprintRevisionId, objectiveId, caseId,
+      purpose: 'practice', status: 'granted', projectionDigest: HASH, deliveryReceiptHash: `prior-practice-${index}`,
+      serverTime: NOW - 1, policyVersion: 'learn-v2.practice-assistance.v1', provenanceVersion: 'learn-v2.post-seal-publication.v1',
+    })
+  })
+  const receipt = accepted(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: f.submission }))
+  expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toMatchObject({
+    validitySnapshot: { status: 'valid', measurementEligible: true }, assistanceSnapshot: { state: 'unassisted' },
+  })
 })
 
 test('calibration acceptance uses its actual scorer request and rejects wire overflow before sealing', async () => {

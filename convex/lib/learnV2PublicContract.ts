@@ -3,7 +3,7 @@ import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
-import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION } from '../../shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, LEARN_TODAY_CHECK_TIMINGS } from '../../shared/learn-v2-today-check'
 import type { learnResponseReceiptSchema} from '../../shared/learn-v2-responses';
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
@@ -16,7 +16,7 @@ import {
 } from '../../shared/learn-v2-delayed-check'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_PUBLIC_FEEDBACK_CODES,
-  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
+  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS, LEARN_V2_PRACTICE_HELP_REASONS,
   learnPostSealTeachingReferenceSchema, learnAuthorizePracticeAssistanceSchema,
   type learnPostSealTeachingSchema, type learnPracticeAssistanceAuthorizationSchema,
   type learnAttemptHistorySchema, type learnDeliveredAssessmentSchema,
@@ -35,11 +35,16 @@ const nullableNumber = v.union(v.number(), v.null())
 const nullableString = v.union(v.string(), v.null())
 const observation = v.union(v.boolean(), v.literal('unknown'))
 const phase = literals(LEARN_V2_ASSESSMENT_PHASES)
-export const todayCheckPointerValidator = v.object({
-  version: v.literal(LEARN_TODAY_CHECK_POINTER_VERSION), reference: v.string(),
+const todayCheckPointerFields = {
+  reference: v.string(),
   state: literals(['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready', 'closed']),
   destination: v.object({ kind: v.literal('canvas'), threadId: v.id('learningThreads'), route: v.string() }),
-})
+}
+export const todayCheckPointerValidator = v.union(
+  v.object({ ...todayCheckPointerFields, version: v.literal(LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION) }),
+  v.object({ ...todayCheckPointerFields, version: v.literal(LEARN_TODAY_CHECK_POINTER_VERSION),
+    topic: v.optional(v.string()), timing: literals(LEARN_TODAY_CHECK_TIMINGS) }),
+)
 export const todayCheckPointersValidator = v.object({
   status: literals(['available', 'unavailable', 'disabled', 'restart_required']), reasonCode: nullableString, checks: v.array(todayCheckPointerValidator),
   isDone: v.boolean(), continueCursor: nullableString,
@@ -217,15 +222,21 @@ export const authorizePracticeAssistanceArgs = {
 }
 export const authorizePracticeAssistanceSchema = learnAuthorizePracticeAssistanceSchema
 const teachingCitations = v.array(v.object({ sourceRef: v.string(), label: v.string() }))
+const practiceHelpState = v.union(v.object({ status: literals(['available', 'delivered']) }),
+  v.object({ status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_PRACTICE_HELP_REASONS) }))
 export const postSealTeachingValidator = v.union(
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('available'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
     feedback: v.union(v.object({ tier: literals(['T0', 'T1']), text: v.string(), citations: teachingCitations }), v.null()),
     lesson: v.union(v.object({ tier: literals(['T0', 'T1']), paragraphs: v.array(v.string()), citations: teachingCitations }), v.null()),
-    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), tier: literals(['T0', 'T2']), prompt: v.string() }), v.null()) }),
+    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), tier: literals(['T0', 'T2']), prompt: v.string() }), v.null()),
+    availability: v.object({ feedback: literals(['scoring_pending', 'feedback_publishing', 'available', 'unavailable']),
+      practice: v.union(v.object({ status: literals(['not_opened', 'available']) }),
+        v.object({ status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) })),
+      help: v.union(v.object({ remaining: v.number(), hint: practiceHelpState, worked_example: practiceHelpState }), v.null()) }) }),
 ) satisfies Validator<z.infer<typeof learnPostSealTeachingSchema>, 'required', string>
 export const practiceAssistanceAuthorizationValidator = v.union(
-  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_PRACTICE_HELP_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('authorized'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
     target: v.object({ responseSlotId: v.id('learnResponseSlots') }), revision: v.number(), authorizationId: v.id('learnAssessmentExposures'), deliveredAt: v.number(),
     content: v.union(
