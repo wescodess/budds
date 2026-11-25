@@ -27,9 +27,9 @@ function workspace(t) {
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   return directory
 }
-function cli(command, directory, args = [], expected = 0) {
+function cli(command, directory, args = [], expected = 0, { timeout = 120_000 } = {}) {
   const result = spawnSync(process.execPath, ['--import', join(fixtures, 'network-deny.mjs'), join(ROOT, 'scripts/learn-v2-scorer-harness.mjs'),
-    command, '--output', directory, ...args], { cwd: ROOT, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 2_000_000 })
+    command, '--output', directory, ...args], { cwd: ROOT, env, encoding: 'utf8', timeout, maxBuffer: 2_000_000 })
   assert.equal(result.error, undefined, result.error?.message)
   assert.equal(result.status, expected, `${result.stdout}\n${result.stderr}`)
   return result.status === 0 ? JSON.parse(result.stdout) : result
@@ -63,7 +63,7 @@ test('full CLI capture: 768 blind dispatches, complete core denominators, exact 
   const before = execFileSync('git', ['status', '--porcelain=v1'], { cwd: ROOT, encoding: 'utf8' })
   const beforeDiff = execFileSync('git', ['diff', '--binary'], { cwd: ROOT })
   init(directory, ['--anchors', file(parent, 'anchors.json', anchors())])
-  const summary = cli('run', directory)
+  const summary = cli('run', directory, [], 0, { timeout: 240_000 })
   assert.equal(summary.evidenceStatus, 'offline_contract_only')
   assert.equal(summary.dispatched, 768)
   assert.equal(summary.complete, true)

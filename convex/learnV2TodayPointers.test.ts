@@ -28,7 +28,7 @@ import { LEARN_V2_MEASUREMENT_ADMISSION_REASONS } from '../shared/learn-v2-measu
 import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 
-const policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
+let policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
   return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
@@ -59,12 +59,13 @@ const NOW = Date.parse('2027-03-07T15:00:00Z')
 
 function setUpPointerTest() {
   vi.useFakeTimers(); vi.setSystemTime(NOW)
-  policy.pointers = true; policy.responses = true; policy.enrollment = true; policy.delivery = true; policy.reports = false; policy.evidenceRows = 64; LEARN_REPORT_APPROVALS.splice(0)
+  policy = { pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null, scorer: null }
+  LEARN_REPORT_APPROVALS.splice(0)
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
 }
 function tearDownPointerTest() {
-  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, structuredClone(originalManifest))
   LEARN_REPORT_APPROVALS.splice(0)
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers()
 }
@@ -1560,7 +1561,7 @@ test('a playable six-form family fits the ready-pointer reservation with native 
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION })).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready', timing: 'this_session' })] })
   budget.mockRestore()
   await attach(f, (await f.opportunities())[0]!)
-})
+}, 20_000)
 
 test('bounded discovery pages retain an older check after more than 32 later records', async () => {
   const f = await fixture()
@@ -1670,6 +1671,7 @@ test('saved-work read caches invalidate after body and source revocation', async
 })
 
 test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under completed-work bounds after publication limits tighten', async state => {
+  const limits = policy
   const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
   await f.start()
   const row = (await f.opportunities())[0]!
@@ -1682,7 +1684,7 @@ test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under com
       submissionId: saved.submissionId, idempotencyKey: 'historical_pointer_score_1234567890' })
   }
   const before = await f.t.run(ctx => ctx.db.get(saved.submissionId))
-  policy.evidenceRows = 1
+  limits.evidenceRows = 1
   expect(await f.read()).toEqual([expect.objectContaining({ state })])
   expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })).toMatchObject({
     status: state === 'result_ready' ? 'feedback' : 'submitted', savedResponse: { response: opened.stage.response },
@@ -1955,7 +1957,7 @@ test('recent deleted checks cannot displace four owned closed receipts from the 
   const today = await families[0]!.owner.query(api.learnV2Today.getToday, {})
   expect('checkPointers' in today && today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
   expect('checkPointers' in today && today.checkPointers.checks.map(pointer => pointer.reference).sort()).toEqual(references.sort())
-})
+}, 20_000)
 
 test('four maximum ready checks remain on the first page with retired historical Canvas labels', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []

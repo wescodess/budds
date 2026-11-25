@@ -6,11 +6,19 @@ import { join } from 'node:path'
 import { ROOT } from './artifacts.mjs'
 
 export const LEDGER_EXIT_TEST_NAME = 'the global approval ledger exit regressions use isolated mock adapters with network denied'
-const patterns = ['A3 M1 and crash table', 'A[456]', 'crash table|post-dispatch|publication internals', 'B1', 'B2', 'A9 transport table']
+// Each disjoint group retains the original process deadline.
+const patterns = ['A3 M1 and crash table', 'A[456]', 'crash table|post-dispatch|publication internals', 'B1', 'B2',
+  'A9 transport table [0-9]', 'A9 transport table [a-l]', 'A9 transport table [m-p]', 'A9 transport table [q-z]']
+const residualPatterns = ['[A-Z]', '[0-9]', '[a-m]', '[n-z]']
+const residual = `(?!(?:${patterns.join('|')}))`
 const filters = [...patterns.map(pattern => `--test-name-pattern=^(?:${pattern})`),
-  `--test-skip-pattern=^(?:${patterns.join('|')})`]
-const expected = [/A3 M1 and crash table/, /A5 historical admission/, /crash table: approval/, /B1/, /B2/, /A9 transport table 400/, /one signed approval cannot dispatch in two directories/]
-export const ledgerPartitions = filters.map((filter, index) => ({ name: String(index + 1), filter, expected: expected[index] }))
+  ...residualPatterns.map(pattern => `--test-name-pattern=^${residual}(?:${pattern})`)]
+const expected = [/A3 M1 and crash table/, /A5 historical admission/, /crash table: approval/, /B1/, /B2/,
+  /A9 transport table 400/, /A9 transport table abort/, /A9 transport table malformed-200/, /A9 transport table redirect-loop/,
+  /A12 response projection/, /256 model\/configuration reservations/, /a resolved canary permits/,
+  /one signed approval cannot dispatch in two directories/]
+const names = ['1', '2', '3', '4', '5', '6a', '6b', '6c', '6d', '7a', '7b', '7c', '7d']
+export const ledgerPartitions = filters.map((filter, index) => ({ name: names[index], filter, expected: expected[index] }))
 
 export function runLedgerPartition(partition) {
   const started = performance.now()

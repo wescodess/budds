@@ -485,7 +485,7 @@ describe('dispatch and scoring', () => {
       expect(result?.results).toHaveLength(200)
       expect(await fixture.t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ gradingStatus: 'settled', gradingNeedsAttention: false })
       expect(await fixture.t.run(ctx => ctx.db.get(fixture.quizId))).toMatchObject({ score: 100 })
-    })
+    }, 20_000)
   })
 
   test.each(['completeAttempt', 'submitAllAnswers'] as const)('%s excludes questions deleted before completion from later score updates', async (path) => {

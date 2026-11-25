@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { convexTest } from 'convex-test'
 import betterAuthTest from '@convex-dev/better-auth/test'
 import schema from './schema'
@@ -15,6 +15,9 @@ const modules = import.meta.glob('./**/*.ts')
 const siteUrl = 'http://localhost:3002'
 const convexSiteUrl = 'http://localhost:3211'
 
+vi.stubEnv('CONVEX_SITE_URL', convexSiteUrl)
+await import('./auth')
+
 function createTestBackend() {
   const t = convexTest(schema, modules)
   betterAuthTest.register(t)
@@ -29,25 +32,30 @@ function decodeBase64Url(value: string) {
   return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), character => character.charCodeAt(0))
 }
 
-describe('Better Auth with the Convex adapter', () => {
-  beforeAll(async () => {
-    // Load the auth module graph before the per-test timeout starts.
-    vi.stubEnv('CONVEX_SITE_URL', convexSiteUrl)
-    await import('./auth')
-  })
+function configureTestEnvironment() {
+  vi.stubEnv('NODE_ENV', 'development')
+  vi.stubEnv('TEST', 'false')
+  vi.stubEnv('SITE_URL', siteUrl)
+  vi.stubEnv('CONVEX_SITE_URL', convexSiteUrl)
+  vi.stubEnv('CONVEX_CLOUD_URL', 'http://localhost:3210')
+  vi.stubEnv('BETTER_AUTH_SECRET', 'ci-only-better-auth-secret-000000000000')
+  vi.stubEnv('GOOGLE_CLIENT_ID', 'ci-only-google-client-id')
+  vi.stubEnv('GOOGLE_CLIENT_SECRET', 'ci-only-google-client-secret')
+  vi.stubEnv('BUDDS_E2E_MODE', 'true')
+  vi.stubEnv('BUDDS_E2E_AUTH_TOKEN', 'ci-only-local-auth-test-000000000000')
+}
 
-  beforeEach(() => {
-    vi.stubEnv('NODE_ENV', 'development')
-    vi.stubEnv('TEST', 'false')
-    vi.stubEnv('SITE_URL', siteUrl)
-    vi.stubEnv('CONVEX_SITE_URL', convexSiteUrl)
-    vi.stubEnv('CONVEX_CLOUD_URL', 'http://localhost:3210')
-    vi.stubEnv('BETTER_AUTH_SECRET', 'ci-only-better-auth-secret-000000000000')
-    vi.stubEnv('GOOGLE_CLIENT_ID', 'ci-only-google-client-id')
-    vi.stubEnv('GOOGLE_CLIENT_SECRET', 'ci-only-google-client-secret')
-    vi.stubEnv('BUDDS_E2E_MODE', 'true')
-    vi.stubEnv('BUDDS_E2E_AUTH_TOKEN', 'ci-only-local-auth-test-000000000000')
-  })
+configureTestEnvironment()
+const warmBackend = createTestBackend()
+const warmResponse = await warmBackend.fetch('/api/auth/sign-in/social', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', origin: siteUrl },
+  body: JSON.stringify({ provider: 'google', callbackURL: '/app' }),
+})
+if (warmResponse.status !== 200) throw new Error('Auth fixture warm-up failed')
+
+describe('Better Auth with the Convex adapter', () => {
+  beforeEach(configureTestEnvironment)
 
   afterEach(() => vi.unstubAllEnvs())
 

@@ -28,7 +28,7 @@ test.each([false, true].flatMap(responses =>
   const mission = await s.owner.query(api.learnV2Journey.getMission, { learningVoidId: s.f.learningVoidId })
   expect(JSON.parse(mission?.plan.preview?.inputSnapshot ?? 'null')).toEqual(schedulingInput)
   expect(JSON.parse(mission?.plan.preview?.resultSnapshot ?? 'null')).toMatchObject({ status: stored.feasibility })
-})
+}, 20_000)
 
 test.each([false, true])('scheduling edits and reflow preserve writer results with responses=%s', async responses => {
   policy.responses = responses

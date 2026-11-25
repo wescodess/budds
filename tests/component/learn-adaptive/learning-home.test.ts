@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 import { nextTick } from 'vue'
@@ -26,6 +26,10 @@ mockNuxtImport('useConvex', () => () => ({ query: (_reference: unknown, args: { 
 const path = ['~', 'components', 'learn-adaptive', 'LearningHome.vue'].join('/')
 const ordinaryKey = (owner = 'owner_1') => `budds.learn.adaptive-draft.v1:${owner}`
 const pasteKey = (owner = 'owner_1') => `budds.learn.adaptive-paste.v1:${owner}`
+
+beforeAll(async () => {
+  await import(path)
+})
 
 describe('need-first LearningHome', () => {
   beforeEach(() => {

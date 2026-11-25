@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
@@ -38,6 +38,10 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
 })
 
 const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
+
+beforeAll(async () => {
+  await import(path)
+})
 
 describe('adaptive thread route isolation', () => {
   beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); canvasError.value = null; sessionStorage.clear() })
