@@ -1659,3 +1659,142 @@ test('a legacy Today assignment keeps its dedicated delayed entry after rollout'
   expect(await f.owner.query(api.learnV2Assessments.getAssessment, { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: ready._id })).toMatchObject({ status: 'delivered' })
   expect(await f.read()).toEqual([])
 })
+
+type SweepFixture = Awaited<ReturnType<typeof fixture>>
+type SweepTarget = 'same_objective' | 'other_objective' | 'other_void' | 'shared_source_void'
+const SWEEP_TARGETS: SweepTarget[] = ['same_objective', 'other_objective', 'other_void', 'shared_source_void']
+const SCHEDULER_STATES = ['preparing_pending', 'preparing_blocked', 'ready_blocked', 'test_open_blocked'] as const
+type SweepCondition = { kind: 'playable' | 'protocol_removed' | 'protocol_version' | 'protocol_window' | 'entitlement' | 'pilot' | 'thread_lost' | 'expired'
+  | 'saved' | 'saved_protocol_version' | 'saved_protocol_window' } | { kind: 'reason', reasonCode: string } | { kind: 'scheduler', state: typeof SCHEDULER_STATES[number] }
+const SWEEP_CONDITIONS: SweepCondition[] = [
+  ...(['playable', 'protocol_removed', 'protocol_version', 'protocol_window', 'entitlement', 'pilot', 'thread_lost', 'expired',
+    'saved', 'saved_protocol_version', 'saved_protocol_window'] as const).map(kind => ({ kind })),
+  ...PREPARATION_REASON_SWEEP.map(reasonCode => ({ kind: 'reason' as const, reasonCode })),
+  ...SCHEDULER_STATES.map(state => ({ kind: 'scheduler' as const, state })),
+]
+const conditionLabel = (condition: SweepCondition) => condition.kind === 'reason' ? `reason ${condition.reasonCode}`
+  : condition.kind === 'scheduler' ? `scheduler ${condition.state}` : condition.kind
+
+async function sweepTarget(f: SweepFixture, target: SweepTarget) {
+  if (target === 'same_objective') return { lessonId: await anotherTodayLesson(f), g: f }
+  if (target === 'other_void' || target === 'shared_source_void') {
+    const g = await fixture({ test: f.t, fixtureKey: 'sweep-void-2' })
+    if (target === 'shared_source_void') await f.t.run(async ctx => ctx.db.patch(g.graph.sourceIdentityId,
+      { externalKey: (await ctx.db.get(f.graph.sourceIdentityId))!.externalKey }))
+    return { lessonId: g.graph.studySessionId, g }
+  }
+  const lessonId = await f.t.run(async ctx => {
+    const objectiveId = await ctx.db.insert('learnObjectives', { userId, blueprintRevisionId: f.graph.blueprintRevisionId, order: 1,
+      title: 'Apply a second rule', depth: 'working', assessmentContract: (await ctx.db.get(f.graph.objectiveId))!.assessmentContract })
+    await ctx.db.insert('learnObjectiveSources', { userId, objectiveId, sourceSnapshotId: f.graph.sourceSnapshotId, coverage: 'strong' })
+    return await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: f.graph.studyPlanRevisionId, primaryObjectiveId: objectiveId,
+      status: 'planned', revision: 1, scheduledStartAt: NOW })
+  })
+  await publishDeliveryTeaching({ t: f.t, graph: { ...f.graph, studySessionId: lessonId } })
+  return { lessonId, g: f }
+}
+
+async function applySweepCondition(f: SweepFixture, condition: SweepCondition, check: Doc<'learnAssessmentOpportunities'>) {
+  const protocol = policy.protocol as ReturnType<typeof syntheticDeliveryProtocol>
+  if (condition.kind.startsWith('saved')) {
+    const opened = await attach(f, check)
+    expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  }
+  if (condition.kind === 'protocol_removed') policy.protocol = null
+  if (condition.kind.endsWith('protocol_version')) policy.protocol = { ...protocol, version: 'synthetic.delivery-protocol.v2' }
+  if (condition.kind.endsWith('protocol_window')) policy.protocol = { ...protocol, coldWindowMs: protocol.coldWindowMs + 60_000 }
+  if (condition.kind === 'entitlement' || condition.kind === 'pilot') await revokeCanvas(condition.kind, f)
+  if (condition.kind === 'thread_lost' && check.contextPins.kind === 'session' && check.contextPins.canvas) {
+    const threadId = check.contextPins.canvas.threadId
+    await f.t.run(ctx => ctx.db.delete(threadId))
+  }
+  if (condition.kind === 'expired') vi.setSystemTime(check.closeAt + 60_000)
+  if (condition.kind === 'reason') await f.t.run(ctx => ctx.db.patch(check._id, { operationalEligibility: 'blocked', reasonCode: condition.reasonCode }))
+  if (condition.kind === 'scheduler') {
+    const [phase, operationalEligibility] = condition.state === 'test_open_blocked' ? ['test_open', 'blocked'] as const
+      : condition.state.split('_') as ['preparing' | 'ready', 'pending' | 'blocked']
+    await f.t.run(ctx => ctx.db.patch(check._id, { phase, operationalEligibility, reasonCode: 'synthetic_scheduler_block' }))
+  }
+}
+
+function expectedCloseReason(condition: SweepCondition) {
+  if (condition.kind === 'reason') return condition.reasonCode
+  if (condition.kind === 'scheduler') return 'synthetic_scheduler_block'
+  if (['protocol_removed', 'protocol_version', 'protocol_window'].includes(condition.kind)) return 'protocol_not_frozen'
+  if (condition.kind === 'entitlement') return 'canvas_not_admitted'
+  return null
+}
+
+async function expectTodayLessonInvariant(f: SweepFixture, lessonId: Id<'studySessions'>, key: string) {
+  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  expect(today).toMatchObject({ status: 'ready', sessionId: lessonId })
+  if (today.status !== 'ready' || !('checkPointers' in today)) throw new Error('Expected a ready Today projection with pointers')
+  const lesson = (await f.t.run(ctx => ctx.db.get(lessonId)))!
+  const content = await f.t.run(ctx => ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q =>
+    q.eq('userId', userId).eq('studySessionId', lessonId)).order('desc').first())
+  const start = () => f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: lessonId,
+    expectedSessionRevision: lesson.revision, expectedContentRevision: content!.revision, entryPoint: 'today', idempotencyKey: `sweep_start_${key}` })
+  const assessment = 'assessment' in today ? today.assessment : undefined
+  if (assessment?.kind === 'check') {
+    const reference = assessment.check?.reference
+    expect(assessment.check).toMatchObject({ state: 'ready' })
+    expect(today.checkPointers.checks).toContainEqual(expect.objectContaining({ reference, state: 'ready' }))
+    const started = await start()
+    expect(started).toMatchObject({ status: 'assessment', assessment: { kind: 'check', check: { state: 'ready' } } })
+    const after = await f.owner.query(api.learnV2Today.getToday, {})
+    const locked = 'assessment' in after && after.assessment?.kind === 'check' ? after.assessment.check?.reference : null
+    expect(locked).toBe('assessment' in started && started.assessment.check ? started.assessment.check.reference : undefined)
+    expect('checkPointers' in after && after.checkPointers.checks).toContainEqual(expect.objectContaining({ reference: locked, state: 'ready' }))
+    expect(await f.t.run(ctx => ctx.db.get(lessonId))).toEqual(lesson)
+    const withheld = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: lessonId,
+      idempotencyKey: `sweep_withheld_${key}_1234567890` })
+    expect(JSON.stringify(withheld)).not.toContain('TEACHING-CANARY')
+    return 'locked' as const
+  }
+  expect(assessment?.kind ?? 'ordinary').toMatch(/^(teach|unprepared|ordinary)$/)
+  expect(await start()).toMatchObject({ status: 'in_progress' })
+  await expectTeachingDelivery(f, lessonId, `sweep_${key}`)
+  return 'taught' as const
+}
+
+test.each(SWEEP_TARGETS.flatMap(target => SWEEP_CONDITIONS.map(condition => [target, conditionLabel(condition), condition] as const)))(
+  'Today startable implies start and delivery for a %s lesson when the open check has %s', async (target, label, condition) => {
+    const f = await fixture()
+    await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { scheduledEndAt: NOW + 30 * 60_000 }))
+    await f.start()
+    const check = await coldFor(f)
+    const { lessonId, g } = await sweepTarget(f, target)
+    await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { scheduledStartAt: NOW + 3 * 86_400_000, scheduledEndAt: undefined }))
+    await applySweepCondition(f, condition, check)
+    const before = (await f.t.run(ctx => ctx.db.get(check._id)))!
+    const savedResponse = before.submissionId ? await f.t.run(ctx => ctx.db.get(before.submissionId!)) : null
+    vi.spyOn(canvasPreparation, 'prepareCanvasSessionForOwner').mockResolvedValue({ kind: 'not_admitted',
+      reasonCode: condition.kind === 'reason' ? condition.reasonCode : 'novel_item_unavailable', observations: 'no_observations' })
+    const key = `${target}_${label}`.replace(/[^a-z0-9]+/giu, '_')
+    const outcome = await expectTodayLessonInvariant(g, lessonId, key)
+    const after = (await f.t.run(ctx => ctx.db.get(check._id)))!
+    // The C4 guard cannot scope a check whose thread is gone, so it withholds every teaching read until that check closes.
+    const independent = target === 'other_void' && condition.kind !== 'thread_lost'
+    if (condition.kind === 'playable' && !independent) {
+      expect(outcome).toBe('locked')
+      expect(after).toEqual(before)
+      const opened = await attach(f, after)
+      expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+      expect(await expectTodayLessonInvariant(g, lessonId, `${key}_after_save`)).toBe('taught')
+      return
+    }
+    expect(outcome).toBe('taught')
+    if (savedResponse) expect(await f.t.run(ctx => ctx.db.get(before.submissionId!))).toEqual(savedResponse)
+    const closable = !independent && !before.submissionId && condition.kind !== 'expired' && condition.kind !== 'playable'
+    if (!closable) {
+      if (independent || before.submissionId) expect(after).toEqual(before)
+      return
+    }
+    expect(after).toMatchObject({ phase: 'cancelled', operationalEligibility: 'blocked' })
+    const facts = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q =>
+      q.eq('userId', userId).eq('fact.assessmentOpportunityId', check._id)).take(16))
+    const cancelled = facts.filter(row => row.fact.kind === 'opportunity' && row.fact.status === 'cancelled')
+    expect(cancelled.length).toBeGreaterThan(0)
+    const reason = expectedCloseReason(condition)
+    if (reason) expect(cancelled.map(row => row.fact.kind === 'opportunity' ? row.fact.reasonCode : null)).toContain(reason)
+  }, 60_000)

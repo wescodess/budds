@@ -5,7 +5,7 @@ import { LearnFolderEvidenceError, retrieveLearnV2FolderEvidence } from '../serv
 import { LearnSessionContentInputError, LearnBlueprintAuthorityError, LearnInputValidationError } from '../shared/learn-v2-errors'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
-import { teachingReadScope } from './lib/learnV2TeachingReadScope'
+import { lessonBaselineSessionContent, lessonTeachingScope } from './lib/learnV2LessonDisclosure'
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -41,7 +41,7 @@ import { matchesLegacyFingerprint, privacyDigest } from "./lib/learnV2ResponsePr
 import { isTestOnlyMeasurementSession, measurementCanonical, publishInstructionalSessionCases, sessionMeasurementScope, validatedSessionMeasurement } from "./lib/learnV2MeasurementItems";
 import { LEARN_MEASUREMENT_CAPABILITIES } from "../shared/learn-v2-measurement-storage-manifest";
 import { isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled } from "../shared/learn-v2-today-check";
-import { prepareTodayAssessment, resolveTodayAssessment, settleUnplayableTodayChecks, settleUnplayableTodaySession, todayAssessmentSummary, type TodayAssessment } from './learnV2Today';
+import { closeUnplayableTodayChecks, prepareTodayLesson, resolveTodayAssessment, resolveTodayLesson, todayAssessmentSummary, type TodayAssessment, type TodayLesson } from './learnV2Today';
 import { grantLearnAssessmentDeliveryForOwner, readLearnAssessmentForOwner } from './lib/learnV2AssessmentDelivery';
 import { recordLearnMeasurementInstructionForOwner } from './lib/learnV2Measurement';
 import { getLearnResponseStateForOwner } from './lib/learnV2Responses';
@@ -270,24 +270,25 @@ async function todayAssessmentEnvelope(ctx: QueryCtx | MutationCtx, userId: stri
 }
 
 type TodayContentGate =
-  | { kind: 'ordinary' }
+  | { kind: 'ordinary', lesson: TodayLesson | null }
   | { kind: 'withheld', value: Awaited<ReturnType<typeof todayAssessmentEnvelope>> }
-  | { kind: 'teach', userId: string, content: Doc<'sessionContent'>, assessment: TeachAssessment };
+  | { kind: 'teach', userId: string, content: Doc<'sessionContent'>, assessment: TeachAssessment, lesson: TodayLesson };
 
 async function todayContentGate(ctx: QueryCtx | MutationCtx, studySessionId: Id<'studySessions'>, delivery: boolean): Promise<TodayContentGate> {
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'ordinary' };
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { kind: 'ordinary', lesson: null };
   const userId = await requireLearnV2QueryAccess(ctx);
   const session = await ctx.db.get(studySessionId);
-  if (!session || session.userId !== userId) return { kind: 'ordinary' };
-  const assessment = await resolveTodayAssessment(ctx, userId, session);
-  if (assessment.kind === 'ordinary') return { kind: 'ordinary' };
+  if (!session || session.userId !== userId) return { kind: 'ordinary', lesson: null };
+  const lesson = await resolveTodayLesson(ctx, userId, session);
+  const assessment = lesson.assessment;
+  if (assessment.kind === 'ordinary') return { kind: 'ordinary', lesson };
   if (assessment.kind !== 'teach') return { kind: 'withheld', value: await todayAssessmentEnvelope(ctx, userId, session, assessment) };
   const content = await todaySessionContentRow(ctx, userId, session);
   if (!content || !await separateTeachingReady(ctx, userId, content, assessment))
     return { kind: 'withheld', value: await todayAssessmentEnvelope(ctx, userId, session, assessment, 'instructional_holdout_unknown') };
   if (!delivery && !await hasTodayInstruction(ctx, userId, content, assessment))
     return { kind: 'withheld', value: await todayAssessmentEnvelope(ctx, userId, session, assessment, 'instruction_not_delivered') };
-  return { kind: 'teach', userId, content, assessment };
+  return { kind: 'teach', userId, content, assessment, lesson };
 }
 
 async function block(ctx: MutationCtx, job: Doc<"learnJobs">, reason: string) {
@@ -1455,8 +1456,9 @@ export const startStudySession = mutation({
       || plan.blueprintRecordRevision !== blueprint.recordRevision)
       throw new LearnSessionContentInputError("Active Blueprint pointer is unavailable");
     await requireActiveBlueprint(ctx, userId, learningVoid, blueprint._id);
-    const resolved = LEARN_MEASUREMENT_CAPABILITIES.responses ? await resolveTodayAssessment(ctx, userId, session) : null;
-    if (resolved?.kind === 'ordinary') await settleUnplayableTodaySession(ctx, userId, session);
+    const lesson = LEARN_MEASUREMENT_CAPABILITIES.responses ? await resolveTodayLesson(ctx, userId, session) : null;
+    const resolved = lesson?.assessment ?? null;
+    if (lesson) await closeUnplayableTodayChecks(ctx, lesson);
     if (resolved && resolved.kind !== 'ordinary') {
       if (!Number.isSafeInteger(args.expectedSessionRevision) || args.expectedSessionRevision < 1
         || !Number.isSafeInteger(args.expectedContentRevision) || args.expectedContentRevision < 1) throw new LearnSessionContentInputError('Expected session revision is invalid');
@@ -1475,7 +1477,7 @@ export const startStudySession = mutation({
       const timezone = session.timezone ?? plan.timezone ?? 'UTC';
       if (session.scheduledStartAt > now && localDateAt(session.scheduledStartAt, timezone) !== localDateAt(now, timezone)) throw new LearnSessionContentInputError('Study session is not scheduled for today');
       if (session.scheduledEndAt !== undefined && session.scheduledEndAt < now) throw new LearnSessionContentInputError('Study session window has expired');
-      const assessment = resolved.kind === 'unprepared' ? await prepareTodayAssessment(ctx, userId, session, args.entryPoint ?? 'today') : resolved;
+      const assessment = lesson?.own.kind === 'unprepared' && resolved.kind !== 'blocked' ? await prepareTodayLesson(ctx, userId, session, args.entryPoint ?? 'today') : resolved;
       const receipt = (current: Exclude<TodayAssessment, { kind: 'ordinary' }>, reasonCode?: string,
         deliveryGrant: Awaited<ReturnType<typeof grantLearnAssessmentDeliveryForOwner>> | null = null) => ({ status: 'assessment' as const,
         sessionContentId: content._id, sessionContentRevision: content.revision, assessment: todayAssessmentSummary(current, reasonCode), deliveryGrant });
@@ -1504,7 +1506,6 @@ export const startStudySession = mutation({
       if (assessment.kind === 'teach') {
         if (!await separateTeachingReady(ctx, userId, content, assessment)) return receipt(assessment, 'instructional_holdout_unknown');
         await settleMissedCold(ctx, assessment);
-        await settleUnplayableTodayChecks(ctx, userId, assessment.assignment);
         await recordTodayInstruction(ctx, userId, content, assessment);
       }
     }
@@ -1683,12 +1684,8 @@ export const recordMeaningfulActivityStarted = mutation({
 
 const getSessionContentRead = defineTeachingRead({
   name: 'learnV2SessionContent.getSessionContent',
-  scope: async (ctx, userId, args) => await teachingReadScope(ctx, userId, [{ kind: 'session', id: args.studySessionId }]),
-  baselineSessionContent: async (ctx, userId, args) => {
-    const session = await ctx.db.get(args.studySessionId);
-    return session?.userId === userId && session.status === 'in_progress' && session.assessmentPurpose === 'independent_application'
-      ? session.startedSessionContentId ?? null : null;
-  },
+  scope: async (ctx, userId, args) => await lessonTeachingScope(ctx, userId, args.studySessionId),
+  baselineSessionContent: async (ctx, userId, args) => await lessonBaselineSessionContent(ctx, userId, args.studySessionId),
 
   args: { studySessionId: v.id("studySessions") },
   handler: async (ctx, args) => {
@@ -1809,6 +1806,7 @@ export const getSessionContentDelivery = mutation({
   handler: async (ctx, args) => {
     const gate = await todayContentGate(ctx, args.studySessionId, true);
     if (gate.kind === 'withheld') return { admission: { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' as const }, value: gate.value };
+    if (gate.lesson) await closeUnplayableTodayChecks(ctx, gate.lesson);
     if (gate.kind === 'teach') await settleMissedCold(ctx, gate.assessment);
     const result = await getSessionContentRead.delivery.handler(ctx, args);
     if (gate.kind !== 'teach') return result;

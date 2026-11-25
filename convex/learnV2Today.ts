@@ -8,7 +8,9 @@ import { localDateAt } from '../shared/learn-v2-mastery'
 import { requireActiveBlueprint } from './lib/learnV2BlueprintAuthority'
 import { getScopedMasteryRecord, masteryScopeKey } from './lib/learnV2MasteryScope'
 import { isTestOnlyMeasurementSession } from './lib/learnV2MeasurementItems'
-import { enrollLearnMeasurementForOwner, type AdmittedAssignment } from './lib/learnV2Measurement'
+import { enrollLearnMeasurementForOwner, learnMeasurementInstructionBlock, type AdmittedAssignment } from './lib/learnV2Measurement'
+import { readLessonDisclosureChecks } from './lib/learnV2LessonDisclosure'
+import { isLearnAssessmentTestOnly } from '../shared/learn-v2-delayed-check'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { closeUnplayableLearnCheck } from './lib/learnV2MeasurementDueWork'
 import { learnCheckUsesCanvasSurface, learnDelayedCheckBindingBlock } from './lib/learnV2DelayedDelivery'
@@ -91,40 +93,89 @@ function dueTodayChecks(checks: Doc<'learnAssessmentOpportunities'>[], now: numb
     && row.submissionId === undefined && ['preparing', 'ready', 'test_open'].includes(row.phase) && row.openAt <= now && now < row.closeAt)
 }
 
-export async function settleUnplayableTodayChecks(ctx: MutationCtx, userId: string, assignment: AdmittedAssignment) {
-  if (assignment.flow !== 'v2_today' || !learnCheckUsesCanvasSurface(assignment)
-    || !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return
-  const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
-    q.eq('userId', userId).eq('assignmentId', assignment._id)).take(8)
-  if (checks.length === 8) throw new Error('Learn Today check inventory limit')
-  for (const row of dueTodayChecks(checks, Date.now())) {
-    if (await readCanvasCheckPointerForOwner(ctx, userId, row)) continue
-    const reasonCode = await learnDelayedCheckBindingBlock(ctx, assignment, row) ?? row.reasonCode ?? 'assessment_unavailable'
-    await closeUnplayableLearnCheck(ctx, assignment, row, reasonCode)
+type UnplayableCheck = { row: Doc<'learnAssessmentOpportunities'>, assignment: AdmittedAssignment, reasonCode: string }
+export type TodayLesson = { assessment: TodayAssessment, own: TodayAssessment, unplayable: UnplayableCheck[] }
+
+function canvasTodayAssignment(assignment: Doc<'learnMeasurementAssignments'> | null): assignment is AdmittedAssignment {
+  return assignment?.status === 'admitted' && learnCheckUsesCanvasSurface(assignment)
+    && (todayCanvasChecksEnabled() || isFrozenTodayCanvasAssignment(assignment))
+}
+
+async function unplayableReason(ctx: QueryCtx | MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>) {
+  const legacyCold = row.purpose.kind === 'measurement_cold' && !assignment.checkSurface
+  return (legacyCold ? null : await learnDelayedCheckBindingBlock(ctx, assignment, row)) ?? row.reasonCode ?? 'assessment_unavailable'
+}
+
+type LessonGate =
+  | { kind: 'lock', row: Doc<'learnAssessmentOpportunities'>, pointer: LearnTodayCheckPointer }
+  | { kind: 'blocked', reasonCode: string }
+  | { kind: 'open', unplayable: UnplayableCheck[] }
+
+async function firstPlayable(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>, rows: Doc<'learnAssessmentOpportunities'>[]): Promise<LessonGate | null> {
+  const ordered = [...rows].sort((left, right) => Number(right.objectiveId === session.primaryObjectiveId) - Number(left.objectiveId === session.primaryObjectiveId)
+    || left.closeAt - right.closeAt || (left.delayedCheckId < right.delayedCheckId ? -1 : left.delayedCheckId > right.delayedCheckId ? 1 : 0))
+  for (const row of ordered) {
+    const pointer = row.submissionId ? null : await readCanvasCheckPointerForOwner(ctx, userId, row)
+    if (pointer?.state === 'ready') return { kind: 'lock', row, pointer }
+  }
+  return null
+}
+
+// Classifies the exact open checks the C4 disclosure guard considers for this lesson's teaching read.
+async function gateTodayLesson(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>): Promise<LessonGate | null> {
+  const disclosure = await readLessonDisclosureChecks(ctx, userId, session._id)
+  if (disclosure.status === 'unscoped') return null
+  if (disclosure.status === 'unknown') return await firstPlayable(ctx, userId, session, disclosure.open) ?? { kind: 'blocked', reasonCode: disclosure.reasonCode }
+  const locked = await firstPlayable(ctx, userId, session, disclosure.checks.filter(check => check.resolved).map(check => check.row))
+  if (locked) return locked
+  const unplayable: UnplayableCheck[] = []
+  for (const { row, resolved } of disclosure.checks) {
+    const assignment = row.assignmentId && !row.submissionId && isLearnAssessmentTestOnly(row.purpose) ? await ctx.db.get(row.assignmentId) : null
+    if (assignment?.userId === userId && canvasTodayAssignment(assignment))
+      unplayable.push({ row, assignment, reasonCode: await unplayableReason(ctx, assignment, row) })
+    else if (!resolved || row.submissionId || row.phase !== 'test_open' || isLearnAssessmentTestOnly(row.purpose))
+      return { kind: 'blocked', reasonCode: 'open_check_unavailable' }
+  }
+  return { kind: 'open', unplayable }
+}
+
+function gatedLesson(own: TodayAssessment, gate: LessonGate | null): TodayLesson {
+  if (!gate) return { assessment: own, own, unplayable: [] }
+  if (gate.kind === 'blocked') return { assessment: { kind: 'blocked', reasonCode: gate.reasonCode, opportunity: null, state: null }, own, unplayable: [] }
+  if (gate.kind === 'lock') return { assessment: { kind: 'check', flow: 'canvas', opportunity: gate.row, state: null, pointer: gate.pointer }, own, unplayable: [] }
+  return { assessment: own, own, unplayable: gate.unplayable }
+}
+
+async function lessonGate(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>, assessment: TodayAssessment) {
+  return !LEARN_MEASUREMENT_CAPABILITIES.responses || isTestOnlyMeasurementSession(session)
+    || assessment.kind === 'check' || assessment.kind === 'blocked' || !await todayCanvasCohort(ctx, userId) ? null
+    : await gateTodayLesson(ctx, userId, session)
+}
+
+export async function resolveTodayLesson(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>): Promise<TodayLesson> {
+  const assessment = await resolveTodayAssessment(ctx, userId, session)
+  return gatedLesson(assessment, await lessonGate(ctx, userId, session, assessment))
+}
+
+export async function prepareTodayLesson(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>, entryPoint: 'today' | 'session_deep_link') {
+  const assessment = await prepareTodayAssessment(ctx, userId, session, entryPoint)
+  const lesson = gatedLesson(assessment, await lessonGate(ctx, userId, session, assessment))
+  await closeUnplayableTodayChecks(ctx, lesson)
+  return lesson.assessment
+}
+
+export async function closeUnplayableTodayChecks(ctx: MutationCtx, lesson: TodayLesson) {
+  for (const { row, assignment, reasonCode } of lesson.unplayable) {
+    const current = await ctx.db.get(row._id)
+    if (current) await closeUnplayableLearnCheck(ctx, assignment, current, reasonCode)
   }
 }
 
-export async function settleUnplayableTodaySession(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>) {
-  if (!todayCanvasChecksEnabled() || isTestOnlyMeasurementSession(session)) return
-  const plan = await ctx.db.get(session.studyPlanRevisionId)
-  if (!plan?.blueprintRevisionId || plan.userId !== userId) return
-  const now = Date.now()
-  const assignments = new Set<Doc<'learnMeasurementAssignments'>['_id']>()
-  for (const phase of ['preparing', 'ready', 'test_open'] as const) {
-    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
-      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(MAX_SESSIONS + 1)
-    if (rows.length > MAX_SESSIONS) throw new Error('Learn Today active check inventory limit')
-    for (const row of dueTodayChecks(rows, now)) {
-      if (row.assignmentId && row.learningVoidId === plan.learningVoidId && row.blueprintRevisionId === plan.blueprintRevisionId
-        && row.objectiveId === session.primaryObjectiveId) assignments.add(row.assignmentId)
-    }
-  }
-  for (const id of assignments) {
-    const assignment = await ctx.db.get(id)
-    if (assignment?.userId === userId && assignment.status === 'admitted'
-      && assignment.blueprintRevisionId === plan.blueprintRevisionId && assignment.objectiveId === session.primaryObjectiveId)
-      await settleUnplayableTodayChecks(ctx, userId, assignment)
-  }
+async function teachToday(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>,
+  opportunity: Doc<'learnAssessmentOpportunities'>, assignment: AdmittedAssignment): Promise<TodayAssessment> {
+  const teach = { kind: 'teach' as const, opportunity, assignment }
+  if (!todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return teach
+  return await learnMeasurementInstructionBlock(ctx, userId, assignment, session) ? { kind: 'ordinary' } : teach
 }
 
 export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId: string, session: Doc<'studySessions'>): Promise<TodayAssessment> {
@@ -170,12 +221,11 @@ export async function resolveTodayAssessment(ctx: QueryCtx | MutationCtx, userId
     }
     const cold = checks.filter(row => row.purpose.kind === 'measurement_cold' && row.horizonDays === undefined)
     if (cold.length !== 1 || checks.some(row => row.objectiveId !== session.primaryObjectiveId)) return unavailable('pins_mismatch')
-    opportunity = cold[0]!
-    return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
+    return await teachToday(ctx, userId, session, cold[0]!, assignment as AdmittedAssignment)
   } else opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
     q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
   if (!opportunity || opportunity.purpose.kind !== 'measurement_cold' || opportunity.objectiveId !== session.primaryObjectiveId) return blocked('assessment_unavailable')
-  if (!coldOpen(opportunity, Date.now())) return { kind: 'teach', opportunity, assignment: assignment as AdmittedAssignment }
+  if (!coldOpen(opportunity, Date.now())) return await teachToday(ctx, userId, session, opportunity, assignment as AdmittedAssignment)
   if (assignment.flow !== 'v2_today' && !todayCanvasChecksEnabled() && !isFrozenTodayCanvasAssignment(assignment)) return blocked('flow_mismatch')
   return await assessmentState(ctx, userId, opportunity)
 }
@@ -357,7 +407,10 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
 }
 
 async function surfaceCanvasPointers(ctx: QueryCtx, userId: string) {
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return false
+  return LEARN_MEASUREMENT_CAPABILITIES.responses && await todayCanvasCohort(ctx, userId)
+}
+
+async function todayCanvasCohort(ctx: QueryCtx | MutationCtx, userId: string) {
   if (todayCanvasChecksEnabled()) return true
   const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
   if (owner?.learnTodayCheckSurfaceVersion) return true
@@ -445,7 +498,7 @@ async function projectToday(ctx: QueryCtx, userId: string) {
     if (!content || content.status !== 'published'
       || (candidate.session.status === 'in_progress' && (candidate.session.startedSessionContentId !== content._id || candidate.session.startedSessionContentRevision !== content.revision))
       || content.studyPlanRevisionId !== candidate.plan._id || content.blueprintRevisionId !== candidate.blueprint._id || content.objectiveId !== candidate.objective._id) return { status: 'blocked' as const, reason: 'started_content_unavailable', nextScheduledAt }
-    const assessment = await resolveTodayAssessment(ctx, userId, candidate.session)
+    const assessment = (await resolveTodayLesson(ctx, userId, candidate.session)).assessment
     if (assessment.kind === 'blocked') return { status: 'blocked' as const, reason: assessment.reasonCode,
       sessionId: candidate.session._id, sessionRevision: candidate.session.revision, canRetryGeneration: false, nextScheduledAt }
     if (assessment.kind === 'check') return { status: 'ready' as const, sessionId: candidate.session._id, sessionRevision: candidate.session.revision,

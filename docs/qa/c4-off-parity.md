@@ -1,6 +1,6 @@
 # C4 capability-off parity sweep
 
-The final Today fallback controls pair the same missing-protocol start with the capability on and off. Enabled starts deliver ordinary teaching; disabled starts retain C5's `assessment / blocked / protocol_not_frozen` response and ready session across retries. New settlement on ordinary starts is capability-gated and leaves legacy C5 enrollment and disclosure behavior unchanged.
+The final Today fallback controls pair the same missing-protocol start with the capability on and off. Enabled starts deliver ordinary teaching; disabled starts retain C5's `assessment / blocked / protocol_not_frozen` response and ready session across retries. New settlement on ordinary starts is capability-gated and leaves legacy C5 enrollment and disclosure behavior unchanged. The help-admission guard's open-check collection and scope matching now live in shared helpers that the Today lesson gate also reads; the guard's decisions, denial records and the C4 goldens are unchanged. The gate runs only for the enabled or frozen Today Canvas cohort.
 
 ## #573 Today pointer amendment
 

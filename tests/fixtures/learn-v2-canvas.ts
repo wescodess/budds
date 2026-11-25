@@ -41,7 +41,7 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
       blueprintRevisionId, blueprintRecordRevision: 1, status: 'accepted', acceptedAt: now, timezone: 'UTC', createdAt: now, updatedAt: now })
     await ctx.db.patch(studyPlanId, { activeRevisionId: studyPlanRevisionId })
     const studySessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId, primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: now })
-    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId, origin: 'user_url', externalKey: 'synthetic-rule.v1' })
+    const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { userId, learningVoidId, origin: 'user_url', externalKey: `synthetic-rule.v1${options.fixtureKey ?? ''}` })
     const sourceContentHash = await measurementDigest('Synthetic source: total = groups * members.')
     const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { userId, learningVoidId, blueprintRevisionId, sourceIdentityId,
       revision: 1, recordRevision: 1, status: 'user_accepted', effectiveStatus: 'user_accepted', rightsStatus: 'permitted', conflictStatus: 'clear',
@@ -86,7 +86,7 @@ export async function canvasFamilyFixture(modelBinding: LearnScorerBinding, opti
       const { _id: _excerptId, _creationTime: _excerptTime, ...excerpt } = (await ctx.db.get(graph.sourceExcerptId))!
       const rows = [graph.support]
       for (let index = 1; index < inventory.sources; index++) {
-        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { ...identity, externalKey: `inventory-source-${index}` })
+        const sourceIdentityId = await ctx.db.insert('learnSourceIdentities', { ...identity, externalKey: `inventory-source-${index}${options.fixtureKey ?? ''}` })
         const sourceSnapshotId = await ctx.db.insert('learnSourceSnapshots', { ...source, sourceIdentityId })
         const sourceExcerptId = await ctx.db.insert('learnSourceExcerpts', { ...excerpt, sourceSnapshotId })
         await ctx.db.insert('learnObjectiveSources', { userId, objectiveId: graph.objectiveId, sourceSnapshotId, coverage: 'strong' })

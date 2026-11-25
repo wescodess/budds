@@ -402,6 +402,27 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   return { status: 'admitted' as const, assignmentId, reasonCodes: [] }
 }
 
+async function instructionAdmission(ctx: ReadCtx, userId: string, assignment: AdmittedAssignment, session: Doc<'studySessions'>,
+  flow: MeasurementFlow, canvasActivityId?: Id<'learningThreadActivities'>) {
+  const blocked = (reasonCode: string) => ({ kind: 'blocked' as const, reasonCode })
+  const protocol = getFrozenLearnMeasurementProtocol()
+  const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
+  if (!protocol || protocol.version !== assignment.protocolVersion || await measurementWindowPolicyDigest(protocol) !== assignment.windowPolicyDigest) return blocked('protocol_not_frozen')
+  if (!cold) return blocked('assessment_unavailable')
+  const assigned = await measurementFlowReason(ctx, userId, assignment.flow, cold, protocol)
+  if (assigned) return blocked(assigned)
+  const delivered = await measurementFlowReason(ctx, userId, flow, await withMeasurementCanvasScope(ctx, userId, cold, session, canvasActivityId), protocol)
+  return delivered ? blocked(delivered) : { kind: 'admitted' as const, cold }
+}
+
+export async function learnMeasurementInstructionBlock(ctx: ReadCtx, userId: string, assignment: AdmittedAssignment, session: Doc<'studySessions'>) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.enrollment) return 'disabled'
+  if (assignment.checkSurface && assignment.flow !== 'v2_today') return 'flow_mismatch'
+  if (session.userId !== userId || session.primaryObjectiveId !== assignment.objectiveId) return 'pins_mismatch'
+  const admission = await instructionAdmission(ctx, userId, assignment, session, 'v2_today')
+  return admission.kind === 'blocked' ? admission.reasonCode : null
+}
+
 export async function recordLearnMeasurementInstructionForOwner(ctx: MutationCtx, userId: string, input: {
   assignmentId: Id<'learnMeasurementAssignments'>, studySessionId: Id<'studySessions'>, flow: MeasurementFlow,
   projectionDigest: string, deliveryReceiptHash: string, canvasActivityId?: Id<'learningThreadActivities'>,
@@ -412,12 +433,9 @@ export async function recordLearnMeasurementInstructionForOwner(ctx: MutationCtx
   if (!LEARN_MEASUREMENT_CAPABILITIES.enrollment) throw new Error('Learn measurement is disabled')
   const authority = await requireMeasurementSession(ctx, userId, { studySessionId: input.studySessionId, entryPoint: input.flow === 'v2_today' ? 'today' : 'canvas' })
   if (authority.objective._id !== assignment.objectiveId || authority.blueprint._id !== assignment.blueprintRevisionId) throw new Error('Learn measurement instruction scope conflicts')
-  const protocol = getFrozenLearnMeasurementProtocol()
-  const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q => q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
-  if (!protocol || !cold || protocol.version !== assignment.protocolVersion || await measurementWindowPolicyDigest(protocol) !== assignment.windowPolicyDigest
-    || await measurementFlowReason(ctx, userId, assignment.flow, cold, protocol)) throw new Error('Learn measurement flow is not admitted')
-  const deliveryScope = await withMeasurementCanvasScope(ctx, userId, cold, authority.session, input.canvasActivityId)
-  if (await measurementFlowReason(ctx, userId, input.flow, deliveryScope, protocol)) throw new Error('Learn measurement flow is not admitted')
+  const admission = await instructionAdmission(ctx, userId, assignment, authority.session, input.flow, input.canvasActivityId)
+  if (admission.kind === 'blocked') throw new Error('Learn measurement flow is not admitted')
+  const { cold } = admission
   const previous = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_deliveryReceiptHash', q => q.eq('userId', userId).eq('deliveryReceiptHash', input.deliveryReceiptHash)).unique()
   if (previous) {
     if (previous.assignmentId !== assignment._id || previous.projectionDigest !== input.projectionDigest
