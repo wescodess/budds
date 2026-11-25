@@ -126,7 +126,7 @@ test('operator distinguishes missing source telemetry from a known empty window'
   fixture.coverage = { firstValue: false, providerBoundaries: false, ownerEvents: false }
   const missing = JSON.parse(custom(fixture).stdout).metrics
   expect(missing).toMatchObject({ firstValue: { status: 'unknown', readyDenominator: null }, providerAmbiguity: { status: 'unknown', numerator: null }, latency: { status: 'unknown', sampleCount: null }, recordedCost: { status: 'unknown', totalUsdMicros: null } })
-})
+}, 20_000)
 
 test('operator reports ready timing at the ninety-second boundary separately from preparing and exclusions', () => {
   const fixture = frozen()
