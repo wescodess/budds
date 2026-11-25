@@ -1517,38 +1517,32 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
 
 describe('Mastery fixture ownership', () => {
-  let release: () => void
-  let result: Promise<unknown>
-  let priorSignal: AbortSignal
-
-  test('captures an aborted query owner before waiting', () => {
+  test('aborted approval hashing cannot write the successor policy', async () => {
     const owner = new AbortController()
-    const pending = new Promise<void>(resolve => { release = resolve })
-    result = waitForMastery(owner.signal, pending).then(() => {
-      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
-    }).catch(error => error)
-    owner.abort(new Error('Expired Mastery query'))
+    const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+    let release!: (value: ArrayBuffer) => void
+    const pending = new Promise<ArrayBuffer>(resolve => { release = resolve })
+    vi.spyOn(crypto.subtle, 'digest').mockReturnValueOnce(pending)
+    const result = configureSyntheticPilot([OWNER], owner.signal)
+    const expired = new Error('Expired Mastery query')
+    owner.abort(expired)
+    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
+    release(new ArrayBuffer(32))
+    await expect(result).rejects.toBe(expired)
+    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
+    expect(ADAPTIVE_V2_PILOT_MANIFEST).toEqual(original)
   })
 
-  test('a released predecessor cannot write the next test rollback policy', async () => {
-    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
-    release()
-    expect(await result).toEqual(new Error('Expired Mastery query'))
-    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
-  })
-
-  test('captures a successful query owner without retiring it', () => {
-    priorSignal = masteryTestSignal
+  test('an unaborted query retains its native late error', async () => {
+    const signal = masteryTestSignal
+    let release!: () => void
     const pending = new Promise<void>(resolve => { release = resolve })
-    result = waitForMastery(priorSignal, pending).then(() => {
+    const result = waitForMastery(signal, pending).then(() => {
       throw new Error('Late successful Mastery query')
-    }).catch(error => error)
-  })
-
-  test('a successful predecessor retains its native late error', async () => {
-    expect(priorSignal.aborted).toBe(false)
+    })
+    expect(signal.aborted).toBe(false)
     release()
-    expect(await result).toEqual(new Error('Late successful Mastery query'))
-    expect(priorSignal.aborted).toBe(false)
+    await expect(result).rejects.toEqual(new Error('Late successful Mastery query'))
+    expect(signal.aborted).toBe(false)
   })
 })

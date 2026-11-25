@@ -44,12 +44,13 @@ const FolderShellHierarchyDrawerStub = defineComponent({
   template: '<div data-testid="drawer-stub" />',
 })
 
-function ownFolderShellMount<T extends { unmount: () => void }>(create: (check: () => void) => Promise<T>): Promise<T> {
+function ownFolderShellMount<T extends { unmount: () => void }>(create: (check: () => void, finish: () => void) => Promise<T>): Promise<T> {
   let finished = false
   let wrapper: T | undefined
   const check = () => { if (finished) throw new Error('FolderShell fixture finished') }
-  onTestFinished(() => { finished = true; wrapper?.unmount() })
-  return create(check).then(mounted => {
+  const finish = () => { finished = true; wrapper?.unmount(); wrapper = undefined }
+  onTestFinished(finish)
+  return create(check, finish).then(mounted => {
     if (finished) { mounted.unmount(); check() }
     wrapper = mounted
     return mounted
@@ -125,21 +126,16 @@ describe('FolderShell', () => {
 
 
 describe('FolderShell fixture ownership', () => {
-  const nextTestWork = vi.fn()
-  let release: (wrapper: { unmount: () => void }) => void
-  let result: Promise<unknown>
-
-  beforeEach(() => { nextTestWork.mockReset() })
-
-  it('owns a mount before its promise can settle', () => {
+  it('unmounts a late predecessor without continuing into the successor', async () => {
+    const nextTestWork = vi.fn()
+    let release!: (wrapper: { unmount: () => void }) => void
+    let finish!: () => void
     const pending = new Promise<{ unmount: () => void }>(resolve => { release = resolve })
-    result = ownFolderShellMount(() => pending).then(nextTestWork).catch(error => error)
-  })
-
-  it('unmounts a predecessor that resolves in the next test without continuing', async () => {
+    const result = ownFolderShellMount((_check, retire) => { finish = retire; return pending }).then(nextTestWork)
+    finish()
     const unmount = vi.fn()
     release({ unmount })
-    expect(await result).toEqual(new Error('FolderShell fixture finished'))
+    await expect(result).rejects.toEqual(new Error('FolderShell fixture finished'))
     expect(unmount).toHaveBeenCalledTimes(1)
     expect(nextTestWork).not.toHaveBeenCalled()
   })
