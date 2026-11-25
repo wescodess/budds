@@ -194,6 +194,12 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(replay(input).output).toMatchObject({ status: 'failed', reasonCodes: ['incompatible_version'], manifest: null, cells: [] })
   })
 
+  it.each(['learn-v2.report-code.c6.2.v7', 'learn-v2.report-code.c6.2.v8'])('rejects the prior computation pin %s', codeVersion => {
+    const input = fixture()
+    input.report.provenance.codeVersion = codeVersion
+    expect(replay(input).output).toMatchObject({ status: 'failed', reasonCodes: ['incompatible_version'], manifest: null, cells: [] })
+  })
+
   it.each(['inputDigest', 'rosterDigest', 'bootstrapSeed', 'episodeCount', 'inputBytes', 'cutoff'])('does not repair a mismatched saved %s', (field) => {
     const input = fixture()
     input.report.provenance[field] = typeof input.report.provenance[field] === 'number' ? input.report.provenance[field] + 1 : `sha256:${'0'.repeat(64)}`

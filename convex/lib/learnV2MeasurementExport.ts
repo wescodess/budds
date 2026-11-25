@@ -5,6 +5,11 @@ import { LEARN_MEASUREMENT_STORAGE_LIMITS, type LearnMeasurementCollection } fro
 type ExportRow = Record<string, unknown> & { _id: Id<LearnMeasurementCollection>, _creationTime: number }
 
 const metadataFields = {
+  learnMeasurementDueWork: [],
+  learnPostSealTeachingSources: ['assessmentOpportunityId', 'submissionId', 'attemptId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealPracticeBindings: ['assessmentOpportunityId', 'submissionId', 'responseSlotId', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealHelpReceipts: ['submissionId', 'responseSlotId', 'expectedRevision', 'kind', 'authorizationId', 'deliveredAt', 'assistanceSequence', 'evidenceStatus', 'invalidatedAt'],
+  learnPostSealSourceLinks: ['evidenceStatus', 'invalidatedAt'],
   // nextId is private lineage linkage and is intentionally withheld.
   learnArtifactLineages: ['lineageVersion', 'classification', 'derivation', 'evidenceStatus', 'invalidatedAt'],
   learnArtifactLineageOrigins: ['transformation'],
@@ -114,7 +119,7 @@ export async function exportMeasurementPage(
   const page: ExportRow[] = []
   for (const row of result.page) {
     // Grant provisioning is operational access data, not a personal report.
-    if (collection === 'learnMeasurementReportViewerGrants') continue
+    if (collection === 'learnMeasurementReportViewerGrants' || collection === 'learnMeasurementDueWork') continue
     const projected: ExportRow = { _id: row._id, _creationTime: row._creationTime, createdAt: row.createdAt }
     const record = row as unknown as Record<string, unknown>
     for (const field of metadataFields[collection]) if (record[field] !== undefined) projected[field] = record[field]

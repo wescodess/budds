@@ -33,6 +33,7 @@ export default defineSchema({
       enabled: v.boolean(),
       updatedAt: v.number(),
     })),
+    learnTodayCheckSurfaceVersion: v.optional(v.string()),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({
@@ -1795,6 +1796,38 @@ export default defineSchema({
     .index('by_userId', ['userId'])
     .index('by_userId_and_cohortVersion_and_epoch', ['userId', 'cohortVersion', 'epoch'])
     .index('by_expiresAt', ['expiresAt']),
+  learnPostSealSourceLinks: defineTable(measurementStorage.postSealSourceLinkFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_target_teachingSourceId', ['userId', 'target.teachingSourceId'])
+    .index('by_userId_and_target_practiceBindingId', ['userId', 'target.practiceBindingId'])
+    .index('by_userId_and_target_helpReceiptId', ['userId', 'target.helpReceiptId'])
+    .index('by_userId_and_dependency_sourceSnapshotId_and_invalidatedAt', ['userId', 'dependency.sourceSnapshotId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_sourceExcerptId_and_invalidatedAt', ['userId', 'dependency.sourceExcerptId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_documentId_and_invalidatedAt', ['userId', 'dependency.documentId', 'invalidatedAt'])
+    .index('by_userId_and_dependency_folderId_and_invalidatedAt', ['userId', 'dependency.folderId', 'invalidatedAt']),
+  learnPostSealHelpReceipts: defineTable(measurementStorage.postSealHelpReceiptFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
+    .index('by_userId_and_submissionId', ['userId', 'submissionId'])
+    .index('by_userId_and_responseSlotId_and_assistanceSequence', ['userId', 'responseSlotId', 'assistanceSequence'])
+    .index('by_userId_and_practiceBindingId', ['userId', 'practiceBindingId'])
+    .index('by_userId_and_idempotencyKeyHash', ['userId', 'idempotencyKeyHash'])
+    .index('by_userId_and_authorizationId', ['userId', 'authorizationId']),
+  learnPostSealPracticeBindings: defineTable(measurementStorage.postSealPracticeBindingFields)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
+    .index('by_userId_and_submissionId', ['userId', 'submissionId'])
+    .index('by_userId_and_responseSlotId', ['userId', 'responseSlotId'])
+    .index('by_userId_and_practiceCaseId', ['userId', 'practiceCaseId']),
+  learnPostSealTeachingSources: defineTable(measurementStorage.postSealTeachingSourceValidator)
+    .index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
+    .index('by_userId_and_submissionId', ['userId', 'submissionId'])
+    .index('by_userId_and_attemptId', ['userId', 'attemptId']),
   learnResponseBodies: defineTable(measurementStorage.responseBodyValidator)
     .index('by_userId', ['userId'])
     .index('by_userId_and_submissionId', ['userId', 'submissionId'])
@@ -1827,6 +1860,8 @@ export default defineSchema({
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnResponses: defineTable(measurementStorage.responseValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_assessmentPins_kind_and_acceptedAt', ['userId', 'flow', 'assessmentPins.kind', 'acceptedAt'])
+    .index('by_userId_and_contextPins_canvas_threadId_and_acceptedAt', ['userId', 'contextPins.canvas.threadId', 'acceptedAt'])
     .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
     .index('by_userId_and_responseSlotId', ['userId', 'responseSlotId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
@@ -1841,6 +1876,7 @@ export default defineSchema({
     .index('by_userId_and_threadId', ['userId', 'threadId'])
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
+    .index('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', ['userId', 'contextPins.canvas.planVersion', 'purpose.kind', 'phase', 'closeAt', 'delayedCheckId'])
     .index('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_phase', ['userId', 'phase'])
@@ -1858,6 +1894,7 @@ export default defineSchema({
     .index('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', ['userId', 'firstCheckClaim.claimKey', 'checkSequence']),
   learnMeasurementAssignments: defineTable(measurementStorage.measurementAssignmentValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_entryPoint_and_status', ['userId', 'flow', 'entryPoint', 'status'])
     .index('by_userId_and_assignmentKey', ['userId', 'assignmentKey'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_epoch_and_createdAt', ['userId', 'epoch', 'createdAt'])
@@ -1921,8 +1958,33 @@ export default defineSchema({
     key: v.literal('delayed_checks'), through: v.union(v.number(), v.null()),
     leaseId: v.union(v.string(), v.null()), leaseExpiresAt: v.number(), updatedAt: v.number(),
   }).index('by_key', ['key']),
-  learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureFields)
+  learnMeasurementDueWork: defineTable({
+    userId: v.string(), storageVersion: v.literal('learn-v2.measurement-storage.v1'), createdAt: v.number(), updatedAt: v.number(),
+    learningVoidId: v.optional(v.id('learningVoids')), assignmentId: v.optional(v.id('learnMeasurementAssignments')),
+    assessmentOpportunityId: v.optional(v.id('learnAssessmentOpportunities')), key: v.string(),
+    kind: v.union(v.literal('owner'), v.literal('assignment'), v.literal('open'), v.literal('close')),
+    state: v.union(v.literal('scheduled'), v.literal('pending'), v.literal('parked'), v.literal('terminal')),
+    dueAt: v.number(), nextAttemptAt: v.number(), attempts: v.number(), generation: v.number(),
+    domainChecks: v.optional(v.number()), recoveryAttempts: v.optional(v.number()), inFlight: v.optional(v.boolean()),
+    previousScheduledFunctionId: v.optional(v.id('_scheduled_functions')),
+    scheduledFunctionId: v.optional(v.id('_scheduled_functions')), reasonCode: v.optional(v.literal('retries_exhausted')),
+    windowFaultAt: v.optional(v.number()),
+    lastDispatchedAt: v.optional(v.number()), lastDispatchedGeneration: v.optional(v.number()),
+    lastDispatchedFunctionId: v.optional(v.id('_scheduled_functions')),
+    lastProcessedAt: v.optional(v.number()), lastProcessedGeneration: v.optional(v.number()),
+    undeliveredDispatchAt: v.optional(v.number()),
+    cursor: v.optional(v.string()), through: v.optional(v.number()), expectedSequence: v.optional(v.number()), coverageComplete: v.optional(v.boolean()),
+  }).index('by_userId', ['userId'])
+    .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
+    .index('by_userId_and_key', ['userId', 'key'])
+    .index('by_userId_and_state_and_dueAt', ['userId', 'state', 'dueAt'])
+    .index('by_state_and_nextAttemptAt', ['state', 'nextAttemptAt'])
+    .index('by_nextAttemptAt', ['nextAttemptAt'])
+    .index('by_inFlight', ['inFlight']),
+  learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_practiceHelp_responseSlotId', ['userId', 'practiceHelp.responseSlotId'])
+    .index('by_userId_and_practiceHelp_practiceBindingId', ['userId', 'practiceHelp.practiceBindingId'])
     .index('by_userId_and_caseId_and_serverTime', ['userId', 'caseId', 'serverTime'])
     .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
     .index('by_userId_and_deliveryReceiptHash', ['userId', 'deliveryReceiptHash'])

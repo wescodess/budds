@@ -81,7 +81,7 @@ cohort/epoch/protocol, the half-open enrollment range and evaluation cutoff.
 Provenance pins extraction dates, adapter/code/source/query versions, coverage,
 canonical input/roster digests, normalized byte/episode counts and the seed plus
 10,000 bootstrap replicates. The supported reducer code pin is
-`learn-v2.report-code.c6.2.v7`. A future reducer needs an explicit
+`learn-v2.report-code.c6.2.v9`. A future reducer needs an explicit
 compatibility decision and updated replay version/expectations; editing an old
 manifest's code pin to bypass rejection does not constitute exact replay. Replay
 v2 consumes legacy and v2 first-Independent claims. An unresolved slot has a null
@@ -239,3 +239,7 @@ EOF
 VITEST_MAX_WORKERS=1 pnpm exec vitest run --config .nuxt/vitest.c6.config.mts --configLoader native scripts/learn-v2-measurement-report.test.ts shared/learn-v2-measurement-report*.test.ts
 VITEST_MAX_WORKERS=1 pnpm run test --config .nuxt/vitest.c6.config.mts --configLoader native
 ```
+
+## Today treatment with Canvas checks
+
+The current computation pin is `learn-v2.report-code.c6.2.v9`, superseding dev v8. `flow` is the teaching treatment. A new Today enrollment remains `v2_today` when its check is delivered and accepted on Canvas. Source extraction validates the frozen assignment/context surface binding before using its measurement flow; actual entry point stays separate. The frozen check surface (`today` or `canvas`) is its own stratum dimension on episode, claim and cell strata, so a mid-epoch capability toggle cannot pool Canvas-check and Today-check `v2_today` enrollments. Legacy strata without a binding derive it from `flow`. Each surface group meets the five-learner publication rule on its own; a group whose `all` cell fails is omitted, as v3 policy already does. A Today check closed because it became unplayable records a blocked fact before cancellation and therefore counts as `access_provider_blocked`. Legacy records keep their stored pins. V9 retains v8 operational-blocker precedence. Earlier computation snapshots and replay inputs are incompatible and are not silently repinned; stored version fields continue accepting historical labels.

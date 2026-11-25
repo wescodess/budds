@@ -1,4 +1,6 @@
 import type { MutationCtx, QueryCtx } from '../_generated/server'
+import { hasMeasurementReadContext } from './learnV2MeasurementReadContext'
+import { privacyRead } from './learnV2PrivacyReadContext'
 
 /**
  * Account deletion is intentionally asynchronous. This durable tombstone is
@@ -20,6 +22,8 @@ export async function hasAccountDeletionTombstone(
   ctx: QueryCtx | MutationCtx,
   userId: string,
 ): Promise<boolean> {
+  if (hasMeasurementReadContext(ctx, userId)) return await privacyRead(ctx, userId, ['account-deletion-tombstone'], true,
+    async scoped => (await scoped.db.query('accountDeletionJobs').withIndex('by_userId', q => q.eq('userId', userId)).unique()) !== null)
   return (await ctx.db
     .query('accountDeletionJobs')
     .withIndex('by_userId', q => q.eq('userId', userId))

@@ -19,7 +19,7 @@ export { LEARN_V2_REPORT_PRECISION } from './learn-v2-measurement-report-math'
 export const LEARN_V2_MEASUREMENT_REPORT_VERSION = 'learn-v2.measurement-report.v3' as const
 export const LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION = 'learn-v2.measurement-report-source.v4' as const
 export const LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION = 'learn-v2.measurement-report-query.v1' as const
-export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v7' as const
+export const LEARN_V2_MEASUREMENT_REPORT_CODE_VERSION = 'learn-v2.report-code.c6.2.v9' as const
 export const VERIFIED_LEARNING_GAIN_VERSION = 'verified_learning_gain.v1' as const
 export const FALSE_MASTERY_NEXT_DELAYED_VERSION = 'false_mastery_next_delayed.v1' as const
 export const LEARN_V2_REPORT_STATUSES = [
@@ -70,9 +70,13 @@ export const learnReportReplacementPolicySchema = z.discriminatedUnion('kind', [
 export const learnReportAcceptanceSnapshotSchema = z.strictObject({
   submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: learnTimestampSchema,
 })
+export const learnReportCheckSurfaceSchema = z.enum(['today', 'canvas'])
+export function learnReportCheckSurface(stratum: { flow: z.infer<typeof learnMeasurementFlowSchema>, checkSurface?: z.infer<typeof learnReportCheckSurfaceSchema> }) {
+  return stratum.checkSurface ?? (stratum.flow === 'v2_canvas' ? 'canvas' : 'today')
+}
 const frozenStratum = {
   epoch: learnVersionSchema, baselineSha: z.string().regex(/^[a-f0-9]{40}$/), cohortVersion: learnVersionSchema,
-  flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
+  flow: learnMeasurementFlowSchema, checkSurface: learnReportCheckSurfaceSchema.optional(), entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
   familyId: learnIdSchema<'learnMeasurementFamilies'>().nullable(), familyRevision: learnRevisionSchema.nullable(),
   familyValidationStatus: z.union([learnFamilyStatusSchema, z.literal('unknown')]), equivalenceVersion: learnVersionSchema.nullable(),
 }
@@ -340,7 +344,7 @@ export function reconcileLearnReportFirstClaims(claims: readonly LearnReportFirs
 export const LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION = 'learn-v2.first-independent-claim.v2' as const
 const claimStratum = z.strictObject({
   epoch: learnVersionSchema, baselineSha: z.string().regex(/^[a-f0-9]{40}$/), cohortVersion: learnVersionSchema,
-  flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
+  flow: learnMeasurementFlowSchema, checkSurface: learnReportCheckSurfaceSchema.optional(), entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
 })
 export const learnReportLinkedFirstSlotSchema = z.strictObject({
   kind: z.literal('linked'), firstCheckOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
@@ -458,7 +462,7 @@ export const learnReportProvenanceSchema = z.strictObject({
   bootstrapSeed: learnDigestSchema, bootstrapReplicates: z.literal(10_000),
 }).refine(value => value.extractionStartedAt <= value.extractionEndedAt, 'Invalid extraction range')
 export const learnReportStratumSchema = z.strictObject({
-  flow: learnMeasurementFlowSchema, entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
+  flow: learnMeasurementFlowSchema, checkSurface: learnReportCheckSurfaceSchema.optional(), entryPoint: learnVersionSchema, depth: learnMeasurementDepthSchema,
   startingBand: z.enum(LEARN_V2_REPORT_STARTING_BANDS), responseKind: z.union([z.enum(LEARN_V2_REPORT_RESPONSE_KINDS), z.literal('unknown')]),
   scoringKind: z.enum(['deterministic', 'model', 'unknown']), configurationDigest: learnDigestSchema.nullable(),
   observedModel: z.string().min(1).max(200).nullable(), observedUpstream: z.string().min(1).max(200).nullable(),
@@ -963,7 +967,7 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
 
 function reportStratum(frozen: z.infer<typeof learnReportFirstSlotStratumSchema>, candidate: ReportResult | null): LearnReportMetric['stratum'] {
   const observed = candidate !== null && matchesReportConfiguration(candidate, frozen.scorerConfiguration) ? candidate : null
-  return { flow: frozen.flow, entryPoint: frozen.entryPoint, depth: frozen.depth, startingBand: 'all', responseKind: frozen.responseKind,
+  return { flow: frozen.flow, checkSurface: learnReportCheckSurface(frozen), entryPoint: frozen.entryPoint, depth: frozen.depth, startingBand: 'all', responseKind: frozen.responseKind,
     scoringKind: frozen.scorerConfiguration.scoringKind, configurationDigest: frozen.scorerConfiguration.configurationDigest,
     observedModel: observed?.observedModel ?? null, observedUpstream: observed?.observedUpstream ?? null, familyValidationStatus: frozen.familyValidationStatus }
 }
@@ -1203,7 +1207,8 @@ async function computeLearningMeasurementReport(input: LearnReportBuildInput, pu
       add(FALSE_MASTERY_NEXT_DELAYED_VERSION, slot.clock.horizonDays, reportStratum(slot.stratum, resultBy(slot.result, metadata.query.cutoff)),
         { kind: 'secondary_only' }, computed, claim)
     } else if (claim.kind === 'first_check_claim_v2') {
-      add(FALSE_MASTERY_NEXT_DELAYED_VERSION, null, { flow: claim.stratum.flow, entryPoint: claim.stratum.entryPoint, depth: claim.stratum.depth,
+      add(FALSE_MASTERY_NEXT_DELAYED_VERSION, null, { flow: claim.stratum.flow, checkSurface: learnReportCheckSurface(claim.stratum),
+        entryPoint: claim.stratum.entryPoint, depth: claim.stratum.depth,
         startingBand: 'all', responseKind: 'unknown', scoringKind: 'unknown', configurationDigest: null, observedModel: null,
         observedUpstream: null, familyValidationStatus: 'unknown' }, { kind: 'secondary_only' }, computeUnlinkedClaimRow(claim, metadata.query.cutoff), claim)
     }

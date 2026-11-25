@@ -2,7 +2,7 @@ import { LearnAccessError, LearnInputValidationError, LearnScoringInputError } f
 import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
-import { measurementReadContext } from './learnV2MeasurementReadContext'
+import { hasMeasurementReadContext, measurementReadContext } from './learnV2MeasurementReadContext'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -27,7 +27,7 @@ import {
   type learnAcceptResponseEntrySchema, type LEARN_V2_RESPONSE_REJECTION_CODES,
 } from '../../shared/learn-v2-responses'
 import {
-  learnResponseScopeSchema, deriveLearnAssessmentResponseContext, learnAssessmentPinsSchema,
+  learnResponseScopeSchema, deriveLearnAssessmentResponseContext, learnAssessmentPinsSchema, learnAssessmentBoundSurface,
   learnScorerBindingSchema, learnMeasurementAllocationSchema, type LearnResponseScope,
 } from '../../shared/learn-v2-measurement'
 import {
@@ -393,8 +393,11 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
     instrumentationVersion: observation.version, instrumentationProvenance: entry.instrumentation ? 'client_observation.v1' : 'missing_instrumentation.v1',
   })
   const assignment = 'assessmentPins' in row ? await matchingAssignment(ctx, userId, row) : null
+  if ('assessmentPins' in row && (assignment?.checkSurface || row.contextPins.kind !== 'calibration' && row.contextPins.checkSurface)
+    && !learnAssessmentBoundSurface(assignment?.status === 'admitted' ? assignment : null, row.contextPins)) reject('pins_mismatch')
   const context = 'assessmentPins' in row ? deriveLearnAssessmentResponseContext({ contextPins: row.contextPins,
-    assignment: assignment?.status === 'admitted' ? { status: 'admitted', assignmentId: assignment._id, epoch: assignment.epoch, flow: assignment.flow }
+    assignment: assignment?.status === 'admitted' ? { status: 'admitted', assignmentId: assignment._id, epoch: assignment.epoch,
+      flow: assignment.flow, ...(assignment.checkSurface ? { checkSurface: assignment.checkSurface } : {}) }
       : assignment ? { status: assignment.status } : null }) : null
   const assessment = 'assessmentPins' in row ? await assessmentValidity(ctx, userId, row, authority, assistance, now, assignment, historyKnown) : null
   const validity = assessment?.validity ?? parseLearnContract(learnValiditySnapshotSchema, { policyVersion: LEARN_V2_VALIDITY_POLICY_VERSION,
@@ -529,7 +532,9 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
         scoringBinding: value.row.scoringBinding, type: 'sealed_response_scoring', status: 'queued', revision: 1,
         idempotencyKey: `submission:${submissionId}`, requestFingerprint: value.payloadDigest, providerEnabled: false, attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.patch(value.row._id, { phase: 'submitted_sealed', submissionId, scoringJobId: jobId, revision: value.row.revision + 1 })
-      if (value.row.purpose.kind === 'measurement_delayed') await finalizeLearnDelayedCheckSession(ctx, userId, (await ctx.db.get(value.row._id))!)
+      if (value.row.purpose.kind === 'measurement_delayed' || value.row.purpose.kind === 'measurement_cold'
+        && value.row.contextPins.kind === 'session' && value.row.contextPins.checkSurface?.surface === 'canvas')
+        await finalizeLearnDelayedCheckSession(ctx, userId, (await ctx.db.get(value.row._id))!)
     }
     await ctx.db.insert('learnResponseBodies', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
       ...aggregate(value.row), submissionId, payload: value.entry.payload, payloadBytes: value.payloadBytes, payloadDigest: value.payloadDigest })
@@ -594,7 +599,7 @@ async function retainedBody(ctx: ReadCtx, userId: string, response: Doc<'learnRe
 }
 
 export async function getLearnResponseStateForOwner(ctx: ReadCtx, userId: string, target: LearnResponseTarget): Promise<LearnV2ResponseState> {
-  ctx = createResponsePrivacyReadContext(ctx, userId).ctx
+  ctx = hasMeasurementReadContext(ctx, userId) ? ctx : createResponsePrivacyReadContext(ctx, userId).ctx
   const row = await requireOwnedResponseTarget(ctx, userId, target)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return disabledLearnV2Result()
   let work = null

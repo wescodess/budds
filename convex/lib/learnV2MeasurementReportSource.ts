@@ -5,7 +5,7 @@ import {
   learnReportFirstClaimV2SnapshotSchema, resolveLearnReportFirstSlotV2,
   learnReportFactSchema, type LearnReportInputSnapshot, type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
-import { deriveLearnScorerConfiguration } from '../../shared/learn-v2-measurement'
+import { deriveLearnScorerConfiguration, learnAssessmentBoundSurface } from '../../shared/learn-v2-measurement'
 import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
 import { learnSerializedBytes } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS as limits } from '../../shared/learn-v2-measurement-storage-manifest'
@@ -105,9 +105,20 @@ async function outcome(ctx: QueryCtx, userId: string, opportunity: Doc<'learnAss
     const integrity = pinned.some(row => row.fact.kind === 'integrity' && (row.fact.currentEligibility !== 'eligible' || !row.fact.evidenceAvailable))
     result = { ...result, evidenceAvailable: result.evidenceAvailable && evidenceAvailable && execution.evidenceStatus === 'available' && !integrity }
   }
+  let flow = 'flow' in response ? (['today', 'v2_today'].includes(response.flow) ? 'v2_today' as const : 'v2_canvas' as const) : null
+  const binding = 'contextPins' in response && response.contextPins.kind !== 'calibration' ? response.contextPins.checkSurface : undefined
+  if (binding) {
+    const assignment = opportunity.assignmentId ? await ctx.db.get(opportunity.assignmentId) : null
+    const pinned = opportunity.contextPins.kind === 'calibration' ? undefined : opportunity.contextPins.checkSurface
+    if (!assignment || assignment.userId !== userId || assignment.status !== 'admitted' || !pinned
+      || pinned.version !== binding.version || pinned.surface !== binding.surface || pinned.measurementFlow !== binding.measurementFlow
+      || !('contextPins' in response) || !('flow' in response) || learnAssessmentBoundSurface(assignment, response.contextPins) !== response.flow)
+      incomplete('invalid_response_flow_binding')
+    flow = binding.measurementFlow
+  }
   return { acceptance: { submissionId: response._id, acceptedAt: response.acceptedAt }, result,
     validitySnapshot: acceptanceFact.validitySnapshot, assistanceState: acceptanceFact.assistanceSnapshot.state, stateAtAcceptance: acceptanceFact.stateAtAcceptance ?? 'unknown' as const,
-    flow: 'flow' in response ? (['today', 'v2_today'].includes(response.flow) ? 'v2_today' : 'v2_canvas') : null,
+    flow,
     epoch: 'baselineEpoch' in response ? response.baselineEpoch : 'measurementContext' in response && response.measurementContext.status === 'admitted' ? response.measurementContext.baselineEpoch : null }
 }
 function operational(rows: Fact[]) {
@@ -122,8 +133,8 @@ function savedClock(rows: Fact[]) {
 function slotDisposition(facts: Fact[], accepted: Awaited<ReturnType<typeof outcome>>): Episode['disposition'] {
   const latest = facts.at(-1)?.fact
   if (latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE) return 'missing_delayed'
-  if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (operational(facts) === 'blocked') return 'access_provider_blocked'
+  if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (latest?.kind === 'opportunity' && ['cancelled', 'abandoned'].includes(latest.status)) return 'abandoned'
   if (latest?.kind === 'opportunity' && ['invalid', 'reconciliation_required'].includes(latest.status)) return 'reconciliation_required'
   return accepted.acceptance && !accepted.result ? 'scoring_pending' : accepted.result ? 'valid_scored' : 'missing_delayed'

@@ -15,6 +15,7 @@ import { deriveLearnScorerConfiguration, learnScorerBindingSchema } from '../../
 import { learnAssessmentPurposeSchema, doesLearnAssessmentPurposeMatchPins, learnFirstCheckClaimSchema } from '../../shared/learn-v2-delayed-check'
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
+import { enqueueLearnDueWork, hasUnresolvedLearnDueWork } from './learnV2DueWorkQueue'
 
 type FactInput = Omit<LearnReportSourceFact, 'factVersion' | 'sequence'> & {
   learningVoidId?: Id<'learningVoids'>
@@ -64,9 +65,12 @@ export async function appendLearnMeasurementFact(ctx: MutationCtx, userId: strin
     dueWorkThrough: watermark?.dueWorkThrough ?? null, historyCoverage: watermark?.historyCoverage ?? 'unknown',
   })
   if (watermark) await ctx.db.patch(watermark._id, state)
-  else await ctx.db.insert('learnMeasurementSourceWatermarks', {
-    ...state, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
-  })
+  else {
+    await ctx.db.insert('learnMeasurementSourceWatermarks', {
+      ...state, userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,
+    })
+    await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: now })
+  }
   return sequence
 }
 
@@ -246,6 +250,7 @@ async function readQualifyingFirstSlot(ctx: QueryCtx, userId: string, claim: Lea
     epoch: assignment?.epoch ?? claim.stratum.epoch, baselineSha: assignment?.baselineSha ?? claim.stratum.baselineSha,
     cohortVersion: assignment?.cohortVersion ?? claim.stratum.cohortVersion,
     flow: assignment?.flow ?? (row.contextPins.kind === 'session' && row.contextPins.canvas ? 'v2_canvas' : 'v2_today'),
+    ...(assignment?.checkSurface ? { checkSurface: assignment.checkSurface.surface } : {}),
     entryPoint: assignment?.entryPoint ?? 'retained_check', depth: row.depth,
     familyId: pins?.familyId ?? null, familyRevision: pins?.familyRevision ?? null,
     familyValidationStatus: family?.status ?? 'unknown', equivalenceVersion: pins?.equivalenceVersion ?? null,
@@ -267,7 +272,8 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
     responseKind: admitted?.responseKind ?? null,
     scorerConfiguration: admitted ? await deriveLearnScorerConfiguration(admitted.scoringBinding) : null,
     epoch: assignment.epoch, baselineSha: assignment.baselineSha, cohortVersion: assignment.cohortVersion,
-    flow: assignment.flow, entryPoint: assignment.entryPoint, depth: assignment.depth,
+    flow: assignment.flow, ...(assignment.checkSurface ? { checkSurface: assignment.checkSurface.surface } : {}),
+    entryPoint: assignment.entryPoint, depth: assignment.depth,
     protocolVersion: admitted?.protocolVersion ?? null, enrollmentAt: admitted?.enrollmentAt ?? null,
     timezone: admitted?.enrollmentTimezone ?? null, anchorAt: admitted?.anchorAt ?? null, anchorKind: admitted?.anchorKind ?? null,
     historyStatus: assignment.historyStatus, familyId: assignment.familyId ?? null, familyRevision: assignment.familyRevision ?? null,
@@ -285,6 +291,9 @@ export async function writeLearnMeasurementEnrollmentFact(ctx: MutationCtx, user
     ? parseLearnContract(learnReportAssignmentSnapshotSchema, previous.fact.snapshot) : null
   if (previous?.fact.kind === 'enrollment' && previous.fact.status === assignment.status
     && JSON.stringify(previousSnapshot) === JSON.stringify(snapshot)) return previous.sequence
+  await enqueueLearnDueWork(ctx, { userId, key: 'owner', kind: 'owner', dueAt: Date.now() })
+  await enqueueLearnDueWork(ctx, { userId, learningVoidId: assignment.learningVoidId,
+    assignmentId: assignment._id, key: `assignment:${assignment._id}`, kind: 'assignment', dueAt: Date.now() })
   const recordRevision = previous?.fact.kind === 'enrollment' ? previous.fact.recordRevision + 1 : 1
   return await appendLearnMeasurementFact(ctx, userId, {
     epoch: assignment.epoch, occurredAt: Date.now(), learningVoidId: assignment.learningVoidId,
@@ -347,9 +356,10 @@ export async function writeLearnResponseAcceptanceFact(ctx: MutationCtx, userId:
 
 export async function readLearnMeasurementWatermarkSnapshot(ctx: QueryCtx | MutationCtx, userId: string, reportRunId: Id<'learnMeasurementReportRuns'>) {
   const { watermark } = await nextLearnMeasurementSourceSequence(ctx, userId)
+  const unresolved = await hasUnresolvedLearnDueWork(ctx, userId, Date.now())
   return parseLearnContract(learnReportWatermarkSnapshotSchema, {
     kind: 'owner_watermark', learnerKey: await deriveLearnReportLearnerKey(reportRunId, userId),
-    sequence: watermark?.sequence ?? 0, dueWorkThrough: watermark?.dueWorkThrough ?? null,
+    sequence: watermark?.sequence ?? 0, dueWorkThrough: unresolved ? null : watermark?.dueWorkThrough ?? null,
     historyCoverage: watermark?.historyCoverage ?? 'unknown', legacyIndependentAudit: { sourceCoverage: 'unknown', unknownCount: null },
   })
 }

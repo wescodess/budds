@@ -22,7 +22,7 @@ import {
   doesLearnAssessmentPurposeMatchPins, isLearnAssessmentTestOnly, isLearnRetainedPromotionTimeEligible,
   learnAssessmentPurposeSchema, resolveLearnAssessmentCapabilities,
 } from '../../shared/learn-v2-delayed-check'
-import { learnAssessmentPinsSchema, learnMeasurementItemPinsSchema, learnScorerBindingSchema } from '../../shared/learn-v2-measurement'
+import { learnAssessmentPinsSchema, learnMeasurementItemPinsSchema, learnScorerBindingSchema, learnAssessmentBoundSurface } from '../../shared/learn-v2-measurement'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../../shared/learn-v2-responses'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, projectDeliveredAssessment } from '../../shared/learn-v2-assessment-disclosure'
 
@@ -45,7 +45,9 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
     || !doesLearnAssessmentPurposeMatchPins(purpose.data, pins.data)) return deny('pins_mismatch')
   const assignment = row.assignmentId ? await ctx.db.get(row.assignmentId) : null
   const canvas = row.contextPins.kind === 'session' ? row.contextPins.canvas : undefined
-  const boundFlow = assignment?.status === 'admitted' ? assignment.flow === 'v2_canvas' ? 'canvas' : 'today' : canvas ? 'canvas' : 'today'
+  const explicit = assignment?.checkSurface || row.contextPins.kind !== 'calibration' && row.contextPins.checkSurface
+  const boundFlow = explicit ? learnAssessmentBoundSurface(assignment?.status === 'admitted' ? assignment : null, row.contextPins)
+    : assignment?.status === 'admitted' ? assignment.flow === 'v2_canvas' ? 'canvas' : 'today' : canvas ? 'canvas' : 'today'
   if (flow !== boundFlow || canvas && flow !== 'canvas') return deny('flow_mismatch')
   if (row.contextPins.kind !== 'calibration') {
     const reason = await measurementScopeReason(ctx, userId, row)
@@ -89,7 +91,7 @@ async function deliveryAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAsse
     if (!assignment || assignment.userId !== userId || assignment.status !== 'admitted'
       || assignment.protocolVersion !== protocol.version || assignment.epoch !== protocol.epoch
       || assignment.windowPolicyDigest !== await measurementWindowPolicyDigest(protocol)
-      || !protocol.flows.includes(flow === 'today' ? 'v2_today' : 'v2_canvas')) return deny('not_admitted')
+      || !protocol.flows.includes(assignment.flow)) return deny('not_admitted')
     if (!row.submissionId) try {
       const manifest = await getValidatedMeasurementFamily(ctx, userId, pins.data.itemPins.familyId)
       const itemPins = pins.data.itemPins

@@ -5,6 +5,7 @@ import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, s
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
 import { learnDueCron, runLearnDueCron } from '../tests/fixtures/learn-v2-due-cron'
+import { enqueueLearnDueWork } from './lib/learnV2DueWorkQueue'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
@@ -104,7 +105,8 @@ async function play(f: Awaited<ReturnType<typeof journey>>, reserve: boolean, sc
   return { targetId, accepted, originalBinding, sealedContextPins: target.contextPins }
 }
 
-async function beginReport(f: Awaited<ReturnType<typeof journey>>, cohort: Awaited<ReturnType<typeof journey>>[], key: string) {
+async function beginReport(f: Awaited<ReturnType<typeof journey>>, cohort: Awaited<ReturnType<typeof journey>>[], key: string, pinOnly = false) {
+  if (!pinOnly) await runLearnDueCron(f.t)
   const protocol = syntheticDeliveryProtocol(START)
   if (!LEARN_REPORT_APPROVALS.length) LEARN_REPORT_APPROVALS.push({ tokenIdentifier: viewerIdentity.tokenIdentifier,
     principalBindingVersion: 'integration.binding.v1', grantVersion: 'integration.grant.v1',
@@ -120,6 +122,7 @@ async function beginReport(f: Awaited<ReturnType<typeof journey>>, cohort: Await
   if (report.status !== 'requested') throw new Error('Expected report request')
   for (let batch = 0; batch < Math.ceil(cohort.length / 8); batch++)
     await f.t.mutation(internal.learnV2MeasurementReports.pinReportOwners, { reportRunId: report.reportRunId })
+  if (pinOnly) return { viewer, reportRunId: report.reportRunId }
   for (let batch = 0; batch < cohort.length * 16; batch++) {
     const run = (await f.t.run(ctx => ctx.db.get(report.reportRunId)))!
     if (run.status !== 'building' || reportControl(run).phase !== 'extracting') break
@@ -138,6 +141,51 @@ async function cohortJourney(reserve: boolean, count: number) {
     { subject: `integration-${index}`, tokenIdentifier: `https://auth.example|integration-${index}` }))
   return cohort
 }
+
+test('C6 pin-time coverage stays unknown with pending retries and becomes complete after the durable work drains', async () => {
+  const cohort = await cohortJourney(false, 5)
+  const f = cohort[0]!
+  vi.setSystemTime(f.original.openAt)
+  const watermark = (await f.t.run(ctx => ctx.db.query('learnMeasurementSourceWatermarks').withIndex('by_userId', q => q.eq('userId', f.learnerId)).unique()))!
+  await f.t.run(async ctx => {
+    await ctx.db.patch(watermark._id, { dueWorkThrough: Date.now() })
+    const pending = await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
+      q.eq('userId', f.learnerId).eq('state', 'pending')).take(16)
+    expect(pending.length).toBeGreaterThan(0)
+    for (const row of pending) await ctx.db.patch(row._id, { nextAttemptAt: Date.now() + 60_000 })
+  })
+  const first = await beginReport(f, cohort, 'pending_due_work_report_1234567890', true)
+  const before = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', first.reportRunId)).take(8))
+  expect(before).toHaveLength(5)
+  for (const row of before) expect(row.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+  expect(await f.t.run(ctx => ctx.db.get(first.reportRunId))).toMatchObject({ sourceCoverage: 'unknown' })
+  policy.responses = false
+  vi.setSystemTime(Date.now() + 1)
+  const paused = await beginReport(f, cohort, 'paused_due_work_report_1234567890', true)
+  const pausedPins = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', paused.reportRunId)).take(8))
+  expect(pausedPins).toHaveLength(5)
+  for (const row of pausedPins) expect(row.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+  policy.responses = true
+  vi.setSystemTime(Date.now() + 60_000)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_state_and_dueAt', q =>
+    q.eq('userId', f.learnerId).eq('state', 'pending')).take(16))).toEqual([])
+  const drained = await beginReport(f, cohort, 'drained_due_work_report_1234567890')
+  const covered = (await sealedMeasurementReportInput(f.t, drained.reportRunId)).rows.filter(row => row.kind === 'owner_watermark')
+  expect(covered).toHaveLength(5)
+  for (const row of covered) expect(row).toMatchObject({ dueWorkThrough: Date.now() })
+  expect(await f.t.run(ctx => ctx.db.get(drained.reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+  await f.t.run(async ctx => {
+    await enqueueLearnDueWork(ctx, { userId: f.learnerId, key: 'exhausted', kind: 'owner', dueAt: Date.now() })
+    const work = (await ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q => q.eq('userId', f.learnerId).eq('key', 'exhausted')).unique())!
+    await ctx.db.patch(work._id, { state: 'terminal', attempts: 8, reasonCode: 'retries_exhausted' })
+  })
+  vi.setSystemTime(Date.now() + 1)
+  const terminal = await beginReport(f, cohort, 'terminal_due_work_report_1234567890', true)
+  expect(await f.t.run(ctx => ctx.db.get(terminal.reportRunId))).toMatchObject({ sourceCoverage: 'unknown' })
+  const terminalPin = (await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q => q.eq('reportRunId', terminal.reportRunId)).take(8))).find(row => row.userId === f.learnerId)
+  expect(terminalPin?.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+}, 30_000)
 
 test('system-late undelivered checks remain missing outcomes in a sealed C6 report', async () => {
   const cohort = await cohortJourney(false, 5)
@@ -344,3 +392,102 @@ test('responses-off due work keeps its original opportunity-fact shape without c
   expect(facts.some(row => row.fact.kind === 'opportunity' && row.fact.status === 'eligible')).toBe(true)
   for (const row of facts) expect(row.fact).not.toHaveProperty('stateAtEligibility')
 })
+
+test.each(['parked', 'terminal'] as const)('C6 coverage resolves a %s opening fault after its closed outcome is recorded', async state => {
+  const cohort = await cohortJourney(false, 5)
+  const f = cohort[0]!
+  await runLearnDueCron(f.t)
+  vi.setSystemTime(f.original.openAt - 1)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(f.original._id))).toMatchObject({ phase: 'preparing', operationalEligibility: 'pending' })
+  const dueHelpers = await import('./lib/learnV2MeasurementDueWork')
+  const original = dueHelpers.processLearnMeasurementDueOpportunity
+  const failure = vi.spyOn(dueHelpers, 'processLearnMeasurementDueOpportunity').mockImplementation((ctx, assignment, protocol, row, through) => {
+    if (row._id === f.original._id) throw new Error('synthetic_opening_fault')
+    return original(ctx, assignment, protocol, row, through)
+  })
+  vi.setSystemTime(f.original.openAt)
+  for (let attempt = 1; attempt <= 8; attempt++) {
+    await runLearnDueCron(f.t)
+    const work = (await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+      q.eq('userId', f.learnerId).eq('key', `${f.original._id}:open`)).unique()))!
+    expect(work.attempts).toBe(attempt)
+    if (attempt < 8) vi.setSystemTime(work.nextAttemptAt)
+  }
+  const parked = (await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId_and_key', q =>
+    q.eq('userId', f.learnerId).eq('key', `${f.original._id}:open`)).unique()))!
+  expect(parked).toMatchObject({ state: 'parked', nextAttemptAt: Math.min(Date.now() + 3_600_000, f.original.closeAt) })
+  if (state === 'terminal') await f.t.run(ctx => ctx.db.patch(parked._id, { state, recoveryAttempts: 3, nextAttemptAt: f.original.closeAt + 8 * 3_600_000 }))
+  const before = await beginReport(f, cohort, `${state}_opening_fault_report`, true)
+  const pins = await f.t.run(ctx => ctx.db.query('learnMeasurementReportRows').withIndex('by_reportRunId_and_sequence', q =>
+    q.eq('reportRunId', before.reportRunId)).take(8))
+  expect(pins.find(row => row.userId === f.learnerId)?.snapshot).toMatchObject({ kind: 'owner_watermark', dueWorkThrough: null })
+  failure.mockRestore()
+  vi.setSystemTime(f.original.closeAt)
+  await runLearnDueCron(f.t)
+  expect(await f.t.run(ctx => ctx.db.get(parked._id))).toBeNull()
+  expect(await f.t.run(ctx => ctx.db.get(f.original._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  const after = await beginReport(f, cohort, `${state}_closed_fault_report`)
+  expect(await f.t.run(ctx => ctx.db.get(after.reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+}, 30_000)
+
+test('C6 reports a block cleared before close as system-late and a held block as access-blocked', async () => {
+  const cohort = await cohortJourney(false, 10)
+  const f = cohort[0]!
+  const cleared = cohort.slice(0, 5)
+  const held = cohort.slice(5)
+  for (const learner of cohort) await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: learner.learnerId, enabled: false })
+  vi.setSystemTime(f.original.openAt)
+  await runLearnDueCron(f.t)
+  for (const learner of cohort) expect(await f.t.run(ctx => ctx.db.get(learner.original._id))).toMatchObject({ reasonCode: 'not_admitted' })
+  const nextCheck = async () => Math.min(...await f.t.run(async ctx => {
+    const rows = await ctx.db.query('learnMeasurementDueWork').withIndex('by_state_and_nextAttemptAt', q => q.eq('state', 'pending')).take(32)
+    return rows.filter(row => row.kind === 'open').map(row => row.nextAttemptAt)
+  }))
+  for (let next = await nextCheck(); next < f.original.closeAt; next = await nextCheck()) {
+    vi.setSystemTime(next)
+    await runLearnDueCron(f.t)
+  }
+  vi.setSystemTime(f.original.closeAt - 30 * 60_000)
+  for (const learner of cleared) await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: learner.learnerId, enabled: true })
+  vi.setSystemTime(f.original.closeAt)
+  await runLearnDueCron(f.t)
+  for (const learner of cleared) expect(await f.t.run(ctx => ctx.db.get(learner.original._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'system_due_work_late' })
+  for (const learner of held) expect(await f.t.run(ctx => ctx.db.get(learner.original._id))).toMatchObject({ phase: 'abandoned', reasonCode: 'not_admitted' })
+  const report = await beginReport(f, cohort, 'cleared_block_slot_report')
+  const input = await sealedMeasurementReportInput(f.t, report.reportRunId)
+  for (const [group, disposition, late] of [[cleared, 'missing_delayed', true], [held, 'access_provider_blocked', false]] as const) {
+    const ids = new Set(group.map(learner => String(learner.original._id)))
+    const episodes = input.rows.filter(row => row.kind === 'episode' && ids.has(String(row.originalOpportunityId)))
+    expect(episodes).toHaveLength(5)
+    for (const row of episodes) {
+      expect(row).toMatchObject({ disposition })
+      if (row.kind === 'episode') expect(row.reasonCodes.includes('system_due_work_late')).toBe(late)
+    }
+    const claims = input.rows.filter(row => row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'linked' && ids.has(String(row.firstSlot.firstCheckOpportunityId)))
+    expect(claims).toHaveLength(5)
+    for (const row of claims) expect(row).toMatchObject({ firstSlot: { unresolvedReason: late ? 'system_due_work_late' : 'access_provider_blocked' } })
+  }
+}, 60_000)
+
+test('closing and rematerializing a submitted, scored check appends no opportunity fact', async () => {
+  const f = await journey(false)
+  vi.setSystemTime(f.original.openAt + 1000)
+  const { targetId } = await play(f, false, 100)
+  const facts = () => f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_assessmentOpportunityId', q =>
+    q.eq('userId', f.learnerId).eq('fact.assessmentOpportunityId', targetId)).take(16))
+  const before = await facts()
+  const row = (await f.t.run(ctx => ctx.db.get(targetId)))!
+  const latest = before.at(-1)?.fact
+  expect(row).toMatchObject({ phase: 'scored_pass' })
+  expect(latest).toMatchObject({ kind: 'opportunity', status: 'eligible' })
+  if (latest?.kind !== 'opportunity') throw new Error('Expected opportunity fact')
+  expect(row.revision).toBeGreaterThan(latest.recordRevision)
+  await f.t.mutation(due, { userId: f.learnerId, through: Date.now() })
+  vi.setSystemTime(row.closeAt)
+  await runLearnDueCron(f.t)
+  await f.t.mutation(due, { userId: f.learnerId, through: Date.now() })
+  expect(await facts()).toEqual(before)
+  expect((await f.t.run(ctx => ctx.db.query('learnMeasurementDueWork').withIndex('by_userId', q => q.eq('userId', f.learnerId)).take(16)))
+    .filter(work => work.assessmentOpportunityId === targetId)).toEqual([])
+}, 30_000)

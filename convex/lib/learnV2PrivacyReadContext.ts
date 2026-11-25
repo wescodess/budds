@@ -5,7 +5,7 @@ type ReadCtx = QueryCtx | MutationCtx
 export const RESPONSE_PRIVACY_READ_BUDGET = 3072
 const scopeKey = Symbol('responsePrivacyReadScope')
 class PrivacyReadBudgetExceeded extends Error {}
-type Scope = { memo: Map<string, Promise<unknown>>, exhausted: () => boolean, throwOnBudgetExhaustion: boolean, invalidate: () => void, requireStrict: () => void }
+type Scope = { memo: Map<string, Promise<unknown>>, exhausted: () => boolean, remaining: () => number, throwOnBudgetExhaustion: boolean, invalidate: () => void, requireStrict: () => void }
 
 function readScope(ctx: ReadCtx): Scope | undefined {
   const scope = Reflect.get(ctx, scopeKey) as Scope | undefined
@@ -25,7 +25,7 @@ export function createResponsePrivacyReadContext<T extends ReadCtx>(ctx: T, user
       : LEARN_MEASUREMENT_CAPABILITIES.responses ? 'Learn source validation unavailable: read_budget_exhausted' : undefined)
     reads++
   }
-  const state: Scope = { memo: new Map(), exhausted: () => reads >= limit, throwOnBudgetExhaustion, invalidate: () => {
+  const state: Scope = { memo: new Map(), exhausted: () => reads >= limit, remaining: () => Math.max(0, limit - reads), throwOnBudgetExhaustion, invalidate: () => {
     documents.clear(); state.memo.clear(); invalidateResponsePrivacyReadContext(ctx)
   }, requireStrict: () => {
     state.throwOnBudgetExhaustion = true
@@ -67,6 +67,10 @@ export function responsePrivacyReadContext<T extends ReadCtx>(ctx: T, userId: st
 
 export function privacyReadBudgetExhausted(ctx: ReadCtx) {
   return readScope(ctx)?.exhausted() ?? false
+}
+
+export function remainingPrivacyReadBudget(ctx: ReadCtx) {
+  return readScope(ctx)?.remaining() ?? RESPONSE_PRIVACY_READ_BUDGET - 16
 }
 
 export async function privacyRead<T>(ctx: ReadCtx, userId: string, key: readonly unknown[], unavailable: T, read: (ctx: ReadCtx) => Promise<T>): Promise<T> {

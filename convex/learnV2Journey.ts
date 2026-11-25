@@ -20,7 +20,7 @@ import { assessmentDeliveryValidator } from './lib/learnV2PublicContract'
 import { sanitizePublicSourceLocator } from './lib/learnV2SourceSanitization'
 
 const MAX_VOIDS = 32
-const fixedCheckSummary = v.object({ ...sessionSummary.fields, assessmentPurpose: v.literal('measurement_delayed'),
+const fixedCheckSummary = v.object({ ...sessionSummary.fields, assessmentPurpose: v.union(v.literal('measurement_delayed'), v.literal('measurement_cold')),
   assessmentOpportunityId: v.id('learnAssessmentOpportunities') })
 const MAX_SOURCES = 64
 const MAX_MILESTONES = 8
@@ -149,7 +149,8 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview, true) : null,
     accepted: accepted ? projectPlan(accepted, true) : null, sessions: sessions.filter(row => !isDedicatedLearnCheck(row)).map(row => projectFields(sessionSummary.fields, row)),
     ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { fixedChecks: fixed.map(row => ({ ...projectFields(sessionSummary.fields, row),
-      assessmentPurpose: 'measurement_delayed' as const, assessmentOpportunityId: row.assessmentOpportunityId! })) } : {}) }
+      assessmentPurpose: row.assessmentPurpose === 'measurement_cold' ? 'measurement_cold' as const : 'measurement_delayed' as const,
+      assessmentOpportunityId: row.assessmentOpportunityId! })) } : {}) }
 }
 
 async function blueprintGenerationProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[0], userId: string, blueprint: BlueprintRow | null) {
