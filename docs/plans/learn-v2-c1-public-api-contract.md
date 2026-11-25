@@ -112,6 +112,61 @@ The pointer is discovered from opportunities independently of active sessions. I
 
 With `todayCanvasChecks` off and no assignment previously enrolled through the new Today Canvas path, existing endpoints follow the dev path byte-for-byte; `getCheckPointers` returns only its disabled envelope. Responses off always dominates, including for stored Canvas assignments. Ordinary Canvas preparation retains its original branch. Existing C4 goldens are retained unchanged. Registered journey, toggle, pagination and boundary evidence is in `convex/learnV2TodayPointers.test.ts`, including first-page maximum inventories, closed and mixed-state overflow, six/twelve-family continuation, the before/after-scoring recovery matrix, historical-version continuation, thread deletion and completed-work recovery under native transaction limits; provider and publication adapters are synthetic, and independent review, deployed behavior and learner experience remain separate proof boundaries.
 
+### #587 additive Canvas timing and practice reference
+
+With responses and `todayCanvasChecks` enabled, `assessment` (including the
+`loadAssessmentCanvas` question projection) and every saved `checkReceipt` add:
+
+```ts
+checkTiming: {
+  version: 'learn-v2.canvas-check-timing.v1',
+  timing: 'this_session' | 'about_a_week' | 'about_a_month' | 'earlier' | 'retained'
+}
+```
+
+This independently versioned, optional extension leaves the existing assessment
+fields and receipt version/state union intact. The shared strict receipt parser
+and Convex validator accept the extension. Both Canvas query and delivery reads
+use the same helper, earliest granted teaching exposure, scope checks, elapsed-day
+buckets and `earlier` fallback as Today pointer v2. Missing topic labels do not
+invent a title or remove coarse timing. No exact time or held-out detail is added.
+Query-snapshot staleness has the same approximate semantics as Today.
+
+The owner-approved Canvas entry copy is:
+
+| Class | Canvas copy |
+| --- | --- |
+| `about_a_week` | A check on last week's work |
+| `about_a_month` | A check on work from about a month ago |
+| `this_session` | A check on this topic |
+| `earlier`, `retained`, unknown | A check on an earlier topic |
+
+Every owned saved receipt also adds this optional, independently versioned
+reference, including `result_unconfirmed` and `closed`:
+
+```ts
+postSealReference: {
+  version: 'learn-v2.post-seal-teaching.v1',
+  assessmentOpportunityId: Id<'learnAssessmentOpportunities'>
+}
+```
+
+It can be passed directly to the existing Canvas aliases `getPostSealTeaching`,
+`openPostSealPractice` and `publishPostSealFeedback`, and used as the reference
+portion of `authorizePracticeAssistance`. It conveys identity only, with no
+content, phase, score or capability claim. An unconfirmed/closed receipt still
+omits `assessment` and cannot infer pass/fail or authorize a scoring retry.
+The endpoints reauthorize the authenticated owner and the complete post-seal
+contract on each read, opening and help replay. An accepted cancellation may
+retain separate-case practice, while evidence loss, relevant open checks,
+revocation or failed separation deny content. Lessons and hints still require a
+valid scored failure; worked examples retain the separate-practice gate.
+
+Neither extension is emitted with `todayCanvasChecks` off, including frozen
+Canvas recovery receipts, and responses off retains its existing path. No
+additional timing reads run in the off state. Today v1 pointers and C4 goldens
+are unchanged. These fields introduce no storage, grant, authority or UI change.
+
 Argument and return validators live in `convex/lib/learnV2PublicContract.ts`. They are importable by application and server adapters and contain no private scorer or source loader. Existing shared schemas supply semantic validation, including original-envelope bytes, finite numbers, exact response text, code-unit limits and URL-safe command keys. Invalid wire input produces a bounded generic error. The new public functions accept no owner, cohort, scorer, phase, trusted grant object or draft payload.
 
 Authentication derives ownership from `tokenIdentifier` through `requireAuth`, including the account-deletion tombstone. Targeted calls check the record and its owning Void/Blueprint/objective/plan/session or standalone thread/activity. Canvas attribution retains the additional adaptive access conjunction; a wrapper cannot remove it. Unauthenticated, foreign, missing or mismatched authority is denied without returning stored payloads. A new handler never returns a successful save, grant, terminalization, score or report from an unimplemented operation.
