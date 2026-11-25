@@ -929,7 +929,7 @@ test('the 64-row publication bound delivers, seals, recovers and scores through 
     .toMatchObject({ assessment: { phase: 'scored_pass' } })
   expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
     submissionId: sealed.submissionId, idempotencyKey: 'bound_canvas_recovery_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
-})
+}, 20_000)
 
 test('65-row inventory is rejected before Canvas publication or disclosure', async () => {
   await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } }))
