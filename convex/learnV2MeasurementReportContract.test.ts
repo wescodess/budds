@@ -12,10 +12,12 @@ import {
   validateLearnPublishedMeasurementReportCells, learnReportInputSnapshotSchema, LEARN_REPORT_PUBLICATION_POLICY_VERSION,
   type LearnReportMetric, type LearnPublishedReportMetric,
   type learnReportAssignmentSnapshotSchema, type learnReportResultSnapshotSchema,
+  LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportFactPayloadSchema, learnPublishedReportMetricSchema,
+  type learnReportIndependentClaimV2Schema,
 } from '../shared/learn-v2-measurement-report'
 import type { z } from 'zod'
 import { seedMeasurementStorage } from '../tests/fixtures/learn-v2-measurement-storage'
-import { partialMeasurementReportCell, measurementReportIdentityFixture, measurementReportNonAdmittedFixture } from '../tests/fixtures/learn-v2-measurement-report'
+import { partialMeasurementReportCell, measurementReportIdentityFixture, measurementReportNonAdmittedFixture, measurementReportSourceFixture } from '../tests/fixtures/learn-v2-measurement-report'
 
 const modules = import.meta.glob('./**/*.ts')
 
@@ -27,6 +29,59 @@ test('stored, public and exported cells have exactly the same frozen fields', ()
   expectTypeOf<Doc<'learnMeasurementReportRows'>['snapshot']>().toEqualTypeOf<z.infer<typeof learnReportInputSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportAssignmentSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportAssignmentSnapshotSchema>>()
   expectTypeOf<Infer<typeof learnReportResultSnapshotValidator>>().toEqualTypeOf<z.infer<typeof learnReportResultSnapshotSchema>>()
+  expectTypeOf<Extract<Doc<'learnMeasurementReportFacts'>['fact'], { kind: 'independent_claim_v2' }>['stratum']>()
+    .toEqualTypeOf<z.infer<typeof learnReportIndependentClaimV2Schema>['stratum']>()
+})
+
+test.each([undefined, 'today', 'canvas'] as const)('round-trips optional checkSurface=%s across stored C6 shapes and zod', async checkSurface => {
+  const t = convexTest(schema, modules)
+  const f = await t.run(ctx => seedMeasurementStorage(ctx, 'https://contract.example|owner'))
+  const row = (await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportRows)))!
+  const enrollment = (await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportFacts)))!
+  const cell = (await t.run(ctx => ctx.db.get(f.rows.learnMeasurementReportCells)))!
+  if (row.snapshot.kind !== 'episode' || enrollment.fact.kind !== 'enrollment') throw new Error('Missing report fixture')
+  const surface = checkSurface === undefined ? {} : { checkSurface }
+  const episode = { ...row.snapshot, assignment: { ...row.snapshot.assignment, ...surface } }
+  const enrollmentFact = { ...enrollment.fact, snapshot: episode.assignment }
+  const metric = { ...partialMeasurementReportCell(), publicationPolicyVersion: LEARN_REPORT_PUBLICATION_POLICY_VERSION,
+    stratum: { ...cell.stratum, ...surface } }
+  await t.run(async ctx => {
+    await ctx.db.patch(row._id, { snapshot: episode })
+    await ctx.db.patch(enrollment._id, { fact: enrollmentFact })
+    await ctx.db.patch(cell._id, metric)
+  })
+  expect(learnReportInputSnapshotSchema.parse((await t.run(ctx => ctx.db.get(row._id)))!.snapshot)).toEqual(episode)
+  expect(learnReportFactPayloadSchema.parse((await t.run(ctx => ctx.db.get(enrollment._id)))!.fact)).toEqual(enrollmentFact)
+  expect(learnPublishedReportMetricSchema.parse(metric)).toEqual(metric)
+  expect((await t.run(ctx => ctx.db.get(cell._id)))!.stratum).toEqual(metric.stratum)
+
+  const source = await measurementReportSourceFixture()
+  const basisAttemptId = await t.run(ctx => ctx.db.insert('masteryAttempts', { userId: f.base.userId,
+    objectiveId: f.scope.objectiveId, blueprintRevisionId: f.scope.blueprintRevisionId, kind: 'independent_application',
+    response: 'Synthetic storage shape control.', confidence: 3, attemptedAt: source.claim.claim.firstIndependentAt,
+    serverScorePercent: 100, idempotencyKey: 'storage_surface_basis' }))
+  const stratum = { epoch: 'epoch.v1', baselineSha: 'a'.repeat(40), cohortVersion: 'cohort.v1',
+    flow: 'v2_today' as const, entryPoint: 'today', depth: 'working' as const, ...surface }
+  const slot = { kind: 'linked' as const, firstCheckOpportunityId: f.rows.learnAssessmentOpportunities,
+    checkSequence: 1 as const, linkedAt: source.claim.claim.firstIndependentAt, clock: { ...source.claim.clock, anchorEventId: basisAttemptId },
+    stratum: { ...source.claim.stratum, ...stratum, familyId: f.rows.learnMeasurementFamilies } }
+  const claim = { ...source.claim.claim, basisAttemptId, claimSequence: 1 as const }
+  const fact = { ...claim, kind: 'independent_claim_v2' as const, version: LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION,
+    blueprintRevisionId: f.scope.blueprintRevisionId, objectiveId: f.scope.objectiveId, stratum,
+    policyPins: { assistancePolicyVersion: 'assistance.v1', validityPolicyVersion: 'validity.v1', thresholdVersion: 'threshold.v1', thresholdPercent: 80 as const }, firstSlot: slot }
+  for (const payload of [fact, { ...claim, kind: 'independent_claim' as const, firstCheckOpportunityId: slot.firstCheckOpportunityId,
+    checkSequence: 1, stratum: slot.stratum }, { kind: 'first_slot_link' as const, version: fact.version,
+    claimKey: claim.claimKey, claimSequence: 1 as const, claimFactSequence: 1, slot }]) {
+    await t.run(ctx => ctx.db.patch(enrollment._id, { fact: payload }))
+    expect(learnReportFactPayloadSchema.parse((await t.run(ctx => ctx.db.get(enrollment._id)))!.fact)).toEqual(payload)
+  }
+  const snapshot = { kind: 'first_check_claim_v2' as const, version: fact.version, ...f.reportKeys, claim, stratum, policyPins: fact.policyPins,
+    firstSlot: { ...slot, stateAtEligibility: 'independent' as const, stateAtAcceptance: null, acceptance: null, result: null, unresolvedReason: null } }
+  await t.run(ctx => ctx.db.patch(row._id, { rowKind: 'first_check_claim_v2', snapshot }))
+  expect(learnReportInputSnapshotSchema.parse((await t.run(ctx => ctx.db.get(row._id)))!.snapshot)).toEqual(snapshot)
+  const invalid = { ...fact, stratum: { ...stratum, checkSurface: 'email' } }
+  expect(learnReportFactPayloadSchema.safeParse(invalid).success).toBe(false)
+  await expect(t.run(ctx => ctx.db.patch(enrollment._id, { fact: invalid as never }))).rejects.toThrow()
 })
 
 test('requires and round-trips assignment admission fields in report rows and enrollment facts', async () => {
