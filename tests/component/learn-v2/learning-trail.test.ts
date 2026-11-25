@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import type { LearnMapEdit, LearnMapSaveResult, LearnObjectiveSnapshot, LearnSourceSnapshot } from '~/types/learn-v2-journey'
 
 const path = ['~', 'components', 'learn-v2'].join('/')
+
+beforeAll(async () => {
+  await import(`${path}/LearningTrail.vue`)
+  const warmup = await mountSuspended({ render: () => null })
+  warmup.unmount()
+})
 const milestoneOf = (index: number) => index < 2 ? 1 : index < 4 ? 2 : 3
 
 function objective(index: number, overrides: Partial<LearnObjectiveSnapshot> = {}): LearnObjectiveSnapshot {

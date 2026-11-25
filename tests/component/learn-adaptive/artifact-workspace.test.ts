@@ -1,26 +1,68 @@
-import { beforeEach, expect, it, vi } from 'vitest'
-import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { beforeAll, expect, it, onTestFinished, vi } from 'vitest'
+import { mountSuspended as mountComponent, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
+import { inject } from 'vue'
 
-const save = vi.fn()
-const remove = vi.fn()
-const artifacts = ref<Array<{ id: string, activityId: string, artifactKind: 'plan', title: string, summary: string, status: 'draft' | 'saved', readOnly: boolean, historical: boolean, evidenceLabel: null }> | null>([])
-const artifactPending = ref(false)
-const isOnline = ref(true)
-mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
-mockNuxtImport('useConvexQuery', () => (reference: never) => ({ data: getFunctionName(reference)?.includes('listThreadArtifacts') ? artifacts : ref(null), pending: getFunctionName(reference)?.includes('listThreadArtifacts') ? artifactPending : ref(false) }))
-mockNuxtImport('useConvexMutation', () => (reference: never) => ({ mutate: getFunctionName(reference)?.includes('deleteArtifact') ? remove : save }))
+mockNuxtImport('useOnlineStatus', () => () => ({ isOnline: inject<WorkspaceFixture | undefined>('artifactWorkspaceFixture', undefined)?.isOnline ?? ref(true) }))
+mockNuxtImport('useConvexQuery', () => (reference: never) => {
+  const fixture = inject<WorkspaceFixture | undefined>('artifactWorkspaceFixture', undefined)
+  return { data: getFunctionName(reference)?.includes('listThreadArtifacts') ? fixture?.artifacts ?? ref([]) : ref(null),
+    pending: getFunctionName(reference)?.includes('listThreadArtifacts') ? fixture?.artifactPending ?? ref(false) : ref(false) }
+})
+mockNuxtImport('useConvexMutation', () => (reference: never) => {
+  const fixture = inject<WorkspaceFixture | undefined>('artifactWorkspaceFixture', undefined)
+  return { mutate: (getFunctionName(reference)?.includes('deleteArtifact') ? fixture?.remove : fixture?.save) ?? vi.fn() }
+})
 
-const canvas = {
+const canvasTemplate = {
   ownerId: 'owner_1', status: 'eligible', thread: { id: 'thread_1', revision: 3, outcome: 'Build a study plan' },
   activity: { id: 'artifact_1', planRevision: 1, status: 'eligible',
     primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'artifact_workspace', action: 'save_artifact', testId: 'learn-primitive-artifact-workspace', props: { prompt: 'Build a concise plan.', artifactKind: 'plan', starterText: 'Goal:' } },
     fallback: { title: 'Activity unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } },
 }
 
-beforeEach(() => { save.mockReset().mockResolvedValue({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } }); remove.mockReset(); artifacts.value = []; artifactPending.value = false; sessionStorage.clear(); isOnline.value = true })
+let fixtureSequence = 0
+type WorkspaceFixture = Pick<ReturnType<typeof createFixture>, 'save' | 'remove' | 'artifacts' | 'artifactPending' | 'isOnline'>
+
+function createFixture() {
+  const canvas = { ...structuredClone(canvasTemplate), ownerId: `owner_${++fixtureSequence}` }
+  const fixture = {
+    canvas,
+    save: vi.fn().mockResolvedValue({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } }),
+    remove: vi.fn(),
+    artifacts: ref<Array<{ id: string, activityId: string, artifactKind: 'plan', title: string, summary: string, status: 'draft' | 'saved', readOnly: boolean, historical: boolean, evidenceLabel: null }> | null>([]),
+    artifactPending: ref(false),
+    isOnline: ref(true),
+  }
+  const storageKey = `learn-artifact:${canvas.ownerId}:thread_1:artifact_1:plan:1`
+  const wrappers = new Set<{ unmount: () => void }>()
+  let finished = false
+  onTestFinished(() => {
+    finished = true
+    for (const wrapper of wrappers) wrapper.unmount()
+    for (const key of Object.keys(sessionStorage)) if (key.startsWith(`learn-artifact:${canvas.ownerId}:`)) sessionStorage.removeItem(key)
+  })
+  const mountSuspended: typeof mountComponent = async (component, options) => {
+    const wrapper = await mountComponent(component, { ...options,
+      global: { ...options?.global, provide: { ...options?.global?.provide, artifactWorkspaceFixture: fixture } } })
+    const unmount = wrapper.unmount.bind(wrapper)
+    wrapper.unmount = () => { if (wrappers.delete(wrapper)) unmount() }
+    wrappers.add(wrapper)
+    if (finished) wrapper.unmount()
+    return wrapper
+  }
+  return { ...fixture, storageKey, mountSuspended }
+}
+
+beforeAll(async () => {
+  await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
+  const warmup = await mountComponent({ render: () => null })
+  warmup.unmount()
+})
+
 
 it('mounts artifact ready, completed, mobile, and version fallback fixtures with accessible status', async () => {
+  const { artifacts, canvas, mountSuspended } = createFixture()
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const ready = await mountSuspended(Component.default, { props: { canvas }, attachTo: document.body })
   expect(ready.get('[data-testid="learn-artifact-canvas"]').attributes('aria-label')).toBe('Artifact workspace')
@@ -48,6 +90,7 @@ it('mounts artifact ready, completed, mobile, and version fallback fixtures with
 })
 
 it('shows a bounded artifact workspace and saves without scoring', async () => {
+  const { save, canvas, storageKey, mountSuspended } = createFixture()
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
   expect(wrapper.get('[data-testid="learn-primitive-artifact-workspace"]').text()).toContain('does not score')
@@ -57,11 +100,12 @@ it('shows a bounded artifact workspace and saves without scoring', async () => {
   await wrapper.get('[data-testid="learn-artifact-save"]').trigger('click')
   await vi.waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ activityId: 'artifact_1', artifactKind: 'plan', title: 'My study plan', summary: 'Review the mechanism daily.', status: 'saved', expectedRevision: 3 })))
   expect(wrapper.text()).toContain('not a mastery result')
-  await vi.waitFor(() => expect(sessionStorage.getItem('learn-artifact:owner_1:thread_1:artifact_1:plan:1')).toBeNull())
+  await vi.waitFor(() => expect(sessionStorage.getItem(storageKey)).toBeNull())
   wrapper.unmount()
 })
 
 it('keeps a local draft after an unconfirmed save and falls back for unsupported actions', async () => {
+  const { save, canvas, mountSuspended } = createFixture()
   save.mockRejectedValueOnce(new Error('timeout'))
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -78,6 +122,7 @@ it('keeps a local draft after an unconfirmed save and falls back for unsupported
 })
 
 it('shows historical artifacts as read-only with a textual state', async () => {
+  const { artifacts, canvas, mountSuspended } = createFixture()
   artifacts.value = [{ id: 'artifact_saved', activityId: 'artifact_1', artifactKind: 'plan', title: 'Earlier plan', summary: 'Saved copy.', status: 'saved', readOnly: true, historical: true, evidenceLabel: null }]
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -87,6 +132,7 @@ it('shows historical artifacts as read-only with a textual state', async () => {
 })
 
 it('shows saved completion and keeps actions usable in a narrow viewport', async () => {
+  const { artifacts, canvas, mountSuspended } = createFixture()
   artifacts.value = [{ id: 'artifact_saved', activityId: 'artifact_1', artifactKind: 'plan', title: 'Tomorrow', summary: 'Practice one example.', status: 'saved', readOnly: false, historical: false, evidenceLabel: null }]
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas }, attachTo: document.body })
@@ -107,8 +153,10 @@ it('shows saved completion and keeps actions usable in a narrow viewport', async
 })
 
 it('keeps in-memory edits when the server row arrives and storage is unavailable', async () => {
+  const { artifacts, canvas, mountSuspended } = createFixture()
   const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage unavailable') })
   const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('storage unavailable') })
+  onTestFinished(() => { getItem.mockRestore(); setItem.mockRestore() })
   try {
     const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
     const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -125,6 +173,7 @@ it('keeps in-memory edits when the server row arrives and storage is unavailable
 })
 
 it('adopts a newer server row only when the editor has no unsaved changes', async () => {
+  const { artifacts, canvas, mountSuspended } = createFixture()
   artifacts.value = [{ id: 'artifact_saved', activityId: 'artifact_1', artifactKind: 'plan', title: 'First title', summary: 'First copy.', status: 'saved', readOnly: false, historical: false, evidenceLabel: null }]
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -139,6 +188,7 @@ it('adopts a newer server row only when the editor has no unsaved changes', asyn
 })
 
 it('uses a new save key after a definite conflict and keeps the draft', async () => {
+  const { save, canvas, mountSuspended } = createFixture()
   save.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision' }).mockResolvedValueOnce({ kind: 'ok', revision: 5, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -156,6 +206,7 @@ it('uses a new save key after a definite conflict and keeps the draft', async ()
 })
 
 it('uses a new delete key after a definite conflict', async () => {
+  const { remove, artifacts, canvas, mountSuspended } = createFixture()
   artifacts.value = [{ id: 'artifact_saved', activityId: 'artifact_1', artifactKind: 'plan', title: 'Plan', summary: 'Saved.', status: 'saved', readOnly: false, historical: false, evidenceLabel: null }]
   remove.mockResolvedValueOnce({ kind: 'conflict', code: 'stale_revision' }).mockResolvedValueOnce({ kind: 'ok', revision: 5, value: { cleanupPending: false } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
@@ -171,6 +222,7 @@ it('uses a new delete key after a definite conflict', async () => {
 })
 
 it('reuses the save key after an unknown outcome to reconcile the same snapshot', async () => {
+  const { save, canvas, mountSuspended } = createFixture()
   save.mockRejectedValueOnce(new Error('network timeout')).mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const wrapper = await mountSuspended(Component.default, { props: { canvas } })
@@ -189,6 +241,7 @@ it('reuses the save key after an unknown outcome to reconcile the same snapshot'
 })
 
 it('keeps the submitted snapshot and local draft while a save is pending', async () => {
+  const { save, artifacts, canvas, mountSuspended } = createFixture()
   let resolveSave!: (value: { kind: string, revision: number }) => void
   save.mockImplementationOnce(() => new Promise(resolve => { resolveSave = resolve }))
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
@@ -209,6 +262,7 @@ it('keeps the submitted snapshot and local draft while a save is pending', async
 })
 
 it('edits the returned artifact ID before the list query refreshes', async () => {
+  const { save, canvas, mountSuspended } = createFixture()
   save.mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } })
     .mockResolvedValueOnce({ kind: 'ok', revision: 5, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
@@ -226,6 +280,7 @@ it('edits the returned artifact ID before the list query refreshes', async () =>
 })
 
 it('replays an uncertain create after remount with the original command key and snapshot', async () => {
+  const { save, canvas, mountSuspended } = createFixture()
   save.mockRejectedValueOnce(new Error('timeout')).mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const first = await mountSuspended(Component.default, { props: { canvas } })
@@ -244,6 +299,7 @@ it('replays an uncertain create after remount with the original command key and 
 })
 
 it('retains a confirmed artifact ID across remount until the list catches up', async () => {
+  const { save, artifacts, canvas, storageKey, mountSuspended } = createFixture()
   save.mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } })
     .mockResolvedValueOnce({ kind: 'ok', revision: 5, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
@@ -259,14 +315,15 @@ it('retains a confirmed artifact ID across remount until the list catches up', a
   await restored.get('[data-testid="learn-artifact-save"]').trigger('click')
   await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(2))
   expect(save.mock.calls[1]![0]).toMatchObject({ artifactId: 'artifact_new', expectedRevision: 4 })
-  expect(sessionStorage.getItem('learn-artifact:owner_1:thread_1:artifact_1:plan:1:pending-create')).toBeNull()
+  expect(sessionStorage.getItem(`${storageKey}:pending-create`)).toBeNull()
   artifacts.value = [{ id: 'artifact_new', activityId: 'artifact_1', artifactKind: 'plan', title: 'My plan', summary: 'Second copy.', status: 'saved', readOnly: false, historical: false, evidenceLabel: null }]
   await vi.waitFor(() => expect(restored.get('[data-testid="learn-artifact-saved-status"]').text()).toContain('Saved artifact'))
-  expect(sessionStorage.getItem('learn-artifact:owner_1:thread_1:artifact_1:plan:1:known-id')).not.toBeNull()
+  expect(sessionStorage.getItem(`${storageKey}:known-id`)).not.toBeNull()
   restored.unmount()
 })
 
 it('blocks Save on remount until the authoritative artifact list hydrates, then edits the known ID', async () => {
+  const { save, artifacts, artifactPending, canvas, mountSuspended } = createFixture()
   save.mockResolvedValueOnce({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } })
     .mockResolvedValueOnce({ kind: 'ok', revision: 5, value: { artifactId: 'artifact_new' } })
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
@@ -295,9 +352,10 @@ it('blocks Save on remount until the authoritative artifact list hydrates, then 
 })
 
 it('discards expired or foreign pending-create metadata', async () => {
-  const pendingKey = 'learn-artifact:owner_1:thread_1:artifact_1:plan:1:pending-create'
+  const { canvas, storageKey, mountSuspended } = createFixture()
+  const pendingKey = `${storageKey}:pending-create`
   sessionStorage.setItem(pendingKey, JSON.stringify({ version: 1, savedAt: Date.now() - 30 * 24 * 60 * 60 * 1000,
-    ownerId: 'owner_1', threadId: 'thread_1', activityId: 'artifact_1', planRevision: 1,
+    ownerId: canvas.ownerId, threadId: 'thread_1', activityId: 'artifact_1', planRevision: 1,
     snapshot: { title: 'Stale', summary: 'Stale draft.', artifactKind: 'plan', status: 'saved', expectedRevision: 3, idempotencyKey: 'artifact-save:old-key' } }))
   const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
   const expired = await mountSuspended(Component.default, { props: { canvas } })
@@ -311,4 +369,31 @@ it('discards expired or foreign pending-create metadata', async () => {
   expect((foreign.get('[data-testid="learn-artifact-content"]').element as HTMLTextAreaElement).disabled).toBe(false)
   expect(sessionStorage.getItem(pendingKey)).toBeNull()
   foreign.unmount()
+})
+
+it('isolates a late artifact predecessor from a fresh editor', async () => {
+  const predecessor = createFixture()
+  const current = createFixture()
+  let resume!: () => void
+  const paused = new Promise<void>(resolve => { resume = resolve })
+  const Component = await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
+  const late = (async () => {
+    await paused
+    predecessor.artifacts.value = [{ id: 'artifact_saved', activityId: 'artifact_1', artifactKind: 'plan', title: 'My plan', summary: 'Review daily.', status: 'saved', readOnly: false, historical: false, evidenceLabel: null }]
+    return predecessor.mountSuspended(Component.default, { props: { canvas: predecessor.canvas } })
+  })()
+  const editor = await current.mountSuspended(Component.default, { props: { canvas: current.canvas } })
+  expect((editor.get('[data-testid="learn-artifact-content"]').element as HTMLTextAreaElement).value).toBe('Goal:')
+  resume()
+  const previousEditor = await late
+  await nextTick()
+  expect((previousEditor.get('[data-testid="learn-artifact-content"]').element as HTMLTextAreaElement).value).toBe('Review daily.')
+  expect((editor.get('[data-testid="learn-artifact-content"]').element as HTMLTextAreaElement).value).toBe('Goal:')
+  expect(current.artifacts.value).toEqual([])
+  expect(current.storageKey).not.toBe(predecessor.storageKey)
+  await editor.get('[data-testid="learn-artifact-title"]').setValue('Current plan')
+  await editor.get('[data-testid="learn-artifact-content"]').setValue('Current draft.')
+  await editor.get('[data-testid="learn-artifact-save"]').trigger('click')
+  await vi.waitFor(() => expect(current.save).toHaveBeenCalledTimes(1))
+  expect(predecessor.save).not.toHaveBeenCalled()
 })

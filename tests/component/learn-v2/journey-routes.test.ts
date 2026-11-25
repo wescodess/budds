@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { defineComponent, ref as vueRef, watch } from 'vue'
@@ -38,6 +38,12 @@ mockNuxtImport('useConvexQuery', () => (reference: never) => {
 })
 mockNuxtImport('useConvex', () => () => ({ query: (reference: never, args: unknown) => getFunctionName(reference) === 'learnAdaptive:listThreadHistory'
   ? Promise.resolve({ page: [], continueCursor: '', isDone: true }) : getInitialDecision(args) }))
+
+beforeAll(async () => {
+  await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
+  const warmup = await mountSuspended({ render: () => null })
+  warmup.unmount()
+})
 
 describe('Learn V2 route entry', () => {
   beforeEach(() => {

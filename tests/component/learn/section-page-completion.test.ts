@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getFunctionName } from 'convex/server'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
@@ -87,6 +87,12 @@ const pagePath = [
   '[courseId]',
   '[sectionId].vue',
 ].join('/')
+
+beforeAll(async () => {
+  await import(pagePath)
+  const warmup = await mountSuspended({ render: () => null })
+  warmup.unmount()
+})
 
 describe('legacy section page completion', () => {
   beforeEach(() => {
