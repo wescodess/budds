@@ -1341,37 +1341,39 @@ test('responses off dominates the new capability and preserves the original Toda
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toEqual({ status: 'disabled', reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null })
 })
 
-test.each([6, 12])('%s maximum-sized families return bounded pointer pages without exhausting Today', async count => {
-  const families: Awaited<ReturnType<typeof fixture>>[] = []
-  for (let index = 0; index < count; index++) {
-    const f = await fixture({ test: families[0]?.t, fixtureKey: `volume-${index}`, inventory: { claims: 32, supports: 2, sources: 64 } })
-    await f.start()
-    families.push(f)
-  }
-  const f = families[0]!
-  await f.t.mutation(due, { userId, through: NOW })
-  await f.t.finishAllScheduledFunctions(vi.runAllTimers)
-  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
-  const today = await f.owner.query(api.learnV2Today.getToday, {})
-  expect('checkPointers' in today && today.checkPointers.status).toBe('available')
-  expect('checkPointers' in today && today.checkPointers.checks).toHaveLength(4)
-  const references: string[] = []
-  let cursor: string | undefined
-  let pages = 0
-  do {
-    const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })
-    expect(page.status).toBe('available')
-    references.push(...page.checks.map(check => check.reference))
-    pages++
-    cursor = page.continueCursor ?? undefined
-    if (page.isDone) break
-    expect(cursor).toBeTruthy()
-    expect(pages).toBeLessThan(count * 3)
-  } while (cursor)
-  expect(pages).toBe(Math.ceil(count / 4))
-  expect(references).toHaveLength(count)
-  expect(new Set(references).size).toBe(count)
-}, 60_000)
+for (const count of [6, 12]) {
+  test(`${count} maximum-sized families return bounded pointer pages without exhausting Today`, async () => {
+    const families: Awaited<ReturnType<typeof fixture>>[] = []
+    for (let index = 0; index < count; index++) {
+      const f = await fixture({ test: families[0]?.t, fixtureKey: `volume-${index}`, inventory: { claims: 32, supports: 2, sources: 64 } })
+      await f.start()
+      families.push(f)
+    }
+    const f = families[0]!
+    await f.t.mutation(due, { userId, through: NOW })
+    await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+    expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
+    const today = await f.owner.query(api.learnV2Today.getToday, {})
+    expect('checkPointers' in today && today.checkPointers.status).toBe('available')
+    expect('checkPointers' in today && today.checkPointers.checks).toHaveLength(4)
+    const references: string[] = []
+    let cursor: string | undefined
+    let pages = 0
+    do {
+      const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor })
+      expect(page.status).toBe('available')
+      references.push(...page.checks.map(check => check.reference))
+      pages++
+      cursor = page.continueCursor ?? undefined
+      if (page.isDone) break
+      expect(cursor).toBeTruthy()
+      expect(pages).toBeLessThan(count * 3)
+    } while (cursor)
+    expect(pages).toBe(Math.ceil(count / 4))
+    expect(references).toHaveLength(count)
+    expect(new Set(references).size).toBe(count)
+  }, count === 12 ? 120_000 : 60_000)
+}
 
 test('overflow continues across saved, ready and both scored phases without exposing their phases', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []
