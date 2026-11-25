@@ -1,7 +1,7 @@
 # C5.6 post-seal runtime
 
 The public version remains `learn-v2.post-seal-teaching.v1`, with the versioned
-`learn-v2.post-seal-teaching.v1.runtime.1` and `.runtime.2` contract amendments. Storage uses
+`learn-v2.post-seal-teaching.v1.runtime.1`, `.runtime.2` and `.runtime.3` contract amendments. Storage uses
 the landed #570 contract. Responses, delivery, enrollment and scoring defaults
 are unchanged. This implementation adds no frontend, provider invocation,
 migration or deployment.
@@ -82,7 +82,12 @@ check, including another horizon on the same assignment, closes teaching and
 help. Overflow or unresolved scope remains unknown. Successful envelopes expose
 independent, content-free feedback and practice availability, distinguishing
 scoring, publication, unopened practice and practice failure. A practice failure
-withholds its prompt without hiding independently valid teaching.
+withholds its prompt without hiding independently valid teaching. With available
+practice, a content-free help state lists delivered kinds, per-kind availability
+and remaining distinct capacity, so a refreshed client can recover delivered
+help without consuming capacity. The publish-only
+`learnV2PostSealTeaching.publishFeedback` retries a deferred publication without
+creating practice, a slot or any exposure.
 
 Post-seal session admission uses the response's immutable acceptance pins.
 Ordinary scoring may complete an `independent_application` or `retained_transfer`
@@ -122,9 +127,13 @@ The ordinary disclosure resolver retains its original behavior.
 Help preserves the response revision and original prompt delivery exposure.
 Acceptance checks the complete owner/slot exposure history against the slot's
 sequence, counters and latest authorization, and freezes the first delivered
-timestamp of each assistance kind. New deliveries are limited to eight per slot,
-so its prompt and help exposures cannot alone exhaust the 64-row Void history
-budget for unrelated cold checks. Saved requests still replay at the limit and
+timestamp of each assistance kind. New help is limited to eight distinct
+contents per slot; a fresh-key request for already delivered content replays
+that delivery and writes nothing. A full slot is denied with
+`help_limit_reached`, distinct from a gated `unavailable` hint. Its prompt and
+help exposures therefore cannot alone exhaust the 64-row Void history budget.
+That budget is still shared across a Void's checks, an accepted residual.
+Saved requests still replay at the limit and
 the response remains acceptable; acceptance retains the existing 64-entry bound
 for previously saved support histories.
 Both exposure kinds carry the binding's practice case and omit
@@ -165,7 +174,9 @@ It also covers colliding historical publications, sibling and unknown lineage,
 incomplete pair decisions, separate-case retries and canonical practice exposures.
 Retained-transfer scoring, large future-check inventories, independently
 retryable publication, availability transitions, copy stability, hint/lesson
-gating and the eight-delivery limit also have persisted regression coverage.
+gating, repeated-help replay, refresh recovery, the distinct-content limit and
+its reason code, and publish-only retry without practice exposure also have
+persisted regression coverage.
 Every help kind, feedback and lesson has collision and replay coverage. Distinct
 atlas countries, arithmetic operators and numbers retain publication coverage.
 The measurement suite exercises enrollment and replacement selection with

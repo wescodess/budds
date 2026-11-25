@@ -83,7 +83,17 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
   const request = async (key = 'practice_help_runtime_123', kind: 'hint' | 'worked_example' = 'worked_example') => ({ ...reference,
     target: { responseSlotId: (await binding()).responseSlotId }, expectedRevision: 1, kind, idempotencyKey: key })
   const help = async (key?: string, kind?: 'hint' | 'worked_example') => f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, await request(key, kind))
-  return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help, prepare, score }
+  const helpState = async () => {
+    const value = await read()
+    return value.status === 'available' ? value.availability.help : value
+  }
+  const publishFeedback = () => f.owner.mutation(learnV2CanvasMeasurementApi.publishPostSealFeedback, reference)
+  const helpExposures = async () => (await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(64))).filter(row => row.practiceHelp)
+  const acceptPractice = async (key: string) => f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: key, response: { target: { responseSlotId: (await binding()).responseSlotId }, expectedRevision: 1,
+      payload: { kind: 'text', text: 'A supported practice response.' } } })
+  return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help,
+    prepare, score, publishFeedback, helpExposures, acceptPractice, helpState }
 }
 
 test.each(['identical', 'normalized'] as const)('publication atomically rejects %s practice/application content', async variant => {
@@ -179,32 +189,76 @@ test.each([
   const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, command)
   if (accepted.kind !== 'accepted') throw new Error('Expected practice acceptance')
   const snapshot = (await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot
-  expect(snapshot).toMatchObject({ state: 'assisted', assistanceRevision: kinds.length,
+  expect(snapshot).toMatchObject({ state: 'assisted', assistanceRevision: new Set(kinds).size,
     substantiveHintUsedAt: first.get('hint') ?? null, answerRevealedAt: first.get('worked_example') ?? null })
   expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, command)).toEqual(accepted)
   expect((await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot).toEqual(snapshot)
 })
 
-test('bounded help history preserves acceptance and replays at the delivery limit', async () => {
+test('repeated help replays one delivery per content and a refreshed read reports content-free help state', async () => {
   const f = await fixture({ score: true })
-  let firstDeliveredAt = 0
-  for (let index = 0; index < 8; index++) {
-    vi.setSystemTime(Date.now() + 1000)
-    const result = await f.help(`bounded_help_delivery_${index}_12345`, 'hint')
-    if (result.status !== 'authorized') throw new Error('Expected delivered help')
-    if (index === 0) firstDeliveredAt = result.deliveredAt
-  }
+  expect(await f.helpState()).toEqual({ remaining: 8, hint: { status: 'available' }, worked_example: { status: 'available' } })
+  const first = await f.help('repeated_hint_delivery_0_12345', 'hint')
+  if (first.status !== 'authorized') throw new Error('Expected delivered help')
   const binding = await f.binding()
   const slot = await f.t.run(ctx => ctx.db.get(binding.responseSlotId))
-  expect(await f.help('bounded_help_delivery_8_12345', 'hint')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
-  expect(await f.help('bounded_help_delivery_0_12345', 'hint')).toMatchObject({ status: 'authorized', deliveredAt: firstDeliveredAt })
+  for (let index = 1; index < 9; index++) {
+    vi.setSystemTime(Date.now() + 1000)
+    expect(await f.help(`repeated_hint_delivery_${index}_12345`, 'hint')).toEqual(first)
+  }
   expect(await f.t.run(ctx => ctx.db.get(binding.responseSlotId))).toEqual(slot)
-  const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
-    idempotencyKey: 'bounded_help_acceptance_12345', response: { target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1,
-      payload: { kind: 'text', text: 'A supported practice response.' } } })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(8))).toHaveLength(1)
+  expect(await f.helpExposures()).toHaveLength(1)
+  expect(await f.helpState()).toEqual({ remaining: 7, hint: { status: 'delivered' }, worked_example: { status: 'available' } })
+  expect(await f.help('repeated_hint_after_refresh_12345', 'hint')).toEqual(first)
+  vi.setSystemTime(Date.now() + 1000)
+  const example = await f.help('repeated_example_delivery_12345', 'worked_example')
+  if (example.status !== 'authorized') throw new Error('Expected worked example')
+  expect(await f.help('repeated_example_after_refresh_12345', 'worked_example')).toEqual(example)
+  expect(await f.helpState()).toEqual({ remaining: 6, hint: { status: 'delivered' }, worked_example: { status: 'delivered' } })
+  expect(await f.helpExposures()).toHaveLength(2)
+  const accepted = await f.acceptPractice('repeated_help_acceptance_12345')
   if (accepted.kind !== 'accepted') throw new Error('Expected practice acceptance')
   expect((await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot).toMatchObject({
-    assistanceRevision: 8, substantiveHintUsedAt: firstDeliveredAt, answerRevealedAt: null })
+    assistanceRevision: 2, substantiveHintUsedAt: first.deliveredAt, answerRevealedAt: example.deliveredAt })
+  expect(await f.helpState()).toEqual({ remaining: 6,
+    hint: { status: 'unavailable', reasonCode: 'unavailable' }, worked_example: { status: 'unavailable', reasonCode: 'unavailable' } })
+})
+
+test('concurrent fresh keys for one help kind serialize into one delivery', async () => {
+  const f = await fixture({ score: true })
+  const [first, second] = await Promise.all([f.help('concurrent_hint_tab_one_12345', 'hint'), f.help('concurrent_hint_tab_two_12345', 'hint')])
+  expect(first).toMatchObject({ status: 'authorized' })
+  expect(second).toEqual(first)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(8))).toHaveLength(1)
+  expect(await f.helpExposures()).toHaveLength(1)
+})
+
+test('the distinct-content cap denies new content with its own reason and still replays delivered help', async () => {
+  const f = await fixture({ score: true })
+  vi.spyOn(postSealTeaching.postSealHelpPolicy, 'distinctContentLimit').mockReturnValue(1)
+  const hint = await f.help('capped_hint_delivery_12345', 'hint')
+  if (hint.status !== 'authorized') throw new Error('Expected delivered help')
+  const binding = await f.binding()
+  const slot = await f.t.run(ctx => ctx.db.get(binding.responseSlotId))
+  expect(await f.help('capped_example_delivery_12345', 'worked_example')).toEqual({ version, status: 'denied', reasonCode: 'help_limit_reached' })
+  expect(await f.help('capped_hint_after_limit_12345', 'hint')).toEqual(hint)
+  expect(await f.help('capped_hint_delivery_12345', 'hint')).toEqual(hint)
+  expect(await f.t.run(ctx => ctx.db.get(binding.responseSlotId))).toEqual(slot)
+  expect(await f.helpExposures()).toHaveLength(1)
+  expect(await f.helpState()).toEqual({ remaining: 0, hint: { status: 'delivered' },
+    worked_example: { status: 'unavailable', reasonCode: 'help_limit_reached' } })
+})
+
+test('a hint withheld by a passing score stays unavailable, distinct from the cap', async () => {
+  const f = await fixture({ score: true, pass: true })
+  expect(await f.help('passed_hint_request_12345', 'hint')).toEqual({ version, status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.helpState()).toEqual({ remaining: 8,
+    hint: { status: 'unavailable', reasonCode: 'unavailable' }, worked_example: { status: 'available' } })
+  expect(await f.help('passed_example_request_12345', 'worked_example')).toMatchObject({ status: 'authorized' })
+  expect(await f.helpState()).toEqual({ remaining: 7,
+    hint: { status: 'unavailable', reasonCode: 'unavailable' }, worked_example: { status: 'delivered' } })
+  expect(await f.helpExposures()).toHaveLength(1)
 })
 
 test('acceptance rejects an incomplete delivered-help history instead of freezing missing timestamps', async () => {
@@ -380,6 +434,7 @@ test('endpoint aliases keep the read content-free for help and preserve the disa
   const binding = await f.binding()
   const source = await f.source()
   expect(await f.prepare()).toEqual({ version, status: 'unavailable', reasonCode: 'disabled' })
+  expect(await f.publishFeedback()).toEqual({ version, status: 'unavailable', reasonCode: 'disabled' })
   expect(await f.binding()).toEqual(binding)
   expect(await f.source()).toEqual(source)
 })
@@ -550,7 +605,7 @@ test('future check inventory still has a separate bounded overflow', async () =>
 test('the read distinguishes unopened practice, pending scoring and publishing without persisting work', async () => {
   const f = await fixture({ prepare: false })
   expect(await f.read()).toEqual({ ...f.reference, status: 'available', feedback: null, lesson: null, practice: null,
-    availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' } } })
+    availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' }, help: null } })
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2))).toEqual([])
   const compare = vi.spyOn(measurementItemAdapters, 'compare')
   const original = compare.getMockImplementation()!
@@ -559,9 +614,35 @@ test('the read distinguishes unopened practice, pending scoring and publishing w
   expect(await f.score()).toMatchObject({ status: 'scored' })
   const pending = await f.source()
   expect(await f.read()).toEqual({ ...f.reference, status: 'available', feedback: null, lesson: null, practice: null,
-    availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' } } })
+    availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
   expect(await f.source()).toEqual(pending)
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})
+
+test('a publish-only retry releases deferred feedback without creating practice or exposures', async () => {
+  const f = await fixture({ prepare: false })
+  const compare = vi.spyOn(measurementItemAdapters, 'compare')
+  const original = compare.getMockImplementation()!
+  compare.mockResolvedValue({ decision: 'unknown', coverage: 'unknown' })
+  expect(await f.score()).toMatchObject({ status: 'scored' })
+  expect(await f.source()).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  expect(await f.publishFeedback()).toEqual({ ...f.reference, status: 'available', feedback: null, lesson: null, practice: null,
+    availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
+  const exposures = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(64))
+  compare.mockImplementation(original)
+  const [first, second] = await Promise.all([f.publishFeedback(), f.publishFeedback()])
+  expect(second).toEqual(first)
+  expect(first).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: null,
+    availability: { feedback: 'available', practice: { status: 'not_opened' }, help: null } })
+  expect(await f.read()).toEqual(first)
+  expect(await f.source()).toMatchObject({ content: { status: 'available' } })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+  expect((await f.t.run(ctx => ctx.db.query('learnResponseSlots').take(64))).filter(slot => slot.stage === 'practice')).toEqual([])
+  const after = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').take(64))
+  expect(after).toEqual(exposures)
+  expect(after.filter(row => row.purpose === 'practice')).toHaveLength(0)
+  expect(getFunctionName(learnV2CanvasMeasurementApi.publishPostSealFeedback)).toBe(getFunctionName(api.learnV2PostSealTeaching.publishFeedback))
+  expect(learnV2TodayMeasurementApi).not.toHaveProperty('publishPostSealFeedback')
 })
 
 test('public retries publish feedback independently when practice cannot be prepared', async () => {
@@ -713,10 +794,12 @@ test('issuer isolation, unauthenticated calls and account deletion guard both en
     await expect(actor.query(learnV2CanvasMeasurementApi.getPostSealTeaching, f.reference)).rejects.toThrow()
     await expect(actor.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance, request)).rejects.toThrow()
     await expect(actor.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, f.reference)).rejects.toThrow()
+    await expect(actor.mutation(learnV2CanvasMeasurementApi.publishPostSealFeedback, f.reference)).rejects.toThrow()
   }
   await f.t.run(ctx => ctx.db.insert('accountDeletionJobs', { userId: deliveryIdentity.tokenIdentifier, status: 'active', phase: 'learnV2',
     startedAt: Date.now(), updatedAt: Date.now() }))
   await expect(f.read()).rejects.toThrow(/deletion/)
   await expect(f.help()).rejects.toThrow(/deletion/)
   await expect(f.prepare()).rejects.toThrow(/deletion/)
+  await expect(f.publishFeedback()).rejects.toThrow(/deletion/)
 })

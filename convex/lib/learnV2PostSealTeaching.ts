@@ -16,7 +16,7 @@ import { receiptFields, getLearnMeasurementScorer } from './learnV2MeasurementSc
 import { LearnInputValidationError, LearnScoringInputError } from '../../shared/learn-v2-errors'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_V2_POST_SEAL_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import {
-  LEARN_V2_POST_SEAL_TEACHING_VERSION, learnPostSealTeachingDenial, projectPostSealTeaching,
+  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_PRACTICE_HELP_LIMIT, learnPostSealTeachingDenial, projectPostSealTeaching,
   projectPracticeAssistanceAuthorization, unavailableLearnPostSealTeaching, learnPracticeAssistanceContentSchema,
   learnPostSealTeachingSchema,
   canReadPostSealLesson,
@@ -37,13 +37,16 @@ type Dependency = z.infer<typeof learnArtifactSourceDependencySchema>
 type Request = z.infer<typeof learnAuthorizePracticeAssistanceSchema>
 type Reason = Parameters<typeof unavailableLearnPostSealTeaching>[0]
 type SourceTarget = Doc<'learnPostSealSourceLinks'>['target']
+type HelpReason = Extract<LearnPracticeAssistanceAuthorization, { status: 'denied' }>['reasonCode']
+type HelpAvailability = NonNullable<Extract<LearnPostSealTeaching, { status: 'available' }>['availability']['help']>
 const policy = 'learn-v2.post-seal-publication.v1'
 export const postSealFeedbackCopy = { version: 'learn-v2.post-seal-feedback-copy.v1', text: (claim: string) => claim,
   citationLabel: (index: number) => `Accepted source ${index + 1}` }
 const assistancePolicy = 'learn-v2.practice-assistance.v1'
 const separationPolicy = 'learn-v2.post-seal-case-separation.v2'
 export const POST_SEAL_HELP_HISTORY_LIMIT = 64
-export const POST_SEAL_HELP_DELIVERY_LIMIT = 8
+export const POST_SEAL_HELP_DELIVERY_LIMIT = LEARN_V2_PRACTICE_HELP_LIMIT
+export const postSealHelpPolicy = { distinctContentLimit: (): number => POST_SEAL_HELP_DELIVERY_LIMIT }
 class PostSealUnavailable extends Error {
   constructor(readonly reason: Reason) { super(reason) }
 }
@@ -53,7 +56,7 @@ function validationReason(error: unknown): Reason {
   if (error instanceof z.ZodError || error instanceof LearnInputValidationError) return 'disclosure_unknown'
   throw error
 }
-const deniedHelp = (reasonCode: Reason): LearnPracticeAssistanceAuthorization => ({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
+const deniedHelp = (reasonCode: HelpReason): LearnPracticeAssistanceAuthorization => ({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
 function base(userId: string, learningVoidId: Id<'learningVoids'>, createdAt = Date.now()) {
   return { userId, learningVoidId, createdAt, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, postSealStorageVersion: LEARN_V2_POST_SEAL_STORAGE_VERSION }
 }
@@ -368,6 +371,39 @@ async function practiceAuthority(ctx: ReadCtx, userId: string, authority: Author
 }
 type PracticeAuthority = Awaited<ReturnType<typeof practiceAuthority>>
 
+async function helpLedger(ctx: ReadCtx, userId: string, slot: Doc<'learnResponseSlots'>) {
+  const receipts = await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_responseSlotId_and_assistanceSequence', q =>
+    q.eq('userId', userId).eq('responseSlotId', slot._id)).order('desc').take(POST_SEAL_HELP_DELIVERY_LIMIT + 1)
+  const previous = slot.stage === 'practice' ? slot.practiceAssistance : undefined
+  if (previous) parseLearnContract(learnPracticeSlotAssistanceStorageSchema, previous)
+  if (receipts.length > POST_SEAL_HELP_DELIVERY_LIMIT || (previous ? receipts[0]?.assistanceSequence !== previous.deliveryCount
+    || receipts[0].authorizationId !== previous.lastAuthorizationId || receipts[0].deliveredAt !== previous.lastDeliveredAt
+    || receipts.length > 1 && receipts[0].assistanceSequence === receipts[1]!.assistanceSequence : receipts.length > 0)) deny()
+  for (const receipt of receipts) parseLearnContract(learnPostSealHelpReceiptStorageSchema, postSealApplicationFields(receipt))
+  const contents = new Set(receipts.map(receipt => receipt.content.status === 'available'
+    ? canonicalPrivacyJson([receipt.kind, receipt.content.payload]) : receipt._id))
+  return { receipts, previous, distinctContents: contents.size }
+}
+
+async function helpAvailability(ctx: ReadCtx, userId: string, authority: Authority, practice: PracticeAuthority): Promise<HelpAvailability> {
+  const limit = postSealHelpPolicy.distinctContentLimit()
+  const { slot } = practice
+  try {
+    const ledger = await helpLedger(ctx, userId, slot)
+    const open = slot.status === 'open' && slot.submissionId === undefined && authority.context.capabilities.canTeachSeparateCase
+    const state = (kind: 'hint' | 'worked_example'): HelpAvailability['hint'] => {
+      if (!open || kind === 'hint' && !canReadPostSealLesson(authority.context)) return { status: 'unavailable', reasonCode: 'unavailable' }
+      if (ledger.receipts.some(receipt => receipt.kind === kind && receipt.expectedRevision === slot.revision
+        && receipt.content.status === 'available')) return { status: 'delivered' }
+      return ledger.distinctContents >= limit ? { status: 'unavailable', reasonCode: 'help_limit_reached' } : { status: 'available' }
+    }
+    return { remaining: Math.max(0, limit - ledger.distinctContents), hint: state('hint'), worked_example: state('worked_example') }
+  } catch (error) {
+    const reasonCode = validationReason(error)
+    return { remaining: 0, hint: { status: 'unavailable', reasonCode }, worked_example: { status: 'unavailable', reasonCode } }
+  }
+}
+
 async function relatedBlock(ctx: ReadCtx, userId: string, authority: Authority, practice: PracticeAuthority, kind: 'explanation' | 'worked_example') {
   return await instructionalBlock(ctx, userId, authority, practice.proof.content._id, kind)
 }
@@ -565,6 +601,7 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
       lesson: source?.content.status === 'available' ? source.content.payload.lesson : null,
       practice: practice ? { responseSlotId: practice.slot._id, revision: practice.slot.revision, tier: 'T0', prompt: practice.binding.content.status === 'available' ? practice.binding.content.payload.prompt : null } : null }, authority.context)
     if (result.status === 'available' && practiceFailure) result.availability.practice = { status: 'unavailable', reasonCode: practiceFailure }
+    else if (result.status === 'available' && practice && result.practice) result.availability.help = await helpAvailability(ctx, userId, authority, practice)
     return parseLearnContract(learnPostSealTeachingSchema, result)
   } catch (error) { return unavailableLearnPostSealTeaching(validationReason(error)) }
 }
@@ -622,48 +659,46 @@ export async function authorizePostSealPracticeForOwner(ctx: MutationCtx, userId
     if (existing.length > 1) deny()
     const prior = existing[0]
     if (prior) parseLearnContract(learnPostSealHelpReceiptStorageSchema, postSealApplicationFields(prior))
-    const last = await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_responseSlotId_and_assistanceSequence', q =>
-      q.eq('userId', userId).eq('responseSlotId', slot._id)).order('desc').take(2)
-    const previous = slot.practiceAssistance
-    if (previous) parseLearnContract(learnPracticeSlotAssistanceStorageSchema, previous)
-    if (previous ? last[0]?.assistanceSequence !== previous.deliveryCount || last[0].authorizationId !== previous.lastAuthorizationId
-      || last[0].deliveredAt !== previous.lastDeliveredAt || last.length > 1 && last[0].assistanceSequence === last[1]!.assistanceSequence : last.length > 0) deny()
+    const ledger = await helpLedger(ctx, userId, slot)
+    const previous = ledger.previous
     const block = await relatedBlock(ctx, userId, authority, practice, request.kind === 'hint' ? 'explanation' : 'worked_example')
     if (request.kind === 'hint' && !canReadPostSealLesson(authority.context)) deny('unavailable')
     const payload = parseLearnContract(learnPracticeAssistanceContentSchema, { kind: request.kind, tier: 'T0', text: block.block.content })
-    const actual = prior?.content.status === 'available' ? prior.content.payload : payload
-    const help = await separateCaseProof(ctx, userId, authority, block, !prior, { kind: request.kind, content: actual, texts: [actual.text] })
+    const replay = prior ?? ledger.receipts.find(receipt => receipt.kind === request.kind && receipt.expectedRevision === request.expectedRevision
+      && receipt.content.status === 'available' && canonicalPrivacyJson(receipt.content.payload) === canonicalPrivacyJson(payload))
+    const actual = replay?.content.status === 'available' ? replay.content.payload : payload
+    const help = await separateCaseProof(ctx, userId, authority, block, !replay, { kind: request.kind, content: actual, texts: [actual.text] })
     const dependencies = normalizeDependencies([...practice.proof.dependencies, ...help.dependencies])
     const validationDigest = await privacyDigest([policy, binding._id, practice.proof.validationDigest, help.validationDigest, request.kind])
-    if (prior) {
-      if (prior.content.status !== 'available' || prior.evidenceStatus !== 'available') deny('evidence_unavailable')
-      if (prior.learningVoidId !== authority.row.learningVoidId || prior.assessmentOpportunityId !== authority.row._id
-        || prior.submissionId !== authority.response._id || prior.practiceBindingId !== binding._id || prior.responseSlotId !== slot._id
-        || prior.expectedRevision !== request.expectedRevision || prior.kind !== request.kind || prior.commandVersion !== request.version
-        || !previous || prior.assistanceSequence > previous.deliveryCount
-        || prior.fingerprintVersion !== fingerprint.fingerprintVersion || prior.requestDigest !== fingerprint.requestDigest
-        || prior.deliveredAt < authority.response.acceptedAt || canonicalPrivacyJson(prior.content.payload) !== canonicalPrivacyJson(payload)) deny()
-      const exposure = await ctx.db.get(prior.authorizationId)
+    if (replay) {
+      if (replay.content.status !== 'available' || replay.evidenceStatus !== 'available') deny('evidence_unavailable')
+      if (replay.learningVoidId !== authority.row.learningVoidId || replay.assessmentOpportunityId !== authority.row._id
+        || replay.submissionId !== authority.response._id || replay.practiceBindingId !== binding._id || replay.responseSlotId !== slot._id
+        || replay.expectedRevision !== request.expectedRevision || replay.kind !== request.kind || replay.commandVersion !== request.version
+        || !previous || replay.assistanceSequence > previous.deliveryCount
+        || replay === prior && (replay.fingerprintVersion !== fingerprint.fingerprintVersion || replay.requestDigest !== fingerprint.requestDigest)
+        || replay.deliveredAt < authority.response.acceptedAt || canonicalPrivacyJson(replay.content.payload) !== canonicalPrivacyJson(payload)) deny()
+      const exposure = await ctx.db.get(replay.authorizationId)
       if (!exposure || exposure.userId !== userId || exposure.assessmentOpportunityId !== undefined || exposure.purpose !== 'practice'
         || exposure.learningVoidId !== authority.row.learningVoidId || exposure.blueprintRevisionId !== authority.row.blueprintRevisionId
         || exposure.objectiveId !== authority.row.objectiveId || exposure.policyVersion !== assistancePolicy || exposure.provenanceVersion !== policy
-        || exposure.deliveryReceiptHash !== fingerprint.requestDigest
-        || exposure.status !== 'granted' || exposure.caseId !== binding.practiceCaseId || exposure.serverTime !== prior.deliveredAt
+        || exposure.deliveryReceiptHash !== replay.requestDigest
+        || exposure.status !== 'granted' || exposure.caseId !== binding.practiceCaseId || exposure.serverTime !== replay.deliveredAt
         || exposure.projectionDigest !== await privacyDigest(payload) || exposure.practiceHelp?.responseSlotId !== slot._id
         || exposure.practiceHelp.practiceBindingId !== binding._id || exposure.practiceHelp.kind !== request.kind
-        || exposure.practiceHelp.assistanceSequence !== prior.assistanceSequence) deny()
+        || exposure.practiceHelp.assistanceSequence !== replay.assistanceSequence) deny()
       const authorizations = await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_authorizationId', q =>
-        q.eq('userId', userId).eq('authorizationId', prior.authorizationId)).take(2)
-      if (authorizations.length !== 1 || authorizations[0]!._id !== prior._id) deny()
-      await verifyPublication(ctx, userId, { ...prior, content: prior.content }, { helpReceiptId: prior._id }, dependencies, validationDigest)
+        q.eq('userId', userId).eq('authorizationId', replay.authorizationId)).take(2)
+      if (authorizations.length !== 1 || authorizations[0]!._id !== replay._id) deny()
+      await verifyPublication(ctx, userId, { ...replay, content: replay.content }, { helpReceiptId: replay._id }, dependencies, validationDigest)
       return projectPracticeAssistanceAuthorization({ request, result: { version: request.version, status: 'authorized',
-        assessmentOpportunityId: authority.row._id, target: request.target, revision: prior.expectedRevision,
-        authorizationId: prior.authorizationId, deliveredAt: prior.deliveredAt, content: prior.content.payload } }, request, authority.context)
+        assessmentOpportunityId: authority.row._id, target: request.target, revision: replay.expectedRevision,
+        authorizationId: replay.authorizationId, deliveredAt: replay.deliveredAt, content: replay.content.payload } }, request, authority.context)
     }
     const reason = learnPostSealTeachingDenial(authority.context)
     if (reason) deny(reason)
+    if (ledger.distinctContents >= postSealHelpPolicy.distinctContentLimit()) return deniedHelp('help_limit_reached')
     const sequence = (previous?.deliveryCount ?? 0) + 1
-    if (sequence > POST_SEAL_HELP_DELIVERY_LIMIT) deny('unavailable')
     parseLearnContract(learnRevisionSchema, sequence)
     const now = Date.now()
     const publicationPins = await publication(payload, dependencies, validationDigest, now)

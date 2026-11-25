@@ -79,7 +79,7 @@ async function fixture() {
     practice: { ...target, revision: 1, tier: 'T0', prompt: 'PRACTICE_CANARY' } }
   const authorization: LearnV2PracticeAssistanceAuthorization = { ...reference, status: 'authorized', target, revision: 1,
     authorizationId: f.rows.learnAssessmentExposures, deliveredAt: f.base.createdAt + 1, content: { kind: 'hint', tier: 'T0', text: 'HINT_CANARY' } }
-  const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice, availability: { feedback: 'available', practice: { status: 'available' } } }
+  const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice, availability: { feedback: 'available', practice: { status: 'available' }, help: null } }
   const unavailableTeaching: LearnV2PostSealTeaching = { version, status: 'unavailable', reasonCode: 'disabled' }
   const deniedAuthorization: LearnV2PracticeAssistanceAuthorization = { version, status: 'denied', reasonCode: 'disabled' }
   function setPhase(phase: LearnAssessmentPhase, mask = 31, validScore = true, relevantOpenCheck: LearnPostSealTeachingContext['relevantOpenCheck'] = 'no') {
@@ -133,7 +133,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
         expect(read).toEqual({ ...f.reference, status: 'available', feedback: feedbackAllowed ? f.source.feedback : null,
           lesson: feedbackAllowed && phase === 'scored_fail' ? f.source.lesson : null, practice: mask & 8 ? f.source.practice : null,
           availability: { feedback: feedbackAllowed ? 'available' : ['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required'].includes(phase) ? 'scoring_pending' : 'unavailable',
-            practice: mask & 8 ? { status: 'available' } : { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+            practice: mask & 8 ? { status: 'available' } : { status: 'unavailable', reasonCode: 'disclosure_unknown' }, help: null } })
         expect(help).toEqual(!(mask & 8) ? { version, status: 'denied', reasonCode: 'disclosure_unknown' }
           : feedbackAllowed && phase === 'scored_fail' ? f.authorization : { version, status: 'denied', reasonCode: 'unavailable' })
       }
@@ -171,7 +171,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     expect(f.context.capabilities.canReadFeedback).toBe(true)
     expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(true)
     for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
-      ...f.reference, status: 'available', feedback: null, lesson: null, practice: f.source.practice, availability: { feedback: 'unavailable', practice: { status: 'available' } },
+      ...f.reference, status: 'available', feedback: null, lesson: null, practice: f.source.practice, availability: { feedback: 'unavailable', practice: { status: 'available' }, help: null },
     })
   })
 
@@ -368,7 +368,7 @@ describe('B1 post-seal authority and provenance', () => {
     for (let replay = 0; replay < 2; replay++) {
       expect(await f.t.query(readProjection, {})).toEqual({ ...f.reference, status: 'available',
         feedback: f.source.feedback, lesson: f.source.lesson, practice: null,
-        availability: { feedback: 'available', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+        availability: { feedback: 'available', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' }, help: null } })
       expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
     }
   })

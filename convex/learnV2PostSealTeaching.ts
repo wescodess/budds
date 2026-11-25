@@ -22,6 +22,17 @@ export const openPractice = mutation({
   },
 })
 
+export const publishFeedback = mutation({
+  args: postSealTeachingArgs, returns: postSealTeachingValidator,
+  handler: async (ctx, args): Promise<LearnV2PostSealTeaching> => {
+    const userId = await requireAuth(ctx)
+    const request = parsePublicLearnRequest(postSealTeachingReferenceSchema, args)
+    await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
+    await publishPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
+    return await readPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
+  },
+})
+
 export const publishTeaching = internalMutation({
   args: { submissionId: v.id('learnResponses') },
   handler: async (ctx, args) => {

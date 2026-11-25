@@ -133,6 +133,8 @@ export function canDiscloseLearnHelp(input: z.infer<typeof learnHelpDisclosureIn
 
 export const LEARN_V2_POST_SEAL_TEACHING_VERSION = 'learn-v2.post-seal-teaching.v1' as const
 export const LEARN_V2_POST_SEAL_TEACHING_REASONS = ['disabled', 'unavailable', 'not_sealed', 'test_open', 'evidence_unavailable', 'disclosure_unknown'] as const
+export const LEARN_V2_PRACTICE_HELP_REASONS = [...LEARN_V2_POST_SEAL_TEACHING_REASONS, 'help_limit_reached'] as const
+export const LEARN_V2_PRACTICE_HELP_LIMIT = 8
 const postSealVersion = z.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION)
 export const learnPostSealTeachingReferenceSchema = z.strictObject({
   version: postSealVersion, assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
@@ -146,12 +148,21 @@ export const learnPostSealLessonSchema = z.strictObject({ tier: sourcedTeachingT
 export const learnPostSealPracticeSchema = z.strictObject({
   responseSlotId: learnIdSchema<'learnResponseSlots'>(), revision: learnRevisionSchema, tier: practiceTeachingTier, prompt: learnTextSchema(),
 })
+const learnPracticeHelpStateSchema = z.discriminatedUnion('status', [
+  z.strictObject({ status: z.enum(['available', 'delivered']) }),
+  z.strictObject({ status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_PRACTICE_HELP_REASONS) }),
+])
 export const learnPostSealAvailabilitySchema = z.strictObject({
   feedback: z.enum(['scoring_pending', 'feedback_publishing', 'available', 'unavailable']),
   practice: z.discriminatedUnion('status', [
     z.strictObject({ status: z.enum(['not_opened', 'available']) }),
     z.strictObject({ status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   ]),
+  help: z.strictObject({
+    remaining: z.number().int().min(0).max(LEARN_V2_PRACTICE_HELP_LIMIT),
+    hint: learnPracticeHelpStateSchema,
+    worked_example: learnPracticeHelpStateSchema,
+  }).nullable(),
 })
 export const learnPostSealTeachingSchema = z.discriminatedUnion('status', [
   z.strictObject({ version: postSealVersion, status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
@@ -168,7 +179,7 @@ export const learnPracticeAssistanceContentSchema = z.discriminatedUnion('kind',
   z.strictObject({ kind: z.literal('worked_example'), tier: practiceTeachingTier, text: learnTextSchema() }),
 ])
 export const learnPracticeAssistanceAuthorizationSchema = z.discriminatedUnion('status', [
-  z.strictObject({ version: postSealVersion, status: z.literal('denied'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  z.strictObject({ version: postSealVersion, status: z.literal('denied'), reasonCode: z.enum(LEARN_V2_PRACTICE_HELP_REASONS) }),
   z.strictObject({ version: postSealVersion, status: z.literal('authorized'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
     target: learnPracticeAssistanceTargetSchema, revision: learnRevisionSchema,
     authorizationId: learnIdSchema<'learnAssessmentExposures'>(), deliveredAt: learnTimestampSchema, content: learnPracticeAssistanceContentSchema }),
@@ -248,6 +259,7 @@ export function projectPostSealTeaching(input: unknown, context: LearnPostSealTe
           : ['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required'].includes(lifecycle.phase) ? 'scoring_pending' : 'unavailable',
         practice: practiceAllowed ? { status: 'available' } : source.practice
           ? { status: 'unavailable', reasonCode: 'disclosure_unknown' } : { status: 'not_opened' },
+        help: null,
       },
     })
   }

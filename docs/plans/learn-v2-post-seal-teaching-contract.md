@@ -1,6 +1,6 @@
 # Post-seal teaching read contract
 
-Contract: `learn-v2.post-seal-teaching.v1`. Implements [C1.4 #533](https://github.com/wescodess/budds/issues/533), consuming the [approved Canvas experience](../design/learn-delayed-check/decision.md). The owner chose this post-seal contract on 2026-11-08. The original C1.4 handlers below stay inactive and write nothing. The versioned runtime amendment below specifies #535's default-off behavior and supersedes the affected endpoint, availability and hint rules.
+Contract: `learn-v2.post-seal-teaching.v1`. Implements [C1.4 #533](https://github.com/wescodess/budds/issues/533), consuming the [approved Canvas experience](../design/learn-delayed-check/decision.md). The owner chose this post-seal contract on 2026-11-08. The original C1.4 handlers below stay inactive and write nothing. The versioned runtime amendments below specify #535's default-off behavior and supersede the affected endpoint, availability, hint, help-limit and replay rules.
 
 ## Public shape
 
@@ -161,7 +161,7 @@ practice fields, after their original authority and disclosure checks.
 | State | Meaning and next transition |
 | --- | --- |
 | `feedback: scoring_pending` | Accepted, sealed work has pending, retryable or reconciliation-required scoring. No feedback or lesson is released. Practice may be opened independently. |
-| `feedback: feedback_publishing` | An authoritative valid score permits feedback but the source is still pending. `openPostSealPractice` retries publication, including when practice cannot be prepared. |
+| `feedback: feedback_publishing` | An authoritative valid score permits feedback but the source is still pending. `publishPostSealFeedback` retries publication only (runtime.3). `openPostSealPractice` also retries it, but opens practice. |
 | `feedback: available` | The immutable source has been published and currently permits feedback. A lesson additionally requires a valid scored failure. |
 | `feedback: unavailable` | The accepted work currently has no eligible scored feedback, such as an invalid result. This is not publication progress. |
 | `practice: not_opened` | No binding exists. The caller can invoke `openPostSealPractice`; the query creates nothing. This is distinct from failed disclosure. |
@@ -228,13 +228,14 @@ that explanation through a hint. Separate-case worked examples retain the
 practice gate and remain available without valid scoring. Every kind still
 requires its shared exact-check separation proof and a content-bearing receipt.
 
-New help is limited to eight distinct deliveries per practice slot. Prompt
-delivery plus a full slot therefore contributes at most nine exposures to the
-existing 64-row Void history budget, rather than exhausting it alone. All
-deliveries remain recorded, replayable at the limit, and counted for case novelty.
-Acceptance retains its existing bounded 64-entry verification for saved histories;
-the new delivery cap does not discard earlier support timestamps or invalidate
-an existing receipt. It introduces no new evidence exemption or storage schema.
+New help is limited to eight distinct help contents per practice slot, as
+counted by runtime.3. Prompt delivery plus a full slot therefore contributes at
+most nine exposures to the existing 64-row Void history budget, rather than
+exhausting it alone. All deliveries remain recorded, replayable at the limit,
+and counted for case novelty. Acceptance retains its existing bounded 64-entry
+verification for saved histories; the cap does not discard earlier support
+timestamps or invalidate an existing receipt. It introduces no new evidence
+exemption or storage schema.
 
 ## Integration amendment: `learn-v2.post-seal-teaching.v1.runtime.2`
 
@@ -272,3 +273,74 @@ are still mandatory. It may retain separate-case practice and worked-example
 replay; it releases no score-driven feedback, lesson or hint. Other disclosure
 callers and the strict lifecycle schema keep their existing terminal behavior.
 No response, attempt, phase, immutable payload or acceptance pin is repaired.
+
+## Help and publication amendment: `learn-v2.post-seal-teaching.v1.runtime.3`
+
+This amendment completes the help and retry surface consumed by
+[#442](https://github.com/wescodess/budds/issues/442). The public request version,
+storage and capabilities are unchanged. It supersedes runtime.1's raw-delivery
+cap, its statement that only `openPostSealPractice` retries publication, and the
+original rule that a changed key cannot reuse a saved delivery.
+Changed payload, slot, revision or kind still cannot reuse one.
+
+| Registered endpoint | Canvas alias | Transaction and result |
+| --- | --- | --- |
+| `learnV2PostSealTeaching.publishFeedback` | `learnV2CanvasMeasurementApi.publishPostSealFeedback` | Authenticated mutation. Takes `Reference`; returns the amended `Teaching`. Retries teaching publication only. |
+
+`publishPostSealFeedback` derives the owner from authentication, checks account
+deletion and opportunity ownership, then runs the same bounded, idempotent
+publication as scoring and practice opening, which rechecks the full check
+authority and relevant-open-check gate. It never creates a practice binding,
+slot or exposure. A #442 client in
+`feedback_publishing` uses this endpoint. Practice exposure happens only when the
+learner opens practice through `openPostSealPractice`, preserving #363's
+separate later-exposure fact. Denials return the existing outer `Reason`; a
+disabled capability returns the original disabled envelope.
+
+Practice help denials gain one reason. `PracticeHelpAuthorization` denials use:
+
+```ts
+type HelpReason = Reason | 'help_limit_reached'
+```
+
+`help_limit_reached` means the slot already holds the maximum number of distinct
+help contents. It is distinct from `unavailable`, which still means the request is
+not allowed yet or any longer, such as a hint before a valid scored failure.
+Teaching read reasons are unchanged.
+
+Every `status: 'available'` teaching envelope adds a content-free help state:
+
+```ts
+availability.help: null | {
+  remaining: number
+  hint: HelpState
+  worked_example: HelpState
+}
+type HelpState =
+  | { status: 'available' | 'delivered' }
+  | { status: 'unavailable'; reasonCode: HelpReason }
+```
+
+`help` is `null` unless practice is `available`. `delivered` means the slot holds
+a delivery of that kind; a request with any fresh key replays it. `available`
+means a request would deliver new content, subject to renewed authorization.
+`unavailable` uses `unavailable` for a closed or answered slot and for a gated
+hint, and `help_limit_reached` when new content would exceed the cap.
+`remaining` is the number of further distinct contents the slot can receive.
+The state carries no text, receipt, authorization ID, time or sequence. It is
+advisory: the help command remains authoritative and rechecks every gate.
+
+The cap counts distinct help contents, by kind and exact saved payload, not raw
+requests. A request whose kind and current payload match a saved receipt for the
+same slot and revision replays that receipt's authorization ID, delivery time
+and content after the full replay authorization. It creates no receipt, exposure,
+source link or assistance counter, so it consumes no capacity. A replay under a
+fresh key does not reserve that key. The current producers deliver one fixed
+explanation per hint and one fixed worked example, so a slot holds at most two
+help deliveries until a producer adds distinct content. The eight-content cap,
+saved-request replay at the limit and acceptance's 64-entry history bound are
+otherwise unchanged.
+
+Accepted residual: one Void's 64-row exposure budget is shared across all of its
+checks, prompts and help, so many checks in one Void can still exhaust it; this
+amendment bounds each slot's share and does not change that budget.

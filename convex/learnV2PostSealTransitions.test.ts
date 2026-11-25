@@ -559,9 +559,12 @@ test('Today treatment on the Canvas surface seals, scores and delivers teaching,
     expect(first).toMatchObject({ status: 'authorized', content: { kind, tier: 'T0' } })
     expect(await f.help(opened.practice.responseSlotId, kind)).toEqual(first)
   }
+  expect(opened.availability.help).toEqual({ remaining: 8, hint: { status: 'available' }, worked_example: { status: 'available' } })
+  const helped = { ...opened, availability: { ...opened.availability,
+    help: { remaining: 6, hint: { status: 'delivered' }, worked_example: { status: 'delivered' } } } }
   policy.todayCanvas = false
-  expect(await f.open()).toEqual(opened)
-  expect(await f.read()).toEqual(opened)
+  expect(await f.open()).toEqual(helped)
+  expect(await f.read()).toEqual(helped)
   expect(await f.help(opened.practice.responseSlotId, 'worked_example')).toMatchObject({ status: 'authorized' })
   expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
   expect(await f.t.run(ctx => ctx.db.get(f.assignment._id))).toMatchObject({ flow: 'v2_today', exclusionReasons: [] })
