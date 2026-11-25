@@ -95,6 +95,7 @@ export const timeoutIsolation = {
     return new Proxy(target, {
       get(object, key) {
         const method = Reflect.get(object, key, object)
+        if (typeof method !== 'function') return method
         return (...args: unknown[]) => {
           if (!active()) return undefined
           track(object)
