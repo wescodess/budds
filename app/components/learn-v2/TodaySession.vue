@@ -78,6 +78,8 @@ const startLock = shallowRef<LearnTodayCheckPointer | null>(null)
 watch(() => [checkPointers, checkLock], () => { startLock.value = null })
 const lessonLock = computed(() => started.value ? null : startLock.value ?? checkLock)
 const showChecks = computed(() => Boolean(checkPointers || lessonLock.value))
+const listedChecks = shallowRef<LearnTodayCheckPointer[]>([])
+const lockHeader = computed(() => lessonLock.value ? listedChecks.value.find(check => check.reference === lessonLock.value!.reference) ?? lessonLock.value : null)
 let meaningfulStartRetryAttempt = 0
 let meaningfulStartRetryTimer: ReturnType<typeof setTimeout> | undefined
 let meaningfulStartDisposed = false
@@ -259,6 +261,7 @@ async function retryScore() { await submit() }
           <h1 id="today-session-title" class="mt-2 font-dm-sans text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{{ candidate.objectiveTitle }}</h1>
           <p v-if="candidate.capability" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.capability }}</p>
           <p data-testid="learn-v2-session-reason" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.reason }}</p>
+          <LearnV2MeasurementTodayCheckHeader v-if="lockHeader" :pointer="lockHeader" />
         </div>
         <button type="button" data-testid="learn-v2-leave" class="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-stone-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none forced-colors:border-current" aria-label="Leave study session and return to your workspace" @click="emit('leave')">
           <ArrowLeft class="h-4 w-4" aria-hidden="true" />
@@ -278,7 +281,7 @@ async function retryScore() { await submit() }
     </header>
 
     <div class="mt-5 space-y-4">
-      <LearnV2MeasurementTodayChecks v-if="showChecks" :envelope="checkPointers" :lock="lessonLock" />
+      <LearnV2MeasurementTodayChecks v-if="showChecks" :envelope="checkPointers" :lock="lessonLock" @checks="listedChecks = $event" />
       <p v-if="!isOnline" id="learn-v2-offline-notice" data-testid="learn-v2-offline-notice" role="status" class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100 forced-colors:border-current">Server-scored sessions require a connection. No offline attempt is queued.</p>
       <p v-if="contentPaused" role="status" data-testid="learn-v2-content-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ contentPaused.message }}</span></p>
       <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current">{{ error }}</p>

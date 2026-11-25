@@ -2,13 +2,14 @@
 import type { Infer } from 'convex/values'
 import type { todayCheckPointersValidator } from '~~/convex/lib/learnV2PublicContract'
 import { api } from '#convex/api'
-import { learnTodayCheckPointerSchema, type LearnTodayCheckPointer } from '#shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_POINTER_VERSION, learnTodayCheckPointerSchema, type LearnTodayCheckPointer } from '#shared/learn-v2-today-check'
 
 type TodayCheckEnvelope = Infer<typeof todayCheckPointersValidator>
 type Link = { token: object, cursor: string | null, page: TodayCheckEnvelope | null, stop: () => void }
 
 const MAX_RESTARTS = 3
 const { envelope, lock = null } = defineProps<{ envelope: TodayCheckEnvelope | null, lock?: LearnTodayCheckPointer | null }>()
+const emit = defineEmits<{ checks: [LearnTodayCheckPointer[]] }>()
 
 const client = import.meta.client ? useConvex() : null
 const links = shallowRef<Link[]>([])
@@ -30,7 +31,7 @@ function open(index: number, cursor: string | null) {
   if (!client) return
   const token = {}
   setLink(index, { token, cursor, page: null, stop: () => {} })
-  const stop = client.onUpdate(api.learnV2Today.getCheckPointers, cursor === null ? {} : { cursor }, (page) => {
+  const stop = client.onUpdate(api.learnV2Today.getCheckPointers, cursor === null ? { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION } : { cursor, pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }, (page) => {
     if (links.value[index]?.token !== token) return
     links.value = links.value.map((link, position) => position === index ? { ...link, page: page as TodayCheckEnvelope } : link)
     advance(index)
@@ -79,17 +80,17 @@ watch(() => envelope, (head) => {
 onScopeDispose(() => truncate(0))
 
 const checks = computed(() => {
-  const seen = new Set<string>()
-  const rows: LearnTodayCheckPointer[] = []
+  const rows = new Map<string, LearnTodayCheckPointer>()
   const candidates = [lock, ...links.value.flatMap(link => link.page?.status === 'available' ? link.page.checks : [])]
   for (const candidate of candidates) {
     const parsed = candidate ? learnTodayCheckPointerSchema.safeParse(candidate) : null
-    if (!parsed?.success || seen.has(parsed.data.reference)) continue
-    seen.add(parsed.data.reference)
-    rows.push(parsed.data)
+    if (!parsed?.success) continue
+    const listed = rows.get(parsed.data.reference)
+    if (!listed || listed.version !== LEARN_TODAY_CHECK_POINTER_VERSION && parsed.data.version === LEARN_TODAY_CHECK_POINTER_VERSION) rows.set(parsed.data.reference, parsed.data)
   }
-  return rows
+  return [...rows.values()]
 })
+watch(checks, value => emit('checks', value), { immediate: true })
 const primaryReference = computed(() => checks.value.find(check => check.state === 'ready')?.reference ?? null)
 </script>
 

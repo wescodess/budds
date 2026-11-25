@@ -4,12 +4,12 @@ import type { todayCheckPointersValidator } from '~~/convex/lib/learnV2PublicCon
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
-import { learnTodayCheckPointerSchema } from '#shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_POINTER_VERSION, learnTodayCheckPointerSchema } from '#shared/learn-v2-today-check'
 
 type TodayCheckEnvelope = Infer<typeof todayCheckPointersValidator>
 type TodayResult = ({ status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null, assessment?: { kind: string, check?: unknown } } | { status: 'pending' | 'blocked' | 'empty', reason?: string, sessionId?: string, sessionRevision?: number, canRetryGeneration?: boolean, nextScheduledAt?: number | null }) & { checkPointers?: TodayCheckEnvelope }
 const { allowed, checkingAccess } = useLearnV2Access()
-const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
+const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, LEARN_MEASUREMENT_CAPABILITIES.responses ? { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION } : {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
 const retryMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.retrySessionContentGeneration) : { mutate: async () => ({}) }
 const result = computed(() => today.data?.value as TodayResult | null | undefined)
 const retrying = ref(false)
