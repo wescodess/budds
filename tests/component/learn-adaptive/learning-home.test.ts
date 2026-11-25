@@ -29,8 +29,6 @@ const pasteKey = (owner = 'owner_1') => `budds.learn.adaptive-paste.v1:${owner}`
 
 beforeAll(async () => {
   await import(path)
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('need-first LearningHome', () => {

@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+import { createTimeoutScope, deferred } from '../tests/support/timeout-isolation'
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -1798,3 +1799,31 @@ test.each(SWEEP_TARGETS.flatMap(target => SWEEP_CONDITIONS.map(condition => [tar
     const reason = expectedCloseReason(condition)
     if (reason) expect(cancelled.map(row => row.fact.kind === 'opportunity' ? row.fact.reasonCode : null)).toContain(reason)
   }, 60_000)
+
+
+test('an expired evidence-limit fixture cannot quarantine the next Canvas publication', async () => {
+  const release = deferred<undefined>()
+  const predecessor = createTimeoutScope()
+  void predecessor.run(async () => {
+    policy.evidenceRows = 1
+    try {
+      await release.promise
+      policy.evidenceRows = 1
+    } finally {
+      policy.evidenceRows = 1
+    }
+  })
+  predecessor.close()
+  expect(policy.evidenceRows).toBe(64)
+  const f = await fixture({ inventory: { claims: 3, supports: 1, sources: 1 } })
+  release.resolve(undefined)
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(policy.evidenceRows).toBe(64)
+  await f.start()
+  const checks = await f.read()
+  expect(checks).toHaveLength(1)
+  expect(checks[0]).toMatchObject({ state: 'ready' })
+  const opened = await attach(f, (await f.opportunities())[0]!)
+  expect(opened.canvas.responsePrompt).toBeTruthy()
+})

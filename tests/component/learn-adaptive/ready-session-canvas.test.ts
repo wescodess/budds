@@ -33,8 +33,6 @@ const canvas = {
 
 beforeAll(async () => {
   await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('ready adaptive Canvas', () => {

@@ -57,8 +57,6 @@ const pagePath = ['~', 'pages', 'app', 'folders', '[id].vue'].join('/')
 
 beforeAll(async () => {
   await import(pagePath)
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('folder page Void deletion', () => {

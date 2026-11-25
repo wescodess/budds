@@ -25,8 +25,6 @@ const base = {
 
 beforeAll(async () => {
   await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('standalone diagnostic Canvas', () => {

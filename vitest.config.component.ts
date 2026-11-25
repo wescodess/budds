@@ -1,11 +1,14 @@
 import { defineVitestConfig } from '@nuxt/test-utils/config'
+import { timeoutIsolationPlugin } from './tests/support/timeout-isolation-plugin'
 
 export default defineVitestConfig({
+  plugins: [timeoutIsolationPlugin()],
   test: {
     // Nuxt's first environment bootstrap can exceed Vitest's 10s default in
     // this application even though individual component tests are fast.
     hookTimeout: 120_000,
-    setupFiles: ['tests/component/setup.ts'],
+    setupFiles: ['tests/support/timeout-isolation.ts', 'tests/component/setup.ts'],
+    sequence: { setupFiles: 'list' },
     include: ['tests/component/**/*.test.ts'],
     // Audio Overview has a dedicated browser-like harness with the exact
     // Convex and Nuxt boundaries it needs. Running those files again in this

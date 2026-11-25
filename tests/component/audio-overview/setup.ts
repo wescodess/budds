@@ -1,5 +1,8 @@
+import { timeoutIsolation } from '../../support/timeout-isolation'
 import { config } from '@vue/test-utils'
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+
+config.plugins.VueWrapper.install(wrapper => { timeoutIsolation.ownWrapper(wrapper); return {} })
 
 Object.assign(globalThis, {
   computed,

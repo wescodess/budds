@@ -90,8 +90,6 @@ const pagePath = [
 
 beforeAll(async () => {
   await import(pagePath)
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('legacy section page completion', () => {

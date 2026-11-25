@@ -21,8 +21,6 @@ mockNuxtImport('useRoute', () => {
 
 beforeAll(async () => {
   await import('~/layouts/default.vue')
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('App Shell Layout — AC4: Folder Breadcrumb Navigation', () => {

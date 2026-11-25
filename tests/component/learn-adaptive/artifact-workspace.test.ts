@@ -21,11 +21,10 @@ const canvasTemplate = {
     fallback: { title: 'Activity unavailable', body: 'Try later.', testId: 'learn-activity-fallback', primaryAction: { label: 'Continue safely' } } },
 }
 
-let fixtureSequence = 0
 type WorkspaceFixture = Pick<ReturnType<typeof createFixture>, 'save' | 'remove' | 'artifacts' | 'artifactPending' | 'isOnline'>
 
 function createFixture() {
-  const canvas = { ...structuredClone(canvasTemplate), ownerId: `owner_${++fixtureSequence}` }
+  const canvas = { ...structuredClone(canvasTemplate), ownerId: `owner_${crypto.randomUUID()}` }
   const fixture = {
     canvas,
     save: vi.fn().mockResolvedValue({ kind: 'ok', revision: 4, value: { artifactId: 'artifact_new' } }),
@@ -56,8 +55,6 @@ function createFixture() {
 
 beforeAll(async () => {
   await import('~/components/learn-adaptive/ArtifactWorkspace.vue')
-  const warmup = await mountComponent({ render: () => null })
-  warmup.unmount()
 })
 
 

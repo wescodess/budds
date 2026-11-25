@@ -41,8 +41,6 @@ const path = ['~', 'pages', 'app', 'learn', 'void', '[threadId].vue'].join('/')
 
 beforeAll(async () => {
   await import(path)
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('adaptive thread route isolation', () => {

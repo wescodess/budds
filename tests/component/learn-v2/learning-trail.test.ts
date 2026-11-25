@@ -7,8 +7,6 @@ const path = ['~', 'components', 'learn-v2'].join('/')
 
 beforeAll(async () => {
   await import(`${path}/LearningTrail.vue`)
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 const milestoneOf = (index: number) => index < 2 ? 1 : index < 4 ? 2 : 3
 

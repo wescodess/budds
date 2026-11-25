@@ -41,8 +41,6 @@ mockNuxtImport('useConvex', () => () => ({ query: (reference: never, args: unkno
 
 beforeAll(async () => {
   await import(['~', 'pages', 'app', 'learn', 'index.vue'].join('/'))
-  const warmup = await mountSuspended({ render: () => null })
-  warmup.unmount()
 })
 
 describe('Learn V2 route entry', () => {

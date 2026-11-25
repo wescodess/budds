@@ -7,7 +7,8 @@ import { describe, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
-import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
+import { createTimeoutScope, deferred } from '../tests/support/timeout-isolation'
+import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
 import { legacyBaselineRequest } from '../tests/fixtures/learn-v2-mastery-baseline'
@@ -1527,4 +1528,39 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(state.attempts).toEqual([])
     expect(state.record).toMatchObject({ state: 'independent', recordRevision: 4 })
   })
+})
+
+
+test('an expired manifest fixture cannot invalidate the next admission or restore over its approval', async () => {
+  const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+  const release = deferred<undefined>()
+  const predecessor = createTimeoutScope()
+  void predecessor.run(async () => {
+    Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { endsAt: 'invalid predecessor date' })
+    try {
+      await release.promise
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { endsAt: 'late invalid date' })
+    } finally {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
+    }
+  })
+  predecessor.close()
+  expect(adaptiveV2PilotDecision(ADAPTIVE_V2_PILOT_MANIFEST.version)).toEqual({ allowed: false, code: 'pilot_manifest_not_approved' })
+  const setup = await fixture()
+  const activity = await addAdaptiveActivity(setup, 'isolated-manifest')
+  await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+  await configureSyntheticPilot([OWNER])
+  const approved = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+  release.resolve(undefined)
+  await Promise.resolve()
+  await Promise.resolve()
+  expect(ADAPTIVE_V2_PILOT_MANIFEST).toEqual(approved)
+  const provider = vi.fn<typeof fetch>(async () => successfulProviderResponse())
+  vi.stubGlobal('fetch', provider)
+  const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('isolated-manifest-attempt', 80)
+  await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+  const result = await setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'isolated-manifest', ...attempt })
+  expect(result).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(provider).toHaveBeenCalledTimes(1)
+  await setup.t.finishInProgressScheduledFunctions()
 })

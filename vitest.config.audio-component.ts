@@ -1,9 +1,11 @@
 import { fileURLToPath } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vitest/config'
+import { timeoutIsolationPlugin } from './tests/support/timeout-isolation-plugin'
 
 export default defineConfig({
   plugins: [
+    timeoutIsolationPlugin(),
     {
       name: 'audio-component-nuxt-runtime-flags',
       enforce: 'pre',
@@ -33,7 +35,8 @@ export default defineConfig({
   test: {
     name: 'audio-components',
     environment: 'happy-dom',
-    setupFiles: ['tests/component/audio-overview/setup.ts'],
+    setupFiles: ['tests/support/timeout-isolation.ts', 'tests/component/audio-overview/setup.ts'],
+    sequence: { setupFiles: 'list' },
     include: ['tests/component/audio-overview/**/*.test.ts'],
     // The suite mutates browser globals at explicit composable seams. Running
     // files serially prevents one mounted app from tearing down another's
