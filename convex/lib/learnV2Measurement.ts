@@ -299,9 +299,13 @@ export async function retireLearnMeasurementDueWork(ctx: MutationCtx, reference:
   if (await ctx.db.get(work._id)) await ctx.db.delete(work._id)
 }
 
-export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: string, request: EnrollmentRequest) {
+export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: string, request: EnrollmentRequest,
+  historySession?: Doc<'studySessions'>) {
   ctx = measurementReadContext(ctx, userId)
   const authority = await requireMeasurementSession(ctx, userId, request)
+  const historyBasis = historySession ?? authority.session
+  if (historyBasis.userId !== userId || historyBasis.studyPlanRevisionId !== authority.session.studyPlanRevisionId
+    || historyBasis.primaryObjectiveId !== authority.session.primaryObjectiveId) throw new Error('Learn measurement history scope conflicts')
   const supplied = getFrozenLearnMeasurementProtocol()
   if (!supplied) return { status: 'protocol_not_frozen' as const, assignmentId: null, reasonCodes: ['protocol_not_frozen'] }
   const protocol = parseLearnContract(learnMeasurementProtocolSchema, supplied)
@@ -330,9 +334,9 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const canvasActivityId = request.canvasActivityId
   scope = await withMeasurementCanvasScope(ctx, userId, scope, session, canvasActivityId)
   const flow = request.entryPoint === 'canvas' || canvasActivityId && !checkSurface ? 'v2_canvas' as const : 'v2_today' as const
-  let history = await enrollmentHistory(ctx, userId, scope, session)
+  let history = await enrollmentHistory(ctx, userId, scope, historyBasis)
   if (checkSurface && history.status === 'prospectively_unexposed') {
-    const prior = await priorObjectiveTeaching(ctx, userId, session)
+    const prior = await priorObjectiveTeaching(ctx, userId, historyBasis)
     if (prior) history = { ...history, status: prior }
   }
   const family = request.familyId ? await ctx.db.get(request.familyId) : null

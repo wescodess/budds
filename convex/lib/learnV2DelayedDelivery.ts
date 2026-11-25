@@ -21,12 +21,15 @@ type Binding = { kind: 'ready', sessionId: Id<'studySessions'>, scheduledStartAt
 
 export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
   current?: Doc<'studySessions'>) {
-  const cold = row.purpose.kind === 'measurement_cold' && row.contextPins.kind === 'session' && row.contextPins.checkSurface?.surface === 'canvas'
+  const canvasCold = row.purpose.kind === 'measurement_cold' && row.contextPins.kind === 'session'
+    && row.contextPins.canvas && row.contextPins.generatorVersion === 'learn-v2.canvas-preparation.v1'
+  const cold = row.purpose.kind === 'measurement_cold' && row.contextPins.kind === 'session' && (row.contextPins.checkSurface?.surface === 'canvas' || canvasCold)
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || row.userId !== userId || row.purpose.kind !== 'measurement_delayed' && !cold
-    || row.contextPins.kind !== 'session' || row.contextPins.generatorVersion !== VERSION) return null
+    || row.contextPins.kind !== 'session' || row.contextPins.generatorVersion !== VERSION && !canvasCold) return null
   const session = current ?? await ctx.db.get(row.contextPins.studySessionId)
   if (!session || session.userId !== userId || session._id !== row.contextPins.studySessionId
     || session.assessmentOpportunityId !== row._id || session.assessmentPurpose !== row.purpose.kind
+    || canvasCold && session.schedulerVersion !== VERSION
     || session.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId || session.primaryObjectiveId !== row.objectiveId
     || session.startedSessionContentId !== undefined && (session.startedSessionContentId !== row.contextPins.sessionContentId
       || session.startedSessionContentRevision !== row.contextPins.contentRevision)
@@ -34,7 +37,7 @@ export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, 
   const content = await ctx.db.get(row.contextPins.sessionContentId)
   if (!content || content.userId !== userId || content.studySessionId !== session._id || content.assessmentOpportunityId !== row._id
     || content.studyPlanRevisionId !== row.contextPins.studyPlanRevisionId || content.blueprintRevisionId !== row.blueprintRevisionId || content.objectiveId !== row.objectiveId
-    || content.assessmentPurpose !== row.purpose.kind || content.generatorVersion !== VERSION
+    || content.assessmentPurpose !== row.purpose.kind || content.generatorVersion !== row.contextPins.generatorVersion
     || content.revision !== row.contextPins.contentRevision || content.inputDigest !== row.contextPins.contentInputDigest) return null
   return { session, content }
 }

@@ -103,6 +103,7 @@ async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v
     const support = (await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', OWNER.tokenIdentifier).eq('claimId', claims[0]!._id)).first())!
     const opportunityId = opportunity?._id
     return { opportunityId: opportunityId!, prompt: item.prompt!, sessionContentId: opportunity?.contextPins.kind === 'session' ? opportunity.contextPins.sessionContentId : teachingContentId,
+      studySessionId: opportunity?.contextPins.kind === 'session' ? opportunity.contextPins.studySessionId : graph.studySessionId,
       itemId: item._id, claimId: claims[0]!._id, supportId: support._id }
   })
   const attach = { studySessionId: graph.studySessionId, expectedSessionRevision: 2, idempotencyKey: `adaptive-ready-${crypto.randomUUID?.() ?? Date.now()}` }
@@ -110,9 +111,9 @@ async function fixture(options: { prepare?: boolean, attach?: boolean, flow?: 'v
   if (attached && attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
   const activity = attached ? await t.run(ctx => ctx.db.query('learningThreadActivities').withIndex('by_userId_and_activityId', q =>
     q.eq('userId', OWNER.tokenIdentifier).eq('activityId', attached.activityId)).unique()) : null
-  const f = { ...graph, studySessionId: graph.studySessionId, threadId: attached?.threadId, activityId: activity?._id,
+  const f = { ...graph, studySessionId: prepared.studySessionId, threadId: attached?.threadId, activityId: activity?._id,
     rows: { learnAssessmentOpportunities: prepared.opportunityId, learnMeasurementClaims: prepared.claimId, learnMeasurementSupports: prepared.supportId } }
-  const stage = attached ? { threadId: attached.threadId, activityId: attached.activityId, studySessionId: graph.studySessionId, expectedRevision: 1, expectedSessionRevision: 3,
+  const stage = attached ? { threadId: attached.threadId, activityId: attached.activityId, studySessionId: prepared.studySessionId, expectedRevision: 1, expectedSessionRevision: 3,
     response: answer, confidence: 3, idempotencyKey: `adaptive-canvas-submit-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` } : null
   const canonical = { submission: { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'today_submission_1234567890',
     response: { target: { assessmentOpportunityId: prepared.opportunityId }, expectedRevision: 2, payload: { kind: 'text' as const, text: answer }, confidence: 3 } } }
@@ -200,10 +201,11 @@ test.each([7, 30] as const)('Canvas delivers and scores the recorded day-%s rese
   if (prior.status !== 'available' || !prior.checks[0]) throw new Error('Expected original')
   await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: prior.checks[0].studySessionId,
     expectedSessionRevision: prior.checks[0].sessionRevision, idempotencyKey: 'reserve_original_attach_1234567890' })
-  await s.t.run(ctx => seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, s.f, Date.now()))
+  await s.t.run(ctx => seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, s.family.graph, Date.now()))
   const reflow = await s.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: s.f.studyPlanRevisionId,
     expectedPlanRecordRevision: 1, idempotencyKey: 'canvas_reserve_reflow_1234567890' })
   expect(reflow.preservedSessionIds).toContain(prior.checks[0].studySessionId)
+  expect(reflow.preservedSessionIds).toContain(s.f.studySessionId)
   await s.t.run(ctx => ctx.db.patch(original._id, { reasonCode: 'contaminated' }))
   const replaced = await s.owner.mutation(replaceMeasurementOpportunity, { assessmentOpportunityId: original._id, reason: 'contaminated' })
   if (replaced.status !== 'replaced') throw new Error('Expected reserve')
@@ -291,7 +293,7 @@ test('fresh Canvas preparation atomically binds its flow and enrollment without 
     expect(opportunities).toHaveLength(1)
     expect(opportunities[0]).toMatchObject({ purpose: { kind: 'measurement_cold' }, phase: 'ready', contextPins: { kind: 'session', canvas: expect.any(Object) } })
     expect(opportunities[0]).not.toHaveProperty('deliveryGrantId')
-    const session = (await ctx.db.get(s.f.studySessionId))!
+    const session = (await ctx.db.get(opportunities[0]!.contextPins.kind === 'session' ? opportunities[0]!.contextPins.studySessionId : s.f.studySessionId))!
     expect(session.assessmentOpportunityId).toBe(opportunities[0]!._id)
     expect(session.status).toBe('ready')
     const content = await ctx.db.get(opportunities[0]!.contextPins.kind === 'session' ? opportunities[0]!.contextPins.sessionContentId : s.prepared.sessionContentId)
@@ -306,6 +308,68 @@ test('fresh Canvas preparation atomically binds its flow and enrollment without 
     assessmentOpportunityId: prepared.assessmentOpportunityId, expectedRevision: 1, idempotencyKey: 'prepared_today_bypass_1234567890' })).toMatchObject({ status: 'unavailable', reasonCodes: ['flow_mismatch'] })
   expect(await s.owner.query(api.learnV2Assessments.getAssessment, { version: LEARN_V2_PUBLIC_API_VERSION,
     assessmentOpportunityId: prepared.assessmentOpportunityId })).toMatchObject({ status: 'unavailable' })
+})
+
+test.each(['predates_catalog', 'started_content'] as const)('Canvas preparation preserves the original session history: %s', async history => {
+  const s = await fixture({ prepare: false, attach: false })
+  await s.t.run(async ctx => {
+    const source = (await ctx.db.get(s.family.graph.studySessionId))!
+    if (history === 'predates_catalog') await ctx.db.patch(s.family.graph.catalogId, { createdAt: source._creationTime + 1 })
+    else await ctx.db.patch(source._id, { startedSessionContentId: s.prepared.sessionContentId, startedSessionContentRevision: 1 })
+  })
+  vi.setSystemTime(Date.now() + 1000)
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)).toMatchObject({ kind: 'not_admitted' })
+  expect(await s.t.run(ctx => ctx.db.query('learnMeasurementAssignments').take(2)))
+    .toEqual([expect.objectContaining({ status: 'not_admitted', historyStatus: history === 'predates_catalog' ? 'unknown' : 'returning' })])
+  expect(await s.t.run(ctx => ctx.db.query('studySessions').take(3))).toHaveLength(1)
+  expect(await s.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(2))).toEqual([])
+})
+
+test('Canvas cold preserves assistance history from the original instructional session', async () => {
+  const s = await fixture({ prepare: false, attach: false })
+  const hintAt = NOW - 1000
+  await s.t.run(ctx => ctx.db.patch(s.family.graph.studySessionId, { assistanceRevision: 1, substantiveHintUsedAt: hintAt }))
+  expect(await s.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, s.prepare)).toMatchObject({ kind: 'prepared' })
+  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)
+  if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
+  const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  const receipt = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId,
+    activityId: attached.activityId, studySessionId: canvas.session.studySessionId, expectedRevision: canvas.activity.planRevision!,
+    expectedSessionRevision: canvas.session.revision, response: answer, confidence: 3, idempotencyKey: 'canvas_cold_prior_assistance_12345' })
+  if (receipt.kind !== 'accepted') throw new Error(JSON.stringify(receipt))
+  expect(await s.t.run(ctx => ctx.db.get(receipt.submissionId))).toMatchObject({
+    assistanceSnapshot: { state: 'assisted', assistanceRevision: 1, substantiveHintUsedAt: hintAt },
+    validitySnapshot: { measurementEligible: false } })
+})
+
+test('an open Canvas cold check still blocks teaching from the preserved instructional session', async () => {
+  const s = await fixture({ attach: false })
+  const before = await s.t.run(ctx => ctx.db.get(s.family.graph.studySessionId))
+  expect(await s.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, {
+    studySessionId: s.family.graph.studySessionId, idempotencyKey: 'canvas_cold_teaching_lock_12345' }))
+    .toMatchObject({ value: { assessment: { kind: 'blocked', reasonCode: 'flow_mismatch' },
+      blocks: [], claims: [], supports: [], delivered: null } })
+  expect(await s.t.run(ctx => ctx.db.get(s.family.graph.studySessionId))).toEqual(before)
+})
+
+test('Canvas cold keeps its exact session and remains playable through a plan reflow', async () => {
+  const s = await fixture({ attach: false })
+  const before = (await s.t.run(ctx => ctx.db.get(s.f.studySessionId)))!
+  expect(before._id).not.toBe(s.family.graph.studySessionId)
+  await s.t.run(ctx => seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, s.family.graph, Date.now()))
+  const reflow = await s.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: s.f.studyPlanRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'canvas_cold_reflow_1234567890' })
+  expect(reflow.preservedSessionIds).toContain(before._id)
+  expect(await s.t.run(ctx => ctx.db.get(before._id))).toEqual(before)
+  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { ...s.attach, studySessionId: before._id })
+  if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
+  const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  expect(canvas.responsePrompt).toBeTruthy()
+  const receipt = await s.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId,
+    activityId: attached.activityId, studySessionId: canvas.session.studySessionId, expectedRevision: canvas.activity.planRevision!,
+    expectedSessionRevision: canvas.session.revision, response: answer, confidence: 3, idempotencyKey: 'canvas_cold_reflow_accept_12345' })
+  expect(receipt).toMatchObject({ kind: 'accepted' })
+  expect(await s.t.run(ctx => ctx.db.get(before._id))).toMatchObject({ status: 'completed', revision: canvas.session.revision })
 })
 
 test.each([false, true])('Today enrollment ignores an ordinary Canvas attachment with Canvas in protocol=%s', async canvasAllowed => {
@@ -480,7 +544,8 @@ test('Canvas scores only its saved ID and preserves one authoritative attempt ac
     expect(attempts[0]).toMatchObject({ kind: 'measurement_cold', submissionId: receipt.submissionId })
     expect(attempts[0]).not.toHaveProperty('response')
     expect(await ctx.db.query('masteryRecords').take(8)).toHaveLength(0)
-    expect((await ctx.db.get(s.f.studySessionId))!.status).toBe('in_progress')
+    expect(await ctx.db.get(s.f.studySessionId)).toMatchObject({ status: 'completed', revision: 3 })
+    expect(await ctx.db.get(s.family.graph.studySessionId)).toMatchObject({ status: 'ready', revision: 2 })
   })
 })
 
@@ -774,7 +839,7 @@ async function purposeFixture(kind: 'measurement_cold' | 'measurement_delayed' |
     policy.scorer = { registry, saved }
     await s.t.run(ctx => ctx.db.patch(s.prepared.opportunityId, { scoringBinding: saved.binding }))
   }
-  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, s.attach)
+  const attached = await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { ...s.attach, studySessionId: s.f.studySessionId })
   if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
   return { ...s, prompt: selectedPrompt, attached, stage: { threadId: attached.threadId, activityId: attached.activityId, studySessionId: s.f.studySessionId,
     expectedSessionRevision: 3, expectedRevision: 1, response: answer, confidence: 3, idempotencyKey: `adaptive-canvas-submit-${crypto.randomUUID()}` } }
@@ -891,7 +956,7 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocu
   const canvas = (await s.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attachment.threadId }))!
   const accepted = await s.owner.mutation(async ctx => {
     const value = await ctx.runMutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attachment.threadId,
-      activityId: attachment.activityId, studySessionId: s.f.studySessionId, expectedRevision: canvas.activity.planRevision!,
+      activityId: attachment.activityId, studySessionId: canvas.session.studySessionId, expectedRevision: canvas.activity.planRevision!,
       expectedSessionRevision: canvas.session.revision, response: answer, confidence: 3, idempotencyKey: 'max_canvas_accept_1234567890' })
     return { value, metrics: await ctx.meta.getTransactionMetrics() }
   })

@@ -25,7 +25,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION } from './lib/learnV2FixedChecks'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
@@ -43,6 +43,7 @@ import { readMeasurementClaims } from './lib/learnV2MeasurementEvidenceReads'
 import { hasAccountDeletionTombstone } from './lib/accountDeletionTombstone'
 import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, type LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema, learnTodayCheckRoute, todayCanvasChecksEnabled, type LearnCanvasCheckReceipt, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
+import { masteryScopeKey } from './lib/learnV2MasteryScope'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
 
@@ -87,6 +88,22 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
   if (!content || content.status !== 'published' || content.studyPlanRevisionId !== revision._id || content.blueprintRevisionId !== blueprint._id
     || content.objectiveId !== objective._id || !content.inputDigest || !content.generatorVersion
     || !await isLearnV2ContentEvidenceReady(ctx, userId, content, learningVoid._id)) return canvasUnavailable('evidence_unavailable')
+  if (entryPoint === 'canvas') {
+    const assignmentKey = await privacyDigest(['learn-v2.measurement-episode.v1', await masteryScopeKey(userId, blueprint._id, objective._id), protocol.epoch])
+    const assignment = await ctx.db.query('learnMeasurementAssignments').withIndex('by_userId_and_assignmentKey', q =>
+      q.eq('userId', userId).eq('assignmentKey', assignmentKey)).unique()
+    if (assignment?.status === 'admitted') {
+      const cold = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
+        q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
+      const checkContent = cold?.contextPins.kind === 'session' ? await ctx.db.get(cold.contextPins.sessionContentId) : null
+      if (assignment.flow !== 'v2_canvas' || !cold || cold.contextPins.kind !== 'session' || !cold.contextPins.canvas
+        || !checkContent || checkContent.inputDigest !== await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest])
+        || await measurementScopeReason(ctx, userId, cold) || await measurementFlowReason(ctx, userId, assignment.flow, cold, protocol)) return canvasUnavailable('flow_mismatch')
+      const state = await readLearnAssessmentStateForOwner(ctx, userId, cold._id, 'canvas')
+      if (state.status !== 'available') return canvasUnavailable(state.status === 'disabled' ? 'disabled' : state.reasonCodes[0] ?? 'assessment_unavailable')
+      return await complete(cold.contextPins.canvas.threadId, cold._id, checkContent._id)
+    }
+  }
   const families = await ctx.db.query('learnMeasurementFamilies').withIndex('by_userId_and_blueprintRevisionId_and_objectiveId', q =>
     q.eq('userId', userId).eq('blueprintRevisionId', blueprint._id).eq('objectiveId', objective._id)).take(7)
   const available = families.filter(row => ['provisional_equivalent', 'empirically_supported'].includes(row.status) && row.evidenceStatus === 'available' && row.invalidatedAt === undefined)
@@ -125,7 +142,12 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
     if (!owner.learnTodayCheckSurfaceVersion) await ctx.db.patch(owner._id, { learnTodayCheckSurfaceVersion: LEARN_CHECK_SURFACE_VERSION })
     return await complete(bound.contextPins.canvas.threadId, bound._id, bound.contextPins.sessionContentId)
   }
-  const sessionContentId = await ctx.db.insert('sessionContent', { userId, studySessionId: session._id, studyPlanRevisionId: revision._id,
+  const checkSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: revision._id,
+    primaryObjectiveId: objective._id, status: 'ready', revision: session.revision, scheduledStartAt: now,
+    scheduledEndAt: now + protocol.coldWindowMs, timezone, assistanceRevision: session.assistanceRevision ?? 0,
+    substantiveHintUsedAt: session.substantiveHintUsedAt, answerRevealedAt: session.answerRevealedAt,
+    placementKind: 'review', schedulingPriority: 'due_review', schedulerVersion: LEARN_DELAYED_DELIVERY_VERSION })
+  const sessionContentId = await ctx.db.insert('sessionContent', { userId, studySessionId: checkSessionId, studyPlanRevisionId: revision._id,
     blueprintRevisionId: blueprint._id, objectiveId: objective._id, revision: content.revision + 1, status: 'published',
     inputDigest: await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest]), generatorVersion: 'learn-v2.canvas-preparation.v1',
     providerModel: content.providerModel, assessmentPurpose: 'measurement_cold', createdAt: now, publishedAt: now })
@@ -159,11 +181,12 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
   const activityId = await ctx.db.insert('learningThreadActivities', { ...fields, status: 'eligible', userId, threadId, learningVoidId: learningVoid._id,
     blueprintRevisionId: blueprint._id, objectiveId: objective._id, sessionContentId, evidenceReferences, createdAt: now, updatedAt: now })
   await ctx.db.patch(threadId, { currentActivityId: activityId })
-  const enrolled = await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, familyId: manifest.familyId, entryPoint, canvasActivityId: activityId })
+  const enrolled = await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: checkSessionId, familyId: manifest.familyId, entryPoint, canvasActivityId: activityId }, session)
   if (enrolled.status !== 'admitted' || !enrolled.assignmentId) {
     await ctx.db.delete(activityId)
     await ctx.db.delete(threadId)
     await ctx.db.delete(sessionContentId)
+    await ctx.db.delete(checkSessionId)
     return canvasUnavailable(enrolled.reasonCodes[0] ?? 'canvas_not_admitted')
   }
   const opportunity = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
@@ -182,7 +205,7 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
   await ctx.db.patch(activityId, { ...finalFields, evidenceReferences: [] })
   await ctx.db.patch(opportunity._id, { deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
   await ctx.db.patch(sessionContentId, { assessmentOpportunityId: opportunity._id })
-  await ctx.db.patch(session._id, { assessmentOpportunityId: opportunity._id, assessmentPurpose: 'measurement_cold', assistanceRevision: session.assistanceRevision ?? 0 })
+  await ctx.db.patch(checkSessionId, { assessmentOpportunityId: opportunity._id, assessmentPurpose: 'measurement_cold' })
   return await complete(threadId, opportunity._id, sessionContentId)
 }
 
@@ -399,6 +422,9 @@ export const attachReadySession = mutation({
       if (session?.userId === userId && !session.assessmentOpportunityId) {
         const prepared = await prepareCanvasSessionForOwner(ctx, { ...args, idempotencyKey: `canvas_prepare_${(await privacyDigest(args.idempotencyKey)).slice(7)}` })
         if (prepared.kind !== 'prepared') return prepared
+        const opportunity = await ctx.db.get(prepared.assessmentOpportunityId)
+        if (opportunity?.contextPins.kind !== 'session') return canvasUnavailable('assessment_unavailable')
+        return await attachAssessmentCanvas(ctx, { ...args, studySessionId: opportunity.contextPins.studySessionId })
       }
       return await attachAssessmentCanvas(ctx, args)
     }

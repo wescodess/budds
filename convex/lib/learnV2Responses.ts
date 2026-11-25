@@ -570,8 +570,7 @@ export async function acceptLearnResponseForOwner(ctx: MutationCtx, userId: stri
         scoringBinding: value.row.scoringBinding, type: 'sealed_response_scoring', status: 'queued', revision: 1,
         idempotencyKey: `submission:${submissionId}`, requestFingerprint: value.payloadDigest, providerEnabled: false, attempts: 0, createdAt: now, updatedAt: now })
       await ctx.db.patch(value.row._id, { phase: 'submitted_sealed', submissionId, scoringJobId: jobId, revision: value.row.revision + 1 })
-      if (value.row.purpose.kind === 'measurement_delayed' || value.row.purpose.kind === 'measurement_cold'
-        && value.row.contextPins.kind === 'session' && value.row.contextPins.checkSurface?.surface === 'canvas')
+      if (value.row.purpose.kind === 'measurement_delayed' || value.row.purpose.kind === 'measurement_cold')
         await finalizeLearnDelayedCheckSession(ctx, userId, (await ctx.db.get(value.row._id))!)
     }
     await ctx.db.insert('learnResponseBodies', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: now,

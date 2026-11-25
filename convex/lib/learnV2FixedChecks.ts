@@ -58,8 +58,7 @@ export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, s
 
 export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan, limit: number) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
-  const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
-  const purposes = owner?.learnTodayCheckSurfaceVersion ? ['measurement_delayed', 'measurement_cold'] as const : ['measurement_delayed'] as const
+  const purposes = ['measurement_delayed', 'measurement_cold'] as const
   const plans = [active]
   let current = active
   const seen = new Set<string>([active._id])

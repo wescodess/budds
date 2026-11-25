@@ -30,7 +30,10 @@ vi.mock('./lib/learnV2MeasurementAssignment', async original => {
   const value = await original<typeof import('./lib/learnV2MeasurementAssignment')>()
   return { ...value, getFrozenLearnMeasurementProtocol: () => policy.protocol }
 })
-vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementScorer: async () => policy.scorer }))
+vi.mock('./lib/learnV2MeasurementScorerInventory', () => ({ getLearnMeasurementScorer: async (binding?: { configurationId: string }) => {
+  const scorer = policy.scorer as { registry: unknown, saved: unknown, legacy?: { binding: { configurationId: string } } } | null
+  return scorer?.legacy && scorer.legacy.binding.configurationId === binding?.configurationId ? { ...scorer, saved: scorer.legacy } : scorer
+} }))
 
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 const materializeDue = makeFunctionReference<'mutation', { userId: string, through: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
@@ -51,9 +54,12 @@ async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 
     identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model', family: 'synthetic',
       snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
   const saved = await sealLearnScorerConfiguration(definition)
-  const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1', configurations: [{ definition, expectedDigest: saved.binding.configurationDigest }],
-    legacyAllowlist: canvas ? [] : [definition.configurationId], prospectiveConfigurationId: null })
-  policy.scorer = { registry, saved }
+  const baseline = { ...definition, configurationId: 'post-seal.baseline', kind: 'legacy_baseline' as const }
+  const legacy = await sealLearnScorerConfiguration(baseline)
+  const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1', configurations: [
+    { definition, expectedDigest: saved.binding.configurationDigest }, ...(canvas ? [{ definition: baseline, expectedDigest: legacy.binding.configurationDigest }] : [])],
+  legacyAllowlist: [canvas ? baseline.configurationId : definition.configurationId], prospectiveConfigurationId: null })
+  policy.scorer = { registry, saved, legacy }
   if (canvas) policy.protocol = { ...syntheticDeliveryProtocol(Date.now(), true), scoringBinding: saved.binding }
   const f = canvas ? await canvasFamilyFixture(saved.binding, { rubric: true, transactionLimits: true })
     : await assessmentDeliveryFixture({ transactionLimits: true })
@@ -486,11 +492,13 @@ test('Canvas scoring preserves its sealed check and teaching authority', async (
   const prepared = await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, { studySessionId,
     expectedSessionRevision: 2, idempotencyKey: 'post_seal_canvas_prepare_12345' })
   if (prepared.kind !== 'prepared') throw new Error(JSON.stringify(prepared))
+  const check = (await f.t.run(ctx => ctx.db.get(prepared.assessmentOpportunityId)))!
+  if (check.contextPins.kind !== 'session') throw new Error('Expected Canvas check session')
   const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId,
     expectedSessionRevision: 2, idempotencyKey: 'post_seal_canvas_attach_12345' })
   if (attached.kind !== 'attached') throw new Error('Expected Canvas attachment')
   const receipt = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
-    studySessionId, expectedRevision: 1, expectedSessionRevision: 3, response: 'A supported Canvas response.',
+    studySessionId: check.contextPins.studySessionId, expectedRevision: 1, expectedSessionRevision: 3, response: 'A supported Canvas response.',
     confidence: 3, idempotencyKey: 'post_seal_canvas_seal_12345' })
   if (receipt.kind !== 'accepted') throw new Error('Expected Canvas acceptance')
   const response = (await f.t.run(ctx => ctx.db.get(receipt.submissionId)))!
@@ -502,9 +510,9 @@ test('Canvas scoring preserves its sealed check and teaching authority', async (
   expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(response)
 })
 
-async function todayCanvasTeaching() {
-  policy.todayCanvas = true
-  const f = await fixture(true, undefined, undefined, { pass: false })
+async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', options: { score?: boolean, pass?: boolean } = {}) {
+  policy.todayCanvas = entryPoint === 'today'
+  const f = await fixture(true, undefined, undefined, { pass: options.pass ?? false })
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true, startsAt: new Date(Date.now() - 86_400_000).toISOString(),
     endsAt: new Date(Date.now() + 40 * 86_400_000).toISOString(),
     cohort: { ...originalManifest.cohort, subjectHashes: [await privacyDigest(['adaptive-v2-pilot-cohort.v1', deliveryIdentity.tokenIdentifier])] },
@@ -516,13 +524,22 @@ async function todayCanvasTeaching() {
     const user = (await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', deliveryIdentity.tokenIdentifier)).unique())!
     await ctx.db.patch(user._id, { learnAdaptiveExperienceEntitlement: { enabled: true, updatedAt: Date.now() } })
   })
-  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
-    expectedSessionRevision: 2, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'today_surface_post_seal_start_12345' }))
-    .toMatchObject({ status: 'assessment' })
+  const instructionalSession = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
+  const instructionalContent = await f.t.run(ctx => ctx.db.get(f.contentId))
+  if (entryPoint === 'canvas') {
+    expect(await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, { studySessionId: f.graph.studySessionId,
+      expectedSessionRevision: 2, idempotencyKey: 'canvas_cold_post_seal_prepare_12345' })).toMatchObject({ kind: 'prepared' })
+  } else {
+    expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: f.graph.studySessionId,
+      expectedSessionRevision: 2, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'today_surface_post_seal_start_12345' }))
+      .toMatchObject({ status: 'assessment' })
+  }
   const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).find(row => row.purpose.kind === 'measurement_cold')!
   const assignment = (await f.t.run(ctx => ctx.db.get(row.assignmentId!)))!
-  expect(assignment).toMatchObject({ status: 'admitted', flow: 'v2_today', checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } })
+  expect(assignment).toMatchObject(entryPoint === 'today'
+    ? { status: 'admitted', flow: 'v2_today', checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } }
+    : { status: 'admitted', flow: 'v2_canvas' })
   if (row.contextPins.kind !== 'session' || !row.contextPins.canvas) throw new Error('Expected dedicated Canvas check')
   expect(row.contextPins.studySessionId).not.toBe(f.graph.studySessionId)
   const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: row.contextPins.studySessionId,
@@ -536,19 +553,19 @@ async function todayCanvasTeaching() {
   if (receipt.kind !== 'accepted') throw new Error('Expected Canvas acceptance')
   const response = (await f.t.run(ctx => ctx.db.get(receipt.submissionId)))!
   expect(response).toMatchObject({ flow: 'canvas', measurementContext: { status: 'admitted' },
-    contextPins: { checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } } })
-  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    ...(entryPoint === 'today' ? { contextPins: { checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } } } : {}) })
+  if (options.score !== false) expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
     submissionId: receipt.submissionId, idempotencyKey: 'today_surface_post_seal_score_12345' })).toMatchObject({ kind: 'accepted', status: 'completed' })
   const reference = { version, assessmentOpportunityId: row._id }
   const read = () => f.owner.query(learnV2CanvasMeasurementApi.getPostSealTeaching, reference)
   const open = () => f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)
   const help = (slotId: Id<'learnResponseSlots'>, kind: 'hint' | 'worked_example') => f.owner.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance,
     { ...reference, target: { responseSlotId: slotId }, expectedRevision: 1, kind, idempotencyKey: `today_surface_help_${kind}_12345` })
-  return { ...f, row, response, assignment, read, open, help }
+  return { ...f, row, response, assignment, instructionalSession, instructionalContent, read, open, help }
 }
 
 test('Today treatment on the Canvas surface seals, scores and delivers teaching, practice and both help kinds', async () => {
-  const f = await todayCanvasTeaching()
+  const f = await canvasColdTeaching()
   expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' },
     availability: { feedback: 'available', practice: { status: 'not_opened' } } })
   const [opened, retry] = await Promise.all([f.open(), f.open()])
@@ -574,8 +591,126 @@ test('Today treatment on the Canvas surface seals, scores and delivers teaching,
   }
 })
 
+test('Canvas cold original-session control delivers post-seal teaching and continues to Independent', async () => {
+  const f = await canvasColdTeaching('canvas')
+  const reference = { version, assessmentOpportunityId: f.row._id }
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: null })
+  expect(await f.owner.mutation(learnV2CanvasMeasurementApi.publishPostSealFeedback, reference))
+    .toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: null })
+  const opened = await f.open()
+  if (opened.status !== 'available' || !opened.practice) throw new Error(JSON.stringify(opened))
+  expect(await f.open()).toEqual(opened)
+  for (const kind of ['hint', 'worked_example'] as const) {
+    const first = await f.help(opened.practice.responseSlotId, kind)
+    expect(first).toMatchObject({ status: 'authorized', content: { kind, tier: 'T0' } })
+    expect(await f.help(opened.practice.responseSlotId, kind)).toEqual(first)
+  }
+  const practiceCommand = { version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'canvas_cold_practice_accept_12345', response: {
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: opened.practice.revision,
+    payload: { kind: 'text' as const, text: 'A separate formative practice response.' } } }
+  const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, practiceCommand)
+  expect(accepted).toMatchObject({ kind: 'accepted' })
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, practiceCommand)).toEqual(accepted)
+  const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  expect(session).toEqual(f.instructionalSession)
+  expect(await f.t.run(ctx => ctx.db.get(f.contentId))).toEqual(f.instructionalContent)
+  const binding = (await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').withIndex('by_userId_and_submissionId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('submissionId', f.response._id)).unique()))!
+  const exposures = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier)).take(16))
+  const later = exposures.filter(row => row.purpose === 'practice')
+  expect(later).toHaveLength(3)
+  for (const exposure of later) {
+    expect(exposure.caseId).toBe(binding.practiceCaseId)
+    expect(exposure).not.toHaveProperty('assessmentOpportunityId')
+  }
+  expect(binding.practiceCaseId).not.toBe(binding.checkCaseId)
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: session._id,
+    expectedSessionRevision: session.revision, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'canvas_cold_teaching_start_12345' }))
+    .toMatchObject({ status: 'in_progress', sessionContentId: f.contentId })
+  expect(await f.read()).toMatchObject({ status: 'unavailable', reasonCode: 'test_open' })
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ id: 'canvas-cold-independent-execution', model: 'synthetic/model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+      criterionResults: [{ key: 'accuracy', awarded: true }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } })))
+  const independent = { studySessionId: session._id, expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1,
+    expectedBlueprintRecordRevision: 1, response: 'Separate ordinary application.', confidence: 3, idempotencyKey: 'canvas_cold_independent_12345' }
+  const result = await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, independent)
+  expect(result).toMatchObject({ status: 'completed', state: 'independent', scorePercent: 100 })
+  expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, independent)).toEqual({ ...result, replayed: true })
+  expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8)))
+    .toEqual([expect.objectContaining({ kind: 'measurement_cold' }), expect.objectContaining({ kind: 'independent_application', studySessionId: session._id,
+      assistanceSnapshot: expect.objectContaining({ state: 'unassisted' }) })])
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_contextPins_studySessionId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('contextPins.studySessionId', session._id)).take(2)))
+    .toEqual([expect.objectContaining({ purpose: { kind: 'independent_application' }, phase: 'scored_pass' })])
+  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_kind_and_sequence', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('fact.kind', 'independent_claim_v2')).take(2)))
+    .toEqual([expect.objectContaining({ fact: expect.objectContaining({ stratum: expect.objectContaining({ flow: 'v2_canvas', entryPoint: 'canvas' }) }) })])
+  expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+  expect(await f.t.run(ctx => ctx.db.get(f.contentId))).toEqual(f.instructionalContent)
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' } })
+})
+
+test('Canvas cold permits separate practice while scoring is pending and withholds pass-only teaching', async () => {
+  const f = await canvasColdTeaching('canvas', { score: false, pass: true })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null,
+    availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' } } })
+  const opened = await f.open()
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected pending practice')
+  expect(await f.help(opened.practice.responseSlotId, 'worked_example')).toMatchObject({ status: 'authorized' })
+  expect(await f.help(opened.practice.responseSlotId, 'hint')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.score(f.response._id)).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: null,
+    practice: { responseSlotId: opened.practice.responseSlotId } })
+  expect(await f.help(opened.practice.responseSlotId, 'hint')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+})
+
+test('Canvas cold rechecks a relevant open sibling before teaching, help replay and practice acceptance', async () => {
+  const f = await canvasColdTeaching('canvas')
+  const opened = await f.open()
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+  expect(await f.help(opened.practice.responseSlotId, 'hint')).toMatchObject({ status: 'authorized' })
+  const delayed = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(delayed.openAt)
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  expect(await f.read()).toMatchObject({ status: 'unavailable', reasonCode: 'test_open' })
+  expect(await f.open()).toMatchObject({ status: 'unavailable', reasonCode: 'test_open' })
+  expect(await f.help(opened.practice.responseSlotId, 'hint')).toMatchObject({ status: 'denied', reasonCode: 'test_open' })
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'canvas_cold_locked_practice_12345', response: { target: { responseSlotId: opened.practice.responseSlotId },
+      expectedRevision: opened.practice.revision, payload: { kind: 'text', text: 'A separate practice response.' } } })).toMatchObject({ kind: 'rejected' })
+  expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+  vi.setSystemTime(delayed.closeAt)
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' } })
+})
+
+test.each(['feedback', 'lesson', 'practice', 'hint', 'worked_example'] as const)('Canvas cold %s requires complete exact-check separation', async kind => {
+  const f = await canvasColdTeaching('canvas', { score: kind !== 'feedback' && kind !== 'lesson' })
+  const opened = kind === 'hint' || kind === 'worked_example' ? await f.open() : null
+  const compare = vi.mocked(measurementItemAdapters.compare)
+  const original = compare.getMockImplementation()!
+  compare.mockImplementation(async input => deliveryKind(input.content) === kind
+    ? { decision: 'unknown', coverage: 'unknown' } : original(input))
+  if (kind === 'feedback' || kind === 'lesson') {
+    expect(await f.score(f.response._id)).toMatchObject({ status: 'scored' })
+    expect(await f.read()).toMatchObject({ status: 'available', feedback: null, lesson: null })
+  } else if (kind === 'practice') {
+    expect(await f.open()).toMatchObject({ status: 'available', practice: null,
+      availability: { practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+  } else {
+    if (opened?.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+    expect(await f.help(opened.practice.responseSlotId, kind)).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+  }
+})
+
 test('closing an unplayable Today check removes its post-seal teaching lock', async () => {
-  const f = await todayCanvasTeaching()
+  const f = await canvasColdTeaching()
   const delayed = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).find(row => row.horizonDays === 7)!
   vi.setSystemTime(delayed.openAt)
@@ -592,8 +727,8 @@ test('closing an unplayable Today check removes its post-seal teaching lock', as
   expect(await f.open()).toMatchObject({ status: 'available', practice: { revision: 1 } })
 })
 
-test('a sealed cancelled check retains separate practice without releasing score-driven teaching', async () => {
-  const f = await todayCanvasTeaching()
+test.each(['today', 'canvas'] as const)('a sealed cancelled %s check retains separate practice without releasing score-driven teaching', async entryPoint => {
+  const f = await canvasColdTeaching(entryPoint)
   const opened = await f.open()
   if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
   const slotId = opened.practice.responseSlotId
