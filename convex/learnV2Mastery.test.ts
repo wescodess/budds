@@ -3,7 +3,7 @@ import { legacyScoringModules, legacyMasteryAttempt } from '../tests/fixtures/le
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest, type TestConvex } from 'convex-test'
 import type { FunctionArgs } from 'convex/server'
-import { afterEach, describe, expect, onTestFinished, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
@@ -12,6 +12,15 @@ import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
 import { legacyBaselineRequest } from '../tests/fixtures/learn-v2-mastery-baseline'
 import { serializeCompletionRequest } from '../server/utils/ai-gateway'
+
+let masteryTestSignal: AbortSignal
+beforeEach(({ signal }) => { masteryTestSignal = signal })
+
+async function waitForMastery<T>(signal: AbortSignal, query: T): Promise<Awaited<T>> {
+  const result = await query
+  signal.throwIfAborted()
+  return result
+}
 
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 afterEach(() => {
@@ -89,17 +98,17 @@ async function addAdaptiveActivity(setup: Awaited<ReturnType<typeof fixture>>, a
   })
 }
 
-async function configureSyntheticPilot(identities: Array<typeof OWNER>) {
+async function configureSyntheticPilot(identities: Array<typeof OWNER>, signal: AbortSignal) {
   const hash = async (value: unknown) => {
     const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value))))
     return `sha256:${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`
   }
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, {
     pilotApproved: true,
-    cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: await Promise.all(identities.map(identity => hash(['adaptive-v2-pilot-cohort.v1', identity.tokenIdentifier]))) },
+    cohort: { ...ADAPTIVE_V2_PILOT_MANIFEST.cohort, subjectHashes: await waitForMastery(signal, Promise.all(identities.map(identity => hash(['adaptive-v2-pilot-cohort.v1', identity.tokenIdentifier])))) },
     modelPolicies: [{ model: 'test/mastery-model', inputUsdPerMillionTokens: 0.1, outputUsdPerMillionTokens: 0.1 }],
     productControls: { ...ADAPTIVE_V2_PILOT_MANIFEST.productControls, maxDispatchesPerHour: 4, maxDispatchesPerDay: 8, maxConcurrent: 2, maxReservedMicroUsdPerDay: 100_000 },
-    rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: await hash(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier]) },
+    rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: await waitForMastery(signal, hash(['adaptive-v2-rollback-owner.tokenIdentifier-sha256.v1', OWNER.tokenIdentifier])) },
   })
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', 'adaptive-v2-pilot.v1')
   vi.stubEnv('OPENROUTER_API_KEY', 'test-key')
@@ -113,6 +122,7 @@ function successfulProviderResponse() {
 
 describe('LA2-12 server-scored mastery attempts', () => {
   test.each(['today', 'canvas'])('preserves %s compatibility request bytes and idempotent replay', async flow => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     vi.useFakeTimers()
     const provider = vi.fn<typeof fetch>(async () => successfulProviderResponse())
@@ -121,40 +131,41 @@ describe('LA2-12 server-scored mastery attempts', () => {
       Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
       vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
     })
-    const setup = await fixture()
+    const setup = await waitForMastery(signal, fixture())
     vi.stubEnv('OPENROUTER_API_KEY', 'synthetic-never-sent')
     vi.stubEnv('CF_ACCOUNT_ID', 'synthetic-account')
     vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'synthetic-gateway')
     const { tokenIdentifier, scorerVerdict: _verdict, ...request } = setup.args(flow === 'today' ? 'legacy:today:key' : 'canvas_request_1234567890', 80)
-    const input = await setup.t.query(internal.learnV2Mastery.getMasteryScoringInput, { tokenIdentifier, ...request })
+    const input = await waitForMastery(signal, setup.t.query(internal.learnV2Mastery.getMasteryScoringInput, { tokenIdentifier, ...request }))
     if (input.kind !== 'score') throw new Error('Expected unscored compatibility input')
     const payload = JSON.stringify({ rubric: input.rubric, challenge: input.challenge,
       evidence: input.evidence.map(({ alias, claim, excerpt }) => ({ alias, claim, excerpt })), learnerResponse: request.response })
     const expectedBytes = serializeCompletionRequest(legacyBaselineRequest(input.model, payload, new AbortController().signal))
     let submit: () => Promise<unknown>
     if (flow === 'canvas') {
-      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
-      await configureSyntheticPilot([OWNER])
+      await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
+      await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
       const activityId = 'compatibility-canvas'
-      const activity = await addAdaptiveActivity(setup, activityId)
-      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence }))
+      const activity = await waitForMastery(signal, addAdaptiveActivity(setup, activityId))
+      await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence })))
       submit = () => setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId, ...request })
     }
     else submit = () => setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, request)
-    const completed = await submit()
+    const completed = await waitForMastery(signal, submit())
     if (!completed || typeof completed !== 'object') throw new Error('Expected a compatibility result')
     expect(completed).toMatchObject({ status: 'completed', replayed: false })
     expect(provider).toHaveBeenCalledTimes(1)
     expect(new TextEncoder().encode(String(provider.mock.calls[0]![1]?.body))).toEqual(new TextEncoder().encode(expectedBytes))
-    expect(await submit()).toEqual({ ...completed, replayed: true })
+    expect(await waitForMastery(signal, submit())).toEqual({ ...completed, replayed: true })
     expect(provider).toHaveBeenCalledTimes(1)
-    const attempts = await setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', tokenIdentifier).eq('idempotencyKey', request.idempotencyKey)).take(8))
+    const attempts = await waitForMastery(signal, setup.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId_and_idempotencyKey', q => q.eq('userId', tokenIdentifier).eq('idempotencyKey', request.idempotencyKey)).take(8)))
     expect(attempts).toHaveLength(1)
     expect(attempts[0]).toMatchObject({ serverScorePercent: 80, scorerVersion: 'learn-v2.mastery-scorer.v1', idempotencyKey: request.idempotencyKey })
-    await setup.t.finishInProgressScheduledFunctions()
+    await waitForMastery(signal, setup.t.finishInProgressScheduledFunctions())
   })
 
   test('keeps a queued retry within the learner concurrency cap while another session is running', async () => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     vi.useFakeTimers()
     const replies: Array<(response: Response) => void> = []
@@ -165,23 +176,23 @@ describe('LA2-12 server-scored mastery attempts', () => {
     vi.stubGlobal('fetch', provider)
     onTestFinished(async () => {
       for (const reply of replies) reply(successfulProviderResponse())
-      await Promise.allSettled(pending)
       Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
       vi.useRealTimers()
       vi.unstubAllEnvs()
       vi.unstubAllGlobals()
+      await Promise.allSettled(pending)
     })
-    const first = await fixture()
-    const second = await fixture({ runtime: first.t })
-    const third = await fixture({ runtime: first.t })
-    await configureSyntheticPilot([OWNER])
+    const first = await waitForMastery(signal, fixture())
+    const second = await waitForMastery(signal, fixture({ runtime: first.t }))
+    const third = await waitForMastery(signal, fixture({ runtime: first.t }))
+    await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
     const requests: Array<FunctionArgs<typeof api.learnAdaptive.submitResponse>> = []
     for (const [index, setup] of [first, second, third].entries()) {
-      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
       const activityId = `learner-concurrency-${index}`
-      const activity = await addAdaptiveActivity(setup, activityId)
+      const activity = await waitForMastery(signal, addAdaptiveActivity(setup, activityId))
       const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`learner-concurrency-key-${index}`, 80)
-      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
       requests.push({ threadId: activity.threadId, activityId, ...attempt })
     }
     const snapshot = () => first.t.run(async ctx => ({
@@ -191,106 +202,109 @@ describe('LA2-12 server-scored mastery attempts', () => {
       budgets: await ctx.db.query('learnAdaptiveProviderBudgets').take(3),
       rateEvents: await ctx.db.query('learnMasteryScoringRateEvents').withIndex('by_userId_and_createdAt', q => q.eq('userId', OWNER.tokenIdentifier)).take(8),
     }))
-    await expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).rejects.toThrow(/AI Gateway error/)
-    const failed = (await snapshot()).jobs[0]!
+    await waitForMastery(signal, expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).rejects.toThrow(/AI Gateway error/))
+    const failed = (await waitForMastery(signal, snapshot())).jobs[0]!
     expect(failed).toMatchObject({ status: 'queued', attempts: 1, providerReservedMicroUsd: 4920, providerReservationStatus: 'settled', terminalReason: 'provider_definitive_failure' })
 
     const dispatched = new Promise<void>((resolve) => { observed = resolve })
     const running = second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)
     pending.push(running)
-    await Promise.race([dispatched, running.then(() => { throw new Error('Expected a pending provider reply') })])
-    await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'accepted', status: 'in_progress' })
-    const denial = await third.owner.action(api.learnAdaptive.submitResponse, requests[2]!)
+    await waitForMastery(signal, Promise.race([dispatched, running.then(() => { throw new Error('Expected a pending provider reply') })]))
+    await waitForMastery(signal, expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'accepted', status: 'in_progress' }))
+    const denial = await waitForMastery(signal, third.owner.action(api.learnAdaptive.submitResponse, requests[2]!))
     expect(denial).toMatchObject({ kind: 'blocked', code: 'adaptive_concurrency_cap', retryable: true })
-    const beforeRetry = await snapshot()
+    const beforeRetry = await waitForMastery(signal, snapshot())
     expect(beforeRetry.budgets.find(row => row.scope === 'guardrail')).toMatchObject({ dispatches: 2, outstanding: 1, eligibleStarts: 2, reservedMicroUsd: 9840 })
 
     const retryDispatched = new Promise<void>((resolve) => { observed = resolve })
     const retry = first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
     pending.push(retry)
-    await Promise.race([retryDispatched, retry])
-    const afterRetry = await snapshot()
+    await waitForMastery(signal, Promise.race([retryDispatched, retry]))
+    const afterRetry = await waitForMastery(signal, snapshot())
     expect(afterRetry.jobs.filter(job => job.status === 'running')).toHaveLength(1)
-    await expect(retry).resolves.toEqual(denial)
+    await waitForMastery(signal, expect(retry).resolves.toEqual(denial))
     expect(afterRetry).toEqual(beforeRetry)
     expect(provider).toHaveBeenCalledTimes(2)
 
     replies.shift()!(successfulProviderResponse())
-    await expect(running).resolves.toMatchObject({ kind: 'accepted', status: 'completed', replayed: false })
+    await waitForMastery(signal, expect(running).resolves.toMatchObject({ kind: 'accepted', status: 'completed', replayed: false }))
     provider.mockImplementation(async () => successfulProviderResponse())
-    const completed = await first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
+    const completed = await waitForMastery(signal, first.owner.action(api.learnAdaptive.submitResponse, requests[0]!))
     expect(completed).toMatchObject({ kind: 'accepted', status: 'completed', replayed: false })
-    const settled = await snapshot()
+    const settled = await waitForMastery(signal, snapshot())
     expect(settled.jobs.find(job => job._id === failed._id)).toMatchObject({ status: 'succeeded', attempts: 2, providerReservedMicroUsd: 9840, providerReservationStatus: 'settled' })
     expect(settled.budgets.find(row => row.scope === 'guardrail')).toMatchObject({ dispatches: 3, outstanding: 0, eligibleStarts: 3, reservedMicroUsd: 14760 })
     expect(settled.rateEvents).toHaveLength(3)
-    await expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).resolves.toEqual({ ...completed, replayed: true })
-    expect(await snapshot()).toEqual(settled)
+    await waitForMastery(signal, expect(first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)).resolves.toEqual({ ...completed, replayed: true }))
+    expect(await waitForMastery(signal, snapshot())).toEqual(settled)
     expect(provider).toHaveBeenCalledTimes(3)
   })
 
   test('blocks recovery behind another learner lease and recovers its own expired lease once capacity clears', async () => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     onTestFinished(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs() })
-    const first = await fixture()
-    const second = await fixture({ runtime: first.t })
-    await configureSyntheticPilot([OWNER])
-    await first.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const first = await waitForMastery(signal, fixture())
+    const second = await waitForMastery(signal, fixture({ runtime: first.t }))
+    await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
+    await waitForMastery(signal, first.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
     const requests = []
     for (const [index, setup] of [first, second].entries()) {
       const activityId = `learner-lease-${index}`
-      const activity = await addAdaptiveActivity(setup, activityId)
+      const activity = await waitForMastery(signal, addAdaptiveActivity(setup, activityId))
       const { scorerVerdict: _verdict, ...request } = setup.args(`learner-lease-key-${index}`, 80)
-      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence }))
+      await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: request.response, submittedConfidence: request.confidence })))
       requests.push({ ...request, adaptiveAdmission: { threadId: activity.threadId, activityId, manifestVersion: ADAPTIVE_V2_PILOT_MANIFEST.version } })
     }
-    const firstLease = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)
+    const firstLease = await waitForMastery(signal, first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!))
     if (firstLease.kind !== 'acquired') throw new Error('Expected first scoring lease')
-    await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' })
-    await first.t.run(ctx => ctx.db.patch(firstLease.jobId, { leaseExpiresAt: Date.now() - 1 }))
-    const secondLease = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[1]!)
+    await waitForMastery(signal, expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' }))
+    await waitForMastery(signal, first.t.run(ctx => ctx.db.patch(firstLease.jobId, { leaseExpiresAt: Date.now() - 1 })))
+    const secondLease = await waitForMastery(signal, first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[1]!))
     if (secondLease.kind !== 'acquired') throw new Error('Expected second scoring lease')
-    const expired = await first.t.run(ctx => ctx.db.get(firstLease.jobId))
-    await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_concurrency_cap', retryable: true })
-    expect(await first.t.run(ctx => ctx.db.get(firstLease.jobId))).toEqual(expired)
-    await first.t.mutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: OWNER.tokenIdentifier, jobId: secondLease.jobId, leaseToken: secondLease.leaseToken, outcome: 'not_dispatched' })
-    const recovered = await first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)
+    const expired = await waitForMastery(signal, first.t.run(ctx => ctx.db.get(firstLease.jobId)))
+    await waitForMastery(signal, expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_concurrency_cap', retryable: true }))
+    expect(await waitForMastery(signal, first.t.run(ctx => ctx.db.get(firstLease.jobId)))).toEqual(expired)
+    await waitForMastery(signal, first.t.mutation(internal.learnV2Mastery.finishMasteryScoringFailure, { tokenIdentifier: OWNER.tokenIdentifier, jobId: secondLease.jobId, leaseToken: secondLease.leaseToken, outcome: 'not_dispatched' }))
+    const recovered = await waitForMastery(signal, first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!))
     expect(recovered).toMatchObject({ kind: 'acquired', jobId: firstLease.jobId })
     if (recovered.kind !== 'acquired') throw new Error('Expected recovered scoring lease')
     expect(recovered.leaseToken).not.toBe(firstLease.leaseToken)
-    expect(await first.t.run(ctx => ctx.db.get(firstLease.jobId))).toMatchObject({ status: 'leased', attempts: 0 })
-    await expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' })
+    expect(await waitForMastery(signal, first.t.run(ctx => ctx.db.get(firstLease.jobId)))).toMatchObject({ status: 'leased', attempts: 0 })
+    await waitForMastery(signal, expect(first.t.mutation(internal.learnV2Mastery.beginMasteryScoring, requests[0]!)).resolves.toEqual({ kind: 'pending', status: 'in_progress' }))
   })
 
   test('denies V2 wrapper reuse of a product-denied adaptive job without dispatch or accounting reset', async () => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const provider = vi.fn(async () => successfulProviderResponse())
     vi.stubGlobal('fetch', provider)
     onTestFinished(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
-    const setup = await fixture()
-    await configureSyntheticPilot([OWNER])
+    const setup = await waitForMastery(signal, fixture())
+    await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, { maxReservedMicroUsdPerDay: 1 })
-    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
-    const activity = await addAdaptiveActivity(setup, 'cross-wrapper-denial')
+    await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
+    const activity = await waitForMastery(signal, addAdaptiveActivity(setup, 'cross-wrapper-denial'))
     const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('cross-wrapper-denial-key', 80)
-    await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+    await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
     const adaptiveRequest = { threadId: activity.threadId, activityId: 'cross-wrapper-denial', ...attempt }
-    await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: false })
-    const exported = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+    await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_cost_budget', retryable: false }))
+    const exported = await waitForMastery(signal, setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
-    const retried = await setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, attempt).catch(error => ({ error }))
+    const retried = await waitForMastery(signal, setup.owner.action(api.learnV2Mastery.submitMasteryAttempt, attempt).catch(error => ({ error })))
     expect(provider).not.toHaveBeenCalled()
     expect(retried).toMatchObject({ status: 'denied', code: 'adaptive_activity_authority_unavailable', retryable: false })
-    await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported)
+    await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toEqual(exported))
     for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
-      await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] }))
     }
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: false })
-    await expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+    await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, adaptiveRequest)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false }))
     expect(provider).not.toHaveBeenCalled()
   })
 
   test.each(['rollback', 'thread deletion', 'lease expiry'])('keeps accepted mastery unchanged after %s while a provider reply is pending', async (interruption) => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T12:00:00.000Z'))
     let reply!: (response: Response) => void
@@ -298,30 +312,31 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const dispatched = new Promise<void>((resolve) => { observed = resolve })
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; observed() })))
     onTestFinished(() => { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
-    const setup = await fixture()
-    await configureSyntheticPilot([OWNER])
-    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
-    const activity = await addAdaptiveActivity(setup, 'rollback-pending')
+    const setup = await waitForMastery(signal, fixture())
+    await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
+    await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
+    const activity = await waitForMastery(signal, addAdaptiveActivity(setup, 'rollback-pending'))
     const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('rollback-pending-key', 80)
-    await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+    await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
     const pending = setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'rollback-pending', ...attempt })
-    await Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })])
+    await waitForMastery(signal, Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })]))
     if (interruption === 'rollback') Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
     else if (interruption === 'lease expiry') clock.mockReturnValue(Date.parse('2026-09-30T12:05:01.000Z'))
     else {
-      const deletion = await setup.owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId: activity.threadId })
-      for (let batch = 0; batch < 12; batch++) await setup.t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: deletion.jobId })
+      const deletion = await waitForMastery(signal, setup.owner.mutation(api.learnAdaptive.requestThreadDeletion, { threadId: activity.threadId }))
+      for (let batch = 0; batch < 12; batch++) await waitForMastery(signal, setup.t.mutation(internal.learnAdaptiveCommands.runThreadDeletionJob, { jobId: deletion.jobId }))
     }
     reply(successfulProviderResponse())
-    await expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+    await waitForMastery(signal, expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false }))
     for (const collection of ['masteryAttempts', 'masteryRecords'] as const) {
-      await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+      await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection, paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] }))
     }
-    const jobs = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+    const jobs = await waitForMastery(signal, setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
     expect(jobs.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
   })
 
   test('preserves unresolved product concurrency after owner deletion, UTC rollover, cleanup and a late reply', async () => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T23:59:00.000Z'))
     let reply!: (response: Response) => void
@@ -330,56 +345,56 @@ describe('LA2-12 server-scored mastery attempts', () => {
     const provider = vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; observed() }))
     vi.stubGlobal('fetch', provider)
     onTestFinished(() => { reply?.(successfulProviderResponse()); Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
-    const first = await fixture()
-    const second = await fixture({ runtime: first.t, identity: OTHER })
-    await configureSyntheticPilot([OWNER, OTHER])
+    const first = await waitForMastery(signal, fixture())
+    const second = await waitForMastery(signal, fixture({ runtime: first.t, identity: OTHER }))
+    await waitForMastery(signal, configureSyntheticPilot([OWNER, OTHER], signal))
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, { maxConcurrent: 1 })
     const requests = []
     for (const [index, setup] of [first, second].entries()) {
-      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
       const activityId = `product-concurrency-${index}`
-      const activity = await addAdaptiveActivity(setup, activityId)
+      const activity = await waitForMastery(signal, addAdaptiveActivity(setup, activityId))
       const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`product-concurrency-key-${index}`, 80)
-      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
       requests.push({ threadId: activity.threadId, activityId, ...attempt })
     }
     const pending = first.owner.action(api.learnAdaptive.submitResponse, requests[0]!)
-    await Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })])
-    await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_concurrency_cap', retryable: true })
+    await waitForMastery(signal, Promise.race([dispatched, pending.then(result => { throw new Error(`Expected dispatch, received ${result.kind}`) })]))
+    await waitForMastery(signal, expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_concurrency_cap', retryable: true }))
     const ownerBodies = () => first.t.run(async ctx => ({
       jobs: await ctx.db.query('learnJobs').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
       activities: await ctx.db.query('learningThreadActivities').withIndex('by_userId', q => q.eq('userId', OWNER.tokenIdentifier)).take(2),
     }))
-    const beforeDeletion = await ownerBodies()
+    const beforeDeletion = await waitForMastery(signal, ownerBodies())
     expect(beforeDeletion.jobs).toEqual([expect.objectContaining({ status: 'running', providerReservationStatus: 'outstanding', providerReservedMicroUsd: 4920 })])
     expect(beforeDeletion.activities).toEqual([expect.objectContaining({ submittedResponse: requests[0]!.response })])
     const guardrail = () => first.t.run(ctx => ctx.db.query('learnAdaptiveProviderBudgets')
       .withIndex('by_scope_and_periodStart', q => q.eq('scope', 'guardrail').eq('periodStart', 0)).unique())
-    const beforeReservation = await guardrail()
+    const beforeReservation = await waitForMastery(signal, guardrail())
     expect(beforeReservation).toMatchObject({ dispatches: 1, reservedMicroUsd: 4920, outstanding: 1, ambiguousOutcomes: 0, rollbackLatched: false })
-    await first.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: OWNER.tokenIdentifier })
+    await waitForMastery(signal, first.t.mutation(internal.accountDeletion.beginAccountDeletionForAuthUser, { userId: OWNER.tokenIdentifier }))
     for (let batch = 0; batch < 250; batch++) {
-      const progress = await first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier })
+      const progress = await waitForMastery(signal, first.t.mutation(internal.accountDeletion.runDeletionBatch, { userId: OWNER.tokenIdentifier }))
       if (progress.state === 'running' && progress.phase === 'waitingExternal') break
     }
     // The database deletion phases have finished; real external cleanup is
     // outside this local fixture. The account tombstone denies its exports.
-    await expect(first.t.query(internal.accountDeletion.getDeletionTombstone, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ phase: 'waitingExternal' })
-    await expect(first.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).rejects.toThrow('Account deletion is in progress')
-    expect(await ownerBodies()).toEqual({ jobs: [], activities: [] })
-    const retainedReservation = await guardrail()
+    await waitForMastery(signal, expect(first.t.query(internal.accountDeletion.getDeletionTombstone, { userId: OWNER.tokenIdentifier })).resolves.toMatchObject({ phase: 'waitingExternal' }))
+    await waitForMastery(signal, expect(first.owner.query(api.dataExport.getUserDataPage, { collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).rejects.toThrow('Account deletion is in progress'))
+    expect(await waitForMastery(signal, ownerBodies())).toEqual({ jobs: [], activities: [] })
+    const retainedReservation = await waitForMastery(signal, guardrail())
     expect(retainedReservation).toEqual({ ...beforeReservation, ambiguousOutcomes: 1, rollbackLatched: true })
     expect(retainedReservation).not.toHaveProperty('userId')
     clock.mockReturnValue(Date.parse('2026-10-03T00:01:00.000Z'))
-    await first.t.mutation(internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {})
-    expect(await guardrail()).toEqual(retainedReservation)
-    await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
+    await waitForMastery(signal, first.t.mutation(internal.learnV2Mastery.cleanupExpiredMasteryScoringRateEvents, {}))
+    expect(await waitForMastery(signal, guardrail())).toEqual(retainedReservation)
+    await waitForMastery(signal, expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false }))
     reply(successfulProviderResponse())
-    await expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
-    expect(await guardrail()).toEqual(retainedReservation)
-    expect(await ownerBodies()).toEqual({ jobs: [], activities: [] })
-    await expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
-    await expect(second.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(second.owner), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+    await waitForMastery(signal, expect(pending).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false }))
+    expect(await waitForMastery(signal, guardrail())).toEqual(retainedReservation)
+    expect(await waitForMastery(signal, ownerBodies())).toEqual({ jobs: [], activities: [] })
+    await waitForMastery(signal, expect(second.owner.action(api.learnAdaptive.submitResponse, requests[1]!)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false }))
+    await waitForMastery(signal, expect(second.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(second.owner)), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] }))
     expect(provider).toHaveBeenCalledTimes(1)
   })
 
@@ -388,34 +403,35 @@ describe('LA2-12 server-scored mastery attempts', () => {
     ['daily quota', { maxDispatchesPerDay: 1 }, 'adaptive_product_daily_quota'],
     ['cost budget', { maxReservedMicroUsdPerDay: 4920 }, 'adaptive_product_cost_budget'],
   ])('reserves product %s across owners and reports bounded denial metadata', async (_label, caps, code) => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-30T23:59:00.000Z'))
     const provider = vi.fn(async () => successfulProviderResponse())
     vi.stubGlobal('fetch', provider)
     onTestFinished(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); clock.mockRestore(); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
-    const first = await fixture()
-    const second = await fixture({ runtime: first.t, identity: OTHER })
-    await configureSyntheticPilot([OWNER, OTHER])
+    const first = await waitForMastery(signal, fixture())
+    const second = await waitForMastery(signal, fixture({ runtime: first.t, identity: OTHER }))
+    await waitForMastery(signal, configureSyntheticPilot([OWNER, OTHER], signal))
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.productControls, caps)
     for (const [index, setup] of [first, second].entries()) {
-      await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+      await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
       const activityId = `product-budget-${index}`
-      const activity = await addAdaptiveActivity(setup, activityId)
+      const activity = await waitForMastery(signal, addAdaptiveActivity(setup, activityId))
       const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args(`product-budget-key-${index}`, 80)
-      await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+      await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
       const request = { threadId: activity.threadId, activityId, ...attempt }
       if (index === 0) {
-        await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'accepted', status: 'completed' })
+        await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'accepted', status: 'completed' }))
       }
       else {
-        await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({
+        await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({
           kind: 'blocked', code, retryable: false,
           admission: { version: 'adaptive-v2-provider-admission.v1', stage: 'provider_dispatch', productPolicyVersion: 'adaptive-v2-product-budget.utc-hour-day.v1', rollbackPolicyVersion: 'adaptive-v2-provider-rollback.v1', retryAfterMs: 60_000 },
-        })
+        }))
         clock.mockReturnValue(Date.parse('2026-10-01T00:01:00.000Z'))
-        await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false })
-        await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
-        const exported = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+        await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'adaptive_product_guardrail_review', retryable: false }))
+        await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'masteryAttempts', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] }))
+        const exported = await waitForMastery(signal, setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
         expect(exported.page).toEqual([expect.objectContaining({ userId: OTHER.tokenIdentifier, providerAdmissionDenialCode: code })])
         expect(JSON.stringify(exported.page)).not.toContain(OWNER.tokenIdentifier)
       }
@@ -428,18 +444,19 @@ describe('LA2-12 server-scored mastery attempts', () => {
     ['unnamed rollback owner', { rollback: ADAPTIVE_V2_PILOT_MANIFEST.rollback }, 'pilot_manifest_invalid'],
     ['active rollback', { rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerSubjectHash: `sha256:${'a'.repeat(64)}`, enabled: true } }, 'pilot_rollback_active'],
   ])('denies otherwise approved synthetic admission with %s', async (_label, override, code) => {
+    const signal = masteryTestSignal
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const provider = vi.fn()
     vi.stubGlobal('fetch', provider)
     onTestFinished(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original); vi.unstubAllEnvs(); vi.unstubAllGlobals() })
-    const setup = await fixture()
-    await configureSyntheticPilot([OWNER])
+    const setup = await waitForMastery(signal, fixture())
+    await waitForMastery(signal, configureSyntheticPilot([OWNER], signal))
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, override)
-    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
-    const activity = await addAdaptiveActivity(setup, 'unapproved-controls')
+    await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
+    const activity = await waitForMastery(signal, addAdaptiveActivity(setup, 'unapproved-controls'))
     const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('unapproved-controls-key', 80)
-    await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'unapproved-controls', ...attempt })).resolves.toMatchObject({ kind: 'blocked', code, retryable: false })
-    await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] })
+    await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'unapproved-controls', ...attempt })).resolves.toMatchObject({ kind: 'blocked', code, retryable: false }))
+    await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })).resolves.toMatchObject({ page: [] }))
     expect(provider).not.toHaveBeenCalled()
   })
 
@@ -457,9 +474,10 @@ describe('LA2-12 server-scored mastery attempts', () => {
     ['missing rollback policy', { rollback: null }],
     ['unsupported owner identity', { rollback: { ...ADAPTIVE_V2_PILOT_MANIFEST.rollback, ownerIdentityVersion: 'subject.v1' } }],
   ])('returns a bounded denial before I/O for malformed activation: %s', async (_label, override) => {
-    const setup = await fixture()
-    const activity = await addAdaptiveActivity(setup, 'malformed-activation')
-    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const signal = masteryTestSignal
+    const setup = await waitForMastery(signal, fixture())
+    const activity = await waitForMastery(signal, addAdaptiveActivity(setup, 'malformed-activation'))
+    await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
     const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
     const provider = vi.fn()
     vi.stubGlobal('fetch', provider)
@@ -471,11 +489,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
       vi.unstubAllGlobals()
     })
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, override)
-    await expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'malformed-activation', ...attempt }))
-      .resolves.toMatchObject({ kind: 'blocked', code: 'pilot_manifest_invalid', retryable: false })
+    await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, { threadId: activity.threadId, activityId: 'malformed-activation', ...attempt }))
+      .resolves.toMatchObject({ kind: 'blocked', code: 'pilot_manifest_invalid', retryable: false }))
     expect(provider).not.toHaveBeenCalled()
-    await expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
-      .resolves.toMatchObject({ page: [], isDone: true })
+    await waitForMastery(signal, expect(setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
+      .resolves.toMatchObject({ page: [], isDone: true }))
   })
 
   test('revalidates the active Blueprint pointer before reservation and provider dispatch', async () => {
@@ -884,6 +902,7 @@ describe('LA2-12 server-scored mastery attempts', () => {
   })
 
   test('blocks a stalled adaptive provider at the 90-second deadline without redispatch or inferred mastery', async () => {
+    const signal = masteryTestSignal
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-30T16:00:00.000Z'))
     const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
@@ -911,9 +930,9 @@ describe('LA2-12 server-scored mastery attempts', () => {
       vi.unstubAllGlobals()
       vi.useRealTimers()
     })
-    const setup = await fixture()
-    const activity = await addAdaptiveActivity(setup, 'adaptive-provider-timeout')
-    await setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true })
+    const setup = await waitForMastery(signal, fixture())
+    const activity = await waitForMastery(signal, addAdaptiveActivity(setup, 'adaptive-provider-timeout'))
+    await waitForMastery(signal, setup.owner.mutation(internal.learnAdaptiveAccess.setCohortEntitlement, { enabled: true }))
     // Test-only approval configuration; all admission and quota policy code
     // remains real, and this test owns manifest cleanup.
     Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true,
@@ -927,17 +946,17 @@ describe('LA2-12 server-scored mastery attempts', () => {
     vi.stubEnv('CF_ACCOUNT_ID', 'test-account')
     vi.stubEnv('CLOUDFLARE_AI_GATEWAY_ID', 'test-gateway')
     const { tokenIdentifier: _token, scorerVerdict: _verdict, ...attempt } = setup.args('adaptive-provider-timeout-key', 80)
-    await setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence }))
+    await waitForMastery(signal, setup.t.run(ctx => ctx.db.patch(activity.activityDocumentId, { submittedResponse: attempt.response, submittedConfidence: attempt.confidence })))
     const request = { threadId: activity.threadId, activityId: 'adaptive-provider-timeout', ...attempt }
     const exportPage = async (collection: 'learnActivityEvents' | 'masteryAttempts' | 'masteryRecords') => setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection, paginationOpts: { cursor: null, numItems: 8 } })
     let settled = false
     const submission = setup.owner.action(api.learnAdaptive.submitResponse, request).finally(() => { settled = true })
-    await Promise.race([dispatchObserved, submission.then((result) => {
+    await waitForMastery(signal, Promise.race([dispatchObserved, submission.then((result) => {
       throw new Error(`Expected stalled provider dispatch, received ${JSON.stringify(result)}`)
-    })])
+    })]))
     expect(timeout).toHaveBeenCalledExactlyOnceWith(90_000)
     expect(provider).toHaveBeenCalledTimes(1)
-    const dispatchExport = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+    const dispatchExport = await waitForMastery(signal, setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
     expect(dispatchExport.page).toEqual([expect.objectContaining({
       providerProductPolicyVersion: 'adaptive-v2-product-budget.utc-hour-day.v1',
       providerRollbackPolicyVersion: 'adaptive-v2-provider-rollback.v1',
@@ -946,15 +965,15 @@ describe('LA2-12 server-scored mastery attempts', () => {
       providerReservationStatus: 'outstanding',
     })])
     expect(dispatchExport.page[0]).not.toHaveProperty('providerActualCostUsd')
-    await vi.advanceTimersByTimeAsync(89_999)
+    await waitForMastery(signal, vi.advanceTimersByTimeAsync(89_999))
     expect(providerSignal).toMatchObject({ aborted: false })
     expect(settled).toBe(false)
-    await vi.advanceTimersByTimeAsync(1)
+    await waitForMastery(signal, vi.advanceTimersByTimeAsync(1))
     expect(providerSignal).toMatchObject({ aborted: true, reason: { name: 'TimeoutError' } })
-    await expect(submission).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
-    const ambiguousExport = await setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await authorizeExport(setup.owner), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } })
+    await waitForMastery(signal, expect(submission).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false }))
+    const ambiguousExport = await waitForMastery(signal, setup.owner.query(api.dataExport.getUserDataPage, { authorizationId: await waitForMastery(signal, authorizeExport(setup.owner)), collection: 'learnJobs', paginationOpts: { cursor: null, numItems: 8 } }))
     expect(ambiguousExport.page).toEqual([expect.objectContaining({ providerReservedMicroUsd: 4920, providerReservationStatus: 'ambiguous' })])
-    const events = await exportPage('learnActivityEvents')
+    const events = await waitForMastery(signal, exportPage('learnActivityEvents'))
     expect(events.isDone).toBe(true)
     expect(events.page).toEqual([
       expect.objectContaining({ threadId: activity.threadId, eventType: 'meaningful_response', eventVersion: 'meaningful_response.v1', metadata: { activityClass: 'factual', boundaryOrdinal: 1, planRevision: 1 } }),
@@ -964,12 +983,12 @@ describe('LA2-12 server-scored mastery attempts', () => {
     expect(JSON.stringify(events.page)).not.toContain(attempt.response)
     expect(JSON.stringify(events.page)).not.toContain(attempt.idempotencyKey)
     for (let retry = 0; retry < 2; retry++) {
-      await expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false })
+      await waitForMastery(signal, expect(setup.owner.action(api.learnAdaptive.submitResponse, request)).resolves.toMatchObject({ kind: 'blocked', code: 'provider_outcome_requires_reconciliation', retryable: false }))
     }
     expect(provider).toHaveBeenCalledTimes(1)
-    expect(await exportPage('learnActivityEvents')).toEqual(events)
-    expect(await exportPage('masteryAttempts')).toMatchObject({ page: [], isDone: true })
-    expect(await exportPage('masteryRecords')).toMatchObject({ page: [], isDone: true })
+    expect(await waitForMastery(signal, exportPage('learnActivityEvents'))).toEqual(events)
+    expect(await waitForMastery(signal, exportPage('masteryAttempts'))).toMatchObject({ page: [], isDone: true })
+    expect(await waitForMastery(signal, exportPage('masteryRecords'))).toMatchObject({ page: [], isDone: true })
   })
 
   test('turns an expired post-dispatch lease into a reconciliation block', async () => {
@@ -1493,5 +1512,43 @@ describe('LA2-12 server-scored mastery attempts', () => {
     }))
     expect(state.attempts).toEqual([])
     expect(state.record).toMatchObject({ state: 'independent', recordRevision: 4 })
+  })
+})
+
+
+describe('Mastery fixture ownership', () => {
+  let release: () => void
+  let result: Promise<unknown>
+  let priorSignal: AbortSignal
+
+  test('captures an aborted query owner before waiting', () => {
+    const owner = new AbortController()
+    const pending = new Promise<void>(resolve => { release = resolve })
+    result = waitForMastery(owner.signal, pending).then(() => {
+      Object.assign(ADAPTIVE_V2_PILOT_MANIFEST.rollback, { enabled: true })
+    }).catch(error => error)
+    owner.abort(new Error('Expired Mastery query'))
+  })
+
+  test('a released predecessor cannot write the next test rollback policy', async () => {
+    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
+    release()
+    expect(await result).toEqual(new Error('Expired Mastery query'))
+    expect(ADAPTIVE_V2_PILOT_MANIFEST.rollback.enabled).toBe(false)
+  })
+
+  test('captures a successful query owner without retiring it', () => {
+    priorSignal = masteryTestSignal
+    const pending = new Promise<void>(resolve => { release = resolve })
+    result = waitForMastery(priorSignal, pending).then(() => {
+      throw new Error('Late successful Mastery query')
+    }).catch(error => error)
+  })
+
+  test('a successful predecessor retains its native late error', async () => {
+    expect(priorSignal.aborted).toBe(false)
+    release()
+    expect(await result).toEqual(new Error('Late successful Mastery query'))
+    expect(priorSignal.aborted).toBe(false)
   })
 })

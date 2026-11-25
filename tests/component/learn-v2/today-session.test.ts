@@ -22,6 +22,18 @@ mockNuxtImport('useConvexMutation', () => (reference: any) => {
 mockNuxtImport('useConvexAction', () => (reference: any) => ({ mutate: getFunctionName(reference)?.includes('submitMasteryAttempt') ? submit : vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: any) => getFunctionName(reference)?.includes('getSessionContent') ? { data: content, error: contentError } : { data: ref(null) })
 
+function ownSessionMount<T extends { unmount: () => void }>(create: (check: () => void) => Promise<T>): Promise<T> {
+  let finished = false
+  let wrapper: T | undefined
+  const check = () => { if (finished) throw new Error('Session fixture finished') }
+  onTestFinished(() => { finished = true; wrapper?.unmount() })
+  return create(check).then(mounted => {
+    if (finished) { mounted.unmount(); check() }
+    wrapper = mounted
+    return mounted
+  })
+}
+
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
 let releasePriorAcknowledgement!: () => void
 
@@ -41,11 +53,12 @@ describe('LearnV2TodaySession', () => {
     contentError.value = null
     isOnline.value = true
   })
-  async function mount() {
-    const Comp = await import(path)
-    const wrapper = await mountSuspended(Comp.default, { props: { candidate }, route: '/login' })
-    onTestFinished(() => wrapper.unmount())
-    return wrapper
+  function mount() {
+    return ownSessionMount(async check => {
+      const Comp = await import(path)
+      check()
+      return mountSuspended(Comp.default, { props: { candidate }, route: '/login' })
+    })
   }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
   async function reachConfidence(wrapper: any) {
@@ -243,5 +256,27 @@ describe('LearnV2TodaySession', () => {
     releasePriorAcknowledgement()
     await vi.advanceTimersByTimeAsync(75)
     expect(recordMeaningfulStart).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('Session fixture ownership', () => {
+  const nextTestWork = vi.fn()
+  let release: (wrapper: { unmount: () => void }) => void
+  let result: Promise<unknown>
+
+  beforeEach(() => { nextTestWork.mockReset() })
+
+  it('owns a mount before its promise can settle', () => {
+    const pending = new Promise<{ unmount: () => void }>(resolve => { release = resolve })
+    result = ownSessionMount(() => pending).then(nextTestWork).catch(error => error)
+  })
+
+  it('unmounts a predecessor that resolves in the next test without continuing', async () => {
+    const unmount = vi.fn()
+    release({ unmount })
+    expect(await result).toEqual(new Error('Session fixture finished'))
+    expect(unmount).toHaveBeenCalledTimes(1)
+    expect(nextTestWork).not.toHaveBeenCalled()
   })
 })
