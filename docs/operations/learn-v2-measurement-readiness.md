@@ -41,7 +41,7 @@ Retained operational/outcome queries keep their fixture-only versions. Experimen
 ## Underlying blockers
 
 1. **Bound Today first-Independent commit fails storage validation.** `convex/lib/learnV2Measurement.ts` includes the frozen `checkSurface` on the claim stratum. `convex/lib/learnV2MeasurementStorage.ts:375` omits it from the stored `independent_claim_v2.stratum` validator, although the report-source validator accepts it. A real cold check, unchanged Today teaching and ordinary application score reproduce the failed claim insert. The scoring transaction rolls back the attempt/mastery/claim; the proof asserts that rollback. This is a contract/#574 correction for the serial owner, outside #440's hot-file ownership. The regression asserts the current rejection explicitly and must become a successful claim/report journey when the owner fixes it. A green regression is not a green first-Independent path.
-2. **Canvas post-seal teaching continuation is pending #535/#576.** Current enabled Canvas commands retain the sealed check rather than delivering its subsequent ordinary lesson/practice and first-Independent application. Canvas cold and delayed scoring/reporting are exercised, but the complete Canvas teaching/first-check chain is unproven. See also the collection blockers [#559](https://github.com/wescodess/budds/issues/559) and [#560](https://github.com/wescodess/budds/issues/560). This proof does not toggle response capabilities off, hand-write an ordinary attempt, or fabricate a claim to get past that boundary.
+2. **Canvas post-seal teaching continuation is pending #535/#576.** Current enabled Canvas commands retain the sealed check rather than delivering its subsequent ordinary lesson/practice and first-Independent application; the proof checks that `getPostSealTeaching` returns `unavailable / disabled` after a scored cold submission. Canvas cold and delayed scoring/reporting are exercised, but the complete Canvas teaching/first-check chain is unproven. See also the collection blockers [#559](https://github.com/wescodess/budds/issues/559) and [#560](https://github.com/wescodess/budds/issues/560). This proof does not toggle response capabilities off, hand-write an ordinary attempt, or fabricate a claim to get past that boundary.
 
 Both blockers require their owning implementation and a subsequent deterministic full-chain run. Independent review and its ledger at the final PR head remain with the orchestrator. No review-gate pass is claimed here.
 
@@ -54,7 +54,7 @@ Dependencies were missing. `pnpm install --offline --frozen-lockfile` succeeded 
 | `source ~/.budds-orchestrator/ci-env.sh && pnpm build` | Passed; artifact secret scan passed. |
 | Focused suites below | Passed: 18 files, 1,398 tests. |
 | Phase A Canvas regression below | Initial run: 71 passed and one unchanged five-second mount timeout. Isolated rerun: all 72 passed, including UUID/fallback command keys and retry-key reuse. |
-| Deterministic command proof | Pending final run. |
+| Deterministic command proof | Seven distinct cases passed in isolated partitions: three 50-learner collection/report/CLI journeys, mixed identity/flow/surface report with source purge, bound-claim rejection/rollback, disclosure inventory and table deletion. |
 | `source ~/.budds-orchestrator/ci-env.sh && pnpm verify` | Pending. |
 | `source ~/.budds-orchestrator/ci-env.sh && pnpm verify:learn-v2-beta` | Pending. |
 

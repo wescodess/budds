@@ -11,6 +11,7 @@ import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementR
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
+import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '../shared/learn-v2-assessment-disclosure'
 import { syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
@@ -96,6 +97,9 @@ async function cohort(route: ProofRoute) {
     await submitMeasurement(f, f.cold, scenario.cold, setVerdict)
   }
   const first = learners[0]!
+  if (route === 'canvas') expect(await first.owner.query(api.learnV2Assessments.getPostSealTeaching, {
+    version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: first.cold._id,
+  })).toMatchObject({ status: 'unavailable', reasonCode: 'disabled' })
   await advanceProofClock(first.t, first.cold.closeAt + 1)
   if (route === 'today') for (const f of learners) await teachToday(f, setVerdict)
   for (const horizon of [7, 30] as const) {
