@@ -1,12 +1,13 @@
 /// <reference types="vite/client" />
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { z } from 'zod'
 import { api, internal } from './_generated/api'
 import { canvasFamilyFixture, canvasIdentity } from '../tests/fixtures/learn-v2-canvas'
 import { publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
-import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
-import { learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
+import { LEARN_V2_RESPONSE_CONTRACT_VERSION, learnIdSchema } from '../shared/learn-v2-responses'
+import { LEARN_TODAY_CHECK_POINTER_VERSION, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
@@ -90,8 +91,8 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
     studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
     idempotencyKey: `today_pointer_start_${entryPoint}`, entryPoint })
   const opportunities = () => f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(16))
-  const read = async () => {
-    const today = await f.owner.query(api.learnV2Today.getToday, {})
+  const read = async (pointerVersion?: typeof LEARN_TODAY_CHECK_POINTER_VERSION) => {
+    const today = await f.owner.query(api.learnV2Today.getToday, { pointerVersion })
     if (!('checkPointers' in today)) throw new Error('Expected pointer projection')
     expect(today.checkPointers.status).toBe('available')
     const checks = [...today.checkPointers.checks]
@@ -100,7 +101,7 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
     let pages = 1
     while (!isDone) {
       expect(cursor).toBeTruthy()
-      const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: cursor! })
+      const page = await f.owner.query(api.learnV2Today.getCheckPointers, { cursor: cursor!, pointerVersion })
       expect(page.status).toBe('available')
       checks.push(...page.checks)
       isDone = page.isDone
@@ -139,6 +140,114 @@ async function coldFor(f: Awaited<ReturnType<typeof fixture>>) {
   if (!row) throw new Error('Expected cold check')
   return row
 }
+
+test.each([undefined, 7, 30] as const)('topic pointers expose only the current map title and coarse timing for horizon %s', async horizon => {
+  const f = await fixture()
+  await f.start()
+  const cold = await coldFor(f)
+  let row = cold
+  if (horizon !== undefined) {
+    const opened = await attach(f, cold)
+    expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+    row = (await f.opportunities()).find(value => value.horizonDays === horizon)!
+    vi.setSystemTime(row.openAt + 1000)
+    await f.t.mutation(due, { userId, through: Date.now() })
+  }
+  const title = (await f.t.run(ctx => ctx.db.get(row.objectiveId)))!.title
+  const pointer = (await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(value => value.reference === row.delayedCheckId)!
+  expect(pointer).toMatchObject({ version: 'learn-v2.today-check-pointer.v2', topic: title,
+    timing: horizon === undefined ? 'this_session' : horizon === 7 ? 'about_a_week' : 'about_a_month' })
+  expect(Object.keys(pointer).sort()).toEqual(['destination', 'reference', 'state', 'timing', 'topic', 'version'])
+  expect(learnTodayCheckPointerSchema.parse(pointer)).toEqual(pointer)
+  expect(JSON.stringify(pointer)).not.toMatch(/Hypothetical|PRIVATE|rubric|scorePercent|openAt|closeAt|dueAt|horizonDays|itemId/)
+})
+
+test('retained pointers classify the retained purpose without exposing its clock or basis attempt', async () => {
+  const f = await fixture()
+  await f.start()
+  const cold = await coldFor(f)
+  const opened = await attach(f, cold)
+  const accepted = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  if (accepted.kind !== 'accepted') throw new Error('Expected seal')
+  vi.stubGlobal('fetch', vi.fn(async () => modelReply()))
+  await f.owner.action(api.learnAdaptive.submitResponse, { threadId: opened.attached.threadId, activityId: opened.attached.activityId,
+    submissionId: accepted.submissionId, idempotencyKey: 'retained_topic_score_1234567890' })
+  const delayed = (await f.opportunities()).find(value => value.horizonDays === 7)!
+  await f.t.run(async ctx => {
+    const scored = (await ctx.db.get(cold._id))!
+    if (!scored.authoritativeAttemptId || delayed.purpose.kind !== 'measurement_delayed') throw new Error('Expected attempt and clock')
+    await ctx.db.patch(cold._id, { purpose: { kind: 'retained_transfer', basisAttemptId: scored.authoritativeAttemptId, clock: delayed.purpose.clock } })
+  })
+  const pointer = (await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(value => value.reference === cold.delayedCheckId)!
+  expect(pointer).toMatchObject({ version: 'learn-v2.today-check-pointer.v2', timing: 'retained' })
+  expect(JSON.stringify(pointer)).not.toMatch(/basisAttemptId|clock|dueAt|anchorAt|horizonDays/)
+})
+
+test.each([false, true])('topic pointers use the renamed objective title after saved=%s', async saved => {
+  const f = await fixture()
+  await f.start()
+  const cold = await coldFor(f)
+  if (saved) {
+    const opened = await attach(f, cold)
+    expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  }
+  await f.t.run(ctx => ctx.db.patch(cold.objectiveId, { title: 'Renamed learner-visible topic' }))
+  expect(await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).toEqual([expect.objectContaining({ topic: 'Renamed learner-visible topic' })])
+})
+
+test.each(['objective_deleted', 'objective_foreign', 'objective_unlinked', 'blank_title', 'blueprint_foreign', 'blueprint_superseded',
+  'void_foreign', 'void_archived', 'void_revoked', 'folder_foreign', 'folder_deleted'] as const)('saved topic pointers omit labels when %s', async change => {
+  const f = await fixture()
+  await f.start()
+  const cold = await coldFor(f)
+  const opened = await attach(f, cold)
+  expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  await f.t.run(async ctx => {
+    const learningVoid = (await ctx.db.get(cold.learningVoidId))!
+    if (change === 'objective_deleted') await ctx.db.delete(cold.objectiveId)
+    if (change === 'objective_foreign') await ctx.db.patch(cold.objectiveId, { userId: 'foreign-owner', title: 'FOREIGN-TOPIC-CANARY' })
+    if (change === 'objective_unlinked') {
+      const blueprint = (await ctx.db.get(cold.blueprintRevisionId))!
+      const other = await ctx.db.insert('learnBlueprintRevisions', { userId, blueprintId: blueprint.blueprintId, learningVoidId: cold.learningVoidId,
+        revision: 2, recordRevision: 1, status: 'draft', createdAt: NOW, updatedAt: NOW })
+      await ctx.db.patch(cold.objectiveId, { blueprintRevisionId: other })
+    }
+    if (change === 'blank_title') await ctx.db.patch(cold.objectiveId, { title: '   ' })
+    if (change === 'blueprint_foreign') await ctx.db.patch(cold.blueprintRevisionId, { userId: 'foreign-owner' })
+    if (change === 'blueprint_superseded') await ctx.db.patch(cold.blueprintRevisionId, { status: 'superseded' })
+    if (change === 'void_foreign') await ctx.db.patch(cold.learningVoidId, { userId: 'foreign-owner' })
+    if (change === 'void_archived') await ctx.db.patch(cold.learningVoidId, { status: 'archived' })
+    if (change === 'void_revoked') await ctx.db.patch(cold.learningVoidId, { activeBlueprintRevisionId: undefined })
+    if (change === 'folder_foreign') await ctx.db.patch(learningVoid.folderId, { userId: 'foreign-owner' })
+    if (change === 'folder_deleted') await ctx.db.delete(learningVoid.folderId)
+  })
+  const pointers = await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION })
+  expect(pointers.checks).toHaveLength(1)
+  expect(pointers.checks[0]).toMatchObject({ version: 'learn-v2.today-check-pointer.v2', reference: cold.delayedCheckId, timing: 'this_session' })
+  expect(pointers.checks[0]).not.toHaveProperty('topic')
+  expect(JSON.stringify(pointers)).not.toContain('FOREIGN-TOPIC-CANARY')
+})
+
+test('topic extension is absent through flag rollback and the original v1 payload still parses', async () => {
+  const f = await fixture()
+  await f.start()
+  const [pointer] = await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)
+  if (!pointer) throw new Error('Expected pointer')
+  const legacy = { destination: pointer.destination, reference: pointer.reference, state: pointer.state, version: 'learn-v2.today-check-pointer.v1' }
+  const originalClientSchema = z.strictObject({ version: z.literal('learn-v2.today-check-pointer.v1'), reference: z.string().min(1).max(256),
+    state: z.enum(['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready', 'closed']),
+    destination: z.strictObject({ kind: z.literal('canvas'), threadId: learnIdSchema<'learningThreads'>(), route: z.string().max(512) }),
+  })
+  const originalClientPointers = await f.read()
+  expect(originalClientPointers).toEqual([legacy])
+  expect(originalClientSchema.parse(originalClientPointers[0])).toEqual(legacy)
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ checks: [legacy] })
+  expect(learnTodayCheckPointerSchema.parse(legacy)).toEqual(legacy)
+  policy.pointers = false
+  expect(JSON.stringify(await f.read(LEARN_TODAY_CHECK_POINTER_VERSION))).toBe(JSON.stringify([legacy]))
+  policy.responses = false
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION })).toEqual({ status: 'disabled', reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null })
+})
 
 async function anotherTodayLesson(f: Awaited<ReturnType<typeof fixture>>) {
   const studySessionId = await f.t.run(ctx => ctx.db.insert('studySessions', { userId, studyPlanRevisionId: f.graph.studyPlanRevisionId,
@@ -1214,7 +1323,7 @@ test('a playable six-form family fits the ready-pointer reservation with native 
   await f.start()
   const original = privacyContext.createResponsePrivacyReadContext
   const budget = vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 896, options))
-  expect(await f.owner.query(api.learnV2Today.getCheckPointers, {})).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready' })] })
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION })).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready', timing: 'this_session' })] })
   budget.mockRestore()
   await attach(f, (await f.opportunities())[0]!)
 })
@@ -1442,11 +1551,14 @@ test.each([1, 2, 4])('%s maximum checks appear together on the first Today page'
   await f.t.mutation(due, { userId, through: NOW })
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
-  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const legacy = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }), metrics: await ctx.meta.getTransactionMetrics() }))
   console.info('today-pointer-read-budget', JSON.stringify({ checks: count, queries: result.metrics.databaseQueries.used,
-    documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
+    documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used, extraQueries: result.metrics.databaseQueries.used - legacy.metrics.databaseQueries.used }))
   expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ status: 'available', isDone: true, continueCursor: null })
   expect('checkPointers' in result.today && result.today.checkPointers.checks).toHaveLength(count)
+  expect('checkPointers' in result.today && result.today.checkPointers.checks.every(pointer => pointer.version === LEARN_TODAY_CHECK_POINTER_VERSION && pointer.topic && pointer.timing === 'this_session')).toBe(true)
+  expect(result.metrics.databaseQueries.used).toBe(legacy.metrics.databaseQueries.used)
   expect(result.metrics.databaseQueries.used).toBeLessThan(3072)
 }, 60_000)
 
@@ -1473,7 +1585,7 @@ test('four maximum mixed-state checks appear on the first Today page', async () 
   const f = families[0]!
   await f.t.mutation(due, { userId, through: NOW })
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
-  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }), metrics: await ctx.meta.getTransactionMetrics() }))
   console.info('today-pointer-read-budget', JSON.stringify({ checks: 'mixed-4', queries: result.metrics.databaseQueries.used,
     documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ status: 'available', isDone: true, continueCursor: null })
@@ -1547,7 +1659,7 @@ test('four maximum ready checks remain on the first page with retired historical
     })
     families.push(f)
   }
-  const result = await families[0]!.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const result = await families[0]!.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }), metrics: await ctx.meta.getTransactionMetrics() }))
   console.info('today-pointer-read-budget', JSON.stringify({ checks: 'ready-4-historical', queries: result.metrics.databaseQueries.used,
     documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in result.today && result.today.checkPointers.checks).toHaveLength(4)
@@ -1568,7 +1680,7 @@ test('four maximum closed receipts appear on the first Today page', async () => 
     families.push(f)
   }
   const f = families[0]!
-  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }), metrics: await ctx.meta.getTransactionMetrics() }))
   console.info('today-pointer-read-budget', JSON.stringify({ checks: 'closed-4', queries: result.metrics.databaseQueries.used,
     documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
