@@ -17,9 +17,10 @@ const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElemen
 const { isOnline } = useOnlineStatus()
 const {
   view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
-  invalidBySource, feedback, lesson, lessonUnavailable, practice,
-  practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
-  start, submit, retryScore, submitPractice, requestAssistance,
+  invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
+  practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
+  assistance, assistanceDenied, assistanceLimit,
+  start, submit, retryScore, openPractice: openPracticeCase, submitPractice, requestAssistance,
 } = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: props.binding, isOnline })
 
 const id = useId()
@@ -64,8 +65,15 @@ const receiptBody = computed(() => {
   }
 })
 const showFullPractice = computed(() => Boolean(practice.value) && (receipt.value?.receipt === 'saved' || practiceExpanded.value))
-const showCollapsedPractice = computed(() => Boolean(practice.value) && !showFullPractice.value
-  && (receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid' || (receipt.value?.receipt === 'not_yet' && !lesson.value)))
+const showCollapsedPractice = computed(() => practiceOffered.value && !showFullPractice.value
+  && (receipt.value?.receipt === 'saved' ? practiceOpenFailed.value : receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid' || (receipt.value?.receipt === 'not_yet' && !lesson.value)))
+const shownHelp = computed(() => {
+  const state = help.value
+  if (!state) return []
+  return (['hint', 'worked_example'] as const).filter(kind => state[kind].status !== 'unavailable' || state[kind].reasonCode === 'help_limit_reached')
+    .map(kind => ({ kind, limited: state[kind].status === 'unavailable' }))
+})
+const helpLimitReached = computed(() => assistanceLimit.value || shownHelp.value.some(item => item.limited))
 const submitFailureBody = computed(() => submitFailure.value === 'offline'
   ? 'You’re offline. It’s still here on this device. Submit again when you’re back online.'
   : 'It’s still here on this device. Submit again.')
@@ -97,8 +105,8 @@ function inspectCitation(event: MouseEvent) {
   if (event.currentTarget instanceof HTMLButtonElement) emit('inspectEvidence', event.currentTarget)
 }
 
-function openPractice() {
-  practiceExpanded.value = true
+async function openPractice() {
+  if (await openPracticeCase()) practiceExpanded.value = true
 }
 </script>
 
@@ -178,7 +186,7 @@ function openPractice() {
             <p class="mt-1 whitespace-pre-wrap break-words pb-2 text-sm leading-6 text-foreground">{{ receipt.answer }}</p>
           </details>
         </div>
-        <div v-if="isResult && (receipt.answer || feedback)" class="mt-5 border-t border-border pt-4">
+        <div v-if="isResult && (receipt.answer || feedback || feedbackPublishing)" class="mt-5 border-t border-border pt-4">
           <template v-if="receipt.answer">
             <p class="font-inter text-xs font-medium text-muted-foreground">You wrote<template v-if="savedAtLabel"> · {{ savedAtLabel }}</template></p>
             <blockquote data-testid="learn-canvas-check-your-answer" class="mt-2 whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-sm leading-6 text-foreground">{{ receipt.answer }}</blockquote>
@@ -188,6 +196,7 @@ function openPractice() {
             <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ feedback.text }}<button v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
             <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
           </template>
+          <p v-else-if="feedbackPublishing" role="status" data-testid="learn-canvas-check-feedback-publishing" class="mt-4 flex items-center gap-2 text-sm leading-6 text-muted-foreground"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting feedback on your answer.</p>
         </div>
         <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('leave')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
         <div v-if="lessonUnavailable" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button></div>
@@ -199,16 +208,18 @@ function openPractice() {
         <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ paragraph }}<button v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
         <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
         <div class="mt-5 flex flex-wrap items-center gap-3">
-          <button v-if="practice && !practiceExpanded" type="button" data-testid="learn-canvas-check-try-practice" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
+          <button v-if="practiceOffered && !showFullPractice" type="button" data-testid="learn-canvas-check-try-practice" :disabled="practiceOpening || !isOnline" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
           <button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button>
         </div>
+        <p v-if="practiceOpenFailed && !showFullPractice" role="alert" data-testid="learn-canvas-check-practice-open-error" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
       </section>
 
       <section v-if="showCollapsedPractice" data-testid="learn-canvas-check-practice-collapsed" :aria-labelledby="`${id}-practice-row`" :class="card">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="min-w-0"><h2 :id="`${id}-practice-row`" class="font-medium text-foreground">Practice with a different case</h2><p class="mt-1 text-sm leading-6 text-muted-foreground">Separate from your check. Hints and worked examples are on.</p></div>
-          <button type="button" data-testid="learn-canvas-check-continue-practice" :class="secondaryAction" @click="openPractice">Continue practising</button>
+          <button type="button" data-testid="learn-canvas-check-continue-practice" :disabled="practiceOpening || !isOnline" :class="secondaryAction" @click="openPractice">Continue practising</button>
         </div>
+        <p v-if="practiceOpenFailed" role="alert" data-testid="learn-canvas-check-practice-open-error" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
       </section>
 
       <section v-if="showFullPractice && practice" data-testid="learn-canvas-check-practice" :aria-labelledby="`${id}-practice`" :class="card">
@@ -216,14 +227,17 @@ function openPractice() {
         <p class="mt-1 text-sm leading-6 text-muted-foreground">Separate from your check. It won’t change the result.</p>
         <p v-if="practice.tier === 'T2'" data-testid="learn-canvas-check-practice-label" class="mt-4 font-inter text-xs font-medium text-foreground">Written by Budds, not <span class="whitespace-nowrap">source-checked</span></p>
         <p data-testid="learn-canvas-check-practice-prompt" :class="[practice.tier === 'T2' ? 'mt-2' : 'mt-4', 'whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground']">{{ practice.prompt }}</p>
-        <div class="mt-4 flex flex-wrap gap-2">
-          <button type="button" data-testid="learn-canvas-check-hint" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('hint')"><Lightbulb class="h-4 w-4 shrink-0" aria-hidden="true" />Get a hint</button>
-          <button type="button" data-testid="learn-canvas-check-worked-example" :disabled="practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('worked_example')"><Eye class="h-4 w-4 shrink-0" aria-hidden="true" />Show worked example</button>
+        <div v-if="shownHelp.length" class="mt-4 flex flex-wrap gap-2">
+          <template v-for="item in shownHelp" :key="item.kind">
+            <button v-if="item.kind === 'hint'" type="button" data-testid="learn-canvas-check-hint" :disabled="item.limited || practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('hint')"><Lightbulb class="h-4 w-4 shrink-0" aria-hidden="true" />Get a hint</button>
+            <button v-else type="button" data-testid="learn-canvas-check-worked-example" :disabled="item.limited || practiceBusy || !isOnline" :class="secondaryAction" @click="requestAssistance('worked_example')"><Eye class="h-4 w-4 shrink-0" aria-hidden="true" />Show worked example</button>
+          </template>
         </div>
         <div v-if="assistance" class="mt-3 break-words rounded-lg bg-muted p-3 text-sm">
           <p v-if="assistance.tier === 'T2'" data-testid="learn-canvas-check-worked-label" class="font-inter text-xs font-medium text-foreground">Worked example · written by Budds, not <span class="whitespace-nowrap">source-checked</span></p>
           <p data-testid="learn-canvas-check-assistance" :class="['whitespace-pre-wrap', assistance.tier === 'T2' && 'mt-1']">{{ assistance.text }}</p>
         </div>
+        <p v-if="helpLimitReached" role="status" data-tone="neutral" data-testid="learn-canvas-check-help-limit" class="mt-3 text-sm font-medium text-foreground">You’ve used all the help for this practice case.</p>
         <p v-if="assistanceDenied" role="alert" data-testid="learn-canvas-check-assistance-denied" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
         <template v-if="!practiceSaved">
           <label :for="`${id}-practice-answer`" class="mt-5 block text-sm font-medium text-foreground">Your practice answer</label>

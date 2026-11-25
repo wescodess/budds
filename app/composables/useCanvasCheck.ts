@@ -89,6 +89,8 @@ export function useCanvasCheck(options: {
   const acceptPracticeMutation = import.meta.client ? useConvexMutation(checkApi.acceptResponse) : { mutate: async () => undefined }
   const scoreAction = import.meta.client ? useConvexAction(checkApi.scoreMasterySubmission) : { mutate: async () => undefined }
   const authorizePracticeMutation = import.meta.client ? useConvexMutation(checkApi.authorizePracticeAssistance) : { mutate: async () => undefined }
+  const openPracticeMutation = import.meta.client ? useConvexMutation(checkApi.openPostSealPractice) : { mutate: async () => undefined }
+  const publishFeedbackMutation = import.meta.client ? useConvexMutation(checkApi.publishPostSealFeedback) : { mutate: async () => undefined }
 
   const answer = ref('')
   const confidence = ref<number | null>(null)
@@ -147,13 +149,16 @@ export function useCanvasCheck(options: {
       || current.validitySnapshot.exclusionReasons.some(reason => reason === 'evidence_unavailable' || reason === 'pins_mismatch')
   })
   const hasSealedReceipt = computed(() => view.value.kind === 'receipt' && submissionId.value !== null)
-  const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value
-    ? { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId }
-    : 'skip')
+  const teachingReference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId }
+  const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value ? teachingReference : 'skip')
   const teaching = computed(() => {
     const value = teachingQuery.data.value
     return hasSealedReceipt.value && value?.status === 'available' ? value : null
   })
+  const availability = computed(() => teaching.value?.availability ?? null)
+  const feedbackPublishing = computed(() => availability.value?.feedback === 'feedback_publishing')
+  const teachingSettled = computed(() => hasSealedReceipt.value && (teachingQuery.data.value?.status === 'unavailable'
+    || availability.value?.feedback === 'available' || availability.value?.feedback === 'unavailable'))
   const feedback = computed(() => {
     const current = view.value
     return current.kind === 'receipt' && (current.receipt === 'passed' || current.receipt === 'not_yet') ? teaching.value?.feedback ?? null : null
@@ -164,9 +169,12 @@ export function useCanvasCheck(options: {
   })
   const lessonUnavailable = computed(() => {
     const current = view.value
-    return current.kind === 'receipt' && current.receipt === 'not_yet' && teachingQuery.data.value !== null && !lesson.value
+    return current.kind === 'receipt' && current.receipt === 'not_yet' && teachingSettled.value && !lesson.value
   })
-  const practice = computed(() => canTeachSeparateCase.value ? teaching.value?.practice ?? null : null)
+  const practice = computed(() => canTeachSeparateCase.value && availability.value?.practice.status === 'available' ? teaching.value?.practice ?? null : null)
+  const practiceOffered = computed(() => canTeachSeparateCase.value
+    && (availability.value?.practice.status === 'available' || availability.value?.practice.status === 'not_opened'))
+  const help = computed(() => practice.value ? availability.value?.help ?? null : null)
 
   async function start() {
     const current = available.value
@@ -260,6 +268,21 @@ export function useCanvasCheck(options: {
     if (phase === 'submitted_sealed' && id && online && scoreRequestedFor !== id) void score(id)
   }, { flush: 'post', immediate: true })
 
+  const feedbackPublishBusy = ref(false)
+  let publishRequestedFor: string | null = null
+
+  async function publishFeedback(id: string) {
+    feedbackPublishBusy.value = true
+    publishRequestedFor = id
+    try { await publishFeedbackMutation.mutate(teachingReference) }
+    catch { publishRequestedFor = null }
+    finally { feedbackPublishBusy.value = false }
+  }
+
+  watch([feedbackPublishing, submissionId, options.isOnline], ([publishing, id, online]) => {
+    if (publishing && id && online && !feedbackPublishBusy.value && publishRequestedFor !== id) void publishFeedback(id)
+  }, { flush: 'post', immediate: true })
+
   const practiceAnswer = ref('')
   const practiceMissing = ref(false)
   const practiceBusy = ref(false)
@@ -267,9 +290,36 @@ export function useCanvasCheck(options: {
   const practiceSaved = ref(false)
   const assistance = shallowRef<PracticeHelpContent | null>(null)
   const assistanceDenied = ref(false)
+  const assistanceLimit = ref(false)
+  const practiceOpening = ref(false)
+  const practiceOpenFailed = ref(false)
+  let autoOpenedFor: string | null = null
   const helpKeys = new Map<string, string>()
   let practiceKey: string | null = null
   let practicePayload: string | null = null
+
+  async function openPractice() {
+    if (practice.value) return true
+    if (!practiceOffered.value || practiceOpening.value || !options.isOnline.value) return false
+    practiceOpening.value = true
+    practiceOpenFailed.value = false
+    try {
+      const result = await openPracticeMutation.mutate(teachingReference)
+      return result?.status === 'available' && result.availability.practice.status === 'available' && result.practice !== null
+    }
+    catch {
+      practiceOpenFailed.value = true
+      return false
+    }
+    finally { practiceOpening.value = false }
+  }
+
+  watch([() => view.value.kind === 'receipt' ? view.value.receipt : null, () => availability.value?.practice.status, submissionId, options.isOnline], ([receipt, status, id, online]) => {
+    if (receipt === 'saved' && status === 'not_opened' && id && online && canTeachSeparateCase.value && autoOpenedFor !== id) {
+      autoOpenedFor = id
+      void openPractice()
+    }
+  }, { flush: 'post', immediate: true })
 
   async function submitPractice() {
     const current = practice.value
@@ -307,6 +357,7 @@ export function useCanvasCheck(options: {
     helpKeys.set(helpKey, idempotencyKey)
     practiceBusy.value = true
     assistanceDenied.value = false
+    assistanceLimit.value = false
     try {
       const result = await authorizePracticeMutation.mutate({
         version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId,
@@ -315,7 +366,8 @@ export function useCanvasCheck(options: {
       if (result?.status === 'authorized' && result.content.kind === kind) assistance.value = result.content
       else {
         helpKeys.delete(helpKey)
-        assistanceDenied.value = true
+        if (result?.status === 'denied' && result.reasonCode === 'help_limit_reached') assistanceLimit.value = true
+        else assistanceDenied.value = true
       }
     }
     catch { assistanceDenied.value = true }
@@ -324,8 +376,9 @@ export function useCanvasCheck(options: {
 
   return {
     view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
-    canTeachSeparateCase, invalidBySource, feedback, lesson, lessonUnavailable, practice,
-    practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, assistance, assistanceDenied,
-    start, submit, retryScore, submitPractice, requestAssistance,
+    canTeachSeparateCase, invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
+    practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
+    assistance, assistanceDenied, assistanceLimit,
+    start, submit, retryScore, openPractice, submitPractice, requestAssistance,
   }
 }
