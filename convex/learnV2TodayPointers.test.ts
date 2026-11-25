@@ -169,8 +169,10 @@ test.each([undefined, 7, 30] as const)('topic pointers expose only the current m
 })
 
 async function timingFixture(options: { teach?: boolean, taughtAt?: number, reserveCount?: number,
-  inventory?: { claims: number, supports: number, sources: number, backingDocuments?: boolean } } = {}) {
-  const f = await fixture({ reserveCount: options.reserveCount ?? 1, closeDayOffset: 31, inventory: options.inventory })
+  inventory?: { claims: number, supports: number, sources: number, backingDocuments?: boolean },
+  test?: Awaited<ReturnType<typeof canvasFamilyFixture>>['t'], fixtureKey?: string } = {}) {
+  const f = await fixture({ reserveCount: options.reserveCount ?? 1, closeDayOffset: 31, inventory: options.inventory,
+    test: options.test, fixtureKey: options.fixtureKey })
   await f.start()
   const cold = await coldFor(f)
   const opened = await attach(f, cold)
@@ -185,6 +187,14 @@ async function timingFixture(options: { teach?: boolean, taughtAt?: number, rese
   }
   const delayed = (await f.opportunities()).find(row => row.horizonDays === 7)!
   return { ...f, delayed }
+}
+
+async function seedTimingTeaching(f: Awaited<ReturnType<typeof timingFixture>>) {
+  await f.t.run(ctx => ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: NOW,
+    learningVoidId: f.delayed.learningVoidId, blueprintRevisionId: f.delayed.blueprintRevisionId, objectiveId: f.delayed.objectiveId,
+    studySessionId: f.graph.studySessionId, assignmentId: f.delayed.assignmentId, purpose: 'teaching', status: 'granted', serverTime: NOW,
+    projectionDigest: 'synthetic-timing-budget', deliveryReceiptHash: 'synthetic-timing-budget',
+    policyVersion: 'synthetic.timing-budget.v1', provenanceVersion: 'learn-v2.instructional-flow.v2_today.v1' }))
 }
 
 test.each([
@@ -256,17 +266,43 @@ test.each(['foreign', 'mismatched', 'future', 'nonfinite', 'negative'] as const)
 
 test('a maximum delayed family with teaching-age lookup fits the unchanged pointer reservation', async () => {
   const f = await timingFixture({ teach: false, reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
-  await f.t.run(ctx => ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: NOW,
-    learningVoidId: f.delayed.learningVoidId, blueprintRevisionId: f.delayed.blueprintRevisionId, objectiveId: f.delayed.objectiveId,
-    studySessionId: f.graph.studySessionId, assignmentId: f.delayed.assignmentId, purpose: 'teaching', status: 'granted', serverTime: NOW,
-    projectionDigest: 'synthetic-timing-budget', deliveryReceiptHash: 'synthetic-timing-budget',
-    policyVersion: 'synthetic.timing-budget.v1', provenanceVersion: 'learn-v2.instructional-flow.v2_today.v1' }))
+  await seedTimingTeaching(f)
   vi.setSystemTime(NOW + 7 * 86_400_000 + 1000)
   await f.t.mutation(due, { userId, through: Date.now() })
   const original = privacyContext.createResponsePrivacyReadContext
   vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 896, options))
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }))
     .toMatchObject({ status: 'available', checks: [expect.objectContaining({ reference: f.delayed.delayedCheckId, timing: 'about_a_week' })] })
+}, 60_000)
+
+test('four maximum delayed checks include teaching receipts in the first-page read budget', async () => {
+  const wallStartedAt = vi.getRealSystemTime()
+  const families: Awaited<ReturnType<typeof timingFixture>>[] = []
+  for (let index = 0; index < 4; index++) {
+    const family = await timingFixture({ test: families[0]?.t, fixtureKey: `delayed-budget-${index}`, teach: false,
+      reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+    await seedTimingTeaching(family)
+    families.push(family)
+  }
+  const f = families[0]!
+  vi.setSystemTime(NOW + 7 * 86_400_000 + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  await f.t.finishAllScheduledFunctions(vi.runAllTimers)
+  const legacy = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const pageStartedAt = vi.getRealSystemTime()
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }),
+    metrics: await ctx.meta.getTransactionMetrics() }))
+  console.info('today-first-page-measurement', JSON.stringify({ fixture: 'delayed-4', milliseconds: vi.getRealSystemTime() - pageStartedAt,
+    queries: result.metrics.databaseQueries.used, documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used,
+    extraQueries: result.metrics.databaseQueries.used - legacy.metrics.databaseQueries.used }))
+  expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ status: 'available', checks: expect.arrayContaining(families.map(family =>
+    expect.objectContaining({ reference: family.delayed.delayedCheckId, version: LEARN_TODAY_CHECK_POINTER_VERSION, timing: 'about_a_week' }))) })
+  expect('checkPointers' in result.today && result.today.checkPointers.checks).toHaveLength(4)
+  expect(result.metrics.databaseQueries.used).toBeLessThanOrEqual(2850)
+  expect(result.metrics.documentsRead.used).toBeLessThanOrEqual(4900)
+  expect(result.metrics.bytesRead.used).toBeLessThanOrEqual(4_300_000)
+  expect(result.metrics.databaseQueries.used).toBeLessThanOrEqual(legacy.metrics.databaseQueries.used + 4)
+  console.info('today-fixture-wall-measurement', JSON.stringify({ fixture: 'delayed-4', milliseconds: vi.getRealSystemTime() - wallStartedAt }))
 }, 60_000)
 
 test('retained pointers classify the retained purpose without exposing its clock or basis attempt', async () => {
