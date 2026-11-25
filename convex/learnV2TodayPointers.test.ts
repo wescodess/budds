@@ -5,7 +5,8 @@ import { api, internal } from './_generated/api'
 import { canvasFamilyFixture, canvasIdentity } from '../tests/fixtures/learn-v2-canvas'
 import { publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
-import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
+import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
+import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
 import { learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
@@ -1277,6 +1278,35 @@ test('measurement read caches revalidate authority after writes', async () => {
   })
 })
 
+test('measurement caches recheck indexed exposure and replaced or deleted evidence', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = await coldFor(f)
+  if (row.assessmentPins.kind !== 'measurement') throw new Error('Expected measurement pins')
+  const caseId = row.assessmentPins.itemPins.caseId
+  await f.owner.mutation(async raw => {
+    const ctx = measurementReadContext(raw, userId)
+    const read = () => readCanvasCheckPointerForOwner(ctx, userId, row)
+    expect(await read()).toMatchObject({ state: 'ready' })
+    const digest = await privacyDigest(['prior-practice', row._id])
+    const exposureId = await ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: LEARN_MEASUREMENT_STORAGE_VERSION, createdAt: NOW,
+      learningVoidId: row.learningVoidId, blueprintRevisionId: row.blueprintRevisionId, objectiveId: row.objectiveId, caseId,
+      purpose: 'practice', status: 'known', projectionDigest: digest, deliveryReceiptHash: digest, serverTime: NOW,
+      policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, provenanceVersion: 'learn-v2.practice.v1' })
+    expect(await read()).toBeNull()
+    await ctx.db.delete('learnAssessmentExposures', exposureId)
+    expect(await read()).toMatchObject({ state: 'ready' })
+    const source = (await ctx.db.get(f.graph.sourceSnapshotId))!
+    const { _id: _sourceId, _creationTime: _sourceTime, ...fields } = source
+    await ctx.db.replace('learnSourceSnapshots', source._id, { ...fields, rightsStatus: 'prohibited' })
+    expect(await read()).toBeNull()
+    await ctx.db.replace(source._id, fields)
+    expect(await read()).toMatchObject({ state: 'ready' })
+    await ctx.db.delete(f.graph.sourceExcerptId)
+    expect(await read()).toBeNull()
+  })
+})
+
 test('saved-work read caches invalidate after body and source revocation', async () => {
   const f = await fixture()
   await f.start()
@@ -1341,6 +1371,7 @@ test('responses off dominates the new capability and preserves the original Toda
 })
 
 test.each([6, 12])('%s maximum-sized families return bounded pointer pages without exhausting Today', async count => {
+  const wallStartedAt = vi.getRealSystemTime()
   const families: Awaited<ReturnType<typeof fixture>>[] = []
   for (let index = 0; index < count; index++) {
     const f = await fixture({ test: families[0]?.t, fixtureKey: `volume-${index}`, inventory: { claims: 32, supports: 2, sources: 64 } })
@@ -1351,9 +1382,16 @@ test.each([6, 12])('%s maximum-sized families return bounded pointer pages witho
   await f.t.mutation(due, { userId, through: NOW })
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
-  const today = await f.owner.query(api.learnV2Today.getToday, {})
+  const pageStartedAt = vi.getRealSystemTime()
+  const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  const today = result.today
+  console.info('today-first-page-measurement', JSON.stringify({ fixture: `families-${count}`, milliseconds: vi.getRealSystemTime() - pageStartedAt,
+    queries: result.metrics.databaseQueries.used, documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in today && today.checkPointers.status).toBe('available')
   expect('checkPointers' in today && today.checkPointers.checks).toHaveLength(4)
+  expect(result.metrics.databaseQueries.used).toBeLessThanOrEqual(1950)
+  expect(result.metrics.documentsRead.used).toBeLessThanOrEqual(3250)
+  expect(result.metrics.bytesRead.used).toBeLessThanOrEqual(2_700_000)
   const references: string[] = []
   let cursor: string | undefined
   let pages = 0
@@ -1370,6 +1408,7 @@ test.each([6, 12])('%s maximum-sized families return bounded pointer pages witho
   expect(pages).toBe(Math.ceil(count / 4))
   expect(references).toHaveLength(count)
   expect(new Set(references).size).toBe(count)
+  console.info('today-fixture-wall-measurement', JSON.stringify({ fixture: `families-${count}`, milliseconds: vi.getRealSystemTime() - wallStartedAt }))
 }, 60_000)
 
 test('overflow continues across saved, ready and both scored phases without exposing their phases', async () => {
@@ -1431,23 +1470,41 @@ test('expired unanswered candidates do not displace the first-page check before 
 })
 
 test.each([1, 2, 4])('%s maximum checks appear together on the first Today page', async count => {
+  const wallStartedAt = vi.getRealSystemTime()
   const families: Awaited<ReturnType<typeof fixture>>[] = []
   for (let index = 0; index < count; index++) {
     const f = await fixture({ test: families[0]?.t, fixtureKey: `first-${index}`, reserveCount: 3,
       inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
-    await f.start()
+    if (index === count - 1) {
+      const result = await f.owner.mutation(async ctx => ({ response: await ctx.runMutation(api.learnV2SessionContent.startStudySession, {
+        studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
+        idempotencyKey: 'today_pointer_start_today', entryPoint: 'today' }), metrics: await ctx.meta.getTransactionMetrics() }))
+      console.info('today-preparation-read-measurement', JSON.stringify({ queries: result.metrics.databaseQueries.used,
+        documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
+      if (count === 4) {
+        expect(result.metrics.databaseQueries.used).toBeLessThanOrEqual(1250)
+        expect(result.metrics.documentsRead.used).toBeLessThanOrEqual(2300)
+        expect(result.metrics.bytesRead.used).toBeLessThanOrEqual(2_100_000)
+      }
+    } else await f.start()
     families.push(f)
   }
   const f = families[0]!
   await f.t.mutation(due, { userId, through: NOW })
   await f.t.finishAllScheduledFunctions(vi.runAllTimers)
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q => q.eq('userId', userId)).take(count * 3 + 1))).toHaveLength(count * 3)
+  const pageStartedAt = vi.getRealSystemTime()
   const result = await f.owner.query(async ctx => ({ today: await ctx.runQuery(api.learnV2Today.getToday, {}), metrics: await ctx.meta.getTransactionMetrics() }))
+  console.info('today-first-page-measurement', JSON.stringify({ fixture: `ready-${count}`, milliseconds: vi.getRealSystemTime() - pageStartedAt,
+    queries: result.metrics.databaseQueries.used, documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   console.info('today-pointer-read-budget', JSON.stringify({ checks: count, queries: result.metrics.databaseQueries.used,
     documents: result.metrics.documentsRead.used, bytes: result.metrics.bytesRead.used }))
   expect('checkPointers' in result.today && result.today.checkPointers).toMatchObject({ status: 'available', isDone: true, continueCursor: null })
   expect('checkPointers' in result.today && result.today.checkPointers.checks).toHaveLength(count)
-  expect(result.metrics.databaseQueries.used).toBeLessThan(3072)
+  expect(result.metrics.databaseQueries.used).toBeLessThanOrEqual(2850)
+  expect(result.metrics.documentsRead.used).toBeLessThanOrEqual(4900)
+  expect(result.metrics.bytesRead.used).toBeLessThanOrEqual(4_250_000)
+  console.info('today-fixture-wall-measurement', JSON.stringify({ fixture: `ready-${count}`, milliseconds: vi.getRealSystemTime() - wallStartedAt }))
 }, 60_000)
 
 test('four maximum mixed-state checks appear on the first Today page', async () => {
