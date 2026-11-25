@@ -6,15 +6,19 @@ import { join } from 'node:path'
 import { ROOT } from './artifacts.mjs'
 
 export const LEDGER_EXIT_TEST_NAME = 'the global approval ledger exit regressions use isolated mock adapters with network denied'
-// Disjoint transport groups keep the full table inside each process deadline.
+// Each disjoint group retains the original process deadline.
 const patterns = ['A3 M1 and crash table', 'A[456]', 'crash table|post-dispatch|publication internals', 'B1', 'B2',
   'A9 transport table [0-9]', 'A9 transport table [a-l]', 'A9 transport table [m-p]', 'A9 transport table [q-z]']
+const residualPatterns = ['A', '256 model/configuration', '[a-m]']
+const residual = `(?!(?:${patterns.join('|')}))`
 const filters = [...patterns.map(pattern => `--test-name-pattern=^(?:${pattern})`),
-  `--test-skip-pattern=^(?:${patterns.join('|')})`]
+  ...residualPatterns.map(pattern => `--test-name-pattern=^${residual}(?:${pattern})`),
+  `--test-skip-pattern=^(?:${[...patterns, ...residualPatterns].join('|')})`]
 const expected = [/A3 M1 and crash table/, /A5 historical admission/, /crash table: approval/, /B1/, /B2/,
   /A9 transport table 400/, /A9 transport table abort/, /A9 transport table malformed-200/, /A9 transport table redirect-loop/,
+  /A12 response projection/, /256 model\/configuration reservations/, /a resolved canary permits/,
   /one signed approval cannot dispatch in two directories/]
-const names = ['1', '2', '3', '4', '5', '6a', '6b', '6c', '6d', '7']
+const names = ['1', '2', '3', '4', '5', '6a', '6b', '6c', '6d', '7a', '7b', '7c', '7d']
 export const ledgerPartitions = filters.map((filter, index) => ({ name: names[index], filter, expected: expected[index] }))
 
 export function runLedgerPartition(partition) {
