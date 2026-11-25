@@ -21,7 +21,7 @@ const {
   practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
   assistance, assistanceDenied, assistanceLimit,
   start, submit, retryScore, openPractice: openPracticeCase, submitPractice, requestAssistance,
-} = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: props.binding, isOnline })
+} = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: () => props.binding, isOnline })
 
 const id = useId()
 const notice = ref('')
@@ -129,7 +129,7 @@ async function openPractice() {
     </section>
 
     <section v-else-if="view.kind === 'entry'" data-testid="learn-canvas-check-entry" :aria-labelledby="`${id}-entry`" :class="card">
-      <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">A check on last week’s work</h2>
+      <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">A check on an earlier topic</h2>
       <p class="mt-2 max-w-xl text-[15px] leading-7 text-muted-foreground">You’ll get one question you haven’t seen. Answer on your own. Once you submit, your answer is locked, practice opens right away, and your result arrives on this page.</p>
       <div class="mt-6 flex flex-wrap gap-3">
         <button type="button" data-testid="learn-canvas-check-start" :disabled="busy || !isOnline" :class="primaryAction" @click="start">Start check<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>

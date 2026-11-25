@@ -6,6 +6,12 @@ import { LEARN_V2_RESPONSE_CONTRACT_VERSION, learnAcceptResponseRequestSchema, l
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, learnAttemptHistorySchema, learnAuthorizePracticeAssistanceSchema, learnDeliveredAssessmentSchema, learnPostSealPracticeSchema, learnPostSealTeachingReferenceSchema, learnPostSealTeachingSchema, learnPracticeAssistanceAuthorizationSchema } from '~~/shared/learn-v2-assessment-disclosure'
 import { LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, learnAssessmentCapabilitiesSchema, type LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
 import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, grantAssessmentDeliverySchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
+import { serverAssessmentCanvas, serverCheckReceipt, serverSavedCheckCanvas } from '../support/canvas-check-projection'
+
+vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
+  return { ...actual, LEARN_MEASUREMENT_CAPABILITIES: { ...actual.LEARN_MEASUREMENT_CAPABILITIES, responses: true } }
+})
 
 const stateData = shallowRef<unknown>(null)
 const deliveryData = shallowRef<unknown>(null)
@@ -98,17 +104,7 @@ const teachingAvailable = (overrides: Record<string, unknown> = {}) => {
 const teachingUnavailable = (reasonCode: string) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode })
 const helpAuthorized = (kind: 'hint' | 'worked_example', text: string, revision = 1, workedTier: 'T0' | 'T2' = 'T2') => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'authorized', assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, revision, authorizationId: 'exposure_1', deliveredAt: 1_800_000_200_000, content: kind === 'hint' ? { kind, tier: 'T0', text } : { kind, tier: workedTier, text } })
 const helpDenied = (reasonCode: string) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
-const canvas = (overrides: Record<string, unknown> = {}) => ({
-  ownerId: 'owner_1', status: 'started', thread: { id: 'thread_1', outcome: 'Explain enzymes', intent: 'understand', revision: 2 },
-  activity: { id: 'check_activity', status: 'eligible', purpose: 'Answer-bearing purpose text.', reasonCode: 'check', planRevision: 1, primitive: null,
-    controls: { reasonText: { version: 'v', purpose: 'why', text: 'Why this canary.' }, selected: null, fixedNextPlan: null, options: [] },
-    fallback: { testId: 'learn-activity-fallback', title: 'Activity unavailable', body: 'Try later.', primaryAction: { label: 'Continue safely' } },
-    requiredAction: { kind: 'submit_response', label: 'Submit response' } },
-  session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
-  responsePrompt: null,
-  assessmentCheck: { assessmentOpportunityId: OPPORTUNITY },
-  ...overrides,
-})
+const canvas = (overrides: Record<string, unknown> = {}) => ({ ...serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open' }), ...overrides })
 
 const wrappers: VueWrapper[] = []
 async function mountCheck(props: Record<string, unknown> = {}) {
@@ -186,7 +182,8 @@ describe('Canvas check', () => {
     })
 
     it('renders the ordinary Canvas when no check is bound', async () => {
-      const wrapper = await mountCheck({ canvas: canvas({ assessmentCheck: null, activity: { ...canvas().activity, controls: undefined } }) })
+      const { assessment: _assessment, ...ordinary } = canvas({ status: 'started', activity: { ...canvas().activity, controls: undefined } })
+      const wrapper = await mountCheck({ canvas: ordinary })
       expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
     })
@@ -225,8 +222,8 @@ describe('Canvas check', () => {
       for (const testId of ['learn-canvas-hint', 'learn-canvas-reveal', 'learn-canvas-source-1', 'learn-canvas-check-hint', 'learn-canvas-check-worked-example']) {
         expect(wrapper.find(`[data-testid="${testId}"]`).exists()).toBe(false)
       }
-      expect(wrapper.text()).not.toContain('Why this canary.')
-      expect(wrapper.text()).not.toContain('Answer-bearing purpose text.')
+      expect(wrapper.text()).not.toContain(canvas().activity.controls.reasonText.text)
+      expect(wrapper.text()).not.toContain(canvas().activity.purpose)
       expect(wrapper.text()).not.toContain('Answer in your own words.')
       expect(recordAssistance).not.toHaveBeenCalled()
       expect(authorizePractice).not.toHaveBeenCalled()
@@ -840,7 +837,7 @@ describe('Canvas check', () => {
       teachingData.value = teachingUnavailable('disabled')
       stateData.value = scored('scored_pass')
       workData.value = workState({ result: result(['pass']) })
-      const wrapper = await mountCheck({ canvas: canvas({ assessmentCheck: { assessmentOpportunityId: OPPORTUNITY, laterTeaching: { feedback: { text: 'Binding canary', citations: [] }, practice: { prompt: 'Binding canary' } } } }) })
+      const wrapper = await mountCheck({ canvas: canvas({ assessment: { ...canvas().assessment, laterTeaching: { feedback: { text: 'Binding canary', citations: [] }, practice: { prompt: 'Binding canary' } } } }) })
       expect(wrapper.text()).not.toContain('Binding canary')
     })
 
@@ -850,7 +847,7 @@ describe('Canvas check', () => {
       stateData.value = scored('scored_fail')
       workData.value = workState({ result: result(['needs_review']) })
       const probe = await mountSuspended(defineComponent({ setup() {
-        check = useCanvasCheck({ ownerId: 'owner_1', threadId: 'thread_1', binding: { assessmentOpportunityId: OPPORTUNITY }, isOnline })
+        check = useCanvasCheck({ ownerId: 'owner_1', threadId: 'thread_1', binding: () => ({ assessmentOpportunityId: OPPORTUNITY, receipt: null }), isOnline })
         return () => h('div')
       } }))
       wrappers.push(probe)
@@ -1063,6 +1060,91 @@ describe('Canvas check', () => {
       expect(publishFeedbackCommand).not.toHaveBeenCalled()
       expect(wrapper.html()).not.toContain(String(SCORE_CANARY))
       expect(wrapper.text()).not.toMatch(/rubric|criteri|score|mastery|delayed|retained/i)
+    })
+  })
+
+  describe('server projections', () => {
+    const subscribed = (name: string) => subscriptions.mock.calls.some(([called]) => String(called).includes(name))
+
+    it.each([
+      ['closed', 'invalid', 'This check won’t count'],
+      ['result_unconfirmed', 'unconfirmed', 'We couldn’t confirm your result'],
+    ] as const)('renders a %s recovery receipt from checkReceipt alone, with its saved answer', async (state, kind, title) => {
+      const receipt = serverCheckReceipt({ reference: 'check_ref_1', state, answer: ANSWER, confidence: 4 })
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'invalid', receipt }) })
+      expect(receiptKind(wrapper)).toBe(kind)
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"] h2').text()).toBe(title)
+      expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain(ANSWER)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
+      expect(subscribed('getAssessmentState')).toBe(false)
+      expect(subscribed('getPostSealTeaching')).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-retry-score"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
+    })
+
+    it('names a source change on a closed receipt only when the server withheld the body for evidence', async () => {
+      const bySource = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'invalid', receipt: serverCheckReceipt({ reference: 'r', state: 'closed', bodyReason: 'evidence_unavailable' }) }) })
+      expect(bySource.text()).toContain('A source this question relied on changed')
+      expect(bySource.find('[data-testid="learn-canvas-check-saved-answer"]').exists()).toBe(false)
+      const other = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'invalid', receipt: serverCheckReceipt({ reference: 'r2', state: 'closed', answer: ANSWER }) }) })
+      expect(other.text()).not.toContain('A source this question relied on changed')
+    })
+
+    it('follows the check state when a saved projection still carries its assessment', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = null
+      const receipt = serverCheckReceipt({ reference: 'check_ref_1', state: 'saved_scoring', answer: ANSWER, confidence: 3 })
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'scoring_pending', receipt }) })
+      expect(receiptKind(wrapper)).toBe('saved')
+      expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain(ANSWER)
+      expect(subscribed('getAssessmentState')).toBe(true)
+    })
+
+    it('drops the locally held answer once the server withdraws the saved body', async () => {
+      const wrapper = await mountCheck()
+      await fillAnswer(wrapper)
+      await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
+      await vi.waitFor(() => expect(accept).toHaveBeenCalledOnce())
+      stateData.value = sealed('scoring_pending')
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain(ANSWER)
+      workData.value = workState({ body: { bodyAvailability: 'purged', reasonCode: 'evidence_unavailable', purgedAt: 1 } })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-saved-answer"]').exists()).toBe(false)
+      expect(wrapper.html()).not.toContain(ANSWER)
+      workData.value = { version: LEARN_V2_PUBLIC_API_VERSION, status: 'unavailable', reasonCodes: ['evidence_unavailable'] }
+      await flushPromises()
+      expect(wrapper.html()).not.toContain(ANSWER)
+    })
+
+    it('keeps a practice draft across a remount and an ambiguous failure, then clears it once accepted', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const practiceKey = `learn-response:owner_1:thread_1:practice:${OPPORTUNITY}`
+      const first = await mountCheck()
+      await first.get('[data-testid="learn-canvas-check-practice-answer"]').setValue('Habitat sets the range.')
+      await nextTick()
+      expect(JSON.parse(sessionStorage.getItem(practiceKey)!).response).toBe('Habitat sets the range.')
+      first.unmount()
+      wrappers.splice(wrappers.indexOf(first), 1)
+      const second = await mountCheck()
+      await nextTick()
+      expect((second.get('[data-testid="learn-canvas-check-practice-answer"]').element as HTMLTextAreaElement).value).toBe('Habitat sets the range.')
+      acceptPractice.mockRejectedValueOnce(new Error('network'))
+      await second.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
+      await vi.waitFor(() => expect(second.find('[data-testid="learn-canvas-check-practice-error"]').exists()).toBe(true))
+      expect(JSON.parse(sessionStorage.getItem(practiceKey)!).response).toBe('Habitat sets the range.')
+      await second.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
+      await vi.waitFor(() => expect(second.find('[data-testid="learn-canvas-check-practice-saved"]').exists()).toBe(true))
+      expect(sessionStorage.getItem(practiceKey)).toBeNull()
+    })
+
+    it('states no teaching age the server did not give', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const wrapper = await mountCheck()
+      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on an earlier topic')
+      expect(wrapper.text()).not.toMatch(/week|month|yesterday|days? ago/i)
     })
   })
 

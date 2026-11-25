@@ -5,17 +5,19 @@ import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { learnVoidRoute } from '~/utils/learn-void-routes'
-import type { CanvasCheckBinding } from '~/composables/useCanvasCheck'
+import { canvasCheckBinding } from '~/composables/useCanvasCheck'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 const route = useRoute()
 const router = useRouter()
 const threadId = computed(() => String(route.params.threadId))
+const checkReference = computed(() => LEARN_MEASUREMENT_CAPABILITIES.responses && typeof route.query.check === 'string' && route.query.check ? route.query.check : null)
 const { allowed, checkingAccess, fallbackRoute } = useLearnAdaptiveAccess()
 const threadQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getThread, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
 const canvasQuery = import.meta.client
-  ? useTeachingQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  ? useTeachingQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => checkReference.value ? { threadId: threadId.value as never, checkReference: checkReference.value } : { threadId: threadId.value as never }), { enabled: allowed })
   : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const diagnosticQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptiveRecovery.getDiagnosticCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
@@ -395,8 +397,9 @@ function retryMemoryCommand() { if (pendingMemoryCommand.value) void runMemoryCo
 const canvas = computed(() => {
   const value = canvasQuery.data.value
   const current = thread.value
+  const addressed = Boolean(checkReference.value) && (value as { checkReceipt?: { reference?: unknown } } | null)?.checkReceipt?.reference === checkReference.value
   return current?.thread.authorityKind === 'v2_mission' && value?.thread.id === current.thread.id
-    && value.ownerId === ownerId.value && value.activity.id === current.currentActivity?.id ? value : null
+    && value.ownerId === ownerId.value && (addressed || value.activity.id === current.currentActivity?.id) ? value : null
 })
 const diagnostic = computed(() => {
   const value = diagnosticQuery.data.value
@@ -426,10 +429,10 @@ const detailFailure = computed(() => detailQueries.value.map(query => query.fail
 function retryDetail() { for (const query of detailQueries.value) if (query.failure.value) void query.refresh() }
 const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
-const checkBinding = computed(() => (canvas.value as { assessmentCheck?: CanvasCheckBinding | null } | null)?.assessmentCheck ?? null)
+const checkBinding = computed(() => canvasCheckBinding(canvas.value as never))
 const checkBound = computed(() => Boolean(checkBinding.value))
 const { locked: checkLocked, open: checkPhaseOpen } = useCanvasCheckLock(() => checkBinding.value)
-const toolsHiddenForCheck = computed(() => checkBound.value || (thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
+const toolsHiddenForCheck = computed(() => checkBound.value || (LEARN_MEASUREMENT_CAPABILITIES.responses && thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
 const selectedHistory = computed(() => checkBound.value ? null : thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => toolsHiddenForCheck.value || !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
@@ -492,10 +495,10 @@ function leave() { void router.push(safeDestination.value) }
       <p role="status">This Void is unavailable.</p>
       <NuxtLink :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ safeDestinationLabel }}</NuxtLink>
     </section>
-    <div v-else-if="thread" :class="['mx-auto w-full max-w-3xl px-4 sm:px-6', checkBound ? 'py-6 sm:py-8' : 'py-8']" data-testid="learn-adaptive-thread-shell">
+    <div v-else-if="thread" :class="checkBound ? 'mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8' : 'mx-auto w-full max-w-3xl px-4 py-8 sm:px-6'" data-testid="learn-adaptive-thread-shell">
       <header>
         <p :class="checkBound ? 'font-inter text-xs font-medium text-muted-foreground' : 'text-xs font-medium uppercase tracking-wide text-primary'">{{ checkOpen ? 'Check' : 'Void' }} · {{ thread.thread.intent }}</p>
-        <h1 :class="['mt-2 font-dm-sans font-bold', checkBound ? 'text-2xl text-foreground sm:text-3xl' : 'text-3xl']">{{ thread.thread.outcome }}</h1>
+        <h1 :class="checkBound ? 'mt-2 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl' : 'mt-2 font-dm-sans text-3xl font-bold'">{{ thread.thread.outcome }}</h1>
         <p v-if="!toolsHiddenForCheck && thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
         <p v-if="!toolsHiddenForCheck && thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
         <p v-if="!toolsHiddenForCheck" class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>

@@ -4,13 +4,29 @@ import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAda
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
+import { learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '~~/shared/learn-v2-measurement-storage-manifest'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
 const PUBLIC_API_VERSION: typeof LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-api.v1'
 const MAX_ANSWER_LENGTH = 12_000
 const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
-export type CanvasCheckBinding = { assessmentOpportunityId: string }
+export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null }
+type CanvasCheckProjection = { assessment?: { assessmentOpportunityId: string } | null, checkReceipt?: unknown } | null | undefined
+
+export function canvasCheckBinding(canvas: CanvasCheckProjection): CanvasCheckBinding | null {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !canvas) return null
+  const parsed = canvas.checkReceipt === undefined ? null : learnCanvasCheckReceiptSchema.safeParse(canvas.checkReceipt)
+  if (parsed && !parsed.success) return null
+  const assessmentOpportunityId = canvas.assessment?.assessmentOpportunityId ?? null
+  const receipt = parsed?.data ?? null
+  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt } : null
+}
+
+export function canvasCheckIdentity(binding: CanvasCheckBinding) {
+  return binding.assessmentOpportunityId ?? `receipt:${binding.receipt?.reference ?? ''}`
+}
 export type CanvasCheckHelpKind = 'hint' | 'worked_example'
 export type CanvasCheckReceiptKind = 'saved' | 'scoring_failed' | 'unconfirmed' | 'invalid' | 'passed' | 'not_yet'
 export type CanvasCheckView =
@@ -30,8 +46,16 @@ function commandKey(prefix: string) {
   return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
-function bodyText(work: AvailableWork | null) {
+function bodyText(work: { body: AvailableWork['body'] } | null) {
   return work?.body.bodyAvailability === 'available' && work.body.payload.kind === 'text' ? work.body.payload.text : null
+}
+
+function receiptOnlyKind(receipt: LearnCanvasCheckReceipt): CanvasCheckReceiptKind {
+  if (receipt.state === 'closed') return 'invalid'
+  if (receipt.state === 'saved_scoring') return 'saved'
+  if (receipt.state === 'result_ready' && receipt.result.feedbackCodes.includes('pass')) return 'passed'
+  if (receipt.state === 'result_ready' && receipt.result.feedbackCodes.includes('needs_review')) return 'not_yet'
+  return 'unconfirmed'
 }
 
 function scoredReceipt(state: AvailableState, work: AvailableWork | null): CanvasCheckReceiptKind {
@@ -55,8 +79,8 @@ export function useCanvasCheckLock(binding: () => CanvasCheckBinding | null | un
     const opportunityId = binding()?.assessmentOpportunityId
     return import.meta.client && opportunityId ? { version: PUBLIC_API_VERSION, assessmentOpportunityId: opportunityId as never } : 'skip'
   })
-  const state = computed(() => binding() ? stateQuery.data.value : null)
-  const locked = computed(() => Boolean(binding()) && (state.value?.status !== 'available' || PRE_SEAL_PHASES.includes(state.value.phase)))
+  const state = computed(() => binding()?.assessmentOpportunityId ? stateQuery.data.value : null)
+  const locked = computed(() => Boolean(binding()?.assessmentOpportunityId) && (state.value?.status !== 'available' || PRE_SEAL_PHASES.includes(state.value.phase)))
   const open = computed(() => state.value?.status === 'available' && state.value.phase === 'test_open' && state.value.capabilities.canSubmit)
   return { locked, open }
 }
@@ -64,24 +88,31 @@ export function useCanvasCheckLock(binding: () => CanvasCheckBinding | null | un
 export function useCanvasCheck(options: {
   ownerId: string
   threadId: string
-  binding: CanvasCheckBinding
+  binding: () => CanvasCheckBinding
   isOnline: Readonly<Ref<boolean>>
 }) {
-  const assessmentOpportunityId = options.binding.assessmentOpportunityId as never
+  const opportunityId = options.binding().assessmentOpportunityId
+  const assessmentOpportunityId = opportunityId as never
+  const serverReceipt = computed(() => options.binding().receipt)
   const reference = { version: PUBLIC_API_VERSION, assessmentOpportunityId }
-  const stateQuery = useSkippableConvexQuery(checkApi.getAssessmentState, () => import.meta.client ? reference : 'skip')
+  const stateQuery = useSkippableConvexQuery(checkApi.getAssessmentState, () => import.meta.client && opportunityId ? reference : 'skip')
   const state = computed(() => stateQuery.data.value)
   const available = computed(() => state.value?.status === 'available' ? state.value : null)
 
   const local = shallowRef<LocalReceipt | null>(null)
-  const submissionId = computed(() => available.value?.submissionId ?? local.value?.submissionId ?? null)
-  const deliveryQuery = useSkippableConvexQuery(checkApi.getAssessment, () => import.meta.client && available.value?.phase === 'test_open' ? reference : 'skip')
-  const workQuery = useSkippableConvexQuery(checkApi.getResponseState, () => import.meta.client && submissionId.value
+  const submissionId = computed(() => available.value?.submissionId ?? serverReceipt.value?.submissionId ?? local.value?.submissionId ?? null)
+  const deliveryQuery = useSkippableConvexQuery(checkApi.getAssessment, () => import.meta.client && opportunityId && available.value?.phase === 'test_open' ? reference : 'skip')
+  const workQuery = useSkippableConvexQuery(checkApi.getResponseState, () => import.meta.client && opportunityId && submissionId.value
     ? { version: PUBLIC_API_VERSION, target: { assessmentOpportunityId } }
     : 'skip')
   const work = computed(() => {
     const value = workQuery.data.value
     return value?.status === 'available' ? value.work : null
+  })
+  const canonicalAnswer = computed(() => {
+    if (workQuery.data.value) return { text: bodyText(work.value) }
+    if (serverReceipt.value) return { text: bodyText(serverReceipt.value) }
+    return null
   })
 
   const grantMutation = import.meta.client ? useConvexMutation(checkApi.grantAssessmentDelivery) : { mutate: async () => undefined }
@@ -107,14 +138,15 @@ export function useCanvasCheck(options: {
   let scoreRequestedFor: string | null = null
 
   const view = computed<CanvasCheckView>(() => {
+    const receipt = (kind: CanvasCheckReceiptKind): CanvasCheckView => ({
+      kind: 'receipt', receipt: kind,
+      answer: canonicalAnswer.value ? canonicalAnswer.value.text : local.value?.answer ?? null,
+      acceptedAt: work.value?.acceptedAt ?? serverReceipt.value?.acceptedAt ?? local.value?.acceptedAt ?? null,
+    })
+    if (!opportunityId) return serverReceipt.value ? receipt(receiptOnlyKind(serverReceipt.value)) : { kind: 'unavailable' }
     if (state.value === null) return { kind: 'loading' }
     if (!available.value) return { kind: 'unavailable' }
     const { phase, capabilities } = available.value
-    const receipt = (kind: CanvasCheckReceiptKind): CanvasCheckView => ({
-      kind: 'receipt', receipt: kind,
-      answer: bodyText(work.value) ?? local.value?.answer ?? null,
-      acceptedAt: work.value?.acceptedAt ?? local.value?.acceptedAt ?? null,
-    })
     if (local.value && (phase === 'test_open' || phase === 'ready')) return receipt('saved')
     switch (phase) {
       case 'ready': return capabilities.canDeliver ? { kind: 'entry' } : { kind: 'unavailable' }
@@ -138,17 +170,17 @@ export function useCanvasCheck(options: {
   })
 
   const sealed = computed(() => view.value.kind === 'receipt')
-  const draftKey = `learn-response:${options.ownerId}:${options.threadId}:check:${options.binding.assessmentOpportunityId}`
+  const draftKey = opportunityId ? `learn-response:${options.ownerId}:${options.threadId}:check:${opportunityId}` : null
   const { restored } = useAdaptiveResponseDraft(draftKey, answer, sealed, confidence)
 
   const canTeachSeparateCase = computed(() => available.value?.capabilities.canTeachSeparateCase === true)
   const invalidBySource = computed(() => {
     const current = work.value
-    if (!current) return false
+    if (!current) return serverReceipt.value?.body.bodyAvailability === 'unavailable' && serverReceipt.value.body.reasonCode === 'evidence_unavailable'
     return current.body.bodyAvailability !== 'available'
       || current.validitySnapshot.exclusionReasons.some(reason => reason === 'evidence_unavailable' || reason === 'pins_mismatch')
   })
-  const hasSealedReceipt = computed(() => view.value.kind === 'receipt' && submissionId.value !== null)
+  const hasSealedReceipt = computed(() => Boolean(opportunityId) && view.value.kind === 'receipt' && submissionId.value !== null)
   const teachingReference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId }
   const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value ? teachingReference : 'skip')
   const teaching = computed(() => {
@@ -288,6 +320,7 @@ export function useCanvasCheck(options: {
   const practiceBusy = ref(false)
   const practiceFailed = ref(false)
   const practiceSaved = ref(false)
+  useAdaptiveResponseDraft(opportunityId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${opportunityId}` : null, practiceAnswer, practiceSaved)
   const assistance = shallowRef<PracticeHelpContent | null>(null)
   const assistanceDenied = ref(false)
   const assistanceLimit = ref(false)

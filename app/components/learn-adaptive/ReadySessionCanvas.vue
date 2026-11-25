@@ -3,7 +3,7 @@ import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import { useAdaptiveComparisonDraft } from '~/composables/useAdaptiveComparisonDraft'
-import type { CanvasCheckBinding } from '~/composables/useCanvasCheck'
+import { canvasCheckBinding, canvasCheckIdentity } from '~/composables/useCanvasCheck'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 import { adaptiveActivityFallbackForReason, type AdaptiveActivityValidationReason, type ValidatedAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
 import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
@@ -28,7 +28,8 @@ type Canvas = {
   recoveryEvidenceIssue?: 'conflict' | 'gap' | null
   recovery?: { title: string, body: string, action: string } | null
   savedResponse?: { response: string, confidence: number } | null
-  assessmentCheck?: CanvasCheckBinding | null
+  assessment?: { assessmentOpportunityId: string } | null
+  checkReceipt?: unknown
 }
 
 type ReadyPrimitive = Extract<ValidatedAdaptiveActivityPrimitive, { type: 'cited_explanation' | 'worked_example' | 'source_comparison' | 'independent_application' }>
@@ -51,7 +52,8 @@ function readyPrimitiveForCanvas(primitive: ValidatedAdaptiveActivityPrimitive):
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
 const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElement] }>()
 const { isOnline } = useOnlineStatus()
-const checkMode = computed(() => Boolean(props.canvas.assessmentCheck))
+const checkBinding = computed(() => canvasCheckBinding(props.canvas))
+const checkMode = computed(() => Boolean(checkBinding.value))
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
 const stageMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.submitCanvasResponse) : { mutate: async () => ({}) }
@@ -459,7 +461,7 @@ async function submitWithValidation() {
 </script>
 
 <template>
-  <LearnAdaptiveCanvasCheck v-if="canvas.assessmentCheck" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="canvas.assessmentCheck" :show-header="showHeader" :active="active" @leave="emit('leave')" @inspect-evidence="emit('inspectEvidence', $event)" />
+  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="canvasCheckIdentity(checkBinding)" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @inspect-evidence="emit('inspectEvidence', $event)" />
   <section v-else class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
