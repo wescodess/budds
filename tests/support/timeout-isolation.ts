@@ -125,14 +125,15 @@ export const timeoutIsolation = {
     if (!scope || !Reflect.get(wrapper, '__app')) return wrapper
     const original = wrapper.unmount.bind(wrapper)
     let mounted = true
-    wrapper.unmount = () => {
+    const unmount = () => {
       if (!mounted) return
       mounted = false
-      scope.wrappers.delete(wrapper.unmount)
+      scope.wrappers.delete(unmount)
       original()
     }
-    scope.wrappers.add(wrapper.unmount)
-    if (!active(scope)) wrapper.unmount()
+    wrapper.unmount = unmount
+    scope.wrappers.add(unmount)
+    if (!active(scope)) unmount()
     return wrapper
   },
   before<T extends (...args: never[]) => unknown>(callback: T): T {
@@ -202,6 +203,7 @@ export function createTimeoutScope(signal?: AbortSignal) {
         for (const key of Object.keys(process.env)) if (!(key in scope.environmentDescriptors)) Reflect.deleteProperty(process.env, key)
         Object.defineProperties(process.env, scope.environmentDescriptors)
       } catch (error) { errors.push(error) }
+      scope.wrappers.clear()
       scope.undo.clear()
       scope.properties.clear()
       for (const key of Reflect.ownKeys(scope.environmentDescriptors)) Reflect.deleteProperty(scope.environmentDescriptors, key)
@@ -212,7 +214,16 @@ export function createTimeoutScope(signal?: AbortSignal) {
   }
 }
 
+const nativeKey = Symbol.for('budds.test.nativeVi')
+const nativeVi: typeof vi = Reflect.get(vi, nativeKey) ?? { ...vi }
+if (!Reflect.has(vi, nativeKey)) Object.defineProperty(vi, nativeKey, { value: nativeVi })
+const mocksKey = Symbol.for('budds.test.guardedMocks')
+const guardedMocks: WeakMap<object, object> = Reflect.get(vi, mocksKey) ?? new WeakMap()
+if (!Reflect.has(vi, mocksKey)) Object.defineProperty(vi, mocksKey, { value: guardedMocks })
+
 function guardMock<T extends (...args: never[]) => unknown>(mock: T): T {
+  const previous = guardedMocks.get(mock)
+  if (previous) return previous as T
   const proxy: T = new Proxy(mock, {
     apply(target, receiver, args) {
       if (!active()) return undefined
@@ -228,13 +239,15 @@ function guardMock<T extends (...args: never[]) => unknown>(mock: T): T {
       }
     },
   })
+  guardedMocks.set(mock, proxy)
+  guardedMocks.set(proxy, proxy)
   return proxy
 }
 
-vi.fn = new Proxy(vi.fn, {
+vi.fn = new Proxy(nativeVi.fn, {
   apply(target, receiver, args) { return guardMock(Reflect.apply(target, receiver, args)) },
 })
-vi.spyOn = new Proxy(vi.spyOn, {
+vi.spyOn = new Proxy(nativeVi.spyOn, {
   apply(target, receiver, args) {
     if (!active()) return undefined
     const mock = Reflect.apply(target, receiver, args)
@@ -267,7 +280,7 @@ function restoreStubs(scope: Scope, kind?: 'env' | 'globals') {
 }
 
 for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals', 'restoreAllMocks', 'resetAllMocks', 'clearAllMocks', 'useFakeTimers', 'useRealTimers', 'setSystemTime', 'runAllTimers', 'runAllTimersAsync', 'advanceTimersByTime', 'advanceTimersByTimeAsync', 'advanceTimersToNextTimer', 'advanceTimersToNextTimerAsync', 'runOnlyPendingTimers', 'runOnlyPendingTimersAsync', 'clearAllTimers'] as const) {
-  const original = vi[name]
+  const original = nativeVi[name]
   Object.defineProperty(vi, name, { configurable: true, writable: true, value: (...args: unknown[]) => {
     if (!active()) return vi
     const scope = current()
