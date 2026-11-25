@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 
 mockNuxtImport('useConvexQuery', () => {
@@ -14,6 +14,10 @@ mockNuxtImport('useConvexMutation', () => {
 })
 
 const componentPath = ['~', 'components', 'learn', 'SectionBlockRenderer.vue'].join('/')
+
+beforeAll(async () => {
+  await import(componentPath)
+})
 
 const textBlock = { type: 'text' as const, content: 'Hello world', order: 0 }
 const quizBlock = { type: 'quiz' as const, entityId: 'quiz_123', entityType: 'quiz' as const, order: 1 }
