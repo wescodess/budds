@@ -9,6 +9,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasLearnV2Access } from './learnV2Access'
 import { requireActiveBlueprint } from './learnV2BlueprintAuthority'
 import { normalizedInstructionalCaseFingerprints } from './learnV2ArtifactLineage'
+import { learnCasePromptsMatch } from '../../shared/learn-v2-case-prompt'
 import { LEARN_ARTIFACT_CASE_IDENTITY_VERSION } from '../../shared/learn-v2-artifact-lineage'
 import {
   LEARN_V2_MEASUREMENT_VERSION, learnMeasurementEquivalenceSchema, learnMeasurementResponseSpecSchema,
@@ -490,7 +491,10 @@ export async function validatedSessionMeasurement(ctx: QueryCtx | MutationCtx, u
   return { kind: 'validated_item' as const, assessmentOpportunityId: opportunity._id, itemPins: pins }
 }
 
-export async function publishInstructionalSessionCases(ctx: MutationCtx, userId: string, scope: Capability | null, candidate: { blocks: Array<{ content: string }>, claims: Array<{ claim: string }>, assessmentRubric: unknown }) {
+export async function publishInstructionalSessionCases(ctx: MutationCtx, userId: string, scope: Capability | null, candidate: { blocks: Array<{ kind?: string, content: string }>, claims: Array<{ claim: string }>, assessmentRubric: unknown }) {
+  const practice = candidate.blocks.filter(block => block.kind === 'faded_example')
+  const applications = candidate.blocks.filter(block => block.kind === 'independent_application')
+  if (practice.some(block => applications.some(application => learnCasePromptsMatch(block.content, application.content)))) fail('instructional_case_overlap')
   const catalogs = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).take(2)
   if (catalogs.length > 1) fail('comparison_coverage_unknown')
   const catalog = catalogs[0]

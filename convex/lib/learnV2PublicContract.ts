@@ -16,7 +16,7 @@ import {
 } from '../../shared/learn-v2-delayed-check'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_PUBLIC_FEEDBACK_CODES,
-  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS,
+  LEARN_V2_POST_SEAL_TEACHING_VERSION, LEARN_V2_POST_SEAL_TEACHING_REASONS, LEARN_V2_PRACTICE_HELP_REASONS,
   learnPostSealTeachingReferenceSchema, learnAuthorizePracticeAssistanceSchema,
   type learnPostSealTeachingSchema, type learnPracticeAssistanceAuthorizationSchema,
   type learnAttemptHistorySchema, type learnDeliveredAssessmentSchema,
@@ -222,15 +222,21 @@ export const authorizePracticeAssistanceArgs = {
 }
 export const authorizePracticeAssistanceSchema = learnAuthorizePracticeAssistanceSchema
 const teachingCitations = v.array(v.object({ sourceRef: v.string(), label: v.string() }))
+const practiceHelpState = v.union(v.object({ status: literals(['available', 'delivered']) }),
+  v.object({ status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_PRACTICE_HELP_REASONS) }))
 export const postSealTeachingValidator = v.union(
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('available'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
     feedback: v.union(v.object({ tier: literals(['T0', 'T1']), text: v.string(), citations: teachingCitations }), v.null()),
     lesson: v.union(v.object({ tier: literals(['T0', 'T1']), paragraphs: v.array(v.string()), citations: teachingCitations }), v.null()),
-    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), tier: literals(['T0', 'T2']), prompt: v.string() }), v.null()) }),
+    practice: v.union(v.object({ responseSlotId: v.id('learnResponseSlots'), revision: v.number(), tier: literals(['T0', 'T2']), prompt: v.string() }), v.null()),
+    availability: v.object({ feedback: literals(['scoring_pending', 'feedback_publishing', 'available', 'unavailable']),
+      practice: v.union(v.object({ status: literals(['not_opened', 'available']) }),
+        v.object({ status: v.literal('unavailable'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) })),
+      help: v.union(v.object({ remaining: v.number(), hint: practiceHelpState, worked_example: practiceHelpState }), v.null()) }) }),
 ) satisfies Validator<z.infer<typeof learnPostSealTeachingSchema>, 'required', string>
 export const practiceAssistanceAuthorizationValidator = v.union(
-  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('denied'), reasonCode: literals(LEARN_V2_PRACTICE_HELP_REASONS) }),
   v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), status: v.literal('authorized'), assessmentOpportunityId: v.id('learnAssessmentOpportunities'),
     target: v.object({ responseSlotId: v.id('learnResponseSlots') }), revision: v.number(), authorizationId: v.id('learnAssessmentExposures'), deliveredAt: v.number(),
     content: v.union(

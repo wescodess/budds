@@ -198,7 +198,8 @@ export async function measurementItemReason(ctx: ReadCtx, userId: string, pins: 
 
 export async function measurementCaseExposed(ctx: ReadCtx, userId: string, caseId: Id<'learnAssessmentCases'>, opportunityId?: Id<'learnAssessmentOpportunities'>) {
   const exposures = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_caseId_and_serverTime', q => q.eq('userId', userId).eq('caseId', caseId)).take(65)
-  return exposures.length > 64 || exposures.some(row => row.status !== 'requested_denied' && row.assessmentOpportunityId !== opportunityId)
+  return exposures.length > 64 || exposures.some(row => row.status !== 'requested_denied'
+    && (opportunityId === undefined || row.assessmentOpportunityId !== opportunityId))
 }
 
 const PRIOR_TEACHING_SESSION_LIMIT = 128

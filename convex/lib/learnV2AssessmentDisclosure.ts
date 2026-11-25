@@ -9,7 +9,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
-import { legacyResponseAvailable, retainedResponsePayload } from './learnV2ResponsePrivacy'
+import { canonicalPrivacyJson, legacyResponseAvailable, retainedResponsePayload } from './learnV2ResponsePrivacy'
 import {
   LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAssessmentDisclosureContextSchema,
   projectAttemptHistory, projectDeliveredAssessment, projectObjectiveSummary, type LearnAssessmentDisclosureContext,
@@ -171,7 +171,44 @@ async function sourceAvailable(ctx: ReadCtx, userId: string, id: Id<'learnSource
     && source.conflictStatus === 'clear' && await canReadSourceEvidence(ctx, source))
 }
 
-export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>): Promise<LearnAssessmentDisclosureContext | null> {
+async function postSealSessionRevisionMatches(ctx: ReadCtx, row: Doc<'learnAssessmentOpportunities'>,
+  session: Doc<'studySessions'>, submission: Doc<'learnResponses'> | null) {
+  const pins = row.contextPins
+  if (pins.kind !== 'session') return false
+  if (!submission) return session.revision === pins.sessionRevision
+  if (submission.userId !== row.userId || submission.scopeKind !== 'v2' || !('assessmentOpportunityId' in submission)
+    || submission.assessmentOpportunityId !== row._id || submission.contextPins.kind !== 'session') return false
+  const accepted = submission.contextPins
+  if (canonicalPrivacyJson({ ...pins, sessionRevision: accepted.sessionRevision }) !== canonicalPrivacyJson(accepted)) return false
+  if (session.revision === accepted.sessionRevision && pins.sessionRevision === accepted.sessionRevision) return true
+  if (session.revision !== accepted.sessionRevision + 1 || session.status !== 'completed'
+    || !['independent_application', 'retained_transfer'].includes(row.purpose.kind) || row.assessmentPins.kind !== 'session_application'
+    || session.assessmentOpportunityId !== row._id || session.assessmentPurpose !== row.purpose.kind
+    || session.startedSessionContentId !== accepted.sessionContentId || session.startedSessionContentRevision !== accepted.contentRevision
+    || pins.sessionRevision !== accepted.sessionRevision && !(accepted.canvas && pins.sessionRevision === session.revision)
+    || (session.assistanceRevision ?? 0) !== submission.assistanceSnapshot.assistanceRevision
+    || (session.substantiveHintUsedAt ?? null) !== submission.assistanceSnapshot.substantiveHintUsedAt
+    || (session.answerRevealedAt ?? null) !== submission.assistanceSnapshot.answerRevealedAt
+    || !row.authoritativeAttemptId || !row.scoringJobId) return false
+  const attempt = await ctx.db.get(row.authoritativeAttemptId)
+  if (!attempt || attempt.userId !== row.userId || attempt.submissionId !== submission._id || attempt.assessmentOpportunityId !== row._id
+    || attempt.kind !== row.purpose.kind || attempt.studySessionId !== accepted.studySessionId || attempt.sessionContentId !== accepted.sessionContentId
+    || attempt.studyPlanRevisionId !== accepted.studyPlanRevisionId || !attempt.scoringExecutionId
+    || attempt.masteryTransitionVersion !== 'learn-v2.mastery-transition.v1' || !attempt.masteryTransitionReason
+    || attempt.acceptedAt !== submission.acceptedAt || attempt.scoreCommittedAt === undefined
+    || attempt.scoreCommittedAt < submission.acceptedAt || attempt.scoreCommittedAt > Date.now()) return false
+  const [execution, job] = await Promise.all([ctx.db.get(attempt.scoringExecutionId), ctx.db.get(row.scoringJobId)])
+  return Boolean(execution && job && execution.userId === row.userId && job.userId === row.userId
+    && execution.assessmentOpportunityId === row._id && execution.submissionId === submission._id
+    && execution.authoritativeAttemptId === attempt._id && execution.committedAt === attempt.scoreCommittedAt
+    && execution.jobId === job._id && execution.responseDigest === submission.payloadDigest
+    && job.type === 'sealed_response_scoring' && job.status === 'succeeded'
+    && job.assessmentOpportunityId === row._id && job.submissionId === submission._id && job.requestFingerprint === submission.payloadDigest
+    && canonicalPrivacyJson(attempt.assistanceSnapshot ?? null) === canonicalPrivacyJson(submission.assistanceSnapshot)
+    && canonicalPrivacyJson(attempt.validitySnapshot ?? null) === canonicalPrivacyJson(submission.validitySnapshot))
+}
+
+export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmentOpportunityId: Id<'learnAssessmentOpportunities'>, postSeal = false): Promise<LearnAssessmentDisclosureContext | null> {
   const userId = await requireAuth(ctx)
   if (LEARN_MEASUREMENT_CAPABILITIES.responses) ctx = responsePrivacyReadContext(ctx, userId)
   const row = await ctx.db.get(assessmentOpportunityId)
@@ -189,9 +226,13 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   ])
   const owned = voidRow?.userId === userId && blueprint?.userId === userId && objective?.userId === userId
     && blueprint.learningVoidId === voidRow._id && objective.blueprintRevisionId === blueprint._id
+  const sealedCancellation = postSeal && row.phase === 'cancelled' && submission?.userId === userId && submission.scopeKind === 'v2'
+    && 'assessmentOpportunityId' in submission && submission.assessmentOpportunityId === row._id
+    && row.deliveryGrantId !== undefined && submission.deliveryGrantId === row.deliveryGrantId
   let accessAvailable = Boolean(owned && (await ctx.db.get(voidRow!.folderId))?.userId === userId)
   let pinsMatch = Boolean(owned && blueprint!.recordRevision === row.blueprintRecordRevision
-    && objective!.depth === row.depth && !['invalid', 'cancelled'].includes(row.phase) && row.invalidatedAt === undefined)
+    && objective!.depth === row.depth && (row.phase !== 'cancelled' || sealedCancellation)
+    && (row.phase !== 'invalid' || postSeal && row.submissionId !== undefined) && row.invalidatedAt === undefined)
   let evidenceAvailable = row.evidenceStatus === 'available' && row.invalidatedAt === undefined
   const contextPins = row.contextPins
   if (contextPins.kind !== 'calibration') {
@@ -210,7 +251,7 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
         && content.blueprintRevisionId === row.blueprintRevisionId && content.objectiveId === row.objectiveId
         && content.revision === contextPins.contentRevision && content.inputDigest === contextPins.contentInputDigest
         && content.generatorVersion === contextPins.generatorVersion
-        && session.revision === contextPins.sessionRevision)
+        && (postSeal ? await postSealSessionRevisionMatches(ctx, row, session, submission) : session.revision === contextPins.sessionRevision))
       if (contextPins.canvas) {
         const canvas = contextPins.canvas
         const [thread, activity] = await Promise.all([ctx.db.get(canvas.threadId), ctx.db.get(canvas.activityId)])
@@ -296,7 +337,7 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   const parsed = learnAssessmentDisclosureContextSchema.safeParse({
     version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, owned, accessAvailable, evidenceAvailable, pinsMatch,
     lifecycle: { version: LEARN_V2_DELAYED_CHECK_VERSION, assessmentOpportunityId: row._id, revision: row.revision,
-      purpose: purpose.data, phase: row.phase, deliveryGrantId: row.deliveryGrantId ?? null,
+      purpose: purpose.data, phase: sealedCancellation ? 'invalid' : row.phase, deliveryGrantId: row.deliveryGrantId ?? null,
       submissionId: row.submissionId ?? null, authoritativeAttemptId: row.authoritativeAttemptId ?? null,
       acceptedAt: submission?.acceptedAt ?? null, checkSequence: row.checkSequence },
     grant: grantValid ? { policyVersion: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, deliveryGrantId: exposure._id,

@@ -29,6 +29,8 @@ export const learnV2TodayMeasurementApi = {
 export const learnV2CanvasMeasurementApi = {
   ...canonical,
   getPostSealTeaching: api.learnV2Assessments.getPostSealTeaching,
+  openPostSealPractice: api.learnV2PostSealTeaching.openPractice,
+  publishPostSealFeedback: api.learnV2PostSealTeaching.publishFeedback,
   authorizePracticeAssistance: api.learnV2Assistance.authorizePracticeAssistance,
   compatibility: { stageResponse: api.learnAdaptiveCanvas.submitCanvasResponse, submitResponse: api.learnAdaptive.submitResponse },
 } as const
