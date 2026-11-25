@@ -18,13 +18,20 @@ normalized dependencies and prompt delivery exposure together. Retries preserve
 that slot and case. Unsupported, same-case, sibling, reserved or unknown input
 remains unavailable. No candidate content is generated here.
 
-Practice uses the same normalized prompt identity as the sealed check, alongside
-its registered artifact lineage. Equal prompts, case/whitespace variants and
-high token overlap are rejected before comparison. Preparation also requires a
-complete passing comparison against that exact check, including an ordinary
-check outside the reserved corpus. The immutable binding seals this pair proof;
-reads verify it without invoking a validator. Instructional publication rejects
-overlapping practice and application prompts before writing content.
+Every post-seal artifact uses one separation helper with the same normalized
+prompt identity as the sealed check and its registered source lineage. It checks
+the actual practice, help, feedback or lesson payload, including saved content
+on reads and replay. First delivery requires a complete passing comparison
+against that exact check, including ordinary checks outside the reserved corpus.
+The publication digest seals the artifact kind, actual payload, identities and
+comparison decision. Reads and replay verify that proof and current authority
+without invoking a validator. Earlier publications lacking this complete proof
+remain unavailable under the immutability rule.
+
+Publication rejects only equal practice/application prompts after canonical
+Unicode, case and whitespace normalization. Operators and numbers remain part
+of identity. Fuzzy similarity does not reject publication or establish case
+separation; delivery requires the complete semantic decision above.
 
 `commitSealedMasteryAttempt` stamps the source with the canonical attempt in its
 score transaction. A missing source becomes pending with zero dependencies and
@@ -129,6 +136,8 @@ also rejects missing transition evidence, an unconsumed execution and changed
 assistance after acceptance, without changing frozen acceptance records.
 It also covers colliding historical publications, sibling and unknown lineage,
 incomplete pair decisions, separate-case retries and canonical practice exposures.
+Every help kind, feedback and lesson has collision and replay coverage. Distinct
+atlas countries, arithmetic operators and numbers retain publication coverage.
 The measurement suite exercises enrollment and replacement selection with
 persisted practice exposures that have no assessment opportunity.
 

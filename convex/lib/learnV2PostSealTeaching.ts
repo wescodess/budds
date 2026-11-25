@@ -6,7 +6,7 @@ import { resolveAssessmentDisclosureContext, canReadSourceEvidence } from './lea
 import { relevantOpenLearnCheck } from './learnV2HelpAdmission'
 import { normalizedInstructionalCaseFingerprints, resolveArtifactLineageForOwner } from './learnV2ArtifactLineage'
 import { measurementItemAdapters } from './learnV2MeasurementItems'
-import { learnCasePromptsOverlap } from '../../shared/learn-v2-case-prompt'
+import { learnCasePromptsMatch } from '../../shared/learn-v2-case-prompt'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { privacyDigest, canonicalPrivacyJson, sourceBodyAvailable } from './learnV2ResponsePrivacy'
 import { documentHasCurrentRevision } from './learnV2BackingSource'
@@ -36,7 +36,7 @@ type Reason = Parameters<typeof unavailableLearnPostSealTeaching>[0]
 type SourceTarget = Doc<'learnPostSealSourceLinks'>['target']
 const policy = 'learn-v2.post-seal-publication.v1'
 const assistancePolicy = 'learn-v2.practice-assistance.v1'
-const separationPolicy = 'learn-v2.post-seal-case-separation.v1'
+const separationPolicy = 'learn-v2.post-seal-case-separation.v2'
 export const POST_SEAL_HELP_HISTORY_LIMIT = 64
 class PostSealUnavailable extends Error {
   constructor(readonly reason: Reason) { super(reason) }
@@ -217,7 +217,8 @@ async function blockAuthority(ctx: ReadCtx, userId: string, authority: Authority
   return { block, content, bound, checkCaseId, caseId: candidate.caseId, dependencies: complete,
     validationDigest: await privacyDigest({ policy, checkCaseId, validation: bound.validation, cases: bound.cases }) }
 }
-async function practiceCaseProof(ctx: ReadCtx, userId: string, authority: Authority, proof: Awaited<ReturnType<typeof blockAuthority>>, validate: boolean) {
+async function separateCaseProof(ctx: ReadCtx, userId: string, authority: Authority, proof: Awaited<ReturnType<typeof blockAuthority>>,
+  validate: boolean, delivery: { kind: 'practice' | 'hint' | 'worked_example' | 'feedback' | 'lesson', content: unknown, texts: string[] }) {
   const pins = authority.row.assessmentPins
   let prompt: string
   let stimulus: string | null = null
@@ -239,20 +240,25 @@ async function practiceCaseProof(ctx: ReadCtx, userId: string, authority: Author
     artifact = { kind: 'session_block', id: matches[0]!._id }
   }
   parseLearnContract(learnTextSchema(), prompt)
-  const practicePrompt = proof.block.content!
-  if (learnCasePromptsOverlap(prompt, practicePrompt) || stimulus && learnCasePromptsOverlap(`${stimulus}\n${prompt}`, practicePrompt)) deny()
+  const candidatePrompt = proof.block.content!
+  const texts = [...new Set([candidatePrompt, ...delivery.texts])]
+  for (const text of texts) {
+    parseLearnContract(learnTextSchema(12000), text)
+    if (learnCasePromptsMatch(prompt, text) || stimulus && learnCasePromptsMatch(`${stimulus}\n${prompt}`, text)) deny()
+  }
   const checkCase = await ctx.db.get(proof.checkCaseId)
   const checkIdentity = await normalizedInstructionalCaseFingerprints(prompt, prompt)
-  const practiceIdentity = await normalizedInstructionalCaseFingerprints(practicePrompt, practicePrompt)
+  const candidateIdentity = await normalizedInstructionalCaseFingerprints(candidatePrompt, candidatePrompt)
+  const deliveredIdentities = await Promise.all(texts.map(text => normalizedInstructionalCaseFingerprints(text, text)))
   if (!checkCase || checkCase.userId !== userId || checkCase.scenarioFingerprint !== checkIdentity.scenarioFingerprint
-    || [checkCase.scenarioFingerprint, checkCase.solutionFingerprint].includes(practiceIdentity.scenarioFingerprint)) deny()
+    || deliveredIdentities.some(identity => [checkCase.scenarioFingerprint, checkCase.solutionFingerprint].includes(identity.scenarioFingerprint))) deny()
   const cases = await ctx.db.query('learnAssessmentCases').withIndex('by_userId_and_scenarioFingerprint', q =>
-    q.eq('userId', userId).eq('scenarioFingerprint', practiceIdentity.scenarioFingerprint)).take(2)
+    q.eq('userId', userId).eq('scenarioFingerprint', candidateIdentity.scenarioFingerprint)).take(2)
   if (cases.length !== 1) deny()
   const candidate = cases[0]!
   const validation = candidate.identityValidationId ? await ctx.db.get(candidate.identityValidationId) : null
   if (candidate._id === checkCase._id || candidate.usageClass !== 'instructional' || candidate.reservedAt !== undefined
-    || candidate.solutionFingerprint !== practiceIdentity.solutionFingerprint || candidate.identityPolicyVersion !== checkCase.identityPolicyVersion
+    || candidate.solutionFingerprint !== candidateIdentity.solutionFingerprint || candidate.identityPolicyVersion !== checkCase.identityPolicyVersion
     || !validation || validation.userId !== userId || validation.subject.kind !== 'case' || validation.subject.caseId !== candidate._id
     || validation.check !== 'same_case_novelty' || validation.decision !== 'pass' || validation.evidenceStatus !== 'available'
     || validation.invalidatedAt !== undefined || validation.comparedCatalogRevision > proof.bound.catalogRevision) deny()
@@ -261,7 +267,8 @@ async function practiceCaseProof(ctx: ReadCtx, userId: string, authority: Author
     if (!origin || origin.userId !== userId || origin.artifact.kind === artifact.kind && origin.artifact.id === artifact.id) deny()
   }
   const comparison = { policy: separationPolicy, check: { caseId: checkCase._id, ...checkIdentity, prompt, stimulus, pins },
-    practice: { caseId: candidate._id, ...practiceIdentity, prompt: practicePrompt, lineageId: proof.bound.lineageId },
+    candidate: { caseId: candidate._id, ...candidateIdentity, prompt: candidatePrompt, lineageId: proof.bound.lineageId },
+    delivery: { ...delivery, identities: deliveredIdentities },
     artifactValidationDigest: proof.validationDigest, promptValidation: validation, validatorVersion: measurementItemAdapters.version }
   const corpusDigest = await privacyDigest(comparison)
   if (validate) {
@@ -321,7 +328,9 @@ async function practiceAuthority(ctx: ReadCtx, userId: string, authority: Author
   parseLearnContract(learnRevisionSchema, slot.revision)
   const blockId = ctx.db.normalizeId('sessionContentBlocks', slot.blockId)
   if (!blockId) deny()
-  const proof = await practiceCaseProof(ctx, userId, authority, await blockAuthority(ctx, userId, authority, blockId, 'faded_example'), false)
+  const block = await blockAuthority(ctx, userId, authority, blockId, 'faded_example')
+  const proof = await separateCaseProof(ctx, userId, authority, block, false,
+    { kind: 'practice', content: binding.content.payload, texts: [binding.content.payload.prompt] })
   if (binding.practiceCaseId !== proof.caseId || binding.checkCaseId !== proof.checkCaseId
     || binding.identityPolicyVersion !== proof.bound.cases[0]!.identityPolicyVersion || binding.caseValidationDigest !== proof.validationDigest
     || binding.catalogRevision > proof.bound.catalogRevision || binding.content.payload.tier !== 'T0'
@@ -370,7 +379,8 @@ async function instructionalBlock(ctx: ReadCtx, userId: string, authority: Autho
   if (blocks.length > 16 || matches.length !== 1) deny()
   return await blockAuthority(ctx, userId, authority, matches[0]!._id, kind)
 }
-async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority) {
+type TeachingPayload = Extract<Doc<'learnPostSealTeachingSources'>['content'], { status: 'available' }>['payload']
+async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority, validate: boolean, stored?: TeachingPayload) {
   const attempt = authority.row.authoritativeAttemptId ? await ctx.db.get(authority.row.authoritativeAttemptId) : null
   if (!attempt || attempt.userId !== userId || attempt.submissionId !== authority.response._id
     || attempt.assessmentOpportunityId !== authority.row._id || attempt.serverScorePercent === undefined
@@ -386,7 +396,13 @@ async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authorit
     ? 'Your response met the check requirements. Use the cited explanation to connect the idea to a separate practice case.'
     : 'Your response needs more practice. Review the cited explanation before trying the separate practice case.', citations },
   lesson: !passed ? { tier: 'T0' as const, paragraphs: [explanation.block.content!], citations } : null }
-  return { payload, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, explanation.validationDigest]) }
+  const actual = stored ?? payload
+  if (!actual.feedback) deny()
+  const feedback = await separateCaseProof(ctx, userId, authority, explanation, validate,
+    { kind: 'feedback', content: actual.feedback, texts: [actual.feedback.text] })
+  const lesson = actual.lesson ? await separateCaseProof(ctx, userId, authority, explanation, validate,
+    { kind: 'lesson', content: actual.lesson, texts: actual.lesson.paragraphs }) : null
+  return { payload, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, feedback.validationDigest, lesson?.validationDigest ?? null]) }
 }
 
 export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: string, id: Id<'learnAssessmentOpportunities'>) {
@@ -402,11 +418,11 @@ export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: 
       return { status: 'prepared' as const, responseSlotId: existing.slot._id }
     }
     if (!authority.context.capabilities.canTeachSeparateCase) deny('unavailable')
-    const proof = await practiceCaseProof(ctx, userId, authority,
-      await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'faded_example'), true)
+    const block = await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'faded_example')
+    const payload = { tier: 'T0' as const, prompt: block.block.content! }
+    const proof = await separateCaseProof(ctx, userId, authority, block, true, { kind: 'practice', content: payload, texts: [payload.prompt] })
     const blockId = proof.block._id
     const now = Date.now()
-    const payload = { tier: 'T0' as const, prompt: proof.block.content! }
     const promptDigest = await privacyDigest(payload.prompt)
     const publicationPins = await publication(payload, proof.dependencies, proof.validationDigest, now)
     const sources = await ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
@@ -457,7 +473,6 @@ export async function publishPostSealTeachingForOwner(ctx: MutationCtx, userId: 
   try {
     const authority = await checkAuthority(ctx, userId, id)
     if (!authority.context.validScore || !authority.context.capabilities.canReadFeedback) deny('unavailable')
-    const teaching = await teachingPayload(ctx, userId, authority)
     const rows = await ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
       q.eq('userId', userId).eq('submissionId', authority.response._id)).take(2)
     if (rows.length !== 1) deny()
@@ -466,6 +481,8 @@ export async function publishPostSealTeachingForOwner(ctx: MutationCtx, userId: 
     if (source.assessmentOpportunityId !== id || source.learningVoidId !== authority.row.learningVoidId
       || source.attemptId !== authority.row.authoritativeAttemptId) deny()
     if (source.content.status === 'purged') deny('evidence_unavailable')
+    const teaching = await teachingPayload(ctx, userId, authority, source.content.status === 'pending',
+      source.content.status === 'available' ? source.content.payload : undefined)
     if (source.content.status === 'available') {
       if (canonicalPrivacyJson(source.content.payload) !== canonicalPrivacyJson(teaching.payload)) deny()
       await verifyPublication(ctx, userId, { ...source, content: source.content }, { teachingSourceId: source._id }, teaching.dependencies, teaching.validationDigest)
@@ -506,7 +523,7 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
     if (source.content.status === 'pending') {
       if ((await sourceLinks(ctx, userId, { teachingSourceId: source._id })).length) deny()
     } else {
-      const teaching = await teachingPayload(ctx, userId, authority)
+      const teaching = await teachingPayload(ctx, userId, authority, false, source.content.payload)
       if (canonicalPrivacyJson(source.content.payload) !== canonicalPrivacyJson(teaching.payload)) deny()
       await verifyPublication(ctx, userId, { ...source, content: source.content }, { teachingSourceId: source._id }, teaching.dependencies, teaching.validationDigest)
     }
@@ -568,19 +585,21 @@ export async function authorizePostSealPracticeForOwner(ctx: MutationCtx, userId
     const existing = await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_idempotencyKeyHash', q =>
       q.eq('userId', userId).eq('idempotencyKeyHash', fingerprint.idempotencyKeyHash)).take(2)
     if (existing.length > 1) deny()
+    const prior = existing[0]
+    if (prior) parseLearnContract(learnPostSealHelpReceiptStorageSchema, postSealApplicationFields(prior))
     const last = await ctx.db.query('learnPostSealHelpReceipts').withIndex('by_userId_and_responseSlotId_and_assistanceSequence', q =>
       q.eq('userId', userId).eq('responseSlotId', slot._id)).order('desc').take(2)
     const previous = slot.practiceAssistance
     if (previous) parseLearnContract(learnPracticeSlotAssistanceStorageSchema, previous)
     if (previous ? last[0]?.assistanceSequence !== previous.deliveryCount || last[0].authorizationId !== previous.lastAuthorizationId
       || last[0].deliveredAt !== previous.lastDeliveredAt || last.length > 1 && last[0].assistanceSequence === last[1]!.assistanceSequence : last.length > 0) deny()
-    const help = await relatedBlock(ctx, userId, authority, practice, request.kind === 'hint' ? 'explanation' : 'worked_example')
-    const payload = parseLearnContract(learnPracticeAssistanceContentSchema, { kind: request.kind, tier: 'T0', text: help.block.content })
+    const block = await relatedBlock(ctx, userId, authority, practice, request.kind === 'hint' ? 'explanation' : 'worked_example')
+    const payload = parseLearnContract(learnPracticeAssistanceContentSchema, { kind: request.kind, tier: 'T0', text: block.block.content })
+    const actual = prior?.content.status === 'available' ? prior.content.payload : payload
+    const help = await separateCaseProof(ctx, userId, authority, block, !prior, { kind: request.kind, content: actual, texts: [actual.text] })
     const dependencies = normalizeDependencies([...practice.proof.dependencies, ...help.dependencies])
     const validationDigest = await privacyDigest([policy, binding._id, practice.proof.validationDigest, help.validationDigest, request.kind])
-    const prior = existing[0]
     if (prior) {
-      parseLearnContract(learnPostSealHelpReceiptStorageSchema, postSealApplicationFields(prior))
       if (prior.content.status !== 'available' || prior.evidenceStatus !== 'available') deny('evidence_unavailable')
       if (prior.learningVoidId !== authority.row.learningVoidId || prior.assessmentOpportunityId !== authority.row._id
         || prior.submissionId !== authority.response._id || prior.practiceBindingId !== binding._id || prior.responseSlotId !== slot._id

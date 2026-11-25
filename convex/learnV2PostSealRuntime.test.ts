@@ -85,17 +85,31 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
   return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help, prepare, score }
 }
 
-test.each(['identical', 'normalized', 'near'] as const)('publication atomically rejects %s practice/application content', async variant => {
+test.each(['identical', 'normalized'] as const)('publication atomically rejects %s practice/application content', async variant => {
   const f = await assessmentDeliveryFixture({ transactionLimits: true })
   const prompt = 'Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
-  const practice = variant === 'identical' ? prompt : variant === 'normalized' ? ` ${prompt.toUpperCase().replaceAll(' ', '\n  ')} `
-    : prompt.replace('inventory', 'stock')
+  const practice = variant === 'identical' ? prompt : ` ${prompt.toUpperCase().replaceAll(' ', '\n  ')} `
   const cases = await f.t.run(ctx => ctx.db.query('learnAssessmentCases').take(64))
   await expect(publishDeliveryTeaching(f, { claims: 1, supports: 1,
     blockContents: { faded_example: practice, independent_application: prompt } })).rejects.toThrow('instructional_case_overlap')
   expect(await f.t.run(ctx => ctx.db.query('sessionContent').take(2))).toEqual([])
   expect(await f.t.run(ctx => ctx.db.query('sessionContentBlocks').take(16))).toEqual([])
   expect(await f.t.run(ctx => ctx.db.query('learnAssessmentCases').take(64))).toEqual(cases)
+})
+
+test.each([
+  ['atlas countries', 'Using the provided atlas, identify the capital city of France.', 'Using the provided atlas, identify the capital city of Japan.'],
+  ['operators', 'Calculate 123 + 456', 'Calculate 123 - 456'],
+  ['numbers', 'Calculate 123 + 456', 'Calculate 123 + 457'],
+  ['similar prose', 'Determine the shipment inventory.', 'Determine the shipment stock.'],
+])('publication preserves distinct %s cases', async (_label, practice, application) => {
+  const f = await assessmentDeliveryFixture({ transactionLimits: true })
+  const id = await publishDeliveryTeaching(f, { claims: 1, supports: 1,
+    blockContents: { faded_example: practice!, independent_application: application! } })
+  const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', id)).take(16))
+  expect(blocks.find(block => block.kind === 'faded_example')?.content).toBe(practice)
+  expect(blocks.find(block => block.kind === 'independent_application')?.content).toBe(application)
 })
 
 test('capability-off publication preserves the existing acceptance of identical instructional blocks', async () => {

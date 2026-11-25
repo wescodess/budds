@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api } from './_generated/api'
 import { makeFunctionReference } from 'convex/server'
 import type { Id } from './_generated/dataModel'
-import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
+import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { canvasFamilyFixture } from '../tests/fixtures/learn-v2-canvas'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
@@ -40,7 +40,8 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers()
 })
 
-async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown') {
+type TeachingOptions = { blocks?: DeliveryTeachingShape['blockContents'], pass?: boolean }
+async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown', options: TeachingOptions = {}) {
   const definition = { configurationId: 'post-seal.synthetic', configurationVersion: 'post-seal.synthetic.v1',
     kind: canvas ? 'measurement_rubric' as const : 'legacy_baseline' as const, requestedModel: 'synthetic/model', endpoint: null,
     identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model', family: 'synthetic',
@@ -55,9 +56,10 @@ async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 
   const legacyPrompt = 'TEACHING-CANARY-independent_application: Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
   const legacyPractice = collision === 'identical' ? legacyPrompt : collision === 'normalized'
     ? `  ${legacyPrompt.toUpperCase().replaceAll(' ', '  \n')}  ` : legacyPrompt.replace('inventory', 'stock')
-  const guard = collision ? vi.spyOn(casePrompt, 'learnCasePromptsOverlap').mockReturnValue(false) : null
+  const guard = collision ? vi.spyOn(casePrompt, 'learnCasePromptsMatch').mockReturnValue(false) : null
   let contentId: Id<'sessionContent'>
-  try { contentId = await publishDeliveryTeaching(f, collision ? { claims: 1, supports: 1, blockContents: { faded_example: legacyPractice } } : undefined) }
+  try { contentId = await publishDeliveryTeaching(f, collision || options.blocks ? { claims: 1, supports: 1,
+    blockContents: { ...options.blocks, ...(collision ? { faded_example: legacyPractice } : {}) } } : undefined) }
   finally { guard?.mockRestore() }
   const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', contentId)).take(16))
@@ -79,7 +81,7 @@ async function fixture(canvas = false, collision?: 'identical' | 'normalized' | 
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
   vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'post-seal-synthetic-execution', model: 'synthetic/model',
     choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
-      criterionResults: [{ key: canvas ? 'private-criterion' : 'accuracy', awarded: true }], misconceptionTags: [] }) } }],
+      criterionResults: [{ key: canvas ? 'private-criterion' : 'accuracy', awarded: options.pass !== false }], misconceptionTags: [] }) } }],
     usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
       endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } }))))
   const reference = (id: Id<'learnAssessmentOpportunities'>) => ({ version, assessmentOpportunityId: id })
@@ -101,8 +103,8 @@ async function cold(f: Awaited<ReturnType<typeof fixture>>) {
   return row
 }
 
-async function ordinary(assisted = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown') {
-  const f = await fixture(false, collision, lineage)
+async function ordinary(assisted = false, collision?: 'identical' | 'normalized' | 'near', lineage?: 'sibling' | 'unknown', options: TeachingOptions = {}) {
+  const f = await fixture(false, collision, lineage, options)
   const first = await cold(f)
   const coldSubmissionId = (await f.t.run(ctx => ctx.db.get(first._id)))!.submissionId!
   expect(await f.score(coldSubmissionId)).toMatchObject({ status: 'scored' })
@@ -121,10 +123,167 @@ async function ordinary(assisted = false, collision?: 'identical' | 'normalized'
 
 test.each(['identical', 'normalized', 'near'] as const)('legacy publication cannot expose a %s ordinary check as practice', async collision => {
   const f = await ordinary(false, collision)
+  if (collision === 'near') {
+    const compare = vi.mocked(measurementItemAdapters.compare)
+    const original = compare.getMockImplementation()!
+    compare.mockImplementation(async input => JSON.stringify(input.content).includes('stock')
+      ? { decision: 'reject' as const, coverage: 'complete' as const } : original(input))
+  }
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
   expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
   expect(await f.t.run(ctx => ctx.db.query('learnResponseSlots').take(2))).toEqual([])
+})
+
+const ordinaryPrompt = 'TEACHING-CANARY-independent_application: Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
+const passFeedback = 'Your response met the check requirements. Use the cited explanation to connect the idea to a separate practice case.'
+
+async function ordinarySource(f: Awaited<ReturnType<typeof ordinary>>) {
+  return (await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('submissionId', f.receipt.submissionId)).unique()))!
+}
+function deliveryKind(value: unknown) {
+  if (!value || typeof value !== 'object' || !('delivery' in value)) return null
+  const delivery = value.delivery
+  return delivery && typeof delivery === 'object' && 'kind' in delivery ? delivery.kind : null
+}
+
+test.each([
+  ['hint', false], ['hint', true], ['worked_example', false], ['worked_example', true],
+] as const)('post-seal %s denies the ordinary check as help, canonical=%s', async (kind, canonical) => {
+  const f = await ordinary(false, undefined, undefined, { blocks: {
+    [kind === 'hint' ? 'explanation' : 'worked_example']: canonical ? ` ${ordinaryPrompt.toUpperCase().replaceAll(' ', '\n  ')} ` : ordinaryPrompt,
+  } })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const opened = await f.open(f.row._id)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected separate practice')
+  expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind, idempotencyKey: 'check_as_help_denied_12345' }))
+    .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(2))).toEqual([])
+})
+
+test.each([
+  ['feedback', false], ['feedback', true], ['lesson', false], ['lesson', true],
+] as const)('post-seal %s cannot publish the ordinary check, canonical=%s', async (kind, canonical) => {
+  const f = await ordinary(false, undefined, undefined, kind === 'feedback'
+    ? { blocks: { independent_application: canonical ? ` ${passFeedback.toUpperCase().replaceAll(' ', '\n  ')} ` : passFeedback } }
+    : { pass: false, blocks: { explanation: canonical ? ` ${ordinaryPrompt.toUpperCase().replaceAll(' ', '\n  ')} ` : ordinaryPrompt } })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: null, lesson: null })
+  const source = await ordinarySource(f)
+  expect(source).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealSourceLinks').withIndex('by_userId_and_target_teachingSourceId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('target.teachingSourceId', source._id)).take(2))).toEqual([])
+})
+
+test.each(['hint', 'worked_example', 'feedback', 'lesson'] as const)('post-seal %s requires a complete comparison before delivery', async kind => {
+  const f = await ordinary(false, undefined, undefined, { pass: false })
+  const compare = vi.mocked(measurementItemAdapters.compare)
+  const original = compare.getMockImplementation()!
+  compare.mockImplementation(async input => deliveryKind(input.content) === kind
+    ? { decision: 'unknown' as const, coverage: 'unknown' as const } : original(input))
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  if (kind === 'feedback' || kind === 'lesson') {
+    expect(await ordinarySource(f)).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+    expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: null, lesson: null })
+  } else {
+    const opened = await f.open(f.row._id)
+    if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+    expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
+      target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind, idempotencyKey: 'unknown_help_comparison_12345' }))
+      .toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+  }
+  expect(compare.mock.calls.some(([input]) => deliveryKind(input.content) === kind)).toBe(true)
+})
+
+test('post-seal distinct artifacts pass one shared proof and preserve replay', async () => {
+  const f = await ordinary(false, undefined, undefined, { pass: false })
+  const compare = vi.mocked(measurementItemAdapters.compare)
+  compare.mockClear()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored', result: { scorePercent: 0 } })
+  expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' } })
+  const opened = await f.open(f.row._id)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+  for (const kind of ['hint', 'worked_example'] as const) {
+    const request = { version, assessmentOpportunityId: f.row._id, target: { responseSlotId: opened.practice.responseSlotId },
+      expectedRevision: 1, kind, idempotencyKey: `separate_${kind}_replay_12345` }
+    const delivered = await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, request)
+    expect(delivered).toMatchObject({ status: 'authorized', content: { kind, tier: 'T0' } })
+    const comparisons = compare.mock.calls.length
+    expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, request)).toEqual(delivered)
+    expect(compare).toHaveBeenCalledTimes(comparisons)
+  }
+  expect(new Set(compare.mock.calls.map(([input]) => deliveryKind(input.content)))).toEqual(new Set(['practice', 'feedback', 'lesson', 'hint', 'worked_example']))
+  const comparisons = compare.mock.calls.length
+  expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' } })
+  expect(compare).toHaveBeenCalledTimes(comparisons)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(3))).toHaveLength(2)
+})
+
+test.each([
+  ['Using the provided atlas, identify the capital city of France.', 'Using the provided atlas, identify the capital city of Japan.'],
+  ['Calculate 123 + 456', 'Calculate 123 - 456'],
+])('post-seal distinct cases are delivered after a complete comparison: %s', async (practice, check) => {
+  const f = await ordinary(false, undefined, undefined, { blocks: { faded_example: practice!, independent_application: check! } })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  expect(await f.open(f.row._id)).toMatchObject({ status: 'available', practice: { prompt: practice } })
+})
+
+test.each(['feedback', 'hint'] as const)('post-seal %s comparison propagates unexpected resource errors', async kind => {
+  const f = await ordinary()
+  if (kind === 'hint') expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const compare = vi.mocked(measurementItemAdapters.compare)
+  const original = compare.getMockImplementation()!
+  compare.mockImplementation(async input => {
+    if (deliveryKind(input.content) === kind) throw new Error('Read limit exceeded')
+    return original(input)
+  })
+  if (kind === 'feedback') {
+    await expect(f.score(f.receipt.submissionId)).rejects.toThrow('Read limit exceeded')
+    expect(await f.t.run(ctx => ctx.db.get(f.row._id))).toMatchObject({ phase: 'scored_pass' })
+    expect(await ordinarySource(f)).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  } else {
+    const opened = await f.open(f.row._id)
+    if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+    await expect(f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
+      target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind, idempotencyKey: 'help_resource_failure_12345' }))
+      .rejects.toThrow('Read limit exceeded')
+    expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(2))).toEqual([])
+  }
+})
+
+test.each(['hint', 'worked_example'] as const)('post-seal %s replay rechecks the saved content against the check', async kind => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const opened = await f.open(f.row._id)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
+  const request = { version, assessmentOpportunityId: f.row._id, target: { responseSlotId: opened.practice.responseSlotId },
+    expectedRevision: 1, kind, idempotencyKey: 'saved_help_collision_12345' }
+  expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, request)).toMatchObject({ status: 'authorized' })
+  const receipt = (await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(2)))[0]!
+  if (receipt.content.status !== 'available') throw new Error('Expected saved receipt')
+  const payload = { ...receipt.content.payload, text: ordinaryPrompt }
+  const content = { ...receipt.content, payload, publication: { ...receipt.content.publication, payloadDigest: await privacyDigest(payload) } }
+  await f.t.run(async ctx => {
+    await ctx.db.patch(receipt._id, { content })
+    await ctx.db.patch(receipt.authorizationId, { projectionDigest: await privacyDigest(payload) })
+  })
+  expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, request)).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(3))).toHaveLength(1)
+})
+
+test.each(['feedback', 'lesson'] as const)('post-seal %s read rechecks the saved content against the check', async kind => {
+  const f = await ordinary(false, undefined, undefined, { pass: false })
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
+  const source = await ordinarySource(f)
+  if (source.content.status !== 'available' || !source.content.payload.feedback || !source.content.payload.lesson) throw new Error('Expected published teaching')
+  const payload = { ...source.content.payload, feedback: kind === 'feedback' ? { ...source.content.payload.feedback, text: ordinaryPrompt } : source.content.payload.feedback,
+    lesson: kind === 'lesson' ? { ...source.content.payload.lesson, paragraphs: [ordinaryPrompt] } : source.content.payload.lesson }
+  const content = { ...source.content, payload, publication: { ...source.content.publication, payloadDigest: await privacyDigest(payload) } }
+  await f.t.run(ctx => ctx.db.patch(source._id, { content }))
+  expect(await f.read(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect((await ordinarySource(f)).content).toEqual(content)
 })
 
 test.each(['sibling', 'unknown'] as const)('ordinary practice rejects %s lineage', async lineage => {
