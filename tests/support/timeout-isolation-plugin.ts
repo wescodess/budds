@@ -10,7 +10,7 @@ export function timeoutIsolationPlugin(): Plugin {
     enforce: 'pre',
     transform(source, id) {
       const path = id.split('?')[0]!
-      if (!/\/(?:convex\/.*\.test\.ts|tests\/(?:component\/.*\.test\.ts|fixtures\/.*\.ts))$/.test(path)) return
+      if (!/\/(?:convex\/.*\.test\.ts|tests\/(?:component\/.*\.test\.ts|fixtures\/.*\.ts|support\/adaptive-activation-configuration\.ts))$/.test(path)) return
       const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
       const edits: Array<{ position: number, text: string, order: number }> = []
       const shared = new Set<string>(['process', 'globalThis', 'window', 'sessionStorage', 'localStorage'])

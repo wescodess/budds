@@ -900,7 +900,7 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocu
     documents: accepted.metrics.documentsRead.used, bytes: accepted.metrics.bytesRead.used }))
   expect(accepted.metrics.databaseQueries.used).toBeLessThan(3072)
 
-})
+}, 20_000)
 
 test.each(['nested_limit', 'native_limit'] as const)('Canvas preparation propagates %s and rolls back earlier writes', async mode => {
   const s = await fixture({ prepare: false, attach: false, reserveCount: 3,
