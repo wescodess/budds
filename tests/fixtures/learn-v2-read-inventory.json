@@ -341,7 +341,22 @@
   },
   {
     "path": "learnV2Assessments.getPostSealTeaching",
-    "handling": "assessment_or_own_response"
+    "handling": "post_seal_teaching"
+  },
+  {
+    "path": "learnV2Assistance.authorizePracticeAssistance",
+    "functionType": "mutation",
+    "handling": "post_seal_practice_authorization"
+  },
+  {
+    "path": "learnV2PostSealTeaching.openPractice",
+    "functionType": "mutation",
+    "handling": "post_seal_practice_preparation"
+  },
+  {
+    "path": "learnV2PostSealTeaching.publishFeedback",
+    "functionType": "mutation",
+    "handling": "post_seal_feedback_publication"
   },
   {
     "path": "learnV2Blueprints.getBlueprintGenerationJob",

@@ -1,5 +1,22 @@
 # C4 teaching read audit
 
+## #535 integration with Today/Canvas checks
+
+Post-seal admission reuses the help guard's bounded open-check collector and
+scope matcher. Expired windows are excluded before counting; future preparing
+and ready windows use a separate allowance from current checks. Today's
+projection, lesson start and delivery retain their shared lesson gate and the
+136-case startable/delivers sweep. Cancelled rows do not block these reads.
+
+A frozen Canvas surface can carry a `v2_today` treatment. Post-seal content uses
+that surface binding, independently of the treatment or the current new-enrollment
+capability. Today pointers and Canvas check receipts retain their own content
+allowlists. The separate post-seal channels and their progress metadata are
+specified in the [runtime integration amendment](../plans/learn-v2-post-seal-teaching-contract.md#integration-amendment-learn-v2post-seal-teachingv1runtime2).
+Accepted cancellations retain only accepted-invalid separate practice authority;
+feedback, lessons and hints remain closed. Revocation, missing evidence and
+unknown lineage still withhold content. Other disclosure callers are unchanged.
+
 ## #573 Today pointer amendment
 
 The [serial API amendment](../plans/learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas) keeps Today as `summary_or_own_work`: an opaque check reference, safe state and owned Canvas destination, without question, answer, rubric, score or feedback. Its default-off capability selects Canvas check delivery for new Today enrollment. Measurement flow remains the Today teaching treatment; frozen surface bindings retain Canvas delivery through rollback. C6 keeps entry point separate from treatment. The destination now addresses its receipt with `?check=<reference>`; #442 forwards that value as `checkReference` to the Canvas read/delivery argument envelope. The server binds it to the exact owned thread.
@@ -206,7 +223,10 @@ The original C4 inventory below lists 128 public query names. C5 and C6 addition
 | `learnV2Assessments.getAssessment` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getAssessmentState` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getFeatureReadiness` | `assessment_or_own_response` | Always on original access and fixed projection |
-| `learnV2Assessments.getPostSealTeaching` | `assessment_or_own_response` | Always on original access and fixed projection |
+| `learnV2Assessments.getPostSealTeaching` | `post_seal_teaching` | Owned sealed submission, current grant, pins, evidence, publication and relevant open checks; fixed unavailable result while responses are off |
+| `learnV2Assistance.authorizePracticeAssistance` | `post_seal_practice_authorization` | Same check authority plus the immutable separate-case binding, live practice revision and renewed help receipt authority; atomic practice exposure and accounting |
+| `learnV2PostSealTeaching.openPractice` | `post_seal_practice_preparation` | Authenticated opening first retries teaching publication independently, then selects the proven separate instructional case and atomically binds its slot, source links and prompt exposure; retries preserve the binding and serialize with relevant check acceptance |
+| `learnV2PostSealTeaching.publishFeedback` | `post_seal_feedback_publication` | Authenticated publish-only retry; rechecks the full check authority and relevant-open-check gate, publishes a pending source once and writes no practice binding, slot or exposure |
 | `learnV2Blueprints.getBlueprintGenerationJob` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Blueprints.getBlueprintMap` | `summary_or_own_work` | Always on original access and fixed projection |
 | `learnV2Calendar.getStatus` | `summary_or_own_work` | Always on original access and fixed projection |
@@ -359,7 +379,7 @@ The frozen baseline payload builder, request builder, parser v1 and mastery arit
 | Due-window expiry and replacement invalidation | The shared due-work opportunity update closes the binding when the phase becomes terminal. `markExpiredSessionsMissed` also closes unanswered started checks at the window boundary; the existing explicit missed-session command already leaves a terminal session. |
 | Void/account deletion | Each bounded opportunity-deletion transaction closes its owned dedicated binding before deleting the opportunity. The existing deletion fences and child-before-parent order remain in force. |
 
-Post-seal teaching remains a dependency on [C5.6 #535](https://github.com/wescodess/budds/issues/535): `getPostSealTeaching`, `authorizePracticeAssistance` and the separate-case practice binding must land before Canvas collection is admitted. Sealed Canvas retains its saved/submitted/scoring/scored status; teaching override controls remain unavailable. This change supplies no teaching continuation and enables no collection.
+The [C5.6 runtime](c5-post-seal-runtime.md) supplies `getPostSealTeaching`, `openPractice`, `publishFeedback`, `authorizePracticeAssistance` and the separate-case practice binding behind unchanged default-off capabilities. Scoring requests publication after its authoritative commit. Canvas integration and collection admission remain separate gates. No UI or collection is enabled by the runtime.
 
 | Entry point | Handling | Capability |
 | --- | --- | --- |

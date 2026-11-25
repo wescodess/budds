@@ -247,6 +247,17 @@ The internal cron endpoint and additive indexes/optional fact reason are describ
 
 ## Native scorer CLI adapters
 
+The [C5.6 runtime](c5-post-seal-runtime.md) adds bounded post-seal publication,
+practice and help paths. Their catches accept only the local domain denial,
+`LearnInputValidationError` and `ZodError`; the stored claim-order JSON parser
+handles only `SyntaxError`. Committed-score validation also recognizes the
+typed scorer-input failure. Unexpected errors, shared read-budget exhaustion
+and native transaction limits propagate. Once a mutation starts writing, all
+errors escape and roll back its exposure, content, links and counters. The
+score stamp uses nonthrowing semantic parsing for optional teaching state and
+does not catch database failures. Relevant-check scope resolution handles only
+its existing explicit unavailable/unknown scope classes.
+
 The native CLI directly consumes the versioned scorer. Its adapter catch sites are also listed here. Known missing or expired metadata and saved null observations carry explicit gateway-failure tags; fixture errors use the same contract. Unexpected lookup/inference errors propagate without sealing an unavailable observation. The shared item-limit error uses erasable TypeScript for Node strip-only loading. Provider policy defaults remain byte-identical.
 
 | Site | Scope | Disposition |

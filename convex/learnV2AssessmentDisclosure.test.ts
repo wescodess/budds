@@ -16,7 +16,11 @@ vi.mock('../shared/learn-v2-measurement-storage-manifest', async importOriginal 
   const original = await importOriginal<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
   return { ...original, LEARN_MEASUREMENT_CAPABILITIES: { ...original.LEARN_MEASUREMENT_CAPABILITIES, get responses() { return policy.responses } } }
 })
-beforeEach(() => { policy.responses = true })
+beforeEach(() => {
+  policy.responses = true
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(1_800_000_000_000)
+})
 
 const modules = import.meta.glob('./**/*.ts')
 const owner = { subject: 'same-subject', issuer: 'https://auth.example.com', tokenIdentifier: 'https://auth.example.com|disclosure-owner' }
@@ -27,7 +31,7 @@ const canaries = { ...STORAGE_CANARIES, nested: 'PRIVATE_NESTED_FUTURE_FIELD', f
 const states = ['no_grant', 'open', 'sealed_pending', 'scored', 'replaced', 'revoked'] as const
 type State = typeof states[number]
 
-afterEach(() => { vi.unstubAllEnvs() })
+afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers() })
 
 async function fixture(state: State = 'open') {
   vi.stubEnv('LEARN_V2_ENABLED', 'true')

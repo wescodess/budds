@@ -1,5 +1,6 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { propagatesResponseReadBudget } from './learnV2PrivacyReadContext'
+import { normalizeLearnCasePrompt } from '../../shared/learn-v2-case-prompt'
 import { LearnBlueprintAuthorityError, LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { ConvexError, getDocumentSize, type Infer, type Value } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -1600,7 +1601,7 @@ export const instructionalReservationSemanticAdapter: InstructionalReservationSe
 
 export async function normalizedInstructionalCaseFingerprints(scenario: string, solution: string): Promise<CaseFingerprints> {
   const fingerprint = (text: string) => canonicalDigest({ version: LEARN_ARTIFACT_CASE_IDENTITY_VERSION,
-    text: text.normalize('NFKC').toLowerCase().replace(/\s+/gu, ' ').trim() }, ARTIFACT_CONTENT_BYTES)
+    text: normalizeLearnCasePrompt(text) }, ARTIFACT_CONTENT_BYTES)
   return { scenarioFingerprint: await fingerprint(scenario), solutionFingerprint: await fingerprint(solution) }
 }
 

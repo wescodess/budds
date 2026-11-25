@@ -79,7 +79,7 @@ async function fixture() {
     practice: { ...target, revision: 1, tier: 'T0', prompt: 'PRACTICE_CANARY' } }
   const authorization: LearnV2PracticeAssistanceAuthorization = { ...reference, status: 'authorized', target, revision: 1,
     authorizationId: f.rows.learnAssessmentExposures, deliveredAt: f.base.createdAt + 1, content: { kind: 'hint', tier: 'T0', text: 'HINT_CANARY' } }
-  const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice }
+  const teaching: LearnV2PostSealTeaching = { ...reference, status: 'available', feedback: source.feedback, lesson: source.lesson, practice: source.practice, availability: { feedback: 'available', practice: { status: 'available' }, help: null } }
   const unavailableTeaching: LearnV2PostSealTeaching = { version, status: 'unavailable', reasonCode: 'disabled' }
   const deniedAuthorization: LearnV2PracticeAssistanceAuthorization = { version, status: 'denied', reasonCode: 'disabled' }
   function setPhase(phase: LearnAssessmentPhase, mask = 31, validScore = true, relevantOpenCheck: LearnPostSealTeachingContext['relevantOpenCheck'] = 'no') {
@@ -131,8 +131,11 @@ describe('post-seal teaching disclosure contract through Convex', () => {
       else {
         const feedbackAllowed = valid && !!(mask & 16) && ['scored_pass', 'scored_fail'].includes(phase)
         expect(read).toEqual({ ...f.reference, status: 'available', feedback: feedbackAllowed ? f.source.feedback : null,
-          lesson: feedbackAllowed && phase === 'scored_fail' ? f.source.lesson : null, practice: mask & 8 ? f.source.practice : null })
-        expect(help).toEqual(mask & 8 ? f.authorization : { version, status: 'denied', reasonCode: 'disclosure_unknown' })
+          lesson: feedbackAllowed && phase === 'scored_fail' ? f.source.lesson : null, practice: mask & 8 ? f.source.practice : null,
+          availability: { feedback: feedbackAllowed ? 'available' : ['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required'].includes(phase) ? 'scoring_pending' : 'unavailable',
+            practice: mask & 8 ? { status: 'available' } : { status: 'unavailable', reasonCode: 'disclosure_unknown' }, help: null } })
+        expect(help).toEqual(!(mask & 8) ? { version, status: 'denied', reasonCode: 'disclosure_unknown' }
+          : feedbackAllowed && phase === 'scored_fail' ? f.authorization : { version, status: 'denied', reasonCode: 'unavailable' })
       }
       expect(await f.t.query(readProjection, {})).toEqual(read)
       expect(await f.t.mutation(authorizeProjection, {})).toEqual(help)
@@ -168,7 +171,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
     expect(f.context.capabilities.canReadFeedback).toBe(true)
     expect(learnAssessmentLifecycleSchema.safeParse(lifecycle).success).toBe(true)
     for (let replay = 0; replay < 2; replay++) expect(await f.t.query(readProjection, {})).toEqual({
-      ...f.reference, status: 'available', feedback: null, lesson: null, practice: f.source.practice,
+      ...f.reference, status: 'available', feedback: null, lesson: null, practice: f.source.practice, availability: { feedback: 'unavailable', practice: { status: 'available' }, help: null },
     })
   })
 
@@ -275,7 +278,7 @@ describe('post-seal teaching disclosure contract through Convex', () => {
 
   test.each(['hint', 'worked_example'] as const)('%s is released only by its matching immutable authorization receipt', async kind => {
     const f = await fixture()
-    f.setPhase('scoring_pending')
+    f.setPhase(kind === 'hint' ? 'scored_fail' : 'scoring_pending')
     f.request.kind = kind; f.savedRequest.kind = kind
     if (f.authorization.status !== 'authorized') throw new Error('Missing fixture authorization')
     f.authorization.content = { kind, tier: 'T0', text: kind === 'hint' ? 'HINT_CANARY' : 'WORKED_EXAMPLE_CANARY' }
@@ -364,7 +367,8 @@ describe('B1 post-seal authority and provenance', () => {
     Reflect.set(f.context.practiceBinding!, 'evidenceAvailable', false)
     for (let replay = 0; replay < 2; replay++) {
       expect(await f.t.query(readProjection, {})).toEqual({ ...f.reference, status: 'available',
-        feedback: f.source.feedback, lesson: f.source.lesson, practice: null })
+        feedback: f.source.feedback, lesson: f.source.lesson, practice: null,
+        availability: { feedback: 'available', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' }, help: null } })
       expect(await f.t.mutation(authorizeProjection, {})).toEqual({ version, status: 'denied', reasonCode: 'disclosure_unknown' })
     }
   })
@@ -635,7 +639,8 @@ describe('strict post-seal public validators', () => {
   test.each(forbidden)('Zod and Convex reject %s at every new content/metadata boundary', async field => {
     const f = await fixture()
     if (f.teaching.status !== 'available' || f.authorization.status !== 'authorized') throw new Error('Missing fixture content')
-    const locations = [f.teaching, f.teaching.feedback!, f.teaching.feedback!.citations[0]!, f.teaching.lesson!, f.teaching.practice!]
+    const locations = [f.teaching, f.teaching.feedback!, f.teaching.feedback!.citations[0]!, f.teaching.lesson!, f.teaching.practice!,
+      f.teaching.availability, f.teaching.availability.practice]
     for (const location of locations) {
       Reflect.set(location, field, 'FORBIDDEN_CANARY')
       expect(learnPostSealTeachingSchema.safeParse(f.teaching).success).toBe(false)
