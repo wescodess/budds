@@ -114,8 +114,10 @@ With `todayCanvasChecks` off and no assignment previously enrolled through the n
 
 ### #587 additive Canvas timing and practice reference
 
-With responses and `todayCanvasChecks` enabled, `assessment` (including the
-`loadAssessmentCanvas` question projection) and every saved `checkReceipt` add:
+With responses and `todayCanvasChecks` enabled, only checks with purpose
+`measurement_cold`, `measurement_delayed` or `retained_transfer` carry
+`checkTiming` on `assessment` (including the `loadAssessmentCanvas` question
+projection) and their saved `checkReceipt`:
 
 ```ts
 checkTiming: {
@@ -131,6 +133,12 @@ use the same helper, earliest granted teaching exposure, scope checks, elapsed-d
 buckets and `earlier` fallback as Today pointer v2. Missing topic labels do not
 invent a title or remove coarse timing. No exact time or held-out detail is added.
 Query-snapshot staleness has the same approximate semantics as Today.
+
+`independent_application` and all other purposes omit `checkTiming`. The approved
+delayed-check design does not authorize a timing line for ordinary application
+checks. When `checkTiming` is absent, the UI shows no timing line and retains its
+existing application content; absence must not be interpreted as `earlier`.
+The unknown-class copy fallback below applies only when timing metadata is present.
 
 The owner-approved Canvas entry copy is:
 

@@ -18,7 +18,7 @@ async function timingForCheck(ctx: QueryCtx | MutationCtx, userId: string, oppor
 }
 
 export async function canvasCheckTiming(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
-  if (!todayCanvasChecksEnabled()) return {}
+  if (!todayCanvasChecksEnabled() || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return {}
   return { checkTiming: { version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: await timingForCheck(ctx, userId, opportunity) } }
 }
 
