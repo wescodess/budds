@@ -797,7 +797,7 @@ async function purposeFixture(kind: 'measurement_cold' | 'measurement_delayed' |
       const rubric = objective.assessmentContract
       await ctx.db.patch(s.prepared.sessionContentId, { assessmentRubricSnapshot: JSON.stringify(rubric) })
       await ctx.db.insert('sessionContentBlocks', { userId: OWNER.tokenIdentifier, sessionContentId: s.prepared.sessionContentId, order: 1,
-        kind: 'transfer_challenge', content: selectedPrompt })
+        kind: kind === 'independent_application' ? 'independent_application' : 'transfer_challenge', content: selectedPrompt })
       const claimId = await ctx.db.insert('sessionContentClaims', { userId: OWNER.tokenIdentifier, sessionContentId: s.prepared.sessionContentId,
         order: 0, claim: 'PRIVATE TEACHING CLAIM', verifierVersion: 'fixture.verifier.v1', confidence: 1 })
       await ctx.db.insert('learnClaimSupports', { userId: OWNER.tokenIdentifier, sessionContentClaimId: claimId, sourceExcerptId: s.family.graph.sourceExcerptId,
