@@ -25,7 +25,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
@@ -45,12 +45,35 @@ import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VE
 import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import { bindSessionApplication } from './lib/learnV2SessionApplication'
-import { readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
+import { postSealApplicationAdmissionForOwner, readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
 
 const RECEIPT_TTL_MS = 30 * 24 * 60 * 60_000
+const MAX_CANVAS_INSTRUCTIONAL_SESSIONS = 600
 
 type CanvasAttachmentRequest = { studySessionId: Id<'studySessions'>, expectedSessionRevision: number, idempotencyKey: string }
 const canvasUnavailable = (reasonCode: string) => ({ kind: 'not_admitted' as const, reasonCode, observations: 'no_observations' as const })
+
+async function canvasInstructionMatches(ctx: QueryCtx | MutationCtx, userId: string, cold: Doc<'learnAssessmentOpportunities'>,
+  checkContent: Doc<'sessionContent'>, session: Doc<'studySessions'>, content: Doc<'sessionContent'>) {
+  if (cold.contextPins.kind !== 'session' || session.primaryObjectiveId !== cold.objectiveId || content.objectiveId !== cold.objectiveId
+    || content.blueprintRevisionId !== cold.blueprintRevisionId) return false
+  if (checkContent.inputDigest === await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest])) return true
+  const sourcePlan = await ctx.db.get(cold.contextPins.studyPlanRevisionId)
+  if (!sourcePlan || sourcePlan._id === session.studyPlanRevisionId || !session.placementId
+    || !await hasLearnReflowPlanAuthority(ctx, userId, sourcePlan, cold.contextPins.planRecordRevision)) return false
+  const active = await requireLearnActiveWorkPlan(ctx, userId, sourcePlan)
+  if (active._id !== session.studyPlanRevisionId) return false
+  const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', sourcePlan._id)).take(MAX_CANVAS_INSTRUCTIONAL_SESSIONS + 1)
+  const origins = sessions.filter(row => row.placementId === session.placementId && row.primaryObjectiveId === cold.objectiveId && !row.assessmentPurpose)
+  if (sessions.length > MAX_CANVAS_INSTRUCTIONAL_SESSIONS || origins.length !== 1) return false
+  const publications = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q =>
+    q.eq('userId', userId).eq('studySessionId', origins[0]!._id)).take(2)
+  return publications.length === 1 && publications[0]!.status === 'published' && !publications[0]!.assessmentPurpose
+    && publications[0]!.studyPlanRevisionId === sourcePlan._id && publications[0]!.blueprintRevisionId === cold.blueprintRevisionId
+    && publications[0]!.objectiveId === cold.objectiveId && checkContent.inputDigest === await privacyDigest([
+      'learn-v2.canvas-preparation.v1', publications[0]!._id, publications[0]!.inputDigest])
+}
 
 export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: CanvasAttachmentRequest, entryPoint: 'today' | 'session_deep_link' | 'canvas' = 'canvas') {
   const userId = await requireAdaptiveMutationAccess(ctx)
@@ -99,7 +122,7 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
         q.eq('userId', userId).eq('assignmentId', assignment._id).eq('horizonDays', undefined)).unique()
       const checkContent = cold?.contextPins.kind === 'session' ? await ctx.db.get(cold.contextPins.sessionContentId) : null
       if (assignment.flow !== 'v2_canvas' || !cold || cold.contextPins.kind !== 'session' || !cold.contextPins.canvas
-        || !checkContent || checkContent.inputDigest !== await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest])
+        || !checkContent || !await canvasInstructionMatches(ctx, userId, cold, checkContent, session, content)
         || await measurementScopeReason(ctx, userId, cold) || await measurementFlowReason(ctx, userId, assignment.flow, cold, protocol)) return canvasUnavailable('flow_mismatch')
       const state = await readLearnAssessmentStateForOwner(ctx, userId, cold._id, 'canvas')
       if (state.status !== 'available') return canvasUnavailable(state.status === 'disabled' ? 'disabled' : state.reasonCodes[0] ?? 'assessment_unavailable')
@@ -266,9 +289,14 @@ export const startCanvasSession = mutation({
     const checkContent = cold?.contextPins.kind === 'session' ? await ctx.db.get(cold.contextPins.sessionContentId) : null
     if (!cold || cold.purpose.kind !== 'measurement_cold' || cold.contextPins.kind !== 'session' || !cold.contextPins.canvas
       || cold.contextPins.studySessionId === session._id || !checkContent
-      || checkContent.inputDigest !== await privacyDigest(['learn-v2.canvas-preparation.v1', content._id, content.inputDigest])) return canvasUnavailable('pins_mismatch')
-    const teaching = await readPostSealTeachingForOwner(ctx, userId, cold._id)
-    if (teaching.status !== 'available') return canvasUnavailable(teaching.reasonCode)
+      || !await canvasInstructionMatches(ctx, userId, cold, checkContent, session, content)) return canvasUnavailable('pins_mismatch')
+    if (cold.contextPins.studyPlanRevisionId === session.studyPlanRevisionId) {
+      const teaching = await readPostSealTeachingForOwner(ctx, userId, cold._id)
+      if (teaching.status !== 'available') return canvasUnavailable(teaching.reasonCode)
+    } else {
+      const reason = await postSealApplicationAdmissionForOwner(ctx, userId, cold._id, content._id)
+      if (reason) return canvasUnavailable(reason)
+    }
     await ctx.db.patch(session._id, { status: 'in_progress', revision: session.revision + 1,
       startedSessionContentId: content._id, startedSessionContentRevision: content.revision })
     const applicationId = await bindSessionApplication(ctx, userId, (await ctx.db.get(session._id))!, content, 'canvas')
