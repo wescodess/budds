@@ -15,10 +15,10 @@ export const openPractice = mutation({
     const userId = await requireAuth(ctx)
     const request = parsePublicLearnRequest(postSealTeachingReferenceSchema, args)
     await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: request.assessmentOpportunityId })
-    const prepared = await preparePostSealPracticeForOwner(ctx, userId, request.assessmentOpportunityId)
-    if (prepared.status !== 'prepared') return prepared
     await publishPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
-    return await readPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId)
+    const prepared = await preparePostSealPracticeForOwner(ctx, userId, request.assessmentOpportunityId)
+    return await readPostSealTeachingForOwner(ctx, userId, request.assessmentOpportunityId,
+      prepared.status === 'unavailable' ? prepared.reasonCode : null)
   },
 })
 

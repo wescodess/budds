@@ -7,6 +7,7 @@ import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, s
 import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
 import * as helpAdmission from './lib/learnV2HelpAdmission'
 import * as postSealTeaching from './lib/learnV2PostSealTeaching'
+import { measurementItemAdapters } from './lib/learnV2MeasurementItems'
 import { postSealApplicationFields } from './lib/learnV2PostSealStamp'
 import { learnV2CanvasMeasurementApi, learnV2TodayMeasurementApi } from './learnV2ApiAdapters'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION as version } from '../shared/learn-v2-assessment-disclosure'
@@ -79,7 +80,7 @@ async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boo
   const publish = () => f.owner.mutation(internal.learnV2PostSealTeaching.publishTeaching, { submissionId: accepted.submissionId })
   const binding = async () => (await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2)))[0]!
   const source = async () => (await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2)))[0]!
-  const request = async (key = 'practice_help_runtime_123', kind: 'hint' | 'worked_example' = 'hint') => ({ ...reference,
+  const request = async (key = 'practice_help_runtime_123', kind: 'hint' | 'worked_example' = 'worked_example') => ({ ...reference,
     target: { responseSlotId: (await binding()).responseSlotId }, expectedRevision: 1, kind, idempotencyKey: key })
   const help = async (key?: string, kind?: 'hint' | 'worked_example') => f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, await request(key, kind))
   return { ...f, contentId, opportunity, accepted, practiceBlock, explanation, example, citationSource, reference, read, publish, binding, source, request, help, prepare, score }
@@ -163,7 +164,7 @@ test.each([
   ['worked_example', 'hint'], ['hint', 'worked_example'], ['hint', 'hint'], ['worked_example', 'worked_example'],
   ['hint', 'worked_example', 'hint'], ['worked_example', 'hint', 'worked_example'],
 ] as const)('acceptance preserves every delivered help kind in order %j', async (...kinds) => {
-  const f = await fixture()
+  const f = await fixture({ score: true })
   const first = new Map<string, number>()
   for (const [index, kind] of kinds.entries()) {
     vi.setSystemTime(Date.now() + 1000)
@@ -185,29 +186,29 @@ test.each([
 })
 
 test('bounded help history preserves acceptance and replays at the delivery limit', async () => {
-  const f = await fixture()
+  const f = await fixture({ score: true })
   let firstDeliveredAt = 0
-  for (let index = 0; index < 64; index++) {
+  for (let index = 0; index < 8; index++) {
     vi.setSystemTime(Date.now() + 1000)
-    const result = await f.help(`bounded_help_delivery_${index}_12345`)
+    const result = await f.help(`bounded_help_delivery_${index}_12345`, 'hint')
     if (result.status !== 'authorized') throw new Error('Expected delivered help')
     if (index === 0) firstDeliveredAt = result.deliveredAt
   }
   const binding = await f.binding()
   const slot = await f.t.run(ctx => ctx.db.get(binding.responseSlotId))
-  expect(await f.help('bounded_help_delivery_64_12345')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
-  expect(await f.help('bounded_help_delivery_0_12345')).toMatchObject({ status: 'authorized', deliveredAt: firstDeliveredAt })
+  expect(await f.help('bounded_help_delivery_8_12345', 'hint')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.help('bounded_help_delivery_0_12345', 'hint')).toMatchObject({ status: 'authorized', deliveredAt: firstDeliveredAt })
   expect(await f.t.run(ctx => ctx.db.get(binding.responseSlotId))).toEqual(slot)
   const accepted = await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
     idempotencyKey: 'bounded_help_acceptance_12345', response: { target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1,
       payload: { kind: 'text', text: 'A supported practice response.' } } })
   if (accepted.kind !== 'accepted') throw new Error('Expected practice acceptance')
   expect((await f.t.run(ctx => ctx.db.get(accepted.submissionId)))!.assistanceSnapshot).toMatchObject({
-    assistanceRevision: 64, substantiveHintUsedAt: firstDeliveredAt, answerRevealedAt: null })
+    assistanceRevision: 8, substantiveHintUsedAt: firstDeliveredAt, answerRevealedAt: null })
 })
 
 test('acceptance rejects an incomplete delivered-help history instead of freezing missing timestamps', async () => {
-  const f = await fixture()
+  const f = await fixture({ score: true })
   const first = await f.help('incomplete_help_first_12345', 'worked_example')
   if (first.status !== 'authorized') throw new Error('Expected delivered help')
   expect(await f.help('incomplete_help_second_12345', 'hint')).toMatchObject({ status: 'authorized' })
@@ -248,11 +249,11 @@ test('a valid pass publishes feedback without a lesson and creation after scorin
 })
 
 test('cross-tab preparation and help retry preserve one slot, receipt, exposure and response revision', async () => {
-  const f = await fixture({ prepare: false })
+  const f = await fixture({ prepare: false, score: true })
   const preparations = await Promise.all([f.prepare(), f.prepare()])
   expect(preparations[0]).toEqual(preparations[1])
   const before = await f.t.run(ctx => ctx.db.get(f.accepted.submissionId))
-  const [first, second] = await Promise.all([f.help(), f.help()])
+  const [first, second] = await Promise.all([f.help(undefined, 'hint'), f.help(undefined, 'hint')])
   expect(first).toEqual(second)
   expect(first).toMatchObject({ status: 'authorized', revision: 1, content: { kind: 'hint', tier: 'T0', text: f.explanation.content } })
   const binding = await f.binding()
@@ -271,7 +272,7 @@ test('cross-tab preparation and help retry preserve one slot, receipt, exposure 
   expect(prompt).not.toHaveProperty('practiceHelp')
   expect(help.practiceHelp).toMatchObject({ practiceBindingId: binding._id, responseSlotId: slot._id, assistanceSequence: 1 })
   expect(await f.help('practice_help_second_123', 'worked_example')).toMatchObject({ status: 'authorized', content: { kind: 'worked_example', text: f.example.content } })
-  expect(await f.help()).toEqual(first)
+  expect(await f.help(undefined, 'hint')).toEqual(first)
   expect(await f.help(undefined, 'worked_example')).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
 })
 
@@ -413,8 +414,8 @@ test('feedback and help citation-only source dependencies revoke independently o
 })
 
 test('different cross-tab keys serialize separate deliveries against one practice slot', async () => {
-  const f = await fixture()
-  const results = await Promise.all([f.help('tab_one_help_key_12345'), f.help('tab_two_help_key_12345', 'worked_example')])
+  const f = await fixture({ score: true })
+  const results = await Promise.all([f.help('tab_one_help_key_12345', 'hint'), f.help('tab_two_help_key_12345', 'worked_example')])
   expect(results.every(result => result.status === 'authorized')).toBe(true)
   const receipts = await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(8))
   expect(receipts.map(row => row.assistanceSequence).sort()).toEqual([1, 2])
@@ -495,7 +496,7 @@ test.each(['same_case', 'reserved', 'unknown_lineage', 'foreign_slot', 'duplicat
     if (mutation === 'duplicate_binding') await ctx.db.insert('learnPostSealPracticeBindings', postSealApplicationFields(binding))
     if (mutation === 'changed_prompt') await ctx.db.patch(f.practiceBlock._id, { content: 'A changed prompt with no new publication.' })
   })
-  expect(await f.read()).toMatchObject({ status: 'unavailable' })
+  expect(await f.read()).toMatchObject({ status: 'available', practice: null, availability: { practice: { status: 'unavailable' } } })
   const help = f.help()
   if (mutation === 'foreign_slot') await expect(help).rejects.toThrow(/access denied/)
   else expect(await help).toMatchObject({ status: 'denied' })
@@ -507,10 +508,150 @@ test('unknown or overflowing relevant-check inventory withholds content and rece
   await f.help()
   await f.t.run(async ctx => {
     const original = (await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row._id !== f.opportunity._id)!
-    for (let i = 0; i < 9; i++) await ctx.db.insert('learnAssessmentOpportunities', postSealApplicationFields(original))
+    for (let i = 0; i < 9; i++) await ctx.db.insert('learnAssessmentOpportunities', { ...postSealApplicationFields(original), openAt: Date.now(), closeAt: Date.now() + 1000 })
   })
   expect(await f.read()).toMatchObject({ status: 'unavailable', reasonCode: 'disclosure_unknown' })
   expect(await f.help()).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
+})
+
+test('future and expired check windows do not exhaust current teaching, help or practice acceptance', async () => {
+  const f = await fixture({ score: true })
+  const saved = await f.help()
+  await f.t.run(async ctx => {
+    const future = (await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)!
+    for (let index = 0; index < 60; index++) await ctx.db.insert('learnAssessmentOpportunities', postSealApplicationFields(future))
+    for (const phase of ['preparing', 'ready', 'test_open'] as const) {
+      for (let index = 0; index < 9; index++) await ctx.db.insert('learnAssessmentOpportunities', {
+        ...postSealApplicationFields(future), phase, openAt: Date.now() - 2000, closeAt: Date.now() - 1,
+      })
+    }
+  })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: { revision: 1 } })
+  expect(await f.prepare()).toMatchObject({ status: 'available', practice: { revision: 1 } })
+  expect(await f.help()).toEqual(saved)
+  expect(await f.help('future_windows_new_help_12345')).toMatchObject({ status: 'authorized' })
+  const binding = await f.binding()
+  expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
+    idempotencyKey: 'future_windows_practice_answer_12345', response: { target: { responseSlotId: binding.responseSlotId }, expectedRevision: 1,
+      payload: { kind: 'text', text: 'A supported separate practice response.' } } })).toMatchObject({ kind: 'accepted' })
+})
+
+test('future check inventory still has a separate bounded overflow', async () => {
+  const f = await fixture()
+  await f.t.run(async ctx => {
+    const future = (await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)!
+    for (let index = 0; index < 64; index++) await ctx.db.insert('learnAssessmentOpportunities', postSealApplicationFields(future))
+  })
+  expect(await f.read()).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+})
+
+test('the read distinguishes unopened practice, pending scoring and publishing without persisting work', async () => {
+  const f = await fixture({ prepare: false })
+  expect(await f.read()).toEqual({ ...f.reference, status: 'available', feedback: null, lesson: null, practice: null,
+    availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' } } })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2))).toEqual([])
+  const compare = vi.spyOn(measurementItemAdapters, 'compare')
+  const original = compare.getMockImplementation()!
+  compare.mockImplementation(async input => 'delivery' in Object(input.content) && (input.content as { delivery: { kind: string } }).delivery.kind === 'feedback'
+    ? { decision: 'unknown', coverage: 'unknown' } : original(input))
+  expect(await f.score()).toMatchObject({ status: 'scored' })
+  const pending = await f.source()
+  expect(await f.read()).toEqual({ ...f.reference, status: 'available', feedback: null, lesson: null, practice: null,
+    availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' } } })
+  expect(await f.source()).toEqual(pending)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})
+
+test('public retries publish feedback independently when practice cannot be prepared', async () => {
+  const f = await fixture({ prepare: false })
+  const compare = vi.spyOn(measurementItemAdapters, 'compare')
+  const original = compare.getMockImplementation()!
+  compare.mockResolvedValue({ decision: 'unknown', coverage: 'unknown' })
+  expect(await f.score()).toMatchObject({ status: 'scored' })
+  expect(await f.source()).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  compare.mockImplementation(async input => (input.content as { delivery?: { kind: string } }).delivery?.kind === 'practice'
+    ? { decision: 'reject', coverage: 'complete' } : original(input))
+  const [first, second] = await Promise.all([f.prepare(), f.prepare()])
+  expect(first).toEqual(second)
+  expect(first).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: null,
+    availability: { feedback: 'available', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+  const source = await f.source()
+  expect(await f.prepare()).toEqual(first)
+  expect(await f.source()).toEqual(source)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').take(2))).toHaveLength(1)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
+})
+
+test('publication deferred by an open check completes through public retries after its acceptance', async () => {
+  const f = await fixture({ prepare: false })
+  const second = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.horizonDays === 7)!
+  vi.setSystemTime(second.openAt)
+  const due = makeFunctionReference<'mutation', { userId: string, through: number }>('learnV2MeasurementDueWork:materializeDelayedCheckEligibility')
+  await f.t.mutation(due, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  const ready = (await f.t.run(ctx => ctx.db.get(second._id)))!
+  if (ready.contextPins.kind !== 'session') throw new Error('Expected ready session')
+  const start = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ready.contextPins.studySessionId,
+    expectedSessionRevision: ready.contextPins.sessionRevision, expectedContentRevision: ready.contextPins.contentRevision,
+    idempotencyKey: 'deferred_publication_check_open_12345' })
+  if (start.status !== 'assessment' || start.deliveryGrant?.status !== 'granted') throw new Error('Expected open check')
+  expect(await f.score()).toMatchObject({ status: 'scored' })
+  expect(await f.source()).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  expect(await f.prepare()).toEqual({ version, status: 'unavailable', reasonCode: 'test_open' })
+  expect(await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'deferred_publication_check_accept_12345', response: {
+      target: { assessmentOpportunityId: ready._id }, expectedRevision: start.deliveryGrant.revision,
+      payload: { kind: 'numeric', value: 0, unit: 'members' } } } })).toMatchObject({ kind: 'accepted' })
+  const [first, secondRetry] = await Promise.all([f.prepare(), f.prepare()])
+  expect(first).toEqual(secondRetry)
+  expect(first).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: { revision: 1 } })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('submissionId', f.accepted.submissionId)).take(2))).toHaveLength(1)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toHaveLength(1)
+})
+
+test('saved feedback uses its sealed payload and survives later copy-label edits', async () => {
+  const f = await fixture({ prepare: false, score: true })
+  const source = await f.source()
+  const before = await f.read()
+  expect(before).toMatchObject({ status: 'available', feedback: { tier: 'T0', text: 'TEACHING-CLAIM-CANARY: the source supports the separate practice case.' } })
+  expect(source.content).toMatchObject({ status: 'available', publication: { policyVersion: 'learn-v2.post-seal-feedback-copy.v1' } })
+  const copy = vi.spyOn(postSealTeaching.postSealFeedbackCopy, 'citationLabel').mockReturnValue('Updated source label')
+  const text = vi.spyOn(postSealTeaching.postSealFeedbackCopy, 'text').mockReturnValue('An updated outcome message.')
+  expect(await f.read()).toEqual(before)
+  expect(await f.prepare()).toMatchObject({ status: 'available', feedback: before.status === 'available' ? before.feedback : null })
+  expect(await f.source()).toEqual(source)
+  expect(copy).not.toHaveBeenCalled()
+  expect(text).not.toHaveBeenCalled()
+})
+
+test('a new feedback copy cannot assign T0 to an unentailed outcome message', async () => {
+  const f = await fixture({ prepare: false })
+  vi.spyOn(postSealTeaching.postSealFeedbackCopy, 'text').mockReturnValue('Your response met the check requirements.')
+  expect(await f.score()).toMatchObject({ status: 'scored' })
+  expect(await f.source()).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: null, lesson: null,
+    availability: { feedback: 'feedback_publishing' } })
+})
+
+test.each(['pending', 'pass', 'failure', 'invalid'] as const)('hint explanation uses the lesson gate for %s scoring', async state => {
+  const f = await fixture({ score: state !== 'pending', pass: state === 'pass' })
+  if (state === 'invalid') await f.t.run(ctx => ctx.db.patch(f.opportunity._id, { phase: 'invalid' }))
+  const result = await f.help('hint_lesson_gate_12345', 'hint')
+  expect(result.status).toBe(state === 'failure' ? 'authorized' : 'denied')
+  if (result.status === 'authorized') expect(result.content.text).toBe(f.explanation.content)
+  else expect(result).toEqual({ version, status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.help('worked_example_lesson_gate_12345', 'worked_example')).toMatchObject({ status: 'authorized' })
+})
+
+test('saved hint replay closes when its scored-failure authority is invalidated', async () => {
+  const f = await fixture({ score: true })
+  const saved = await f.help('hint_lesson_replay_gate_12345', 'hint')
+  expect(saved).toMatchObject({ status: 'authorized' })
+  await f.t.run(ctx => ctx.db.patch(f.accepted.submissionId, { currentEligibility: 'excluded' }))
+  expect(await f.help('hint_lesson_replay_gate_12345', 'hint')).toEqual({ version, status: 'denied', reasonCode: 'unavailable' })
+  await f.t.run(ctx => ctx.db.patch(f.accepted.submissionId, { currentEligibility: 'eligible' }))
+  expect(await f.help('hint_lesson_replay_gate_12345', 'hint')).toEqual(saved)
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealHelpReceipts').take(2))).toHaveLength(1)
 })
 
 test('unexpected and resource failures escape all runtime endpoints without delivered receipts or counters', async () => {

@@ -220,18 +220,24 @@ export async function relevantOpenLearnCheck(ctx: ReadCtx, userId: string, oppor
   const resolver = scopeResolver(ctx, userId)
   const scope = emptyScope()
   const rows: Doc<'learnAssessmentOpportunities'>[] = []
+  const now = Date.now()
+  let future = 0
   for (const phase of LEARN_HELP_OPEN_PHASES) {
-    const candidates = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase', q =>
-      q.eq('userId', userId).eq('phase', phase)).take(LEARN_HELP_LIMITS.openOpportunities + 1 - rows.length)
-    rows.push(...candidates)
-    if (rows.length > LEARN_HELP_LIMITS.openOpportunities) return 'unknown'
+    const limit = LEARN_HELP_LIMITS.openOpportunities + FUTURE_OPPORTUNITY_LIMIT + 1 - rows.length - future
+    const candidates = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
+    for (const row of candidates) {
+      if (!Number.isFinite(row.openAt) || !Number.isFinite(row.closeAt)) return 'unknown'
+      if (row.phase !== 'test_open' && row.openAt > now) future++
+      else rows.push(row)
+    }
+    if (rows.length > LEARN_HELP_LIMITS.openOpportunities || future > FUTURE_OPPORTUNITY_LIMIT) return 'unknown'
   }
   try {
     await resolver.learningVoid(scope, opportunity.learningVoidId)
     for (const row of rows) {
       if (row._id === opportunity._id) continue
       if (row.submissionId) return 'unknown'
-      if (row.phase !== 'test_open' && (row.openAt > Date.now() || row.closeAt <= Date.now())) continue
       if (row.assignmentId && row.assignmentId === opportunity.assignmentId) return 'yes'
       const other = emptyScope()
       await resolver.learningVoid(other, row.learningVoidId)

@@ -6,11 +6,13 @@ import type { Id } from './_generated/dataModel'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol, type DeliveryTeachingShape } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { canvasFamilyFixture } from '../tests/fixtures/learn-v2-canvas'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
-import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
+import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter, normalizedInstructionalCaseFingerprints } from './lib/learnV2ArtifactLineage'
 import { measurementItemAdapters } from './lib/learnV2MeasurementItems'
 import { measurementCaseExposed } from './lib/learnV2Measurement'
 import * as casePrompt from '../shared/learn-v2-case-prompt'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
+import { postSealApplicationFields } from './lib/learnV2PostSealStamp'
+import { measurementClock } from './lib/learnV2MeasurementAssignment'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION as version } from '../shared/learn-v2-assessment-disclosure'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION } from '../shared/learn-v2-responses'
@@ -130,13 +132,13 @@ test.each(['identical', 'normalized', 'near'] as const)('legacy publication cann
       ? { decision: 'reject' as const, coverage: 'complete' as const } : original(input))
   }
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
-  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.open(f.row._id)).toMatchObject({ status: 'available', practice: null, availability: { practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
   expect(await f.t.run(ctx => ctx.db.query('learnResponseSlots').take(2))).toEqual([])
 })
 
 const ordinaryPrompt = 'TEACHING-CANARY-independent_application: Seven parcels contain eleven spare parts apiece. Determine the shipment inventory.'
-const passFeedback = 'Your response met the check requirements. Use the cited explanation to connect the idea to a separate practice case.'
+const feedbackClaim = 'TEACHING-CLAIM-CANARY: the source supports the separate practice case.'
 
 async function ordinarySource(f: Awaited<ReturnType<typeof ordinary>>) {
   return (await f.t.run(ctx => ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
@@ -151,7 +153,7 @@ function deliveryKind(value: unknown) {
 test.each([
   ['hint', false], ['hint', true], ['worked_example', false], ['worked_example', true],
 ] as const)('post-seal %s denies the ordinary check as help, canonical=%s', async (kind, canonical) => {
-  const f = await ordinary(false, undefined, undefined, { blocks: {
+  const f = await ordinary(false, undefined, undefined, { pass: false, blocks: {
     [kind === 'hint' ? 'explanation' : 'worked_example']: canonical ? ` ${ordinaryPrompt.toUpperCase().replaceAll(' ', '\n  ')} ` : ordinaryPrompt,
   } })
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
@@ -167,7 +169,7 @@ test.each([
   ['feedback', false], ['feedback', true], ['lesson', false], ['lesson', true],
 ] as const)('post-seal %s cannot publish the ordinary check, canonical=%s', async (kind, canonical) => {
   const f = await ordinary(false, undefined, undefined, kind === 'feedback'
-    ? { blocks: { independent_application: canonical ? ` ${passFeedback.toUpperCase().replaceAll(' ', '\n  ')} ` : passFeedback } }
+    ? { blocks: { independent_application: canonical ? ` ${feedbackClaim.toUpperCase().replaceAll(' ', '\n  ')} ` : feedbackClaim } }
     : { pass: false, blocks: { explanation: canonical ? ` ${ordinaryPrompt.toUpperCase().replaceAll(' ', '\n  ')} ` : ordinaryPrompt } })
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
   expect(await f.read(f.row._id)).toMatchObject({ status: 'available', feedback: null, lesson: null })
@@ -231,7 +233,7 @@ test.each([
 })
 
 test.each(['feedback', 'hint'] as const)('post-seal %s comparison propagates unexpected resource errors', async kind => {
-  const f = await ordinary()
+  const f = await ordinary(false, undefined, undefined, { pass: false })
   if (kind === 'hint') expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
   const compare = vi.mocked(measurementItemAdapters.compare)
   const original = compare.getMockImplementation()!
@@ -241,7 +243,7 @@ test.each(['feedback', 'hint'] as const)('post-seal %s comparison propagates une
   })
   if (kind === 'feedback') {
     await expect(f.score(f.receipt.submissionId)).rejects.toThrow('Read limit exceeded')
-    expect(await f.t.run(ctx => ctx.db.get(f.row._id))).toMatchObject({ phase: 'scored_pass' })
+    expect(await f.t.run(ctx => ctx.db.get(f.row._id))).toMatchObject({ phase: 'scored_fail' })
     expect(await ordinarySource(f)).toMatchObject({ content: { status: 'pending' }, sourceDependencyCount: 0 })
   } else {
     const opened = await f.open(f.row._id)
@@ -254,7 +256,7 @@ test.each(['feedback', 'hint'] as const)('post-seal %s comparison propagates une
 })
 
 test.each(['hint', 'worked_example'] as const)('post-seal %s replay rechecks the saved content against the check', async kind => {
-  const f = await ordinary()
+  const f = await ordinary(false, undefined, undefined, { pass: false })
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
   const opened = await f.open(f.row._id)
   if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice')
@@ -289,7 +291,7 @@ test.each(['feedback', 'lesson'] as const)('post-seal %s read rechecks the saved
 test.each(['sibling', 'unknown'] as const)('ordinary practice rejects %s lineage', async lineage => {
   const f = await ordinary(false, undefined, lineage)
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
-  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.open(f.row._id)).toMatchObject({ status: 'available', practice: null, availability: { practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
   expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toEqual([])
 })
 
@@ -301,7 +303,7 @@ test.each([
   const f = await ordinary()
   expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored' })
   const compare = vi.spyOn(measurementItemAdapters, 'compare').mockResolvedValue(verdict)
-  expect(await f.open(f.row._id)).toEqual({ version, status: 'unavailable', reasonCode: 'disclosure_unknown' })
+  expect(await f.open(f.row._id)).toMatchObject({ status: 'available', practice: null, availability: { practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
   if (f.row.assessmentPins.kind !== 'session_application') throw new Error('Expected ordinary check')
   expect(compare).toHaveBeenCalledWith(expect.objectContaining({ purpose: 'instructional',
     corpus: [expect.objectContaining({ _id: f.row.assessmentPins.caseId, usageClass: 'instructional' })],
@@ -321,10 +323,9 @@ test('a separate ordinary practice case is proved once and its prompt case owns 
   await f.read(f.row._id)
   expect(compare).toHaveBeenCalledOnce()
   expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
-    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'hint', idempotencyKey: 'separate_prompt_help_12345' })).toMatchObject({ status: 'authorized' })
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'worked_example', idempotencyKey: 'separate_prompt_help_12345' })).toMatchObject({ status: 'authorized' })
   const binding = (await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2)))[0]!
   const promptCase = (await f.t.run(ctx => ctx.db.get(binding.practiceCaseId)))!
-  const { normalizedInstructionalCaseFingerprints } = await import('./lib/learnV2ArtifactLineage')
   expect(promptCase).toMatchObject(await normalizedInstructionalCaseFingerprints(opened.practice.prompt, opened.practice.prompt))
   const exposures = await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_caseId_and_serverTime', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier).eq('caseId', binding.practiceCaseId)).take(8))
@@ -346,7 +347,7 @@ test.each([false, true])('ordinary scoring preserves teaching and immutable acce
   const opened = await f.open(f.row._id)
   if (opened.status !== 'available' || !opened.practice) throw new Error('Expected practice opening')
   expect(await f.owner.mutation(api.learnV2Assistance.authorizePracticeAssistance, { version, assessmentOpportunityId: f.row._id,
-    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'hint', idempotencyKey: 'completed_session_practice_hint_12345' }))
+    target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1, kind: 'worked_example', idempotencyKey: 'completed_session_practice_hint_12345' }))
     .toMatchObject({ status: 'authorized' })
   expect(await f.owner.mutation(api.learnV2Responses.acceptResponse, { version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
     idempotencyKey: 'completed_session_practice_answer_12345', response: { target: { responseSlotId: opened.practice.responseSlotId }, expectedRevision: 1,
@@ -358,6 +359,89 @@ test.each([false, true])('ordinary scoring preserves teaching and immutable acce
   expect((await f.t.run(ctx => ctx.db.get(f.row._id)))!.contextPins).toEqual(accepted.contextPins)
 })
 
+test.each([{ pass: false, separate: true }, { pass: true, separate: true }, { pass: true, separate: false }])('retained-transfer teaching uses its exact Independent basis and a fresh pair proof: %j', async ({ pass, separate }) => {
+  const f = await ordinary()
+  expect(await f.score(f.receipt.submissionId)).toMatchObject({ status: 'scored', result: { scorePercent: 100 } })
+  const basis = (await f.t.run(ctx => ctx.db.get(f.row._id)))!
+  const basisAt = Date.now()
+  vi.setSystemTime(basisAt + 7 * 86_400_000)
+  const retained = await f.t.run(async ctx => {
+    const userId = deliveryIdentity.tokenIdentifier
+    const checks = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_learningVoidId', q =>
+      q.eq('userId', userId).eq('learningVoidId', f.graph.learningVoidId)).take(8)
+    for (const check of checks) if (check.horizonDays === 7) await ctx.db.patch(check._id, { phase: 'cancelled' })
+    const prompt = 'Use six pallets with thirteen boxes each to determine the warehouse delivery total.'
+    if (basis.assessmentPins.kind !== 'session_application' || basis.contextPins.kind !== 'session') throw new Error('Expected Independent basis')
+    const checkCase = (await ctx.db.get(basis.assessmentPins.caseId))!
+    const caseId = await ctx.db.insert('learnAssessmentCases', { ...postSealApplicationFields(checkCase),
+      ...await normalizedInstructionalCaseFingerprints(prompt, prompt), caseKey: 'retained-transfer-case',
+      usageClass: 'instructional', identityValidationId: checkCase.identityValidationId! })
+    const validation = (await ctx.db.get(checkCase.identityValidationId!))!
+    const catalog = (await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique())!
+    await ctx.db.patch(catalog._id, { catalogRevision: catalog.catalogRevision + 1 })
+    const validationId = await ctx.db.insert('learnMeasurementValidations', { ...postSealApplicationFields(validation),
+      subject: { kind: 'case', caseId }, comparedCatalogRevision: catalog.catalogRevision + 1 })
+    await ctx.db.patch(caseId, { identityValidationId: validationId })
+    const clock = measurementClock(syntheticDeliveryProtocol(), { at: basisAt, eventId: basis.authoritativeAttemptId! }, 'UTC', 7)
+    const studySessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      primaryObjectiveId: f.graph.objectiveId, status: 'ready', revision: 1, assistanceRevision: 0, scheduledStartAt: Date.now(), placementKind: 'retained_review', assessmentPurpose: 'retained_transfer' })
+    const original = (await ctx.db.get(f.contentId))!
+    const sessionContentId = await ctx.db.insert('sessionContent', { ...postSealApplicationFields(original), studySessionId,
+      assessmentPurpose: 'retained_transfer' })
+    await ctx.db.insert('sessionContentBlocks', { userId, sessionContentId, order: 0, kind: 'transfer_challenge', content: prompt, claimOrdersJson: '[0]' })
+    const claims = await ctx.db.query('sessionContentClaims').withIndex('by_userId_and_sessionContentId_and_order', q =>
+      q.eq('userId', userId).eq('sessionContentId', original._id)).take(32)
+    for (const claim of claims) {
+      const sessionContentClaimId = await ctx.db.insert('sessionContentClaims', { ...postSealApplicationFields(claim), sessionContentId })
+      const supports = await ctx.db.query('learnClaimSupports').withIndex('by_userId_and_sessionContentClaimId', q =>
+        q.eq('userId', userId).eq('sessionContentClaimId', claim._id)).take(8)
+      for (const support of supports) await ctx.db.insert('learnClaimSupports', { ...postSealApplicationFields(support), sessionContentClaimId })
+    }
+    const { submissionId: _submission, scoringJobId: _job, authoritativeAttemptId: _attempt, deliveryGrantId: _grant,
+      ...fields } = postSealApplicationFields(basis)
+    const opportunityId = await ctx.db.insert('learnAssessmentOpportunities', { ...fields, phase: 'ready', revision: 1,
+      purpose: { kind: 'retained_transfer', basisAttemptId: basis.authoritativeAttemptId!, clock },
+      contextPins: { ...basis.contextPins, studySessionId, sessionContentId, sessionRevision: 1 },
+      assessmentPins: { ...basis.assessmentPins, caseId, promptDigest: await privacyDigest(prompt) },
+      openAt: clock.openAt, closeAt: clock.closeAt, dueAt: clock.dueAt, checkSequence: 1, originalSlot: true })
+    await ctx.db.patch(studySessionId, { assessmentOpportunityId: opportunityId })
+    await ctx.db.patch(sessionContentId, { assessmentOpportunityId: opportunityId })
+    return { opportunityId, studySessionId, caseId }
+  })
+  const started = await f.owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: retained.studySessionId,
+    expectedSessionRevision: 1, expectedContentRevision: 1, idempotencyKey: 'retained_teaching_start_12345' })
+  if (started.status !== 'assessment' || started.deliveryGrant?.status !== 'granted') throw new Error(`Expected retained grant: ${JSON.stringify(started)}`)
+  const accepted = await f.owner.mutation(api.learnV2Mastery.acceptMasterySubmission, { submission: {
+    version: LEARN_V2_RESPONSE_CONTRACT_VERSION, idempotencyKey: 'retained_teaching_accept_12345', response: {
+      target: { assessmentOpportunityId: retained.opportunityId }, expectedRevision: started.deliveryGrant.revision,
+      payload: { kind: 'text', text: 'A retained transfer response.' }, confidence: 3 } } })
+  if (accepted.kind !== 'accepted') throw new Error(`Expected retained acceptance: ${JSON.stringify(accepted)}`)
+  expect(await f.t.run(ctx => ctx.db.get(accepted.submissionId))).toMatchObject({ validitySnapshot: { status: 'valid', masteryEligible: true } })
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ id: 'retained-synthetic-execution', model: 'synthetic/model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+      criterionResults: [{ key: 'accuracy', awarded: pass }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } })))
+  const compare = vi.mocked(measurementItemAdapters.compare)
+  const original = compare.getMockImplementation()!
+  if (!separate) compare.mockImplementation(async input => deliveryKind(input.content)
+    ? { decision: 'unknown', coverage: 'unknown' } : original(input))
+  compare.mockClear()
+  expect(await f.score(accepted.submissionId)).toMatchObject({ status: 'scored', result: { scorePercent: pass ? 100 : 0 } })
+  if (!separate) {
+    expect(await f.read(retained.opportunityId)).toMatchObject({ status: 'available', feedback: null, lesson: null,
+      availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' } } })
+    expect(await f.open(retained.opportunityId)).toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null,
+      availability: { feedback: 'feedback_publishing', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+    return
+  }
+  expect(await f.read(retained.opportunityId)).toMatchObject({ status: 'available', feedback: { tier: 'T0' },
+    lesson: pass ? null : { tier: 'T0' }, availability: { feedback: 'available', practice: { status: 'not_opened' } } })
+  expect(await f.open(retained.opportunityId)).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, practice: { revision: 1 } })
+  expect(compare.mock.calls.filter(([input]) => deliveryKind(input.content)).every(([input]) => input.corpus.length === 1
+    && input.corpus[0]!._id === retained.caseId)).toBe(true)
+  expect(new Set(compare.mock.calls.map(([input]) => deliveryKind(input.content)))).toEqual(new Set(pass ? ['feedback', 'practice'] : ['feedback', 'lesson', 'practice']))
+})
 test('an unrelated post-seal revision cannot impersonate scoring completion', async () => {
   const f = await ordinary()
   await f.t.run(ctx => ctx.db.patch(f.graph.studySessionId, { revision: 4 }))

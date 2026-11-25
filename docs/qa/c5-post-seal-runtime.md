@@ -1,6 +1,7 @@
 # C5.6 post-seal runtime
 
-The frozen public version remains `learn-v2.post-seal-teaching.v1`. Storage uses
+The public version remains `learn-v2.post-seal-teaching.v1`, with the versioned
+`learn-v2.post-seal-teaching.v1.runtime.1` contract amendment. Storage uses
 the landed #570 contract. Responses, delivery, enrollment and scoring defaults
 are unchanged. This implementation adds no frontend, provider invocation,
 migration or deployment.
@@ -17,6 +18,12 @@ separate case and creates one practice slot, immutable submission binding,
 normalized dependencies and prompt delivery exposure together. Retries preserve
 that slot and case. Unsupported, same-case, sibling, reserved or unknown input
 remains unavailable. No candidate content is generated here.
+
+Retained-transfer checks use the instructional publication from their exact
+canonical Independent basis attempt and opportunity. Their current test-only
+publication remains excluded from instructional registration. A retained case
+allocated later requires a fresh complete comparison against that exact check;
+an older catalogue decision alone never authorizes delivery.
 
 Every post-seal artifact uses one separation helper with the same normalized
 prompt identity as the sealed check and its registered source lineage. It checks
@@ -41,17 +48,20 @@ canonical score commit.
 
 The scoring action calls `internal.learnV2PostSealTeaching.publishTeaching`
 after the authoritative score commits, including on a score retry. Practice
-opening also retries publication when a valid score already exists. These
+opening retries publication before attempting preparation, independently of its
+success, when a valid score already exists. These
 publication transactions remain separate from the canonical score commit;
 unexpected publication errors propagate without undoing that score. Feedback
 and lessons resolve the same pinned instructional publication independently of
-practice preparation. Feedback gives a bounded outcome statement with
-opaque citations. A valid failure additionally receives the source-verified
+practice preparation. Feedback quotes a verified supporting claim with opaque
+citations; it does not label canned outcome copy T0. A valid failure additionally receives the source-verified
 explanation from the practice content's registered instructional session.
 Publication seals the exact payload, complete dependency manifest and validation
 digests in the same transaction as all source links. This producer uses verified
 T0 content; it does not infer T1 or T2 provenance from unlabelled legacy text.
-The frozen schemas retain their ADR-0009 tier restrictions.
+The schemas retain their ADR-0009 tier restrictions. Feedback copy is versioned
+in the existing publication policy pin. Reads verify the sealed stored payload
+and current authority without rebuilding text or citation labels.
 
 Preparation requires an existing passing instructional reservation decision.
 The default unavailable semantic validator is unchanged. Synthetic decisions
@@ -64,9 +74,14 @@ permission to activate collection.
 mints a grant. Every read and help replay rechecks authentication, deletion,
 ownership, canonical acceptance, current score eligibility, evidence, grant,
 pins, publication and the owner-scoped relevant-check inventory. The bounded
-open-phase index ranges serialize with check acceptance. A second relevant
+owner/phase/closing-time index ranges serialize with check acceptance. Closed
+windows are excluded; up to 64 future windows use a separate allowance from
+the eight currently open checks. A second relevant
 check, including another horizon on the same assignment, closes teaching and
-help. Overflow or unresolved scope remains unknown.
+help. Overflow or unresolved scope remains unknown. Successful envelopes expose
+independent, content-free feedback and practice availability, distinguishing
+scoring, publication, unopened practice and practice failure. A practice failure
+withholds its prompt without hiding independently valid teaching.
 
 Post-seal session admission uses the response's immutable acceptance pins.
 Ordinary scoring may complete an `independent_application` or `retained_transfer`
@@ -87,7 +102,8 @@ allowance. Any extra revision or mismatched completion proof closes admission.
 
 `authorizePracticeAssistance` checks both the public check gate and the exact
 live practice binding before first delivery. Hint content comes from its
-verified explanation; worked examples use the corresponding verified
+verified explanation and shares the lesson's valid-scored-failure gate, including
+on replay; worked examples use the corresponding verified
 instructional block. Each delivery atomically saves an immutable content-bearing
 receipt, independent exposure, complete source links and slot assistance
 counters. Canonical key/request hashes prevent payload substitution. Replay
@@ -97,9 +113,11 @@ and returns the saved ID, time and content.
 Help preserves the response revision and original prompt delivery exposure.
 Acceptance checks the complete owner/slot exposure history against the slot's
 sequence, counters and latest authorization, and freezes the first delivered
-timestamp of each assistance kind. Distinct deliveries are limited to 64 per
-slot so that this verification stays bounded; saved requests still replay at
-the limit and the response remains acceptable.
+timestamp of each assistance kind. New deliveries are limited to eight per slot,
+so its prompt and help exposures cannot alone exhaust the 64-row Void history
+budget for unrelated cold checks. Saved requests still replay at the limit and
+the response remains acceptable; acceptance retains the existing 64-entry bound
+for previously saved support histories.
 Both exposure kinds carry the binding's practice case and omit
 `assessmentOpportunityId`. Practice acceptance freezes its own assistance and
 purge dependencies. It changes neither the sealed check nor its assistance
@@ -136,6 +154,9 @@ also rejects missing transition evidence, an unconsumed execution and changed
 assistance after acceptance, without changing frozen acceptance records.
 It also covers colliding historical publications, sibling and unknown lineage,
 incomplete pair decisions, separate-case retries and canonical practice exposures.
+Retained-transfer scoring, large future-check inventories, independently
+retryable publication, availability transitions, copy stability, hint/lesson
+gating and the eight-delivery limit also have persisted regression coverage.
 Every help kind, feedback and lesson has collision and replay coverage. Distinct
 atlas countries, arithmetic operators and numbers retain publication coverage.
 The measurement suite exercises enrollment and replacement selection with

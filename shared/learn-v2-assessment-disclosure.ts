@@ -146,10 +146,18 @@ export const learnPostSealLessonSchema = z.strictObject({ tier: sourcedTeachingT
 export const learnPostSealPracticeSchema = z.strictObject({
   responseSlotId: learnIdSchema<'learnResponseSlots'>(), revision: learnRevisionSchema, tier: practiceTeachingTier, prompt: learnTextSchema(),
 })
+export const learnPostSealAvailabilitySchema = z.strictObject({
+  feedback: z.enum(['scoring_pending', 'feedback_publishing', 'available', 'unavailable']),
+  practice: z.discriminatedUnion('status', [
+    z.strictObject({ status: z.enum(['not_opened', 'available']) }),
+    z.strictObject({ status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
+  ]),
+})
 export const learnPostSealTeachingSchema = z.discriminatedUnion('status', [
   z.strictObject({ version: postSealVersion, status: z.literal('unavailable'), reasonCode: z.enum(LEARN_V2_POST_SEAL_TEACHING_REASONS) }),
   z.strictObject({ version: postSealVersion, status: z.literal('available'), assessmentOpportunityId: learnIdSchema<'learnAssessmentOpportunities'>(),
-    feedback: learnPostSealFeedbackSchema.nullable(), lesson: learnPostSealLessonSchema.nullable(), practice: learnPostSealPracticeSchema.nullable() }),
+    feedback: learnPostSealFeedbackSchema.nullable(), lesson: learnPostSealLessonSchema.nullable(), practice: learnPostSealPracticeSchema.nullable(),
+    availability: learnPostSealAvailabilitySchema }),
 ])
 export const learnAuthorizePracticeAssistanceSchema = learnPostSealTeachingReferenceSchema.extend({
   target: learnPracticeAssistanceTargetSchema, expectedRevision: learnRevisionSchema,
@@ -204,6 +212,11 @@ export function learnPostSealTeachingDenial(context: LearnPostSealTeachingContex
   return postSealTeachingDenial(parseLearnContract(learnPostSealTeachingContextSchema, context))
 }
 
+export function canReadPostSealLesson(context: LearnPostSealTeachingContext) {
+  return context.validScore && context.capabilities.canReadFeedback && context.disclosure.lifecycle.authoritativeAttemptId !== null
+    && context.disclosure.lifecycle.phase === 'scored_fail'
+}
+
 function canReadPostSealPractice(context: LearnPostSealTeachingContext, responseSlotId: string, revision: number) {
   const binding = context.practiceBinding
   return context.capabilities.canTeachSeparateCase && binding?.owned && binding.evidenceAvailable && binding.stage === 'practice'
@@ -224,11 +237,18 @@ export function projectPostSealTeaching(input: unknown, context: LearnPostSealTe
       || source.attemptId !== lifecycle.authoritativeAttemptId) return unavailableLearnPostSealTeaching('disclosure_unknown')
     const feedbackAllowed = value.validScore && value.capabilities.canReadFeedback && lifecycle.authoritativeAttemptId !== null
       && ['scored_pass', 'scored_fail'].includes(lifecycle.phase)
+    const practiceAllowed = source.practice && canReadPostSealPractice(value, source.practice.responseSlotId, source.practice.revision)
     return parseLearnContract(learnPostSealTeachingSchema, {
       version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: lifecycle.assessmentOpportunityId,
       feedback: feedbackAllowed ? source.feedback : null,
-      lesson: feedbackAllowed && lifecycle.phase === 'scored_fail' ? source.lesson : null,
-      practice: source.practice && canReadPostSealPractice(value, source.practice.responseSlotId, source.practice.revision) ? source.practice : null,
+      lesson: canReadPostSealLesson(value) ? source.lesson : null,
+      practice: practiceAllowed ? source.practice : null,
+      availability: {
+        feedback: feedbackAllowed ? source.feedback ? 'available' : 'feedback_publishing'
+          : ['submitted_sealed', 'scoring_pending', 'retryable_failure', 'reconciliation_required'].includes(lifecycle.phase) ? 'scoring_pending' : 'unavailable',
+        practice: practiceAllowed ? { status: 'available' } : source.practice
+          ? { status: 'unavailable', reasonCode: 'disclosure_unknown' } : { status: 'not_opened' },
+      },
     })
   }
   catch (error) {
@@ -246,6 +266,7 @@ export function projectPracticeAssistanceAuthorization(input: unknown, request: 
   if (denied) return deny(denied)
   if (command.assessmentOpportunityId !== value.disclosure.lifecycle.assessmentOpportunityId
     || !canReadPostSealPractice(value, command.target.responseSlotId, command.expectedRevision)) return deny('disclosure_unknown')
+  if (command.kind === 'hint' && !canReadPostSealLesson(value)) return deny('unavailable')
   try {
     const saved = parseLearnContract(learnPracticeAssistanceReceiptSchema, input)
     if (JSON.stringify(saved.request) !== JSON.stringify(command)) return deny('disclosure_unknown')

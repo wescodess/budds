@@ -1,6 +1,6 @@
 # Post-seal teaching read contract
 
-Contract: `learn-v2.post-seal-teaching.v1`. Implements [C1.4 #533](https://github.com/wescodess/budds/issues/533), consuming the [approved Canvas experience](../design/learn-delayed-check/decision.md). The owner chose this post-seal contract on 2026-11-08. All new handlers stay inactive and write nothing.
+Contract: `learn-v2.post-seal-teaching.v1`. Implements [C1.4 #533](https://github.com/wescodess/budds/issues/533), consuming the [approved Canvas experience](../design/learn-delayed-check/decision.md). The owner chose this post-seal contract on 2026-11-08. The original C1.4 handlers below stay inactive and write nothing. The versioned runtime amendment below specifies #535's default-off behavior and supersedes the affected endpoint, availability and hint rules.
 
 ## Public shape
 
@@ -120,3 +120,118 @@ The runtime ticket must implement the following before the Canvas replaces its t
 - Replace #442's temporary `laterTeaching` channel using these server reads and authorization results, under its existing UI ownership and release gates. Run the runtime endpoint/alias matrix; contract fixtures here do not establish runtime publication, generation, persistence or production readiness.
 
 No schema, frontend, runtime generator/selector, flag, environment, deployment, migration, enrollment or provider operation is introduced by C1.4.
+
+## Runtime amendment: `learn-v2.post-seal-teaching.v1.runtime.1`
+
+This amendment completes the backend contract consumed by [#442](https://github.com/wescodess/budds/issues/442).
+It keeps the public request version `learn-v2.post-seal-teaching.v1`, adds closed
+availability metadata to successful runtime reads, and records the practice-opening
+mutation already implemented by #535. It adds no storage fields or indexes.
+The capability remains default-off. Disabled responses are byte-identical to
+the original contract; this amendment authorizes no activation or frontend work.
+
+| Registered endpoint | Canvas alias | Transaction and result |
+| --- | --- | --- |
+| `learnV2Assessments.getPostSealTeaching` | `learnV2CanvasMeasurementApi.getPostSealTeaching` | Query. Takes `Reference`; returns `Teaching` with the availability amendment below. Reads existing records only. |
+| `learnV2PostSealTeaching.openPractice` | `learnV2CanvasMeasurementApi.openPostSealPractice` | Authenticated mutation. Takes `Reference`; returns the same amended `Teaching`. Independently retries teaching publication before attempting practice preparation. |
+| `learnV2Assistance.authorizePracticeAssistance` | `learnV2CanvasMeasurementApi.authorizePracticeAssistance` | Authenticated mutation. Takes `PracticeHelpRequest`; returns `PracticeHelpAuthorization`. |
+
+There are no Today aliases for these endpoints. None accepts owner, score,
+content, case, publication approval or trusted binding from the client. The
+existing response-acceptance endpoint accepts the practice slot; it is not an
+additional post-seal content channel.
+
+Every `status: 'available'` runtime teaching envelope now also contains:
+
+```ts
+availability: {
+  feedback: 'scoring_pending' | 'feedback_publishing' | 'available' | 'unavailable'
+  practice:
+    | { status: 'not_opened' | 'available' }
+    | { status: 'unavailable'; reasonCode: Reason }
+}
+```
+
+These states carry no content, private scoring detail or case identity. The
+feedback and practice states are independent: opening practice need not await
+a score, and publishing feedback need not succeed in preparing practice.
+Content remains exclusively in the existing nullable feedback, lesson and
+practice fields, after their original authority and disclosure checks.
+
+| State | Meaning and next transition |
+| --- | --- |
+| `feedback: scoring_pending` | Accepted, sealed work has pending, retryable or reconciliation-required scoring. No feedback or lesson is released. Practice may be opened independently. |
+| `feedback: feedback_publishing` | An authoritative valid score permits feedback but the source is still pending. `openPostSealPractice` retries publication, including when practice cannot be prepared. |
+| `feedback: available` | The immutable source has been published and currently permits feedback. A lesson additionally requires a valid scored failure. |
+| `feedback: unavailable` | The accepted work currently has no eligible scored feedback, such as an invalid result. This is not publication progress. |
+| `practice: not_opened` | No binding exists. The caller can invoke `openPostSealPractice`; the query creates nothing. This is distinct from failed disclosure. |
+| `practice: available` | The existing binding and saved prompt pass current authority and separation checks. |
+| `practice: unavailable` | Preparation or renewed practice authority failed. The content-free `reasonCode` identifies that failure; independently valid feedback and lesson remain readable. |
+| Outer `status: unavailable` | Shared check authority, source publication, evidence, access, sealing or relevant-open-check admission failed, with the existing `Reason`. No content is released. |
+
+Before scoring or practice opening, an authorized sealed read therefore reports
+`scoring_pending` and `not_opened`, with all content null. Missing optional
+pre-score storage is not `disclosure_unknown`. A missing source after an
+authoritative score, duplicate sources, malformed publication or mismatched
+attempt still fail closed. There is no query-side repair or inferred publication.
+
+The scoring action attempts publication after the authoritative score commit.
+An authorized practice-opening mutation always attempts that bounded, idempotent
+publication first, independently of practice preparation. If another check
+defers publication, a later call retries once authority permits it. No retry
+rewrites an available or purged source, stamps an attempt outside score commit,
+or requires a second score. Pending sources retain zero dependencies and no
+links until the one atomic publication. Same-submission concurrent calls produce
+one publication and at most one binding/slot. Unexpected failures escape the
+transaction; domain denials do not erase independently published teaching.
+
+The relevant-check inventory uses owner/phase/closing-time indexed reads and
+excludes closed windows before applying its bound. At most eight currently
+open checks and 64 future checks can be inspected. Future preparing rows do not
+consume the open-check allowance. Unresolved scope or overflow of either bounded
+set stays unknown; an actual relevant open check closes reads, help, replay,
+practice preparation and practice acceptance until it seals or closes.
+
+Retained-transfer checks are included. Their test-only publication, including
+`transfer_challenge`, remains the sealed check and cannot acquire instructional
+lineage. Teaching resolves the original instructional publication from the exact
+canonical Independent basis attempt and its opportunity. That publication must
+match the owner, Void, Blueprint and objective. Its teaching blocks still need
+the same complete separation, reservation and evidence proof against the retained
+check as for an ordinary application. The existing proven scoring-completion revision allowance
+applies; unrelated revisions remain denied.
+
+The retained check may be allocated after that instructional publication. The
+older catalogue comparison is not evidence of separation from the new check:
+first delivery must obtain the complete passing comparison against the exact
+retained check, and replay must verify that sealed pair proof. This targeted
+allowance does not change instructional registration, current reservation and
+lineage checks, or any other disclosure caller.
+
+New feedback uses the accepted, entailment-verified claim supporting the cited
+instructional explanation, rather than labeling a canned outcome sentence T0.
+The score outcome stays in the existing assessment result channel. New feedback
+publications use `learn-v2.post-seal-feedback-copy.v1` in the existing publication
+policy pin. Reads and retries validate the saved payload's sealed digest,
+complete dependency manifest, separation proof and current authority. They never
+reconstruct text or citation labels from the latest copy producer. A future copy
+version must retain verification for existing approved publication versions;
+it must not rewrite prior payloads. T0 feedback must match a currently verified
+supporting claim independently of the copy producer. A canned outcome that
+lacks that entailment remains unavailable, including in a previously saved
+payload; it cannot be repaired by rewriting its immutable content.
+
+The current hint producer delivers the verified explanation. It therefore has
+the same valid-score, scored-failure and feedback-capability gate as the lesson,
+on first delivery and replay. Pending, invalid and passing checks cannot obtain
+that explanation through a hint. Separate-case worked examples retain the
+practice gate and remain available without valid scoring. Every kind still
+requires its shared exact-check separation proof and a content-bearing receipt.
+
+New help is limited to eight distinct deliveries per practice slot. Prompt
+delivery plus a full slot therefore contributes at most nine exposures to the
+existing 64-row Void history budget, rather than exhausting it alone. All
+deliveries remain recorded, replayable at the limit, and counted for case novelty.
+Acceptance retains its existing bounded 64-entry verification for saved histories;
+the new delivery cap does not discard earlier support timestamps or invalidate
+an existing receipt. It introduces no new evidence exemption or storage schema.
