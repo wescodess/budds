@@ -34,7 +34,7 @@ The report starts from the approved synthetic owner roster, reads the real bound
 
 The exact retained normalized inputs are replayed by the actual Node CLI in a temporary directory and removed afterwards. CLI cells must equal the online published cells. Offline output must retain `sourceAdmission: pending`, `viewerGrant: unverified_offline`, `realObservations: unverified_offline`, and `baselineCapture: unproven`. Synthetic replay never upgrades source provenance.
 
-Controls cover anonymous and different-issuer direct report/export/download requests, legacy unaudited-query refusal, owned metadata exports, foreign export authorization, answer/private-scoring canaries, immutable scorer replay without another dispatch, post-watermark response integrity invalidation, and physical source purge. Invalidated online readers withhold aggregates; retained snapshot inputs are never presented as current authority. The explicit disclosure inventory assigns all 142 currently declared surfaces to an owner and regression suites. That inventory test checks completeness and existing test files; the mapped suites supply behavioral evidence. Every owned measurement table must appear in the export inventory and survive the exhaustive bounded account-deletion test. The global due-work cursor and withheld access-audit table have their existing separate policies.
+Controls cover anonymous and different-issuer direct report/export/download requests, legacy unaudited-query refusal, owned metadata exports, foreign export authorization, answer/private-scoring canaries, immutable scorer replay without another dispatch, post-watermark response integrity invalidation, and physical source purge. Invalidated online readers withhold aggregates; retained snapshot inputs are never presented as current authority. The explicit disclosure inventory assigns all 142 currently declared surfaces to an owner and specific regression suites. That inventory test checks completeness and existing test files; the mapped suites supply behavioral evidence, with an explicit no-measurement-join boundary for the auth HTTP router. Every owned measurement table must appear in the export inventory and survive the exhaustive bounded account-deletion test. That separate lifecycle control seeds one sentinel in every owned collection; its rows never feed the collection reports or CLI. The global due-work cursor and withheld access-audit table have their existing separate policies.
 
 Retained operational/outcome queries keep their fixture-only versions. Experiment assignment remains `learn-adaptive.experiment-assignment.v1` with the authenticated learner as its unit. Existing metric suites remain separate from C6.
 
@@ -55,8 +55,20 @@ Dependencies were missing. `pnpm install --offline --frozen-lockfile` succeeded 
 | Focused suites below | Passed: 18 files, 1,398 tests. |
 | Phase A Canvas regression below | Initial run: 71 passed and one unchanged five-second mount timeout. Isolated rerun: all 72 passed, including UUID/fallback command keys and retry-key reuse. |
 | Deterministic command proof | Seven distinct cases passed in isolated partitions: three 50-learner collection/report/CLI journeys, mixed identity/flow/surface report with source purge, bound-claim rejection/rollback, disclosure inventory and table deletion. |
-| `source ~/.budds-orchestrator/ci-env.sh && pnpm verify` | Pending. |
-| `source ~/.budds-orchestrator/ci-env.sh && pnpm verify:learn-v2-beta` | Pending. |
+| `source ~/.budds-orchestrator/ci-env.sh && VITEST_MAX_WORKERS=2 pnpm verify` | Exit 2 after 7,991 unit, 1,112 app component, 61 audio component, 62 workflow and 9 evaluator tests passed. Evaluator typechecking stopped on missing local `@cloudflare/workers-types`; Python and audits were not reached in that invocation. |
+| `source ~/.budds-orchestrator/ci-env.sh && VITEST_MAX_WORKERS=3 pnpm verify` | After dependency restoration, exit 1: 7,990 unit tests passed; the existing scorer-harness A9 transport partition hit its unchanged 360-second child-process timeout. Later stages were not reached in this invocation. |
+| `source ~/.budds-orchestrator/ci-env.sh && VITEST_MAX_WORKERS=1 pnpm verify:learn-v2-beta` | Exit 0: 4,454 unit and 145 component tests passed. |
+| Isolated scorer-harness rerun below | Exit 1: seven tests passed; the same A9 partition timed out at its unchanged 360-second child-process deadline. File duration: 962.89 seconds. This remains a verification blocker on this machine. |
+
+The missing evaluator dependency was restored with `pnpm --dir workers/laya-evaluator install --offline --frozen-lockfile` (80 cached packages, zero downloads). Nuxt preparation passed again. The evaluator's nine tests/typecheck, all 13 Python tests and all three dependency audits then passed separately with the command below. Neither complete `pnpm verify` invocation exited green; isolated success does not change that status.
+
+The initial hosted history scan flagged two synthetic command-key literals in a nested fixture directory. The fixture keys were simplified, the feature history was rewritten with a pinned lease, and the local redacted scan of `origin/dev..HEAD` passed. No scan policy or allowlist changed. The command/rollback and inventory controls passed again after those fixture and ownership-reference corrections. Final-head aggregate checks and the independent review ledger remain required.
+
+```sh
+source ~/.budds-orchestrator/ci-env.sh && pnpm laya:evaluator:test && pnpm audit && pnpm --dir workers/audio-overview audit && pnpm --dir workers/laya-evaluator audit
+source ~/.budds-orchestrator/ci-env.sh && pnpm exec vitest run scripts/learn-v2-scorer-harness.test.ts --maxWorkers=1
+gitleaks git --log-opts='origin/dev..HEAD' --redact=100
+```
 
 Exact focused command:
 
@@ -80,4 +92,4 @@ All items below remain pending; fixtures approve none of them.
 - Run approved privacy/export/deletion/revocation canaries in the intended environment and test deployed cron timing, receipt retention and production contention. Local transactional tests prove none of those infrastructure properties.
 - Run independent review and required checks at the final PR head, record the ledger, and make the owner release decision.
 
-Real cold baseline capture is unproven for Today/Today, Today/Canvas and Canvas/Canvas. Real day-7 and day-30 outcomes are separately unproven for each of those groups. Real first-next-check false mastery is also unproven for every group. A fixture score, successful replay, passing test or later horizon cannot satisfy another flow's or horizon's real-attempt learning exit.
+Native limits are enforced for these fixtures, with at most 50 owners per collection cohort. This does not establish the documented 600-owner/64-MiB maximum under production load. Real cold baseline capture is unproven for Today/Today, Today/Canvas and Canvas/Canvas. Real day-7 and day-30 outcomes are separately unproven for each of those groups. Real first-next-check false mastery is also unproven for every group. A fixture score, successful replay, passing test or later horizon cannot satisfy another flow's or horizon's real-attempt learning exit.

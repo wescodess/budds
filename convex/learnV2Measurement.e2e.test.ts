@@ -336,6 +336,7 @@ test('every disclosure surface has an explicit owner and existing regression sui
     expect(row.tests.length).toBeGreaterThan(0)
     for (const file of row.tests) expect(readFileSync(file, 'utf8'), `${row.surface}: ${file}`).toMatch(/(?:test|it)\(/u)
   }
+  expect(readFileSync('convex/http.ts', 'utf8')).not.toMatch(/learn(?:Measurement|Assessment|Response|Scoring|PostSeal)/u)
   expect(readFileSync('shared/learn-adaptive-operational-metrics.ts', 'utf8')).toContain("OPERATIONAL_QUERY_VERSION = 'operational_fixture_query.v1'")
   expect(readFileSync('shared/learn-adaptive-outcome-metrics.ts', 'utf8')).toContain("OUTCOME_QUERY_VERSION = 'outcome_fixture_query.v1'")
   expect(ADAPTIVE_ROUTING_ASSIGNMENT_UNIT).toBe('authenticated_learner')
