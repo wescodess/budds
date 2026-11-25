@@ -1,21 +1,24 @@
 # Continuous integration
 
-Budds defines its repository-owned merge gate for `main` and `dev` in [`.github/workflows/test.yml`](../.github/workflows/test.yml). GitHub-hosted execution is currently blocked by the account billing or spending restriction, so the same gate must be run locally and recorded until hosted execution is restored.
+Budds defines its repository-owned merge gate for `main` and `dev` in [`.github/workflows/test.yml`](../.github/workflows/test.yml). The repository is public, so it runs on GitHub's free standard hosted runners.
 
 ## Required checks
+
+Every job except `burn-in` and `report` starts immediately and runs in parallel; `report` is the single gate that requires all of them. A lint or typecheck failure therefore no longer holds back the test jobs, and the slowest single job sets the wall-clock time.
 
 The workflow runs these stages:
 
 1. `security`: a full-history Gitleaks scan that blocks committed credentials.
 2. `quality`: a zero-warning ESLint gate, application and Convex-native
    typechecks, and the root dependency audit.
-3. `test`: parallel suites for Convex/Nitro unit tests, Nuxt mounted components, the dedicated Audio Overview component harness, the Audio Workflow Worker, and the Laya evaluator Worker. The Laya shard runs its TypeScript contract tests and Python fake-backend service tests without Docker or model weights.
+3. `test`: parallel suites for Convex/Nitro unit tests (three `vitest --shard` jobs plus a dedicated job for the serial scorer-harness exit test, which alone takes about six minutes), Nuxt mounted components, the dedicated Audio Overview component harness, the Audio Workflow Worker, and the Laya evaluator Worker. The Laya shard runs its TypeScript contract tests and Python fake-backend service tests without Docker or model weights.
 4. `build`: strict configuration validation and a Cloudflare Pages production build.
-5. `learn-v2-beta`: the production-like synthetic Phase 0-4 admission contract.
+5. `learn-v2-beta`: the production-like synthetic Phase 0-4 admission contract. In CI it runs only the contract tests because `quality` already typechecks the same tree; `pnpm verify:learn-v2-beta` still includes the typechecks locally.
 6. `learn-v2-calendar`: the independent synthetic Calendar admission contract
-   documented in [the Calendar gate](./qa/learn-v2-calendar-gate.md).
-7. `burn-in`: ten repetitions of every test suite on the weekly schedule or manual dispatch.
-8. `report`: a single summary check that fails unless the required jobs pass.
+   documented in [the Calendar gate](./qa/learn-v2-calendar-gate.md). Its CI job likewise skips the typechecks that `quality` runs.
+7. `learn-v2-browser`: the design-capture, Learn journey, and Learn authority browser suites as three parallel matrix jobs.
+8. `burn-in`: ten repetitions of every test suite on the weekly schedule or manual dispatch.
+9. `report`: a single summary check that fails unless the required jobs pass.
 
 The workflow uploads per-suite logs and retains the compiled Pages output for seven days. GitHub provides failed-check notifications; no Slack or email destination is configured.
 
