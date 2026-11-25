@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { mockMatchMedia } from '../../support/match-media'
@@ -7,6 +7,8 @@ const mode = ref<'light' | 'dark'>('light')
 const folderThemeEnabled = ref(true)
 const allFolders = ref<any[]>([])
 const queryData = ref<any[]>([])
+
+beforeAll(async () => { await import('~/components/folder-shell/FolderShell.vue') })
 
 mockNuxtImport('useAppTheme', () => {
   return () => ({
@@ -45,7 +47,7 @@ const FolderShellHierarchyDrawerStub = defineComponent({
 async function mountFolderShell() {
   const FolderShell = (await import('~/components/folder-shell/FolderShell.vue')).default
 
-  return mountSuspended(FolderShell, {
+  const wrapper = await mountSuspended(FolderShell, {
     props: {
       folderId: 'folder-1' as any,
       folder: {
@@ -68,6 +70,8 @@ async function mountFolderShell() {
       },
     },
   })
+  onTestFinished(() => wrapper.unmount())
+  return wrapper
 }
 
 describe('FolderShell', () => {

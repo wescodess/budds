@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 
@@ -23,6 +23,10 @@ mockNuxtImport('useConvexAction', () => (reference: any) => ({ mutate: getFuncti
 mockNuxtImport('useConvexQuery', () => (reference: any) => getFunctionName(reference)?.includes('getSessionContent') ? { data: content, error: contentError } : { data: ref(null) })
 
 const path = ['~', 'components', 'learn-v2', 'TodaySession.vue'].join('/')
+let releasePriorAcknowledgement!: () => void
+
+beforeAll(async () => { await import(path) })
+
 const candidate = { studySessionId: 'session_1', sessionRevision: 1, contentRevision: 2, planRecordRevision: 3, blueprintRecordRevision: 4, objectiveTitle: 'Explain gravity', estimatedMinutes: 12, scheduledStartAt: 0, timezone: 'America/Toronto', reason: 'due', progress: { retained: 0, independent: 0, total: 1 } }
 const blocks = ['retrieval', 'objective', 'cold_attempt', 'explanation', 'worked_example', 'faded_example', 'independent_application', 'confidence_teach_back'].map((kind, order) => ({ kind, order, content: `${kind} content` }))
 const adaptivePresentation = { purpose: 'Read the supported explanation and continue.', reasonCode: 'accepted_evidence_explanation', requiredAction: { kind: 'continue', label: 'Continue' }, composition: { type: 'cited_explanation', testId: 'learn-primitive-cited-explanation', heading: 'Supported concept', explanation: 'The accepted evidence supports this explanation.' } }
@@ -37,7 +41,12 @@ describe('LearnV2TodaySession', () => {
     contentError.value = null
     isOnline.value = true
   })
-  async function mount() { const Comp = await import(path); return await mountSuspended(Comp.default, { props: { candidate }, route: '/login' }) }
+  async function mount() {
+    const Comp = await import(path)
+    const wrapper = await mountSuspended(Comp.default, { props: { candidate }, route: '/login' })
+    onTestFinished(() => wrapper.unmount())
+    return wrapper
+  }
   async function startSession(wrapper: any) { await wrapper.find('[data-testid="learn-v2-start"]').trigger('click'); await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1)) }
   async function reachConfidence(wrapper: any) {
     await wrapper.find('[data-testid="learn-v2-continue"]').trigger('click')
@@ -217,5 +226,22 @@ describe('LearnV2TodaySession', () => {
     const wrapper = await mount(); await startSession(wrapper)
     expect(wrapper.get('[data-testid="learn-v2-phase-retrieval"]').text()).toContain('retrieval content')
     expect(wrapper.find('[data-testid="learn-v2-content-paused"]').exists()).toBe(false)
+  })
+
+  it('fixture teardown owns a session with a pending acknowledgement', async () => {
+    recordMeaningfulStart.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      releasePriorAcknowledgement = () => reject(new Error('late fixture acknowledgement'))
+    }))
+    const wrapper = await mount()
+    await startSession(wrapper)
+    await vi.waitFor(() => expect(recordMeaningfulStart).toHaveBeenCalledTimes(1))
+  })
+
+  it('fixture teardown prevents a prior retry from reaching the next mock', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    onTestFinished(() => { vi.useRealTimers() })
+    releasePriorAcknowledgement()
+    await vi.advanceTimersByTimeAsync(75)
+    expect(recordMeaningfulStart).not.toHaveBeenCalled()
   })
 })
