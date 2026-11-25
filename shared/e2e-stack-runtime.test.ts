@@ -168,6 +168,14 @@ test.skipIf(!supportsProcessGroups)('stack startup reports captured subprocess d
   const directory = await mkdtemp(join(tmpdir(), 'budds-e2e-startup-error-'))
   const secret = 'test-only-private-token-that-must-be-redacted'
   try {
+    await writeFile(join(directory, 'git'), `#!/usr/bin/env node
+const { mkdirSync, rmSync } = require('node:fs')
+const [command, action, flag, directory] = process.argv.slice(2)
+if (command !== 'worktree' || !directory) process.exit(2)
+if (action === 'add' && flag === '--detach') mkdirSync(directory, { recursive: true })
+else if (action === 'remove' && flag === '--force') rmSync(directory, { recursive: true, force: true })
+else process.exit(2)
+`, { mode: 0o755 })
     await writeFile(join(directory, 'pnpm'), '#!/usr/bin/env node\nconsole.error("CONVEX_DOWNLOAD_FAILED " + process.env.BUDDS_E2E_AUTH_TOKEN); process.exit(1)\n', { mode: 0o755 })
     const error = await promisify(execFile)(process.execPath, [resolve('scripts/e2e-stack.mjs')], {
       env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, BUDDS_E2E_AUTH_TOKEN: secret },
@@ -404,7 +412,7 @@ test.skipIf(!supportsProcessGroups)('dead parent and broken output pipes cannot 
       const backend = await readFile(join(directory, 'backend.json'), 'utf8').then(JSON.parse).catch(() => undefined)
       port = backend?.port
       return port ?? 0
-    }).toBeGreaterThan(0)
+    }, { timeout: 10_000 }).toBeGreaterThan(0)
     if (!port) throw new Error('Disposable backend did not report its listener')
     const closed = once(parent, 'close')
     const started = Date.now()
