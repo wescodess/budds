@@ -46,15 +46,15 @@ export function timeoutIsolationPlugin(): Plugin {
         if (inFunction && ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
           const left = node.left
           if ((ts.isPropertyAccessExpression(left) || ts.isElementAccessExpression(left))) {
-            wrap(node, `(${runtime}.track(${left.expression.getText(file)}), `)
+            wrap(left.expression, `${runtime}.reference(`)
           } else if (ts.isIdentifier(left) && shared.has(left.text)) {
-            wrap(node, `(${runtime}.scalar(${JSON.stringify(`${path}:${left.text}`)}, (() => { const value = ${left.text}; return () => { ${left.text} = value } })()), `)
+            wrap(node, `(${runtime}.active() ? (${runtime}.scalar(${JSON.stringify(`${path}:${left.text}`)}, (() => { const value = ${left.text}; return () => { ${left.text} = value } })()), `, ') : undefined)')
           }
         }
         if (inFunction && (ts.isDeleteExpression(node) || ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)))) {
           const operand = ts.isDeleteExpression(node) ? node.expression : node.operand
-          if ((ts.isPropertyAccessExpression(operand) || ts.isElementAccessExpression(operand))) wrap(node, `(${runtime}.track(${operand.expression.getText(file)}), `)
-          else if (ts.isIdentifier(operand) && shared.has(operand.text)) wrap(node, `(${runtime}.scalar(${JSON.stringify(`${path}:${operand.text}`)}, (() => { const value = ${operand.text}; return () => { ${operand.text} = value } })()), `)
+          if ((ts.isPropertyAccessExpression(operand) || ts.isElementAccessExpression(operand))) wrap(operand.expression, `${runtime}.reference(`)
+          else if (ts.isIdentifier(operand) && shared.has(operand.text)) wrap(node, `(${runtime}.active() ? (${runtime}.scalar(${JSON.stringify(`${path}:${operand.text}`)}, (() => { const value = ${operand.text}; return () => { ${operand.text} = value } })()), `, ') : undefined)')
         }
         if (inFunction && ts.isCallExpression(node)) {
           const name = node.expression.getText(file)
@@ -66,16 +66,22 @@ export function timeoutIsolationPlugin(): Plugin {
         }
         if (inFunction && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
           const call = node.expression
-          if (['Object.assign', 'Object.defineProperty', 'Object.defineProperties', 'Reflect.set', 'Reflect.deleteProperty', 'Reflect.defineProperty'].includes(call.getText(file)) && node.arguments[0]) wrap(node.arguments[0], `${runtime}.track(`)
-          else if (mutators.has(call.name.text)) wrap(call.expression, `${runtime}.track(`)
+          if (['Object.assign', 'Object.defineProperty', 'Object.defineProperties', 'Reflect.set', 'Reflect.deleteProperty', 'Reflect.defineProperty'].includes(call.getText(file))) wrap(call, `${runtime}.builtin(${JSON.stringify(call.getText(file))}, `)
+          else if (mutators.has(call.name.text)) wrap(call.expression, `${runtime}.mutationTarget(`)
         }
         ts.forEachChild(node, child => visit(child, inFunction || ts.isFunctionLike(node)))
       }
       visit(file)
       edits.sort((a, b) => b.position - a.position || a.order - b.order)
-      let result = source
-      for (const edit of edits) result = result.slice(0, edit.position) + edit.text + result.slice(edit.position)
-      return { code: result, map: null }
+      const parts: string[] = []
+      let cursor = 0
+      for (let index = edits.length - 1; index >= 0; index--) {
+        const edit = edits[index]!
+        parts.push(source.slice(cursor, edit.position), edit.text)
+        cursor = edit.position
+      }
+      parts.push(source.slice(cursor))
+      return { code: parts.join(''), map: null }
     },
   }
 }

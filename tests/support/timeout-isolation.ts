@@ -6,6 +6,10 @@ type Scope = {
   lifetime: { active: boolean }
   signal?: AbortSignal
   undo: Map<unknown, () => void>
+  properties: Map<object, Set<PropertyKey>>
+  environment: NodeJS.ProcessEnv
+  environmentDescriptors: PropertyDescriptorMap
+  globalDescriptors: PropertyDescriptorMap
   wrappers: Set<() => void>
   env: Map<string, string | undefined>
   globals: Map<PropertyKey, PropertyDescriptor | undefined>
@@ -55,6 +59,65 @@ function track<T>(target: T): T {
 
 export const timeoutIsolation = {
   track,
+  reference<T extends object>(target: T): T {
+    return new Proxy(target, {
+      get(object, key) { return Reflect.get(object, key, object) },
+      set(object, key, value) {
+        if (!active()) return true
+        timeoutIsolation.property(object, key)
+        return Reflect.set(object, key, value, object)
+      },
+      deleteProperty(object, key) {
+        if (!active()) return true
+        timeoutIsolation.property(object, key)
+        return Reflect.deleteProperty(object, key)
+      },
+    })
+  },
+  property(target: object, key: PropertyKey) {
+    const scope = current()
+    if (!scope || !active(scope)) return
+    if (Array.isArray(target)) { track(target); return }
+    let keys = scope.properties.get(target)
+    if (!keys) { keys = new Set(); scope.properties.set(target, keys) }
+    if (keys.has(key)) return
+    keys.add(key)
+    const descriptor = Object.getOwnPropertyDescriptor(target, key)
+    const ref = key === 'value' && Reflect.get(target, '__v_isRef') === true
+    const value = ref ? Reflect.get(target, key) : undefined
+    scope.undo.set({}, () => {
+      if (ref) Reflect.set(target, key, value)
+      else if (descriptor) Object.defineProperty(target, key, descriptor)
+      else Reflect.deleteProperty(target, key)
+    })
+  },
+  mutationTarget<T extends object>(target: T): T {
+    return new Proxy(target, {
+      get(object, key) {
+        const method = Reflect.get(object, key, object)
+        return (...args: unknown[]) => {
+          if (!active()) return undefined
+          track(object)
+          return Reflect.apply(method, object, args)
+        }
+      },
+    })
+  },
+  builtin(name: string, original: (...args: never[]) => unknown) {
+    return (target: object, ...args: unknown[]) => {
+      if (!active()) return name.startsWith('Reflect.') ? true : target
+      if (name === 'Object.assign') {
+        for (const source of args) if (source != null) {
+          for (const key of Reflect.ownKeys(Object(source))) {
+            if (Object.getOwnPropertyDescriptor(source, key)?.enumerable) timeoutIsolation.property(target, key)
+          }
+        }
+      } else if (name === 'Object.defineProperties') {
+        for (const key of Reflect.ownKeys(args[0] as object)) timeoutIsolation.property(target, key)
+      } else timeoutIsolation.property(target, args[0] as PropertyKey)
+      return Reflect.apply(original, undefined, [target, ...args])
+    }
+  },
   active,
   ownWrapper<T extends { unmount: () => void }>(wrapper: T): T {
     const scope = current()
@@ -110,7 +173,7 @@ export const timeoutIsolation = {
 Object.assign(globalThis, { __buddsTimeoutIsolation: timeoutIsolation })
 
 export function createTimeoutScope(signal?: AbortSignal) {
-  const scope: Scope = { lifetime: { active: true }, signal, undo: new Map(), wrappers: new Set(), env: new Map(), globals: new Map() }
+  const scope: Scope = { lifetime: { active: true }, signal, undo: new Map(), properties: new Map(), environment: process.env, environmentDescriptors: Object.getOwnPropertyDescriptors(process.env), globalDescriptors: Object.getOwnPropertyDescriptors(globalThis), wrappers: new Set(), env: new Map(), globals: new Map() }
   return {
     run<T>(callback: () => T): T { return scopes.run(scope, callback) },
     dispose() {
@@ -123,9 +186,25 @@ export function createTimeoutScope(signal?: AbortSignal) {
       scope.lifetime.active = false
       const errors: unknown[] = []
       for (const unmount of [...scope.wrappers]) { try { unmount() } catch (error) { errors.push(error) } }
-      try { restoreStubs(scope) } catch (error) { errors.push(error) }
+      const globals = [...scope.globals.keys()]
       for (const restore of [...scope.undo.values()].reverse()) { try { restore() } catch (error) { errors.push(error) } }
+      try { restoreStubs(scope) } catch (error) { errors.push(error) }
+      for (const key of globals) {
+        const descriptor = scope.globalDescriptors[key as string]
+        try {
+          if (descriptor) Object.defineProperty(globalThis, key, descriptor)
+          else Reflect.deleteProperty(globalThis, key)
+        } catch (error) { errors.push(error) }
+      }
+      try {
+        process.env = scope.environment
+        for (const key of Object.keys(process.env)) if (!(key in scope.environmentDescriptors)) Reflect.deleteProperty(process.env, key)
+        Object.defineProperties(process.env, scope.environmentDescriptors)
+      } catch (error) { errors.push(error) }
       scope.undo.clear()
+      scope.properties.clear()
+      for (const key of Reflect.ownKeys(scope.environmentDescriptors)) Reflect.deleteProperty(scope.environmentDescriptors, key)
+      for (const key of Reflect.ownKeys(scope.globalDescriptors)) Reflect.deleteProperty(scope.globalDescriptors, key)
       if (errors.length) throw new AggregateError(errors, 'Test isolation cleanup failed')
     },
     scope,
@@ -199,8 +278,9 @@ for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals'
       const key = args[0] as string
       if (!scope.env.has(key)) scope.env.set(key, import.meta.env[key])
       const value = args[1]
-      if (value === undefined) Reflect.deleteProperty(import.meta.env, key)
-      else import.meta.env[key] = ['PROD', 'DEV', 'SSR'].includes(key) ? (value ? '1' : '') : String(value)
+      if (['PROD', 'DEV', 'SSR'].includes(key)) import.meta.env[key] = value ? '1' : ''
+      else if (value === undefined) Reflect.deleteProperty(import.meta.env, key)
+      else import.meta.env[key] = String(value)
       return vi
     }
     if (name === 'unstubAllEnvs') { restoreStubs(scope, 'env'); return vi }

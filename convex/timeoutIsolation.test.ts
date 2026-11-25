@@ -59,3 +59,39 @@ test('keeps fake-clock callbacks owned by their expired predecessor', async () =
   expect(fixture.summary).toBe('successor')
   vi.useRealTimers()
 })
+
+test('rolls back interleaved stubs and direct writes without resurrecting a fake clock', () => {
+  const original = process.env.BUDDS_TIMEOUT_ISOLATION_INTERLEAVE
+  const predecessor = createTimeoutScope()
+  predecessor.run(() => {
+    vi.stubEnv('BUDDS_TIMEOUT_ISOLATION_INTERLEAVE', 'stub')
+    process.env.BUDDS_TIMEOUT_ISOLATION_INTERLEAVE = 'direct'
+    vi.stubGlobal('__buddsInterleaveProbe', 'stub')
+    Object.assign(globalThis, { __buddsInterleaveProbe: 'direct' })
+    vi.useFakeTimers()
+    Object.assign(globalThis, { __buddsPropertyProbe: true })
+    vi.useRealTimers()
+  })
+  predecessor.close()
+  expect(process.env.BUDDS_TIMEOUT_ISOLATION_INTERLEAVE).toBe(original)
+  expect('__buddsInterleaveProbe' in globalThis).toBe(false)
+  expect('__buddsPropertyProbe' in globalThis).toBe(false)
+  expect(Date).not.toHaveProperty('isFake')
+  expect(setTimeout).not.toHaveProperty('clock')
+})
+
+test('evaluates assignment targets and keys once and restores shared array length', () => {
+  const rows = [{ value: 0 }, { value: 0 }]
+  let calls = 0
+  let index = 0
+  const target = () => { calls++; return rows[0]! }
+  target().value = 7
+  rows[index++]!.value += 2
+  expect(calls).toBe(1)
+  expect(index).toBe(1)
+  expect(rows[0]!.value).toBe(9)
+  const predecessor = createTimeoutScope()
+  predecessor.run(() => { fixture.rows[4] = 'late array slot' })
+  predecessor.close()
+  expect(fixture.rows).toEqual(['original'])
+})
