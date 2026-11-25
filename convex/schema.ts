@@ -1983,6 +1983,7 @@ export default defineSchema({
     .index('by_inFlight', ['inFlight']),
   learnAssessmentExposures: defineTable(measurementStorage.assessmentExposureValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_assignmentId_and_purpose_and_status_and_serverTime', ['userId', 'assignmentId', 'purpose', 'status', 'serverTime'])
     .index('by_userId_and_practiceHelp_responseSlotId', ['userId', 'practiceHelp.responseSlotId'])
     .index('by_userId_and_practiceHelp_practiceBindingId', ['userId', 'practiceHelp.practiceBindingId'])
     .index('by_userId_and_caseId_and_serverTime', ['userId', 'caseId', 'serverTime'])
