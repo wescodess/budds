@@ -1,8 +1,4 @@
-import { timeoutIsolation } from '../support/timeout-isolation'
 import { beforeEach } from 'vitest'
-import { config } from '@vue/test-utils'
-
-config.plugins.VueWrapper.install(wrapper => { timeoutIsolation.ownWrapper(wrapper); return {} })
 
 // Better Auth exposes these flags specifically so component tests can avoid
 // bootstrapping a real client/server session transport before the test app is

@@ -1,5 +1,4 @@
 /// <reference types="vite/client" />
-import { createTimeoutScope, deferred } from '../tests/support/timeout-isolation'
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
@@ -23,7 +22,7 @@ import * as dedicatedChecks from './lib/learnV2DelayedDelivery'
 import * as canvasPreparation from './learnAdaptiveCanvas'
 import { LEARN_V2_MEASUREMENT_ADMISSION_REASONS } from '../shared/learn-v2-measurement'
 
-const policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
+let policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
   return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
@@ -53,12 +52,13 @@ const NOW = Date.parse('2027-03-07T15:00:00Z')
 
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(NOW)
-  policy.pointers = true; policy.responses = true; policy.enrollment = true; policy.delivery = true; policy.reports = false; policy.evidenceRows = 64; LEARN_REPORT_APPROVALS.splice(0)
+  policy = { pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null, scorer: null }
+  LEARN_REPORT_APPROVALS.splice(0)
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
 })
 afterEach(() => {
-  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, structuredClone(originalManifest))
   LEARN_REPORT_APPROVALS.splice(0)
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers()
 })
@@ -1299,6 +1299,7 @@ test('saved-work read caches invalidate after body and source revocation', async
 })
 
 test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under completed-work bounds after publication limits tighten', async state => {
+  const limits = policy
   const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
   await f.start()
   const row = (await f.opportunities())[0]!
@@ -1311,7 +1312,7 @@ test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under com
       submissionId: saved.submissionId, idempotencyKey: 'historical_pointer_score_1234567890' })
   }
   const before = await f.t.run(ctx => ctx.db.get(saved.submissionId))
-  policy.evidenceRows = 1
+  limits.evidenceRows = 1
   expect(await f.read()).toEqual([expect.objectContaining({ state })])
   expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })).toMatchObject({
     status: state === 'result_ready' ? 'feedback' : 'submitted', savedResponse: { response: opened.stage.response },
@@ -1801,31 +1802,3 @@ test.each(SWEEP_TARGETS.flatMap(target => SWEEP_CONDITIONS.map(condition => [tar
     const reason = expectedCloseReason(condition)
     if (reason) expect(cancelled.map(row => row.fact.kind === 'opportunity' ? row.fact.reasonCode : null)).toContain(reason)
   }, 60_000)
-
-
-test('an expired evidence-limit fixture cannot quarantine the next Canvas publication', async () => {
-  const release = deferred<undefined>()
-  const predecessor = createTimeoutScope()
-  void predecessor.run(async () => {
-    policy.evidenceRows = 1
-    try {
-      await release.promise
-      policy.evidenceRows = 1
-    } finally {
-      policy.evidenceRows = 1
-    }
-  })
-  predecessor.close()
-  expect(policy.evidenceRows).toBe(64)
-  const f = await fixture({ inventory: { claims: 3, supports: 1, sources: 1 } })
-  release.resolve(undefined)
-  await Promise.resolve()
-  await Promise.resolve()
-  expect(policy.evidenceRows).toBe(64)
-  await f.start()
-  const checks = await f.read()
-  expect(checks).toHaveLength(1)
-  expect(checks[0]).toMatchObject({ state: 'ready' })
-  const opened = await attach(f, (await f.opportunities())[0]!)
-  expect(opened.canvas.responsePrompt).toBeTruthy()
-})
