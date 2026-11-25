@@ -19,7 +19,7 @@ The owner decision of 2026-11-24 retains [Today points](../design/learn-delayed-
   state: 'ready' | 'saved_scoring' | 'result_unconfirmed' | 'result_ready' | 'closed',
   destination: { kind: 'canvas', threadId: Id<'learningThreads'>, route: string },
   topic?: string,
-  timing: 'this_session' | 'about_a_week' | 'about_a_month' | 'retained'
+  timing: 'this_session' | 'about_a_week' | 'about_a_month' | 'earlier' | 'retained'
 }
 ```
 
@@ -27,9 +27,23 @@ Callers opt into the additive version with `pointerVersion: 'learn-v2.today-chec
 
 The [#579 owner decision](https://github.com/wescodess/budds/issues/579) adds only `topic` and `timing` to the enabled pointer. `topic` is the current objective title, identical to the learner's map title, never a frozen item or question label. It is omitted when the objective, Blueprint, Void or folder is missing, foreign or no longer authoritative, when the Void is archived, or when the title is blank. An owned saved receipt survives that loss without a topic; an unanswered check still follows its existing playability gates. Renaming an objective updates the label on the next read. No fallback title is synthesized.
 
-`timing` derives from purpose and the frozen horizon, without reading or returning an exact schedule: `measurement_cold` becomes `this_session`, `measurement_delayed` at 7/30 days becomes `about_a_week`/`about_a_month`, and `retained_transfer` becomes `retained`. These are classes for copy, not literal UI strings or calendar-week claims. They remain stable across overdue reads and scoring; Today can use the approved "Check on last week's topic" and "Start with a quick check on last week's topic." for the week class. Neither addition includes an item, case, key, rubric, score or held-out content.
+`timing` is evaluated at read time against the earliest granted teaching receipt for the same owner and assignment, with matching Void, Blueprint and objective. Its `serverTime` records actual teaching delivery. Enrollment, sealed-cold and replacement-creation timestamps do not establish when teaching occurred. The first receipt remains the basis for that assignment's original and replacement checks; a replacement does not reset the teaching age. One indexed first-row lookup, memoized by assignment for the invocation, supplies that time. No receipt timestamp or exact schedule is returned.
 
-The shared parser and return validator retain the closed v1 shape alongside v2; common reference/state/destination fields are unchanged. With `todayCanvasChecks` off, even previously bound recovery pointers retain their byte-identical v1 shape, with no title reads or added fields. Responses off still dominates. This extension changes no schema, index, continuation, capability default or C4 golden. The version request is ignored with the capability off, preserving the existing payload even for opted-in callers.
+For delayed checks, elapsed days means `(Date.now() - serverTime) / 86_400_000`, without calendar rounding. The allowed ready-row and header copy is closed below; the topic title may be shown separately only when present.
+
+| Class | Rule | Ready-row copy | Header copy |
+| --- | --- | --- | --- |
+| `this_session` | Cold check, regardless of elapsed time | "Check on this topic" | "Start with a quick check on this topic." |
+| `about_a_week` | Known teaching age at least 4 days and less than 14 days | "Check on last week's topic" | "Start with a quick check on last week's topic." |
+| `about_a_month` | Known teaching age at least 14 days and less than 46 days | "Check on a topic from about a month ago" | "Start with a quick check on a topic from about a month ago." |
+| `earlier` | Delayed check younger than 4 days, at least 46 days old, or teaching time unknown/invalid | "Check on an earlier topic" | "Start with a quick check on an earlier topic." |
+| `retained` | Retained-purpose check | "Check on an earlier topic" | "Start with a quick check on an earlier topic." |
+
+Unknown teaching time includes a missing receipt, foreign or mismatched scope, or a nonfinite, negative or future timestamp. Its horizon fallback is deliberately generic (`earlier`): a frozen 7/30-day horizon cannot authorize an age claim without a teaching timestamp. A seven-day check still open on day 30 therefore uses `about_a_month` when teaching occurred on day zero. Timing changes with elapsed age even when the opportunity and original clock are unchanged.
+
+`Date.now()` is read when the reactive query evaluates; time passing alone does not invalidate a Convex query. These classes authorize approximate period copy only, with no exact age, due date, countdown or promised transition instant. Their broad buckets intentionally tolerate ordinary snapshot staleness around a boundary without timer-driven invalidation; a later query evaluation recomputes the class. An indefinitely retained snapshot is not a live clock and must not be presented as an exact calendar statement. Neither addition includes an item, case, key, rubric, score or held-out content.
+
+The shared parser and return validator retain the closed v1 shape alongside v2; common reference/state/destination fields are unchanged. With `todayCanvasChecks` off, even previously bound recovery pointers retain their byte-identical v1 shape, with no title reads or added fields. Responses off still dominates. The only schema addition is an exposure index over owner, assignment, purpose, status and server time for the bounded teaching lookup. This extension changes no stored fields, continuation, capability default or C4 golden. The version request is ignored with the capability off, preserving the existing payload even for opted-in callers.
 
 `reference` is the opaque check identity, never an item identity or an authorization. The destination is the owned Canvas route `/app/learn/void/${encodeURIComponent(threadId)}?check=${encodeURIComponent(reference)}`. The `check` query addresses the receipt across refresh and later activity changes. The #442 adapter forwards it as the optional `checkReference` argument to `learnAdaptiveCanvas.getCanvas` or `getCanvasDelivery`. The server checks the owned thread and exact check binding; a reference for another owned or foreign Canvas returns no projection. Before saving, the question must pass the same current Canvas claim, item, source-rights, access, evidence, novelty, revocation and canonical delivery checks as attachment. An unplayable unanswered check has no row, including after a grant or window closure.
 

@@ -22,6 +22,8 @@ import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import * as dedicatedChecks from './lib/learnV2DelayedDelivery'
 import * as canvasPreparation from './learnAdaptiveCanvas'
 import { LEARN_V2_MEASUREMENT_ADMISSION_REASONS } from '../shared/learn-v2-measurement'
+import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
+import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 
 const policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
@@ -64,7 +66,7 @@ afterEach(() => {
 })
 
 async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?: { claims: number, supports: number, sources: number, backingDocuments?: boolean }, reserveCount?: number,
-  test?: Awaited<ReturnType<typeof canvasFamilyFixture>>['t'], fixtureKey?: string, teaching?: DeliveryTeachingShape } = {}) {
+  test?: Awaited<ReturnType<typeof canvasFamilyFixture>>['t'], fixtureKey?: string, teaching?: DeliveryTeachingShape, closeDayOffset?: number } = {}) {
   const definition = { configurationId: 'today-canvas.synthetic.v1', configurationVersion: 'today-canvas.synthetic.v1', kind: 'measurement_rubric' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
       family: 'synthetic', snapshotAssurance: 'unknown' as const, verifiedReturnedModels: [] } }
@@ -74,7 +76,9 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
   const registry = await createLearnScorerRegistry({ epoch: 'synthetic.epoch.v1', configurations: [{ definition, expectedDigest: saved.binding.configurationDigest },
     { definition: baseline, expectedDigest: baselineSaved.binding.configurationDigest }], legacyAllowlist: [baseline.configurationId], prospectiveConfigurationId: null })
   policy.scorer = { registry, saved }
-  policy.protocol = { ...syntheticDeliveryProtocol(), scoringBinding: saved.binding }
+  const protocol = syntheticDeliveryProtocol()
+  policy.protocol = { ...protocol, scoringBinding: saved.binding,
+    windows: protocol.windows.map(window => ({ ...window, closeDayOffset: options.closeDayOffset ?? window.closeDayOffset })) }
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true,
     startsAt: new Date(NOW - 86_400_000).toISOString(), endsAt: new Date(NOW + 40 * 86_400_000).toISOString(),
     cohort: { ...originalManifest.cohort, subjectHashes: [await privacyDigest(['adaptive-v2-pilot-cohort.v1', userId])] },
@@ -149,6 +153,7 @@ test.each([undefined, 7, 30] as const)('topic pointers expose only the current m
   if (horizon !== undefined) {
     const opened = await attach(f, cold)
     expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+    await f.start()
     row = (await f.opportunities()).find(value => value.horizonDays === horizon)!
     vi.setSystemTime(row.openAt + 1000)
     await f.t.mutation(due, { userId, through: Date.now() })
@@ -161,6 +166,107 @@ test.each([undefined, 7, 30] as const)('topic pointers expose only the current m
   expect(learnTodayCheckPointerSchema.parse(pointer)).toEqual(pointer)
   expect(JSON.stringify(pointer)).not.toMatch(/Hypothetical|PRIVATE|rubric|scorePercent|openAt|closeAt|dueAt|horizonDays|itemId/)
 })
+
+async function timingFixture(options: { teach?: boolean, taughtAt?: number, reserveCount?: number,
+  inventory?: { claims: number, supports: number, sources: number, backingDocuments?: boolean } } = {}) {
+  const f = await fixture({ reserveCount: options.reserveCount ?? 1, closeDayOffset: 31, inventory: options.inventory })
+  await f.start()
+  const cold = await coldFor(f)
+  const opened = await attach(f, cold)
+  expect((await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)).kind).toBe('accepted')
+  if (options.teach !== false) {
+    vi.setSystemTime(options.taughtAt ?? NOW)
+    await f.start()
+    const delivery = await f.owner.mutation(api.learnV2SessionContent.getSessionContentDelivery, { studySessionId: f.graph.studySessionId,
+      idempotencyKey: 'timing_teaching_delivery_1234567890' })
+    if (!delivery.value) throw new Error(`Expected teaching delivery: ${JSON.stringify(delivery.admission)}`)
+    expect(delivery.value?.blocks.length).toBeGreaterThan(0)
+  }
+  const delayed = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  return { ...f, delayed }
+}
+
+test.each([
+  [0, 'earlier'], [4 * 86_400_000 - 1, 'earlier'], [4 * 86_400_000, 'about_a_week'],
+  [14 * 86_400_000 - 1, 'about_a_week'], [14 * 86_400_000, 'about_a_month'],
+  [46 * 86_400_000 - 1, 'about_a_month'], [46 * 86_400_000, 'earlier'], [90 * 86_400_000, 'earlier'],
+] as const)('teaching age %s ms projects the coarse bucket %s', async (elapsed, expected) => {
+  const f = await timingFixture()
+  vi.setSystemTime(NOW + elapsed)
+  const label = await f.owner.query(ctx => todayCheckLabel(measurementReadContext(ctx, userId), userId, f.delayed, LEARN_TODAY_CHECK_POINTER_VERSION))
+  expect(label).toMatchObject({ timing: expected })
+  expect(JSON.stringify(label)).not.toMatch(/serverTime|anchorAt|horizonDays|dueAt|openAt|closeAt/)
+})
+
+test.each([false, true])('a day-seven check read on day thirty uses the teaching age after replacement=%s', async replace => {
+  const f = await timingFixture()
+  vi.setSystemTime(NOW + 7 * 86_400_000 + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === f.delayed.delayedCheckId))
+    .toMatchObject({ state: 'ready', timing: 'about_a_week' })
+  const original = await f.t.run(ctx => ctx.db.get(f.delayed._id))
+  vi.setSystemTime(NOW + 30 * 86_400_000)
+  let reference = f.delayed.delayedCheckId
+  if (replace) {
+    await f.t.run(ctx => ctx.db.patch(f.delayed._id, { reasonCode: 'contaminated' }))
+    const replacement = await f.owner.mutation(replaceMeasurementOpportunity, { assessmentOpportunityId: f.delayed._id, reason: 'contaminated' })
+    if (replacement.status !== 'replaced') throw new Error(`Expected replacement: ${replacement.status}`)
+    await f.t.mutation(due, { userId, through: Date.now() })
+    const row = (await f.t.run(ctx => ctx.db.get(replacement.assessmentOpportunityId)))!
+    expect(row.createdAt).toBe(Date.now())
+    expect(row.purpose).toEqual(f.delayed.purpose)
+    reference = row.delayedCheckId
+  } else expect(await f.t.run(ctx => ctx.db.get(f.delayed._id))).toEqual(original)
+  expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === reference))
+    .toMatchObject({ state: 'ready', timing: 'about_a_month' })
+})
+
+test('timing uses actual teaching rather than the enrollment or cold-submission clock', async () => {
+  const f = await timingFixture({ taughtAt: NOW + 2 * 86_400_000 })
+  vi.setSystemTime(NOW + 14 * 86_400_000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === f.delayed.delayedCheckId))
+    .toMatchObject({ state: 'ready', timing: 'about_a_week' })
+})
+
+test('unknown teaching time uses generic timing despite a seven-day horizon', async () => {
+  const f = await timingFixture({ teach: false })
+  vi.setSystemTime(NOW + 30 * 86_400_000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === f.delayed.delayedCheckId))
+    .toMatchObject({ state: 'ready', timing: 'earlier' })
+})
+
+test.each(['foreign', 'mismatched', 'future', 'nonfinite', 'negative'] as const)('a %s teaching receipt cannot authorize age copy', async condition => {
+  const f = await timingFixture()
+  await f.t.run(async ctx => {
+    const receipt = (await ctx.db.query('learnAssessmentExposures')
+      .withIndex('by_userId_and_assignmentId_and_purpose_and_status_and_serverTime', q =>
+        q.eq('userId', userId).eq('assignmentId', f.delayed.assignmentId).eq('purpose', 'teaching').eq('status', 'granted')).first())!
+    await ctx.db.patch(receipt._id, condition === 'foreign' ? { userId: 'foreign-owner' }
+      : condition === 'mismatched' ? { objectiveId: undefined }
+        : { serverTime: condition === 'future' ? NOW + 31 * 86_400_000 : condition === 'negative' ? -1 : NaN })
+  })
+  vi.setSystemTime(NOW + 30 * 86_400_000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === f.delayed.delayedCheckId))
+    .toMatchObject({ state: 'ready', timing: 'earlier' })
+})
+
+test('a maximum delayed family with teaching-age lookup fits the unchanged pointer reservation', async () => {
+  const f = await timingFixture({ teach: false, reserveCount: 3, inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
+  await f.t.run(ctx => ctx.db.insert('learnAssessmentExposures', { userId, storageVersion: 'learn-v2.measurement-storage.v1', createdAt: NOW,
+    learningVoidId: f.delayed.learningVoidId, blueprintRevisionId: f.delayed.blueprintRevisionId, objectiveId: f.delayed.objectiveId,
+    studySessionId: f.graph.studySessionId, assignmentId: f.delayed.assignmentId, purpose: 'teaching', status: 'granted', serverTime: NOW,
+    projectionDigest: 'synthetic-timing-budget', deliveryReceiptHash: 'synthetic-timing-budget',
+    policyVersion: 'synthetic.timing-budget.v1', provenanceVersion: 'learn-v2.instructional-flow.v2_today.v1' }))
+  vi.setSystemTime(NOW + 7 * 86_400_000 + 1000)
+  await f.t.mutation(due, { userId, through: Date.now() })
+  const original = privacyContext.createResponsePrivacyReadContext
+  vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 896, options))
+  expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION }))
+    .toMatchObject({ status: 'available', checks: [expect.objectContaining({ reference: f.delayed.delayedCheckId, timing: 'about_a_week' })] })
+}, 60_000)
 
 test('retained pointers classify the retained purpose without exposing its clock or basis attempt', async () => {
   const f = await fixture()

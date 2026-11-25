@@ -5,7 +5,7 @@ import { learnAttemptHistorySchema, learnSafeAssessmentResultSchema } from './le
 
 export const LEARN_TODAY_CHECK_POINTER_VERSION = 'learn-v2.today-check-pointer.v2' as const
 export const LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION = 'learn-v2.today-check-pointer.v1' as const
-export const LEARN_TODAY_CHECK_TIMINGS = ['this_session', 'about_a_week', 'about_a_month', 'retained'] as const
+export const LEARN_TODAY_CHECK_TIMINGS = ['this_session', 'about_a_week', 'about_a_month', 'earlier', 'retained'] as const
 export const LEARN_TODAY_CHECK_LIMIT = 4
 export function learnTodayCheckRoute(threadId: string, reference: string) {
   return `/app/learn/void/${encodeURIComponent(threadId)}?check=${encodeURIComponent(reference)}`
