@@ -21,7 +21,7 @@ import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-s
 import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { prepareCanvasSessionForOwner, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
-import { LEARN_TODAY_CHECK_LIMIT, LEARN_TODAY_CLOSED_CHECK_DAYS, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
+import { LEARN_TODAY_CHECK_LIMIT, LEARN_TODAY_CLOSED_CHECK_DAYS, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { remainingPrivacyReadBudget } from './lib/learnV2PrivacyReadContext'
 import { todayCheckPointersValidator } from './lib/learnV2PublicContract'
@@ -295,7 +295,8 @@ function pointerOrder(left: PointerPosition, right: PointerPosition) {
     : left.delayedCheckId === right.delayedCheckId ? 0 : left.delayedCheckId > right.delayedCheckId ? -1 : 1
 }
 
-async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null) {
+async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: string | null = null,
+  pointerVersion?: typeof LEARN_TODAY_CHECK_POINTER_VERSION) {
   const continuation = pointerCursorReference(cursor)
   if (continuation.startedAt < Date.now() - 3_600_000) return { status: 'restart_required' as const, reasonCode: 'cursor_expired',
     checks: [], isDone: false, continueCursor: null }
@@ -362,7 +363,7 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
   for (const row of candidates) {
     if (checks.length === LEARN_TODAY_CHECK_LIMIT || visited === POINTER_CANDIDATE_LIMIT
       || visited > 0 && remainingPrivacyReadBudget(ctx) < POINTER_READ_RESERVE) break
-    const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row)
+    const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row, pointerVersion)
     if (pointer) checks.push(pointer)
     last = row
     visited++
@@ -379,7 +380,7 @@ async function readTodayCheckPointers(ctx: QueryCtx, userId: string, cursor: str
         q.eq('userId', userId).eq('delayedCheckId', reference)).unique()
       const response = row?.submissionId ? await ctx.db.get(row.submissionId) : null
       if (!row || !response || response.userId !== userId || response.acceptedAt < since || checks.some(check => check.reference === reference)) continue
-      const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row)
+      const pointer = await readCanvasCheckPointerForOwner(ctx, userId, row, pointerVersion)
       if (pointer) checks.push(pointer)
     }
   }
@@ -423,11 +424,11 @@ async function todayCanvasCohort(ctx: QueryCtx | MutationCtx, userId: string) {
 }
 
 export const getCheckPointers = query({
-  args: { cursor: v.optional(v.string()) }, returns: todayCheckPointersValidator,
+  args: { cursor: v.optional(v.string()), pointerVersion: v.optional(v.literal(LEARN_TODAY_CHECK_POINTER_VERSION)) }, returns: todayCheckPointersValidator,
   handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     if (!await surfaceCanvasPointers(ctx, userId)) return { status: 'disabled' as const, reasonCode: 'disabled', checks: [], isDone: true, continueCursor: null }
-    return await readTodayCheckPointers(measurementReadContext(ctx, userId), userId, args.cursor)
+    return await readTodayCheckPointers(measurementReadContext(ctx, userId), userId, args.cursor, args.pointerVersion)
   },
 })
 
@@ -536,13 +537,13 @@ async function projectToday(ctx: QueryCtx, userId: string) {
 }
 
 export const getToday = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { pointerVersion: v.optional(v.literal(LEARN_TODAY_CHECK_POINTER_VERSION)) },
+  handler: async (ctx, args) => {
     const userId = await requireLearnV2QueryAccess(ctx)
     if (!await surfaceCanvasPointers(ctx, userId)) return await projectToday(ctx, userId)
     ctx = measurementReadContext(ctx, userId)
     const today = await projectToday(ctx, userId)
-    const checks = remainingPrivacyReadBudget(ctx) >= POINTER_READ_RESERVE + POINTER_VERSION_PAGE * POINTER_PHASES.length * POINTER_PURPOSES.length + POINTER_DISCOVERY_RESERVE + 6 ? await readTodayCheckPointers(ctx, userId)
+    const checks = remainingPrivacyReadBudget(ctx) >= POINTER_READ_RESERVE + POINTER_VERSION_PAGE * POINTER_PHASES.length * POINTER_PURPOSES.length + POINTER_DISCOVERY_RESERVE + 6 ? await readTodayCheckPointers(ctx, userId, null, args.pointerVersion)
       : { status: 'unavailable' as const, reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null }
     return { ...today, checkPointers: checks }
   },
