@@ -369,7 +369,7 @@ if (storageMethods) {
 }
 
 aroundEach(async (runTest, context) => {
-  resetSharedMocks()
+  if (/\/(?:convex\/.*\.test\.ts|tests\/component\/)/.test(context.task.file.filepath)) resetSharedMocks()
   const owner = createTimeoutScope()
   const fakeTimers = vi.isFakeTimers()
   const original = getFn(context.task)
