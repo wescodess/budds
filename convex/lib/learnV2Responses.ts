@@ -3,6 +3,7 @@ import { measurementLearnerResponse } from './learnV2MeasurementItemContract'
 import { readLearnAssessmentScoringInput } from './learnV2AssessmentScoringInput'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
 import { hasMeasurementReadContext, measurementReadContext } from './learnV2MeasurementReadContext'
+import { postSealPracticeAcceptanceAuthority, postSealPracticeResponseDependencies, POST_SEAL_HELP_HISTORY_LIMIT } from './learnV2PostSealTeaching'
 import { createResponsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { z } from 'zod'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -21,6 +22,7 @@ import {
   LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, LEARN_V2_RESPONSE_LIMITS,
   learnSerializedBytes, parseLearnContract, learnAssistanceSnapshotSchema, learnValiditySnapshotSchema,
   learnResponseSlotPinsSchema, learnResponseDependencySchema, learnResponseReceiptSchema, learnResponseTerminalizedResultSchema,
+  learnPracticeSlotAssistanceStorageSchema,
   resolveLearnInstrumentation, validateLearnAcceptResponseRequest, validateLearnFinalResponseBundle,
   learnIdSchema, learnTimestampSchema, learnCodeSchema, learnVersionSchema,
   type LearnResponseTarget, type LearnResponseReceipt, type LearnAssistanceSnapshot,
@@ -94,6 +96,10 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const pins = scope(row)
   requireAvailable(row)
   if (!await liveResponseAggregate(ctx, userId, row)) reject('unavailable')
+  if ('stage' in row && row.scopeKind === 'v2' && row.stage === 'practice' && row.slotKey.startsWith('post-seal:')) {
+    if (!await postSealPracticeAcceptanceAuthority(ctx, userId, row)) reject('unavailable')
+    return { pins, session: null, content: null }
+  }
   if (pins.scopeKind === 'standalone') {
     const [thread, activity] = await Promise.all([ctx.db.get(pins.threadId), ctx.db.get(pins.activityId)])
     if (!thread || !activity || thread.deletionStartedAt !== undefined || ['ended', 'rollback'].includes(thread.lifecycle)) reject('unavailable')
@@ -176,6 +182,9 @@ async function threadDependencies(ctx: ReadCtx, userId: string, thread: Doc<'lea
 
 async function responseDependencies(ctx: ReadCtx, userId: string, authority: Awaited<ReturnType<typeof currentScope>>, row: Target): Promise<Dependency[]> {
   const { pins, content } = authority
+  if ('stage' in row && row.scopeKind === 'v2' && row.stage === 'practice' && row.slotKey.startsWith('post-seal:')) {
+    return await postSealPracticeResponseDependencies(ctx, userId, row)
+  }
   if (pins.scopeKind === 'standalone') return await threadDependencies(ctx, userId, (await ctx.db.get(pins.threadId))!, pins.threadRevision)
   const sources = new Set<Id<'learnSourceSnapshots'>>()
   const supportPins: unknown[] = []
@@ -360,6 +369,33 @@ async function assessmentValidity(ctx: ReadCtx, userId: string, row: Doc<'learnA
   return { validity, stateAtAcceptance: record?.state ?? 'unknown' as const }
 }
 
+async function practiceHelpTimestamps(ctx: ReadCtx, userId: string, row: Doc<'learnResponseSlots'>, now: number) {
+  const assistance = row.stage === 'practice' ? row.practiceAssistance : undefined
+  if (!assistance) return null
+  parseLearnContract(learnPracticeSlotAssistanceStorageSchema, assistance)
+  const history = await ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_practiceHelp_responseSlotId', q =>
+    q.eq('userId', userId).eq('practiceHelp.responseSlotId', row._id)).take(POST_SEAL_HELP_HISTORY_LIMIT + 1)
+  if (history.length > POST_SEAL_HELP_HISTORY_LIMIT || history.length !== assistance.deliveryCount) reject('pins_mismatch')
+  history.sort((a, b) => a.practiceHelp!.assistanceSequence - b.practiceHelp!.assistanceSequence)
+  let hint: number | null = null
+  let reveal: number | null = null
+  let hintCount = 0
+  let workedExampleCount = 0
+  for (const [index, exposure] of history.entries()) {
+    if (exposure.userId !== userId || exposure.status !== 'granted' || exposure.purpose !== 'practice'
+      || exposure.assessmentOpportunityId !== undefined || exposure.practiceHelp?.responseSlotId !== row._id
+      || exposure.practiceHelp.assistanceSequence !== index + 1
+      || exposure.practiceHelp.practiceBindingId !== history[0]!.practiceHelp!.practiceBindingId
+      || !Number.isFinite(exposure.serverTime) || exposure.serverTime < row.createdAt || exposure.serverTime > now) reject('pins_mismatch')
+    if (exposure.practiceHelp.kind === 'hint') { hint ??= exposure.serverTime; hintCount++ }
+    else { reveal ??= exposure.serverTime; workedExampleCount++ }
+  }
+  const last = history.at(-1)
+  if (hintCount !== assistance.hintCount || workedExampleCount !== assistance.workedExampleCount
+    || last?._id !== assistance.lastAuthorizationId || last.serverTime !== assistance.lastDeliveredAt) reject('pins_mismatch')
+  return { hint, reveal }
+}
+
 async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: Target, now: number) {
   if (row.submissionId) reject('already_accepted')
   if (entry.expectedRevision !== row.revision) reject('stale_revision')
@@ -382,13 +418,15 @@ async function prepareResponse(ctx: ReadCtx, userId: string, entry: Entry, row: 
   const historyKnown = catalog?.historyCompleteness === 'prospective_complete' && !!catalog.historyCoverageWatermark
   // Planned measurement and calibration have no session revision. Catalogue
   // coverage supplies history, but never resolves a pending exposure.
-  const assistanceHistoryKnown = session ? session.assistanceRevision !== undefined : historyKnown
-  const hint = session?.substantiveHintUsedAt ?? null
-  const reveal = session?.answerRevealedAt ?? null
+  const practiceAssistance = 'stage' in row && row.stage === 'practice' ? row.practiceAssistance : undefined
+  const practiceHistory = 'stage' in row ? await practiceHelpTimestamps(ctx, userId, row, now) : null
+  const assistanceHistoryKnown = practiceAssistance !== undefined || (session ? session.assistanceRevision !== undefined : historyKnown)
+  const hint = practiceHistory ? practiceHistory.hint : session?.substantiveHintUsedAt ?? null
+  const reveal = practiceHistory ? practiceHistory.reveal : session?.answerRevealedAt ?? null
   const assistance = parseLearnContract(learnAssistanceSnapshotSchema, {
-    policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: actualHelp || hint !== null || reveal !== null ? 'assisted'
+    policyVersion: LEARN_V2_ASSISTANCE_POLICY_VERSION, state: practiceAssistance !== undefined || actualHelp || hint !== null || reveal !== null ? 'assisted'
       : unresolvedExposure || !assistanceHistoryKnown ? 'unknown' : 'unassisted',
-    assistanceRevision: session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
+    assistanceRevision: practiceAssistance?.revision ?? session?.assistanceRevision ?? 0, substantiveHintUsedAt: hint, answerRevealedAt: reveal,
     priorExposure: 'unknown', outsideHelp: 'unknown', pasteObserved: observation.pasteObserved, focusLossObserved: observation.focusLossObserved,
     instrumentationVersion: observation.version, instrumentationProvenance: entry.instrumentation ? 'client_observation.v1' : 'missing_instrumentation.v1',
   })

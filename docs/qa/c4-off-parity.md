@@ -1,6 +1,16 @@
 # C4 capability-off parity sweep
 
-The final Today fallback controls pair the same missing-protocol start with the capability on and off. Enabled starts deliver ordinary teaching; disabled starts retain C5's `assessment / blocked / protocol_not_frozen` response and ready session across retries. New settlement on ordinary starts is capability-gated and leaves legacy C5 enrollment and disclosure behavior unchanged. The help-admission guard's open-check collection and scope matching now live in shared helpers that the Today lesson gate also reads; the guard's decisions, denial records and the C4 goldens are unchanged. The gate runs only for the enabled or frozen Today Canvas cohort.
+The final Today fallback controls pair the same missing-protocol start with the capability on and off. Enabled starts deliver ordinary teaching; disabled starts retain C5's `assessment / blocked / protocol_not_frozen` response and ready session across retries. New settlement on ordinary starts is capability-gated and leaves legacy C5 enrollment and disclosure behavior unchanged. The help-admission guard's open-check collection and scope matching live in shared helpers used by the Today lesson gate and post-seal admission. The #535 integration shares the corrected current/future-window semantics; responses-off decisions, denial records and the C4 goldens are unchanged. The gate runs only for the enabled or frozen Today Canvas cohort.
+
+## #535 post-seal integration
+
+Post-seal read, practice opening and practice help retain their existing disabled
+shapes while responses are off. With responses enabled, their check admission
+shares C4's collector and matcher, including future-window bounds and cancelled
+row exclusion. A `v2_today` assignment with a frozen Canvas surface keeps that
+surface for teaching, practice and help during capability rollback. No frozen
+flow, binding, response or attempt is rewritten. The #574 lesson sweep and both
+C4 parity suites remain independent required checks; no golden is regenerated.
 
 ## #573 Today pointer amendment
 
@@ -316,6 +326,6 @@ A7 adds registered controls for all three server reads relevant to client-only f
 
 C5.5 continuation verification uses the same dev pin (`427bd0fa7f0542732a6597f89da89763d7faf57f`). After merging C5.4 at `b00f1accb377848f963b59db930f4026b361134b`, the pinned-source run passes 140 tests and independently reproduces all 34 C5 golden values, including the eight Canvas values, without changing the golden file. The new reference variant additionally pins the original composer's factual, diagnostic and contribution canonical digests at `c1ecb5ecf07c1c27b608ff582d4cfc2ad23c8870`; all old versions still replay. The two shared-change regressions run through the registered acceptance boundary and the pure plan composer/replayer. Canvas collection and all flag defaults remain unchanged. Final required checks are reported with the pushed head.
 
-The delayed-player regressions use registered materialization, discovery, flow-specific grant, seal and scoring calls for Today and Canvas at both horizons, including below-Independent day 30 after a missed or failed day 7. Assigned originals and fixed first-slot links are preserved. Canvas retains its submitted/scoring/scored status without available teaching override controls. [C5.6 #535](https://github.com/wescodess/budds/issues/535) supplies `getPostSealTeaching`, `authorizePracticeAssistance` and the separate-case practice binding; Canvas collection stays disabled until that dependency and its admission requirements are satisfied. Synthetic journeys prove application behavior only.
+The delayed-player regressions use registered materialization, discovery, flow-specific grant, seal and scoring calls for Today and Canvas at both horizons, including below-Independent day 30 after a missed or failed day 7. Assigned originals and fixed first-slot links are preserved. Canvas retains its submitted/scoring/scored receipt contract. [C5.6 #535](https://github.com/wescodess/budds/issues/535) supplies the separate `getPostSealTeaching`, `openPractice` and `authorizePracticeAssistance` channels and their practice binding; Canvas collection stays disabled until that dependency and its admission requirements are satisfied. Synthetic journeys prove application behavior only.
 
 C5 preparation/application regressions retain those pinned fixtures. The off suite now also includes the disabled new endpoint: `pnpm exec vitest run convex/learnV2DisclosureOffParity.test.ts server/api/disclosure-off-parity.test.ts convex/learnV2C5OffParity.test.ts convex/learnV2CanvasPreparationOff.test.ts --maxWorkers=1`. Its additional test checks inert preparation against a seeded graph; it has no dev endpoint equivalent and does not replace the dev differential. Enabled Today and Canvas journeys use registered publication, preparation/start, grant, acceptance and scoring calls. The Canvas fixture no longer supplies its initial enrollment, flow, session/opportunity or activity bindings by hand. Synthetic scorer transport verifies request bytes and receipt handling only; it establishes no provider, family-equivalence or learning result.
