@@ -3,7 +3,7 @@ import { legacyScoringModules, legacyMasteryAttempt } from '../tests/fixtures/le
 import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { convexTest, type TestConvex } from 'convex-test'
 import type { FunctionArgs } from 'convex/server'
-import { describe, expect, test, vi } from 'vitest'
+import { describe, expect, onTestFinished, test, vi } from 'vitest'
 import { api, internal } from './_generated/api'
 import { toAdaptiveSubmissionAdmission } from './learnAdaptive'
 import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
@@ -1533,6 +1533,11 @@ describe('LA2-12 server-scored mastery attempts', () => {
 
 test('an expired manifest fixture cannot invalidate the next admission or restore over its approval', async () => {
   const original = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+  onTestFinished(() => {
+    Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, original)
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  })
   const release = deferred<undefined>()
   const predecessor = createTimeoutScope()
   void predecessor.run(async () => {

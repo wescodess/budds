@@ -19,7 +19,7 @@ async function runFixture(kind: string, mode: string) {
   }
 }
 
-test.each(['callback', 'await', 'rejection'])('a late %s failure after success still fails the run', async kind => {
+test.each(['callback', 'await', 'rejection', 'private-state'])('a late %s failure after success still fails the run', async kind => {
   for (const mode of ['native', 'guarded']) {
     const result = await runFixture(kind, mode)
     const output = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`)
@@ -27,5 +27,15 @@ test.each(['callback', 'await', 'rejection'])('a late %s failure after success s
     expect(output, mode).toContain(`Error: late-success-${kind}`)
     expect(output, mode).toContain('Unhandled Rejection')
     expect(result.code, mode).toBe(1)
+  }
+}, 35_000)
+
+test('normal completion preserves native state until explicit fixture cleanup', async () => {
+  for (const mode of ['native', 'guarded']) {
+    const result = await runFixture('state', mode)
+    const output = stripVTControlCharacters(`${result.stdout}\n${result.stderr}`)
+    expect(output, mode).toMatch(/Tests\s+2 passed/)
+    expect(output, mode).not.toContain('Unhandled Rejection')
+    expect(result.code, mode).toBe(0)
   }
 }, 35_000)

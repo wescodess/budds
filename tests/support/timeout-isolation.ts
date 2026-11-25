@@ -1,18 +1,14 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { afterAll, aroundEach, vi } from 'vitest'
-import { getCurrentTest, getFn, setFn } from 'vitest/suite'
+import { aroundEach, vi } from 'vitest'
 
 type Scope = {
-  lifetime: { active: boolean, cleaned: boolean }
+  lifetime: { active: boolean, recording: boolean }
   signal?: AbortSignal
   undo: Map<unknown, () => void>
   properties: Map<object, Set<PropertyKey>>
   environment: NodeJS.ProcessEnv
   environmentDescriptors: PropertyDescriptorMap
-  globalDescriptors: PropertyDescriptorMap
   wrappers: Set<() => void>
-  env: Map<string, string | undefined>
-  globals: Map<PropertyKey, PropertyDescriptor | undefined>
 }
 const scopeKey = Symbol.for('budds.test.timeoutScopes')
 const scopes: AsyncLocalStorage<Scope> = Reflect.get(process, scopeKey) ?? new AsyncLocalStorage<Scope>()
@@ -25,27 +21,9 @@ const storageMethods = typeof Storage === 'undefined' ? undefined : {
 }
 const active = (scope = current()) => !scope || (scope.lifetime.active && !scope.signal?.aborted)
 
-type SharedMock = {
-  mock: ReturnType<typeof vi.fn>
-  implementation: ReturnType<ReturnType<typeof vi.fn>['getMockImplementation']>
-  name: string
-  once: Array<{ name: string, args: unknown[] }>
-}
-const sharedMocks = new Set<WeakRef<SharedMock>>()
-function resetSharedMocks() {
-  for (const reference of sharedMocks) {
-    const shared = reference.deref()
-    if (!shared) { sharedMocks.delete(reference); continue }
-    shared.mock.mockReset().mockName(shared.name)
-    if (shared.implementation) shared.mock.mockImplementation(shared.implementation)
-    for (const operation of shared.once) Reflect.apply(Reflect.get(shared.mock, operation.name), shared.mock, operation.args)
-  }
-}
-
-
 function track<T>(target: T): T {
   const scope = current()
-  if (!scope || scope.lifetime.cleaned || !active(scope) || target === null || (typeof target !== 'object' && typeof target !== 'function') || scope.undo.has(target)) return target
+  if (!scope || !scope.lifetime.recording || !active(scope) || target === null || (typeof target !== 'object' && typeof target !== 'function') || scope.undo.has(target)) return target
   const object = target as Record<PropertyKey, unknown>
   if (storageMethods && target instanceof Storage) {
     const entries = Array.from({ length: target.length }, (_, index) => {
@@ -96,7 +74,7 @@ export const timeoutIsolation = {
   },
   property(target: object, key: PropertyKey) {
     const scope = current()
-    if (!scope || scope.lifetime.cleaned || !active(scope)) return
+    if (!scope || !scope.lifetime.recording || !active(scope)) return
     if (Array.isArray(target)) { track(target); return }
     let keys = scope.properties.get(target)
     if (!keys) { keys = new Set(); scope.properties.set(target, keys) }
@@ -148,25 +126,9 @@ export const timeoutIsolation = {
   ownWrapper<T extends { unmount: () => void }>(wrapper: T): T {
     const scope = current()
     if (!scope || !Reflect.get(wrapper, '__app')) return wrapper
-    const original = wrapper.unmount.bind(wrapper)
-    let mounted = true
-    const unmount = () => {
-      if (!mounted) return
-      mounted = false
-      scope.wrappers.delete(unmount)
-      original()
-    }
-    wrapper.unmount = unmount
-    scope.wrappers.add(unmount)
-    if (scope.lifetime.cleaned || !active(scope)) unmount()
+    if (!active(scope)) wrapper.unmount()
+    else if (scope.lifetime.recording) scope.wrappers.add(wrapper.unmount.bind(wrapper))
     return wrapper
-  },
-  before<T extends (...args: never[]) => unknown>(callback: T): T {
-    return function (this: unknown, ...args: never[]) {
-      const scope = current()
-      if (!scope) return callback.apply(this, args)
-      return scopes.run({ ...scope, signal: getCurrentTest()?.context.signal }, () => callback.apply(this, args))
-    } as T
   },
   async wait<T>(value: T | PromiseLike<T>): Promise<T> {
     const scope = current()
@@ -193,50 +155,40 @@ export const timeoutIsolation = {
   },
   scalar(key: string, restore: () => void) {
     const scope = current()
-    if (scope && !scope.lifetime.cleaned && active(scope) && !scope.undo.has(key)) scope.undo.set(key, restore)
+    if (scope && scope.lifetime.recording && active(scope) && !scope.undo.has(key)) scope.undo.set(key, restore)
   },
 }
 
 Object.assign(globalThis, { __buddsTimeoutIsolation: timeoutIsolation })
 
 export function createTimeoutScope(signal?: AbortSignal) {
-  const scope: Scope = { lifetime: { active: true, cleaned: false }, signal, undo: new Map(), properties: new Map(), environment: process.env, environmentDescriptors: Object.getOwnPropertyDescriptors(process.env), globalDescriptors: Object.getOwnPropertyDescriptors(globalThis), wrappers: new Set(), env: new Map(), globals: new Map() }
-  const cleanup = () => {
-    if (scope.lifetime.cleaned) return
-    scope.lifetime.cleaned = true
-    const errors: unknown[] = []
-    for (const unmount of [...scope.wrappers]) { try { unmount() } catch (error) { errors.push(error) } }
-    const globals = [...scope.globals.keys()]
-    for (const restore of [...scope.undo.values()].reverse()) { try { restore() } catch (error) { errors.push(error) } }
-    try { restoreStubs(scope) } catch (error) { errors.push(error) }
-    for (const key of globals) {
-      const descriptor = scope.globalDescriptors[key as string]
-      try {
-        if (descriptor) Object.defineProperty(globalThis, key, descriptor)
-        else Reflect.deleteProperty(globalThis, key)
-      } catch (error) { errors.push(error) }
-    }
-    try {
-      process.env = scope.environment
-      for (const key of Object.keys(process.env)) if (!(key in scope.environmentDescriptors)) Reflect.deleteProperty(process.env, key)
-      Object.defineProperties(process.env, scope.environmentDescriptors)
-    } catch (error) { errors.push(error) }
+  const scope: Scope = { lifetime: { active: true, recording: true }, signal, undo: new Map(), properties: new Map(), environment: process.env, environmentDescriptors: Object.getOwnPropertyDescriptors(process.env), wrappers: new Set() }
+  const fakeTimers = vi.isFakeTimers()
+  const release = () => {
+    scope.lifetime.recording = false
     scope.wrappers.clear()
     scope.undo.clear()
     scope.properties.clear()
     for (const key of Reflect.ownKeys(scope.environmentDescriptors)) Reflect.deleteProperty(scope.environmentDescriptors, key)
-    for (const key of Reflect.ownKeys(scope.globalDescriptors)) Reflect.deleteProperty(scope.globalDescriptors, key)
-    if (errors.length) throw new AggregateError(errors, 'Test isolation cleanup failed')
   }
   return {
     run<T>(callback: () => T): T { return scopes.run(scope, callback) },
-    dispose() {
+    release,
+    close() {
+      scope.lifetime.active = false
+      if (!scope.lifetime.recording) return
       const errors: unknown[] = []
-      for (const unmount of [...scope.wrappers]) { try { unmount() } catch (error) { errors.push(error) } }
-      if (errors.length) throw new AggregateError(errors, 'Component cleanup failed')
+      for (const unmount of scope.wrappers) { try { unmount() } catch (error) { errors.push(error) } }
+      for (const restore of [...scope.undo.values()].reverse()) { try { restore() } catch (error) { errors.push(error) } }
+      try {
+        process.env = scope.environment
+        for (const key of Object.keys(process.env)) if (!(key in scope.environmentDescriptors)) Reflect.deleteProperty(process.env, key)
+        Object.defineProperties(process.env, scope.environmentDescriptors)
+        if (!fakeTimers && vi.isFakeTimers()) nativeVi.useRealTimers()
+      } catch (error) { errors.push(error) }
+      release()
+      if (errors.length) throw new AggregateError(errors, 'Aborted test rollback failed')
     },
-    cleanup,
-    close() { scope.lifetime.active = false; cleanup() },
     scope,
   }
 }
@@ -252,12 +204,27 @@ function guardMock<T extends (...args: never[]) => unknown>(mock: T, fallback?: 
   const previous = guardedMocks.get(mock)
   if (previous) return previous as T
   const native = mock as unknown as ReturnType<typeof vi.fn>
-  const shared: SharedMock | undefined = current() ? undefined : { mock: native, implementation: native.getMockImplementation(), name: native.getMockName(), once: [] }
-  if (shared) sharedMocks.add(new WeakRef(shared))
+  let once: Array<{ name: string, args: unknown[] }> = []
+  const snapshot = () => {
+    const scope = current()
+    if (!scope || !scope.lifetime.recording || scope.undo.has(native)) return
+    const implementation = native.getMockImplementation()
+    const name = native.getMockName()
+    const savedOnce = once.slice()
+    const history = Object.entries(native.mock).filter(([, value]) => Array.isArray(value)).map(([key, value]) => [key, value.slice()] as const)
+    scope.undo.set(native, () => {
+      native.mockReset().mockName(name)
+      if (implementation) native.mockImplementation(implementation)
+      for (const operation of savedOnce) Reflect.apply(Reflect.get(native, operation.name), native, operation.args)
+      for (const [key, value] of history) Reflect.get(native.mock, key).splice(0, Infinity, ...value)
+      once = savedOnce
+    })
+  }
   const proxy: T = new Proxy(mock, {
     apply(target, receiver, args) {
       if (!active()) return fallback ? Reflect.apply(fallback, receiver, args) : undefined
-      if (shared && !current()) shared.once.shift()
+      snapshot()
+      once.shift()
       return Reflect.apply(target, receiver, args)
     },
     get(target, key, receiver) {
@@ -265,13 +232,10 @@ function guardMock<T extends (...args: never[]) => unknown>(mock: T, fallback?: 
       if (typeof key !== 'string' || !key.startsWith('mock') || typeof value !== 'function') return value
       return (...args: unknown[]) => {
         if (!active()) return proxy
+        snapshot()
         const result = Reflect.apply(value, target, args)
-        if (shared && !current()) {
-          if (key.endsWith('Once')) shared.once.push({ name: key, args })
-          if (key === 'mockReset' || key === 'mockRestore') shared.once = []
-          shared.implementation = native.getMockImplementation()
-          shared.name = native.getMockName()
-        }
+        if (key.endsWith('Once')) once.push({ name: key, args })
+        if (key === 'mockReset' || key === 'mockRestore') once = []
         return result === target ? proxy : result
       }
     },
@@ -294,7 +258,7 @@ vi.spyOn = new Proxy(nativeVi.spyOn, {
     const fallback = kind ? prior?.[kind as 'get' | 'set'] : Reflect.get(object, key)
     const mock = Reflect.apply(target, receiver, args)
     const scope = current()
-    if (scope && !scope.lifetime.cleaned) scope.undo.set(mock, () => { mock.mockRestore() })
+    if (scope && scope.lifetime.recording) scope.undo.set(mock, () => { mock.mockRestore() })
     const clockRead = (object === Date && key === 'now') || object === Math
       || (typeof performance !== 'undefined' && object === performance && key === 'now')
     const proxy = guardMock(mock, clockRead && typeof fallback === 'function' ? fallback : undefined)
@@ -305,61 +269,15 @@ vi.spyOn = new Proxy(nativeVi.spyOn, {
     return proxy
   },
 })
-function restoreStubs(scope: Scope, kind?: 'env' | 'globals') {
-  if (!kind || kind === 'env') {
-    for (const [name, value] of scope.env) {
-      if (value === undefined) Reflect.deleteProperty(import.meta.env, name)
-      else import.meta.env[name] = value
-    }
-    scope.env.clear()
-  }
-  if (!kind || kind === 'globals') {
-    for (const [name, descriptor] of scope.globals) {
-      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
-      else Reflect.deleteProperty(globalThis, name)
-    }
-    scope.globals.clear()
-  }
-}
-
 for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals', 'restoreAllMocks', 'resetAllMocks', 'clearAllMocks', 'useFakeTimers', 'useRealTimers', 'setSystemTime', 'runAllTimers', 'runAllTimersAsync', 'advanceTimersByTime', 'advanceTimersByTimeAsync', 'advanceTimersToNextTimer', 'advanceTimersToNextTimerAsync', 'runOnlyPendingTimers', 'runOnlyPendingTimersAsync', 'clearAllTimers'] as const) {
   const original = nativeVi[name]
   Object.defineProperty(vi, name, { configurable: true, writable: true, value: (...args: unknown[]) => {
     if (!active()) return vi
-    const scope = current()
-    if (!scope || scope.lifetime.cleaned) {
-      const result = Reflect.apply(original, vi, args)
-      return result
-    }
-    if (name === 'stubEnv') {
-      const key = args[0] as string
-      if (!scope.env.has(key)) scope.env.set(key, import.meta.env[key])
-      const value = args[1]
-      if (['PROD', 'DEV', 'SSR'].includes(key)) import.meta.env[key] = value ? '1' : ''
-      else if (value === undefined) Reflect.deleteProperty(import.meta.env, key)
-      else import.meta.env[key] = String(value)
-      return vi
-    }
-    if (name === 'unstubAllEnvs') { restoreStubs(scope, 'env'); return vi }
-    if (name === 'stubGlobal') {
-      const key = args[0] as PropertyKey
-      if (!scope.globals.has(key)) scope.globals.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
-      Object.defineProperty(globalThis, key, { value: args[1], configurable: true, writable: true, enumerable: true })
-      return vi
-    }
-    if (name === 'unstubAllGlobals') { restoreStubs(scope, 'globals'); return vi }
+    if (name === 'stubGlobal') timeoutIsolation.property(globalThis, args[0] as PropertyKey)
     const result = Reflect.apply(original, vi, args)
     return result
   } })
 }
-
-const fileEnvironment = Object.getOwnPropertyDescriptors(process.env)
-afterAll(() => {
-  vi.unstubAllEnvs()
-  vi.unstubAllGlobals()
-  for (const key of Object.keys(process.env)) if (!(key in fileEnvironment)) Reflect.deleteProperty(process.env, key)
-  Object.defineProperties(process.env, fileEnvironment)
-})
 
 if (storageMethods) {
   for (const name of ['setItem', 'removeItem', 'clear'] as const) {
@@ -373,23 +291,12 @@ if (storageMethods) {
 }
 
 aroundEach(async (runTest, context) => {
-  if (/\/(?:convex\/.*\.test\.ts|tests\/component\/)/.test(context.task.file.filepath)) resetSharedMocks()
-  const owner = createTimeoutScope()
-  const fakeTimers = vi.isFakeTimers()
-  const original = getFn(context.task)
-  setFn(context.task, () => scopes.run({ ...owner.scope, signal: context.signal }, async () => {
-    try { await original() } finally { owner.run(owner.dispose) }
-  }))
+  const owner = createTimeoutScope(context.signal)
   try {
     await owner.run(runTest)
   } finally {
-    setFn(context.task, original)
-    try {
-      if (context.signal.aborted) owner.close()
-      else owner.cleanup()
-    } finally {
-      if (!fakeTimers && vi.isFakeTimers()) vi.useRealTimers()
-    }
+    if (context.signal.aborted) owner.close()
+    else owner.release()
   }
 })
 

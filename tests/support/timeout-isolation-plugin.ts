@@ -45,8 +45,7 @@ export function timeoutIsolationPlugin(): Plugin {
         if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
           const parent = node.parent
           const registration = ts.isCallExpression(parent) && (/^(test|it|describe|suite|beforeEach|afterEach|beforeAll|afterAll|aroundEach|aroundAll|onTestFinished|onTestFailed)(\.|$)/.test(parent.expression.getText(file)) || /\.run$/.test(parent.expression.getText(file)))
-          if (ts.isCallExpression(parent) && parent.expression.getText(file) === 'beforeEach') wrap(node, `${runtime}.before(`)
-          else if (inFunction && !registration) wrap(node, `${runtime}.bind(`)
+          if (inFunction && !registration) wrap(node, `${runtime}.bind(`)
         }
         if (inFunction && ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
           const left = node.left
