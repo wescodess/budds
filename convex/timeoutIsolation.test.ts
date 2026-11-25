@@ -1,5 +1,5 @@
-import { deferred } from '../tests/support/timeout-isolation'
-import { expect, test } from 'vitest'
+import { createTimeoutScope, deferred } from '../tests/support/timeout-isolation'
+import { expect, test, vi } from 'vitest'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 
 const gate = deferred<undefined>()
@@ -45,4 +45,17 @@ test('restores shared state and ignores the expired predecessor after a successo
 
 test.fails('preserves assertion failures in an active test', () => {
   expect('actual').toBe('expected')
+})
+
+
+test('keeps fake-clock callbacks owned by their expired predecessor', async () => {
+  vi.useFakeTimers()
+  const predecessor = createTimeoutScope()
+  const lateWrite = () => { fixture.summary = 'late timer' }
+  predecessor.run(() => { setTimeout(lateWrite, 10) })
+  predecessor.close()
+  fixture.summary = 'successor'
+  await vi.advanceTimersByTimeAsync(10)
+  expect(fixture.summary).toBe('successor')
+  vi.useRealTimers()
 })

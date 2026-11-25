@@ -83,6 +83,7 @@ export const timeoutIsolation = {
     try {
       const result = await value
       if (!active(scope)) {
+        // Vitest owns the timeout failure; abandoned continuations stay suspended.
         if (result && typeof result === 'object' && 'unmount' in result && typeof result.unmount === 'function') result.unmount()
         return pending()
       }
@@ -178,12 +179,15 @@ function restoreStubs(scope: Scope, kind?: 'env' | 'globals') {
   }
 }
 
-for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals', 'restoreAllMocks', 'resetAllMocks', 'clearAllMocks', 'useFakeTimers', 'useRealTimers', 'setSystemTime'] as const) {
+for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals', 'restoreAllMocks', 'resetAllMocks', 'clearAllMocks', 'useFakeTimers', 'useRealTimers', 'setSystemTime', 'runAllTimers', 'runAllTimersAsync', 'advanceTimersByTime', 'advanceTimersByTimeAsync', 'advanceTimersToNextTimer', 'advanceTimersToNextTimerAsync', 'runOnlyPendingTimers', 'runOnlyPendingTimersAsync', 'clearAllTimers'] as const) {
   const original = vi[name]
   Object.defineProperty(vi, name, { configurable: true, writable: true, value: (...args: unknown[]) => {
     if (!active()) return vi
     const scope = current()
-    if (!scope) return Reflect.apply(original, vi, args)
+    if (!scope) {
+      const result = Reflect.apply(original, vi, args)
+      return result
+    }
     if (name === 'stubEnv') {
       const key = args[0] as string
       if (!scope.env.has(key)) scope.env.set(key, import.meta.env[key])
@@ -200,7 +204,8 @@ for (const name of ['stubEnv', 'unstubAllEnvs', 'stubGlobal', 'unstubAllGlobals'
       return vi
     }
     if (name === 'unstubAllGlobals') { restoreStubs(scope, 'globals'); return vi }
-    return Reflect.apply(original, vi, args)
+    const result = Reflect.apply(original, vi, args)
+    return result
   } })
 }
 
