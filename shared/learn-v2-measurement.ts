@@ -14,6 +14,11 @@ export const LEARN_V2_SCORER_RECEIPT_VERSION = 'learn-v2.scorer-receipt.v1' as c
 export const LEARN_V2_FORM_ORDERS = ['ABC', 'ACB', 'BAC', 'BCA', 'CAB', 'CBA'] as const
 export const learnMeasurementHorizonSchema = z.union([z.literal(7), z.literal(30)])
 export const learnMeasurementFlowSchema = z.enum(['v2_today', 'v2_canvas'])
+export const LEARN_CHECK_SURFACE_VERSION = 'learn-v2.check-surface.v1' as const
+export const learnCheckSurfaceBindingSchema = z.strictObject({
+  version: learnVersionSchema, surface: z.enum(['today', 'canvas']), measurementFlow: learnMeasurementFlowSchema,
+})
+export type LearnCheckSurfaceBinding = z.infer<typeof learnCheckSurfaceBindingSchema>
 export const learnMeasurementDepthSchema = z.enum(['foundational', 'working', 'advanced'])
 export const learnHistoryStatusSchema = z.enum(['prospectively_unexposed', 'returning', 'unknown'])
 export const learnFamilyStatusSchema = z.enum(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired'])
@@ -33,6 +38,7 @@ export const learnCanvasPinsSchema = z.strictObject({
 const planFields = {
   studyPlanId: learnIdSchema<'studyPlans'>(), studyPlanRevisionId: learnIdSchema<'studyPlanRevisions'>(),
   planRevision: learnRevisionSchema, planRecordRevision: learnRevisionSchema,
+  checkSurface: learnCheckSurfaceBindingSchema.optional(),
 }
 export const learnContextPinsSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('calibration'), origin: z.enum(['today', 'canvas']).optional() }),
@@ -46,26 +52,32 @@ export const learnV2ScopeSchema = z.strictObject({ scopeKind: z.literal('v2'), .
 const assessmentResponseContextSourceSchema = z.strictObject({
   contextPins: learnContextPinsSchema,
   assignment: z.discriminatedUnion('status', [
-    z.strictObject({ status: z.literal('admitted'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), epoch: learnVersionSchema, flow: learnMeasurementFlowSchema }),
+    z.strictObject({ status: z.literal('admitted'), assignmentId: learnIdSchema<'learnMeasurementAssignments'>(), epoch: learnVersionSchema,
+      flow: learnMeasurementFlowSchema, checkSurface: learnCheckSurfaceBindingSchema.optional() }),
     z.strictObject({ status: z.enum(['considered', 'not_admitted']) }),
   ]).nullable(),
 })
+export function learnAssessmentBoundSurface(assignment: { flow: 'v2_today' | 'v2_canvas', checkSurface?: LearnCheckSurfaceBinding } | null,
+  context: z.infer<typeof learnContextPinsSchema>): 'today' | 'canvas' | null {
+  const treatmentSurface = assignment ? assignment.flow === 'v2_today' ? 'today' : 'canvas' : null
+  const binding = context.kind === 'calibration' ? undefined : context.checkSurface
+  const surface = context.kind === 'session' ? context.canvas ? 'canvas' : 'today'
+    : context.kind === 'calibration' ? context.origin ?? null : binding?.surface ?? treatmentSurface
+  if (binding || assignment?.checkSurface) {
+    const expected = assignment?.checkSurface
+    if (!binding || !expected || binding.version !== expected.version || binding.surface !== expected.surface
+      || binding.measurementFlow !== expected.measurementFlow || binding.measurementFlow !== assignment?.flow || binding.surface !== surface) return null
+    return surface
+  }
+  return treatmentSurface && treatmentSurface !== surface ? null : surface
+}
 export function deriveLearnAssessmentResponseContext(input: unknown) {
   const { contextPins, assignment } = parseLearnContract(assessmentResponseContextSourceSchema, input)
   const admitted = assignment?.status === 'admitted' ? assignment : null
-  const assignmentFlow = admitted ? (admitted.flow === 'v2_today' ? 'today' : 'canvas') : null
-  let flow: 'today' | 'canvas'
-  switch (contextPins.kind) {
-    case 'session': flow = contextPins.canvas ? 'canvas' : 'today'; break
-    case 'calibration':
-      if (!contextPins.origin) throw new Error('Calibration origin is unavailable')
-      flow = contextPins.origin
-      break
-    case 'planned_measurement':
-      if (!assignmentFlow) throw new Error('Planned measurement requires an admitted assignment')
-      flow = assignmentFlow
-  }
-  if (assignmentFlow && assignmentFlow !== flow) throw new Error('Assessment and assignment flows do not match')
+  if (contextPins.kind === 'calibration' && !contextPins.origin) throw new Error('Calibration origin is unavailable')
+  if (contextPins.kind === 'planned_measurement' && !admitted) throw new Error('Planned measurement requires an admitted assignment')
+  const flow = learnAssessmentBoundSurface(admitted, contextPins)
+  if (!flow) throw new Error('Assessment and assignment flows do not match')
   return learnAssessmentResponseContextSchema.parse({ responseContextVersion: LEARN_V2_RESPONSE_CONTEXT_VERSION, flow,
     measurementContext: admitted ? { status: 'admitted', assignmentId: admitted.assignmentId, baselineEpoch: admitted.epoch } : { status: 'not_enrolled' } })
 }

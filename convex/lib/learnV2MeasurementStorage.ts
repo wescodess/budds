@@ -38,10 +38,12 @@ const canvasPins = v.object({
   activityRevision: v.number(), planVersion: v.string(), replayVersion: v.string(),
   rendererVersion: v.string(), evaluationVersion: v.string(), pilotConfigurationVersion: v.string(),
 })
+const checkSurface = v.object({ version: v.string(), surface: v.union(v.literal('today'), v.literal('canvas')),
+  measurementFlow: v.union(v.literal('v2_today'), v.literal('v2_canvas')) })
 const contextPins = v.union(
   v.object({ kind: v.literal('calibration'), origin: v.optional(v.union(v.literal('today'), v.literal('canvas'))) }),
-  v.object({ kind: v.literal('planned_measurement'), ...planPins }),
-  v.object({ kind: v.literal('session'), ...planPins, ...sessionPins, canvas: v.optional(canvasPins) }),
+  v.object({ kind: v.literal('planned_measurement'), ...planPins, checkSurface: v.optional(checkSurface) }),
+  v.object({ kind: v.literal('session'), ...planPins, ...sessionPins, canvas: v.optional(canvasPins), checkSurface: v.optional(checkSurface) }),
 )
 const v2Scope = { scopeKind: v.literal('v2'), ...capability, contextPins }
 const standaloneScope = {
@@ -203,6 +205,7 @@ export const measurementValidationFields = {
 const assignmentBase = {
   ...base, ...capability, ...evidenceState, assignmentKey: v.string(), epoch: v.string(), baselineSha: v.string(),
   flow: v.union(v.literal('v2_today'), v.literal('v2_canvas')), entryPoint: v.string(), cohortVersion: v.string(),
+  checkSurface: v.optional(checkSurface),
   historyStatus: v.union(v.literal('prospectively_unexposed'), v.literal('returning'), v.literal('unknown')),
   historyBasisVersion: v.string(), instrumentationEpoch: v.string(), exclusionReasons: v.array(v.string()),
   familyId: v.optional(v.id('learnMeasurementFamilies')), familyRevision: v.optional(v.number()),

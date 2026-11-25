@@ -11,6 +11,7 @@ export const LEARN_MEASUREMENT_STORAGE_LIMITS = {
 // These are storage capabilities, not runtime switches or admission authority.
 export const LEARN_MEASUREMENT_CAPABILITIES = {
   enrollment: false, delivery: false, responses: false, scoring: false, reports: false,
+  todayCanvasChecks: false,
 } as const
 
 type Entry = {
@@ -57,10 +58,10 @@ export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
   { table: 'learnResponseIntegrityEvents', parentField: 'submissionId', parentIndex: 'by_userId_and_submissionId_and_sequence', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'delete_standalone', indexes: [['userId', 'submissionId', 'sequence'], ['userId', 'learningVoidId'], ['userId', 'threadId']] },
   { table: 'learnResponseCommandReceipts', retention: 'response_receipt', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'delete_standalone', indexes: [['userId', 'idempotencyKeyHash'], ['userId', 'learningVoidId'], ['userId', 'threadId'], ['expiresAt']] },
   { table: 'learnScoringExecutions', parentField: 'submissionId', parentIndex: 'by_userId_and_submissionId', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'submissionId'], ['userId', 'assessmentOpportunityId'], ['userId', 'jobId', 'dispatchOrdinal'], ['userId', 'learningVoidId']] },
-  { table: 'learnResponses', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'delete_standalone', indexes: [['userId', 'assessmentOpportunityId'], ['userId', 'responseSlotId'], ['userId', 'learningVoidId'], ['userId', 'contextPins.studySessionId'], ['userId', 'threadId']] },
+  { table: 'learnResponses', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'delete_standalone', indexes: [['userId', 'flow', 'assessmentPins.kind', 'acceptedAt'], ['userId', 'contextPins.canvas.threadId', 'acceptedAt'], ['userId', 'assessmentOpportunityId'], ['userId', 'responseSlotId'], ['userId', 'learningVoidId'], ['userId', 'contextPins.studySessionId'], ['userId', 'threadId']] },
   { table: 'learnResponseSlots', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'delete_standalone', indexes: [['userId', 'activityId'], ['userId', 'contextPins.canvas.activityId'], ['userId', 'learningVoidId'], ['userId', 'contextPins.studySessionId'], ['userId', 'threadId'], ['userId', 'slotKey']] },
-  { table: 'learnAssessmentOpportunities', parentField: 'assignmentId', parentIndex: 'by_userId_and_assignmentId_and_horizonDays', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'phase'], ['userId', 'phase', 'closeAt'], ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'], ['userId', 'contextPins.canvas.activityId'], ['userId', 'learningVoidId'], ['userId', 'contextPins.studySessionId'], ['userId', 'assignmentId', 'horizonDays'], ['userId', 'delayedCheckId'], ['userId', 'submissionId'], ['phase', 'dueAt'], ['phase', 'openAt'], ['phase', 'closeAt'], ['userId', 'phase', 'openAt'], ['userId', 'firstCheckClaim.claimKey', 'checkSequence']] },
-  { table: 'learnMeasurementAssignments', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'assignmentKey'], ['userId', 'learningVoidId'], ['userId', 'epoch', 'createdAt'], ['userId', 'blueprintRevisionId', 'objectiveId']] },
+  { table: 'learnAssessmentOpportunities', parentField: 'assignmentId', parentIndex: 'by_userId_and_assignmentId_and_horizonDays', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'contextPins.canvas.planVersion', 'purpose.kind', 'phase', 'closeAt', 'delayedCheckId'], ['userId', 'phase'], ['userId', 'phase', 'closeAt'], ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'], ['userId', 'contextPins.canvas.activityId'], ['userId', 'learningVoidId'], ['userId', 'contextPins.studySessionId'], ['userId', 'assignmentId', 'horizonDays'], ['userId', 'delayedCheckId'], ['userId', 'submissionId'], ['phase', 'dueAt'], ['phase', 'openAt'], ['phase', 'closeAt'], ['userId', 'phase', 'openAt'], ['userId', 'firstCheckClaim.claimKey', 'checkSequence']] },
+  { table: 'learnMeasurementAssignments', retention: 'response_history', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'assignmentKey'], ['userId', 'flow', 'entryPoint', 'status'], ['userId', 'learningVoidId'], ['userId', 'epoch', 'createdAt'], ['userId', 'blueprintRevisionId', 'objectiveId']] },
   { table: 'learnMeasurementSupports', parentField: 'claimId', parentIndex: 'by_userId_and_claimId', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'claimId'], ['userId', 'itemId'], ['userId', 'sourceSnapshotId', 'invalidatedAt'], ['userId', 'sourceExcerptId', 'invalidatedAt'], ['userId', 'learningVoidId']] },
   { table: 'learnMeasurementClaims', parentField: 'itemId', parentIndex: 'by_userId_and_itemId_and_order', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'itemId', 'order'], ['userId', 'scoringSpecId'], ['userId', 'learningVoidId']] },
   { table: 'learnMeasurementScoringSpecs', parentField: 'itemId', parentIndex: 'by_userId_and_itemId_and_revision', retention: 'assessment_bank', export: 'metadata_only', voidDeletion: 'delete', threadDeletion: 'preserve', indexes: [['userId', 'itemId', 'revision'], ['userId', 'learningVoidId']] },
@@ -75,6 +76,11 @@ export const LEARN_MEASUREMENT_STORAGE_MANIFEST = [
 ] as const satisfies readonly Entry[]
 
 export type LearnMeasurementCollection = typeof LEARN_MEASUREMENT_STORAGE_MANIFEST[number]['table']
+export function learnMeasurementIndexName(table: string, fields: readonly string[]) {
+  const name = `by_${fields.map(field => field.replaceAll('.', '_')).join('_and_')}`
+  return table === 'learnAssessmentOpportunities' && name === 'by_userId_and_contextPins_canvas_planVersion_and_purpose_kind_and_phase_and_closeAt_and_delayedCheckId'
+    ? 'by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId' : name
+}
 export const LEARN_MEASUREMENT_COLLECTIONS = LEARN_MEASUREMENT_STORAGE_MANIFEST.map(entry => entry.table)
 export function isLearnMeasurementCollection(value: string): value is LearnMeasurementCollection {
   return LEARN_MEASUREMENT_COLLECTIONS.some(table => table === value)

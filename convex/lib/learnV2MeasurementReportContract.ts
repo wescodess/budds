@@ -12,6 +12,7 @@ const literals = <const T extends string>(values: readonly T[]) => v.union(...va
 const nullableNumber = v.union(v.number(), v.null())
 const nullableString = v.union(v.string(), v.null())
 const sourceCoverage = literals(['complete', 'unknown'])
+const checkSurface = literals(['today', 'canvas'])
 const responseKind = literals(LEARN_V2_REPORT_RESPONSE_KINDS)
 const familyStatus = literals(['provisional_equivalent', 'empirically_supported', 'quarantined', 'retired', 'unknown'])
 const masteryState = literals(['unseen', 'learning', 'guided', 'independent', 'retained', 'needs_review', 'blocked', 'provisionally_known'])
@@ -38,7 +39,7 @@ const bandCounts = v.object({ population: v.number(), accepted: v.number(), vali
 export const learnReportComputationMetricValidator = v.object({
   metric: literals(['verified_learning_gain.v1', 'false_mastery_next_delayed.v1']), horizonDays: v.union(v.literal(7), v.literal(30), v.null()),
   weighting: literals(['capability_episode', 'learner_sensitivity']), stratum: v.object({
-    flow: literals(['v2_today', 'v2_canvas']), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
+    flow: literals(['v2_today', 'v2_canvas']), checkSurface: v.optional(checkSurface), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
     startingBand: literals(LEARN_V2_REPORT_STARTING_BANDS), responseKind: v.union(responseKind, v.literal('unknown')), scoringKind: literals(['deterministic', 'model', 'unknown']),
     configurationDigest: nullableString, observedModel: nullableString, observedUpstream: nullableString,
     familyValidationStatus: familyStatus,
@@ -81,7 +82,7 @@ const acceptance = v.object({ submissionId: v.id('learnResponses'), acceptedAt: 
 const computationKeys = { learnerKey: v.string(), capabilityKey: v.string() }
 const frozenStratum = {
   epoch: v.string(), baselineSha: v.string(), cohortVersion: v.string(), flow: literals(['v2_today', 'v2_canvas']),
-  entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
+  checkSurface: v.optional(checkSurface), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']),
   familyId: v.union(v.id('learnMeasurementFamilies'), v.null()), familyRevision: nullableNumber,
   familyValidationStatus: familyStatus, equivalenceVersion: nullableString,
 }
@@ -151,7 +152,7 @@ export const learnReportInputSnapshotValidator = v.union(
   v.object({ kind: v.literal('first_check_claim_v2'), version: v.literal(LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION), ...computationKeys,
     claim: v.object({ ...firstCheckClaim.fields, claimSequence: v.literal(1) }),
     stratum: v.object({ epoch: v.string(), baselineSha: v.string(), cohortVersion: v.string(), flow: literals(['v2_today', 'v2_canvas']),
-      entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']) }),
+      checkSurface: v.optional(checkSurface), entryPoint: v.string(), depth: literals(['foundational', 'working', 'advanced']) }),
     policyPins: v.object({ assistancePolicyVersion: v.string(), validityPolicyVersion: v.string(), thresholdVersion: v.string(), thresholdPercent: v.literal(80) }),
     firstSlot: v.union(v.object({ kind: v.literal('unresolved'), reason: v.string() }),
       v.object({ kind: v.literal('linked'), firstCheckOpportunityId: v.id('learnAssessmentOpportunities'), checkSequence: v.literal(1),

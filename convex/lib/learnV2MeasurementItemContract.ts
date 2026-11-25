@@ -1,3 +1,4 @@
+import { readMeasurementClaims, readMeasurementSupports } from './learnV2MeasurementEvidenceReads'
 import type { Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_ITEM_LIMITS as limits, MeasurementItemBoundsError } from '../../shared/learn-v2-measurement-item-limits'
@@ -21,10 +22,10 @@ export async function readMeasurementScoringInput(ctx: Pick<QueryCtx, 'db'>, use
   const evidence: BaselineMasteryScoringInput['evidence'] = []
   const claimLimit = mode === 'recovery' ? storageLimits.maxClaims : limits.claims
   const supportLimit = mode === 'recovery' ? storageLimits.maxSupportsPerClaim : limits.supportsPerClaim
-  const claims = await ctx.db.query('learnMeasurementClaims').withIndex('by_userId_and_itemId_and_order', q => q.eq('userId', userId).eq('itemId', itemId)).take(claimLimit + 1)
+  const claims = await readMeasurementClaims(ctx, userId, itemId, claimLimit)
   if (!claims.length || claims.length > claimLimit) throw new MeasurementItemBoundsError('item_evidence_limit')
   for (const claim of claims) {
-    const supports = await ctx.db.query('learnMeasurementSupports').withIndex('by_userId_and_claimId', q => q.eq('userId', userId).eq('claimId', claim._id)).take(supportLimit + 1)
+    const supports = await readMeasurementSupports(ctx, userId, claim._id, supportLimit)
     if (!supports.length || supports.length > supportLimit || mode !== 'recovery' && evidence.length + supports.length > limits.evidenceRows) throw new MeasurementItemBoundsError('item_evidence_limit')
     for (const support of supports) {
       const excerpt = await ctx.db.get(support.sourceExcerptId)

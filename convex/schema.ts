@@ -33,6 +33,7 @@ export default defineSchema({
       enabled: v.boolean(),
       updatedAt: v.number(),
     })),
+    learnTodayCheckSurfaceVersion: v.optional(v.string()),
   }).index('by_tokenIdentifier', ['tokenIdentifier']),
 
   folders: defineTable({
@@ -1859,6 +1860,8 @@ export default defineSchema({
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId']),
   learnResponses: defineTable(measurementStorage.responseValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_assessmentPins_kind_and_acceptedAt', ['userId', 'flow', 'assessmentPins.kind', 'acceptedAt'])
+    .index('by_userId_and_contextPins_canvas_threadId_and_acceptedAt', ['userId', 'contextPins.canvas.threadId', 'acceptedAt'])
     .index('by_userId_and_assessmentOpportunityId', ['userId', 'assessmentOpportunityId'])
     .index('by_userId_and_responseSlotId', ['userId', 'responseSlotId'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
@@ -1873,6 +1876,7 @@ export default defineSchema({
     .index('by_userId_and_threadId', ['userId', 'threadId'])
     .index('by_userId_and_slotKey', ['userId', 'slotKey']),
   learnAssessmentOpportunities: defineTable(measurementStorage.assessmentOpportunityFields)
+    .index('by_userId_canvasPlan_purpose_phase_closeAt_delayedCheckId', ['userId', 'contextPins.canvas.planVersion', 'purpose.kind', 'phase', 'closeAt', 'delayedCheckId'])
     .index('by_userId_and_objectiveId_and_firstSlotEpoch_and_openAt', ['userId', 'objectiveId', 'firstSlotEpoch', 'openAt'])
     .index('by_userId', ['userId'])
     .index('by_userId_and_phase', ['userId', 'phase'])
@@ -1890,6 +1894,7 @@ export default defineSchema({
     .index('by_userId_and_firstCheckClaim_claimKey_and_checkSequence', ['userId', 'firstCheckClaim.claimKey', 'checkSequence']),
   learnMeasurementAssignments: defineTable(measurementStorage.measurementAssignmentValidator)
     .index('by_userId', ['userId'])
+    .index('by_userId_and_flow_and_entryPoint_and_status', ['userId', 'flow', 'entryPoint', 'status'])
     .index('by_userId_and_assignmentKey', ['userId', 'assignmentKey'])
     .index('by_userId_and_learningVoidId', ['userId', 'learningVoidId'])
     .index('by_userId_and_epoch_and_createdAt', ['userId', 'epoch', 'createdAt'])

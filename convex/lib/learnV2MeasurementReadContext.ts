@@ -5,6 +5,11 @@ import { createResponsePrivacyReadContext, invalidateResponsePrivacyReadContext 
 type ReadCtx = QueryCtx | MutationCtx
 const owner = Symbol('measurementReadOwner')
 
+export function hasMeasurementReadContext(ctx: Pick<ReadCtx, 'db'>, userId: string): ctx is ReadCtx & { [owner]: { userId: string, db: ReadCtx['db'] } } {
+  const scope = Reflect.get(ctx, owner) as { userId: string, db: ReadCtx['db'] } | undefined
+  return scope?.userId === userId && scope.db === ctx.db
+}
+
 // Pass the returned context for every read and write in the delivery invocation.
 export function measurementReadContext<T extends ReadCtx>(ctx: T, userId: string): T {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ctx
