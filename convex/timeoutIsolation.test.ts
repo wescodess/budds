@@ -6,9 +6,11 @@ const gate = deferred<undefined>()
 const fixture = { summary: 'Goal:', nested: { evidenceRows: 64 }, rows: ['original'] }
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
 const originalEnv = process.env.BUDDS_TIMEOUT_ISOLATION_PROBE
+const sharedQueue = vi.fn().mockResolvedValue('default')
+const expiredSignal = deferred<AbortSignal>()
 let counter = 0
 
-test.fails('expires a predecessor before its deferred shared writes and finally cleanup', async () => {
+test.fails('expires a predecessor before its deferred shared writes and finally cleanup', async ({ signal }) => {
   const previous = ADAPTIVE_V2_PILOT_MANIFEST.pilotApproved
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true })
   fixture.summary = 'predecessor'
@@ -16,6 +18,8 @@ test.fails('expires a predecessor before its deferred shared writes and finally 
   fixture.rows.push('predecessor')
   process.env.BUDDS_TIMEOUT_ISOLATION_PROBE = 'predecessor'
   counter++
+  expiredSignal.resolve(signal)
+  sharedQueue.mockResolvedValueOnce('predecessor')
   try {
     await gate.promise
     fixture.summary = 'Review daily.'
@@ -28,6 +32,10 @@ test.fails('expires a predecessor before its deferred shared writes and finally 
 }, 30)
 
 test('restores shared state and ignores the expired predecessor after a successor starts', async () => {
+  const signal = await expiredSignal.promise
+  expect(signal.aborted).toBe(true)
+  expect(String(signal.reason)).toContain('timed out in 30ms')
+  expect(await sharedQueue()).toBe('default')
   expect(ADAPTIVE_V2_PILOT_MANIFEST).toEqual(originalManifest)
   expect(fixture).toEqual({ summary: 'Goal:', nested: { evidenceRows: 64 }, rows: ['original'] })
   expect(process.env.BUDDS_TIMEOUT_ISOLATION_PROBE).toBe(originalEnv)
@@ -94,4 +102,14 @@ test('evaluates assignment targets and keys once and restores shared array lengt
   predecessor.run(() => { fixture.rows[4] = 'late array slot' })
   predecessor.close()
   expect(fixture.rows).toEqual(['original'])
+})
+
+test('expired background clock reads use the original function without entering a successor spy', () => {
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(123)
+  expect(Date.now()).toBe(123)
+  const predecessor = createTimeoutScope()
+  predecessor.close()
+  expect(typeof predecessor.run(Date.now)).toBe('number')
+  expect(clock).toHaveBeenCalledTimes(1)
+  clock.mockRestore()
 })

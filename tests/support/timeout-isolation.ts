@@ -25,6 +25,24 @@ const storageMethods = typeof Storage === 'undefined' ? undefined : {
 }
 const active = (scope = current()) => !scope || (scope.lifetime.active && !scope.signal?.aborted)
 
+type SharedMock = {
+  mock: ReturnType<typeof vi.fn>
+  implementation: ReturnType<ReturnType<typeof vi.fn>['getMockImplementation']>
+  name: string
+  once: Array<{ name: string, args: unknown[] }>
+}
+const sharedMocks = new Set<WeakRef<SharedMock>>()
+function resetSharedMocks() {
+  for (const reference of sharedMocks) {
+    const shared = reference.deref()
+    if (!shared) { sharedMocks.delete(reference); continue }
+    shared.mock.mockReset().mockName(shared.name)
+    if (shared.implementation) shared.mock.mockImplementation(shared.implementation)
+    for (const operation of shared.once) Reflect.apply(Reflect.get(shared.mock, operation.name), shared.mock, operation.args)
+  }
+}
+
+
 function track<T>(target: T): T {
   const scope = current()
   if (!scope || !active(scope) || target === null || (typeof target !== 'object' && typeof target !== 'function') || scope.undo.has(target)) return target
@@ -39,11 +57,13 @@ function track<T>(target: T): T {
       for (const [key, value] of entries) storageMethods.setItem.call(target, key, value)
     })
   } else if (target instanceof Map) {
-    const entries = [...target]
-    scope.undo.set(target, () => { Map.prototype.clear.call(target); for (const [key, value] of entries) Map.prototype.set.call(target, key, value) })
+    const raw = (object.__v_isReactive || object.__v_isReadonly) ? object.__v_raw : target
+    const entries = [...Map.prototype.entries.call(raw)]
+    scope.undo.set(target, () => { Map.prototype.clear.call(raw); for (const [key, value] of entries) Map.prototype.set.call(raw, key, value) })
   } else if (target instanceof Set) {
-    const entries = [...target]
-    scope.undo.set(target, () => { Set.prototype.clear.call(target); for (const value of entries) Set.prototype.add.call(target, value) })
+    const raw = (object.__v_isReactive || object.__v_isReadonly) ? object.__v_raw : target
+    const entries = [...Set.prototype.values.call(raw)]
+    scope.undo.set(target, () => { Set.prototype.clear.call(raw); for (const value of entries) Set.prototype.add.call(raw, value) })
   } else if (object.__v_isRef === true) {
     const value = object.value
     scope.undo.set(target, () => { object.value = value })
@@ -120,6 +140,11 @@ export const timeoutIsolation = {
     }
   },
   active,
+  factory<T extends (...args: never[]) => unknown>(callback: T): T {
+    return function (this: unknown, ...args: never[]) {
+      return scopes.exit(() => callback.apply(this, args))
+    } as T
+  },
   ownWrapper<T extends { unmount: () => void }>(wrapper: T): T {
     const scope = current()
     if (!scope || !Reflect.get(wrapper, '__app')) return wrapper
@@ -221,12 +246,16 @@ const mocksKey = Symbol.for('budds.test.guardedMocks')
 const guardedMocks: WeakMap<object, object> = Reflect.get(vi, mocksKey) ?? new WeakMap()
 if (!Reflect.has(vi, mocksKey)) Object.defineProperty(vi, mocksKey, { value: guardedMocks })
 
-function guardMock<T extends (...args: never[]) => unknown>(mock: T): T {
+function guardMock<T extends (...args: never[]) => unknown>(mock: T, fallback?: (...args: never[]) => unknown): T {
   const previous = guardedMocks.get(mock)
   if (previous) return previous as T
+  const native = mock as unknown as ReturnType<typeof vi.fn>
+  const shared: SharedMock | undefined = current() ? undefined : { mock: native, implementation: native.getMockImplementation(), name: native.getMockName(), once: [] }
+  if (shared) sharedMocks.add(new WeakRef(shared))
   const proxy: T = new Proxy(mock, {
     apply(target, receiver, args) {
-      if (!active()) return undefined
+      if (!active()) return fallback ? Reflect.apply(fallback, receiver, args) : undefined
+      if (shared && !current()) shared.once.shift()
       return Reflect.apply(target, receiver, args)
     },
     get(target, key, receiver) {
@@ -235,6 +264,12 @@ function guardMock<T extends (...args: never[]) => unknown>(mock: T): T {
       return (...args: unknown[]) => {
         if (!active()) return proxy
         const result = Reflect.apply(value, target, args)
+        if (shared && !current()) {
+          if (key.endsWith('Once')) shared.once.push({ name: key, args })
+          if (key === 'mockReset' || key === 'mockRestore') shared.once = []
+          shared.implementation = native.getMockImplementation()
+          shared.name = native.getMockName()
+        }
         return result === target ? proxy : result
       }
     },
@@ -250,11 +285,15 @@ vi.fn = new Proxy(nativeVi.fn, {
 vi.spyOn = new Proxy(nativeVi.spyOn, {
   apply(target, receiver, args) {
     if (!active()) return undefined
+    const [object, key, kind] = args
+    let parent = object
+    let prior: PropertyDescriptor | undefined
+    while (parent && !prior) { prior = Object.getOwnPropertyDescriptor(parent, key); parent = Object.getPrototypeOf(parent) }
+    const fallback = kind ? prior?.[kind as 'get' | 'set'] : Reflect.get(object, key)
     const mock = Reflect.apply(target, receiver, args)
     const scope = current()
     if (scope) scope.undo.set(mock, () => { mock.mockRestore() })
-    const proxy = guardMock(mock)
-    const [object, key, kind] = args
+    const proxy = guardMock(mock, typeof fallback === 'function' ? fallback : undefined)
     const descriptor = Object.getOwnPropertyDescriptor(object, key)!
     if (kind) Object.defineProperty(object, key, { ...descriptor, [kind]: proxy })
     else if ('value' in descriptor) Object.defineProperty(object, key, { ...descriptor, value: proxy })
@@ -330,6 +369,7 @@ if (storageMethods) {
 }
 
 aroundEach(async (runTest, context) => {
+  resetSharedMocks()
   const owner = createTimeoutScope()
   const fakeTimers = vi.isFakeTimers()
   const original = getFn(context.task)

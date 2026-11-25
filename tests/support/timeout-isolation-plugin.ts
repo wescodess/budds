@@ -34,7 +34,12 @@ export function timeoutIsolationPlugin(): Plugin {
       collect(file)
       const visit = (node: ts.Node, inFunction = false) => {
         if ((ts.isExpressionStatement(node) || ts.isVariableStatement(node) || ts.isReturnStatement(node) || ts.isThrowStatement(node)) && !source.slice(node.getStart(file), node.end).trimEnd().endsWith(';')) add(node.end, ';')
-        if (ts.isCallExpression(node) && /^vi\.(mock|doMock|hoisted)$/.test(node.expression.getText(file))) return
+        if (ts.isCallExpression(node) && /^(vi\.(mock|doMock)|mockNuxtImport|mockComponent)$/.test(node.expression.getText(file))) {
+          const factory = node.arguments[1]
+          if (factory && (ts.isArrowFunction(factory) || ts.isFunctionExpression(factory) || ts.isIdentifier(factory))) wrap(factory, `${runtime}.factory(`)
+          if (/^vi\./.test(node.expression.getText(file))) return
+        }
+        if (ts.isCallExpression(node) && node.expression.getText(file) === 'vi.hoisted') return
         if (ts.isFunctionLike(node) && 'body' in node && node.body && ts.isBlock(node.body) && !ts.isConstructorDeclaration(node) && !ts.isGetAccessorDeclaration(node)) add(node.body.getStart(file) + 1, ` if (!${runtime}.active()) return; `)
         if (inFunction && ts.isAwaitExpression(node)) wrap(node.expression, `${runtime}.wait(`)
         if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
