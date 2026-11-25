@@ -226,9 +226,13 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   ])
   const owned = voidRow?.userId === userId && blueprint?.userId === userId && objective?.userId === userId
     && blueprint.learningVoidId === voidRow._id && objective.blueprintRevisionId === blueprint._id
+  const sealedCancellation = postSeal && row.phase === 'cancelled' && submission?.userId === userId && submission.scopeKind === 'v2'
+    && 'assessmentOpportunityId' in submission && submission.assessmentOpportunityId === row._id
+    && row.deliveryGrantId !== undefined && submission.deliveryGrantId === row.deliveryGrantId
   let accessAvailable = Boolean(owned && (await ctx.db.get(voidRow!.folderId))?.userId === userId)
   let pinsMatch = Boolean(owned && blueprint!.recordRevision === row.blueprintRecordRevision
-    && objective!.depth === row.depth && row.phase !== 'cancelled' && (row.phase !== 'invalid' || postSeal && row.submissionId !== undefined) && row.invalidatedAt === undefined)
+    && objective!.depth === row.depth && (row.phase !== 'cancelled' || sealedCancellation)
+    && (row.phase !== 'invalid' || postSeal && row.submissionId !== undefined) && row.invalidatedAt === undefined)
   let evidenceAvailable = row.evidenceStatus === 'available' && row.invalidatedAt === undefined
   const contextPins = row.contextPins
   if (contextPins.kind !== 'calibration') {
@@ -333,7 +337,7 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   const parsed = learnAssessmentDisclosureContextSchema.safeParse({
     version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, owned, accessAvailable, evidenceAvailable, pinsMatch,
     lifecycle: { version: LEARN_V2_DELAYED_CHECK_VERSION, assessmentOpportunityId: row._id, revision: row.revision,
-      purpose: purpose.data, phase: row.phase, deliveryGrantId: row.deliveryGrantId ?? null,
+      purpose: purpose.data, phase: sealedCancellation ? 'invalid' : row.phase, deliveryGrantId: row.deliveryGrantId ?? null,
       submissionId: row.submissionId ?? null, authoritativeAttemptId: row.authoritativeAttemptId ?? null,
       acceptedAt: submission?.acceptedAt ?? null, checkSequence: row.checkSequence },
     grant: grantValid ? { policyVersion: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, deliveryGrantId: exposure._id,

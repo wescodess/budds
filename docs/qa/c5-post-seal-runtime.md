@@ -1,7 +1,7 @@
 # C5.6 post-seal runtime
 
 The public version remains `learn-v2.post-seal-teaching.v1`, with the versioned
-`learn-v2.post-seal-teaching.v1.runtime.1` contract amendment. Storage uses
+`learn-v2.post-seal-teaching.v1.runtime.1` and `.runtime.2` contract amendments. Storage uses
 the landed #570 contract. Responses, delivery, enrollment and scoring defaults
 are unchanged. This implementation adds no frontend, provider invocation,
 migration or deployment.
@@ -74,7 +74,8 @@ permission to activate collection.
 mints a grant. Every read and help replay rechecks authentication, deletion,
 ownership, canonical acceptance, current score eligibility, evidence, grant,
 pins, publication and the owner-scoped relevant-check inventory. The bounded
-owner/phase/closing-time index ranges serialize with check acceptance. Closed
+owner/phase/closing-time index ranges serialize with check acceptance. The collector
+and scope matcher are shared with C4 help admission and the Today lesson gate. Closed
 windows are excluded; up to 64 future windows use a separate allowance from
 the eight currently open checks. A second relevant
 check, including another horizon on the same assignment, closes teaching and
@@ -109,6 +110,14 @@ receipt, independent exposure, complete source links and slot assistance
 counters. Canonical key/request hashes prevent payload substitution. Replay
 passes through `projectPracticeAssistanceAuthorization` after renewed authority
 and returns the saved ID, time and content.
+
+Today-treatment checks with a frozen Canvas surface use the same post-seal
+endpoints, including after capability rollback. Surface is read from the frozen
+assignment binding, while the measurement treatment remains `v2_today`. The
+Today pointer and Canvas receipt keep their own allowlists. Unanswered cancelled
+checks do not block teaching. A proven sealed cancellation has only
+accepted-invalid separate practice authority; score-driven teaching stays closed.
+The ordinary disclosure resolver retains its original behavior.
 
 Help preserves the response revision and original prompt delivery exposure.
 Acceptance checks the complete owner/slot exposure history against the slot's

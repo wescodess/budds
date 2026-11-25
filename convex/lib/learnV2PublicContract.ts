@@ -3,6 +3,7 @@ import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
+import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION } from '../../shared/learn-v2-today-check'
 import type { learnResponseReceiptSchema} from '../../shared/learn-v2-responses';
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
@@ -34,6 +35,16 @@ const nullableNumber = v.union(v.number(), v.null())
 const nullableString = v.union(v.string(), v.null())
 const observation = v.union(v.boolean(), v.literal('unknown'))
 const phase = literals(LEARN_V2_ASSESSMENT_PHASES)
+export const todayCheckPointerValidator = v.object({
+  version: v.literal(LEARN_TODAY_CHECK_POINTER_VERSION), reference: v.string(),
+  state: literals(['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready', 'closed']),
+  destination: v.object({ kind: v.literal('canvas'), threadId: v.id('learningThreads'), route: v.string() }),
+})
+export const todayCheckPointersValidator = v.object({
+  status: literals(['available', 'unavailable', 'disabled', 'restart_required']), reasonCode: nullableString, checks: v.array(todayCheckPointerValidator),
+  isDone: v.boolean(), continueCursor: nullableString,
+})
+export const canvasCheckReadArgs = { threadId: v.id('learningThreads'), checkReference: v.optional(v.string()) }
 export const responseTargetValidator = v.union(
   v.object({ responseSlotId: v.id('learnResponseSlots') }),
   v.object({ assessmentOpportunityId: v.id('learnAssessmentOpportunities') }),
@@ -111,6 +122,14 @@ const work = v.object({
     v.object({ bodyAvailability: v.literal('purged'), reasonCode: v.literal('evidence_unavailable'), purgedAt: v.number() }),
   ), result: v.union(safeResult, v.null()),
 }) satisfies Validator<z.infer<typeof learnAttemptHistorySchema>, 'required', string>
+const canvasCheckReceiptFields = {
+  version: v.literal(LEARN_CANVAS_CHECK_RECEIPT_VERSION), reference: v.string(),
+  submissionId: v.id('learnResponses'), acceptedAt: v.number(), confidence: v.optional(v.number()), body: work.fields.body,
+}
+export const canvasCheckReceiptValidator = v.union(
+  v.object({ ...canvasCheckReceiptFields, state: v.literal('result_ready'), result: safeResult }),
+  v.object({ ...canvasCheckReceiptFields, state: literals(['saved_scoring', 'result_unconfirmed', 'closed']) }),
+)
 export const responseStateValidator = v.union(unavailableValidator, v.object({
   version: v.literal(LEARN_V2_PUBLIC_API_VERSION), status: v.literal('available'), target: responseTargetValidator,
   revision: v.number(), state: literals(['open', 'accepted', 'terminal']), work: v.union(work, v.null()),

@@ -1,5 +1,7 @@
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
+import { hasMeasurementReadContext } from './learnV2MeasurementReadContext'
+import { privacyRead } from './learnV2PrivacyReadContext'
 
 export type LearnV2PublicStatus =
   | {
@@ -41,8 +43,12 @@ export async function hasLearnV2Access(
   ctx: QueryCtx | MutationCtx,
   tokenIdentifier: string,
 ): Promise<boolean> {
-  // Deliberately read for every decision so a true -> false rollback takes
-  // effect without a warm-runtime cache window.
+  if (hasMeasurementReadContext(ctx, tokenIdentifier)) return await privacyRead(ctx, tokenIdentifier, ['learn-v2-access'], false,
+    async scoped => await currentLearnV2Access(scoped, tokenIdentifier))
+  return await currentLearnV2Access(ctx, tokenIdentifier)
+}
+
+async function currentLearnV2Access(ctx: QueryCtx | MutationCtx, tokenIdentifier: string) {
   if (process.env.LEARN_V2_ENABLED !== 'true') return false
   if (await hasAccountDeletionTombstone(ctx, tokenIdentifier)) return false
 

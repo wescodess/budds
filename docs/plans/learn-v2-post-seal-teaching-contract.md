@@ -235,3 +235,40 @@ deliveries remain recorded, replayable at the limit, and counted for case novelt
 Acceptance retains its existing bounded 64-entry verification for saved histories;
 the new delivery cap does not discard earlier support timestamps or invalidate
 an existing receipt. It introduces no new evidence exemption or storage schema.
+
+## Integration amendment: `learn-v2.post-seal-teaching.v1.runtime.2`
+
+This reconciles the runtime amendment with [#574's Today/Canvas API amendment](learn-v2-c1-public-api-contract.md#573-serial-amendment-today-points-to-canvas).
+The public version, three endpoints and availability envelopes above stay the
+same. No new storage or capability is introduced.
+
+Post-seal admission, C4 help admission and the Today lesson gate share the same
+bounded open-check collector and scope matcher. Owner/phase/closing-time index
+ranges exclude expired windows. Unopened future preparing or ready checks use
+the separate 64-row allowance; only current windows or an actual `test_open`
+check use the eight-row open allowance. Baseline instructional checks are
+excluded only by the guard's existing exact content binding. Overflow and
+unresolved scopes remain unavailable. Post-seal admission also retains the
+same-assignment rule. Cancelled checks never enter this collection. Today's
+projection, lesson start and content delivery continue to use one lesson gate;
+the startable/delivers invariant and the 136-case sweep remain required.
+
+Measurement `flow` describes the teaching treatment. The frozen assignment
+binding determines the check surface through `learnCheckUsesCanvasSurface`;
+assignment and context bindings must agree. A `v2_today` treatment with Canvas
+checks seals, scores and uses all three post-seal endpoints on the Canvas
+surface, including after the Today capability is turned off for new enrollment.
+The treatment is not rewritten to `v2_canvas`. Today pointers remain
+`summary_or_own_work` and acquire no teaching, practice, help, question or score
+content. The #574 Canvas receipt also keeps its own closed allowlist; these
+post-seal endpoints are separate content channels for #442.
+
+`closeUnplayableLearnCheck` closes only unanswered checks. It cannot cancel an
+accepted submission or change its snapshots. A cancelled check without an
+accepted submission releases no teaching. If a stored cancellation retains an
+exact owned canonical submission and delivery grant, only the post-seal resolver
+classifies it as accepted-invalid. Current access, evidence, pins and instructional publication
+are still mandatory. It may retain separate-case practice and worked-example
+replay; it releases no score-driven feedback, lesson or hint. Other disclosure
+callers and the strict lifecycle schema keep their existing terminal behavior.
+No response, attempt, phase, immutable payload or acceptance pin is repaired.

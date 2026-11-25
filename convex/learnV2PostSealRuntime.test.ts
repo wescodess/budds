@@ -514,18 +514,20 @@ test('unknown or overflowing relevant-check inventory withholds content and rece
   expect(await f.help()).toMatchObject({ status: 'denied', reasonCode: 'disclosure_unknown' })
 })
 
-test('future and expired check windows do not exhaust current teaching, help or practice acceptance', async () => {
+test.each(['preparing', 'ready'] as const)('future %s and expired check windows do not exhaust teaching, help or practice acceptance', async phase => {
   const f = await fixture({ score: true })
   const saved = await f.help()
   await f.t.run(async ctx => {
     const future = (await ctx.db.query('learnAssessmentOpportunities').take(8)).find(row => row.horizonDays === 7)!
-    for (let index = 0; index < 60; index++) await ctx.db.insert('learnAssessmentOpportunities', postSealApplicationFields(future))
+    for (let index = 0; index < 60; index++) await ctx.db.insert('learnAssessmentOpportunities', { ...postSealApplicationFields(future), phase })
     for (const phase of ['preparing', 'ready', 'test_open'] as const) {
       for (let index = 0; index < 9; index++) await ctx.db.insert('learnAssessmentOpportunities', {
         ...postSealApplicationFields(future), phase, openAt: Date.now() - 2000, closeAt: Date.now() - 1,
       })
     }
   })
+  expect(await f.owner.run(ctx => helpAdmission.readTeachingDisclosureChecks(ctx, deliveryIdentity.tokenIdentifier, null,
+    async () => ({ references: [{ kind: 'learning_void', id: f.graph.learningVoidId }] })))).toEqual({ status: 'known', checks: [] })
   expect(await f.read()).toMatchObject({ status: 'available', feedback: { tier: 'T0' }, lesson: { tier: 'T0' }, practice: { revision: 1 } })
   expect(await f.prepare()).toMatchObject({ status: 'available', practice: { revision: 1 } })
   expect(await f.help()).toEqual(saved)

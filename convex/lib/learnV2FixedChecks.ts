@@ -8,7 +8,7 @@ type ReadCtx = QueryCtx | MutationCtx
 type Plan = Doc<'studyPlanRevisions'>
 
 export function isDedicatedLearnCheck(session: Doc<'studySessions'>) {
-  return LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed'
+  return LEARN_MEASUREMENT_CAPABILITIES.responses && ['measurement_cold', 'measurement_delayed'].includes(session.assessmentPurpose ?? '')
     && session.assessmentOpportunityId !== undefined && session.schedulerVersion === LEARN_DELAYED_DELIVERY_VERSION
 }
 
@@ -58,6 +58,8 @@ export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, s
 
 export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan, limit: number) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
+  const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
+  const purposes = owner?.learnTodayCheckSurfaceVersion ? ['measurement_delayed', 'measurement_cold'] as const : ['measurement_delayed'] as const
   const plans = [active]
   let current = active
   const seen = new Set<string>([active._id])
@@ -68,10 +70,10 @@ export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, act
     plans.push(parent); seen.add(parent._id); current = parent
   }
   const checks: Doc<'studySessions'>[] = []
-  for (const plan of plans) {
+  for (const plan of plans) for (const purpose of purposes) {
     const remaining = limit - checks.length
     const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', q =>
-      q.eq('userId', userId).eq('studyPlanRevisionId', plan._id).eq('assessmentPurpose', 'measurement_delayed')).take(remaining + 1)
+      q.eq('userId', userId).eq('studyPlanRevisionId', plan._id).eq('assessmentPurpose', purpose)).take(remaining + 1)
     if (rows.length > remaining) throw new Error('Fixed checks exceed the bounded Study Plan contract')
     checks.push(...rows.filter(isDedicatedLearnCheck))
   }

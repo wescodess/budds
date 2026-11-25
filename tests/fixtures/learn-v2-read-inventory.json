@@ -458,6 +458,10 @@
     "handling": "summary_or_own_work"
   },
   {
+    "path": "learnV2Today.getCheckPointers",
+    "handling": "summary_or_own_work"
+  },
+  {
     "path": "learnV2Today.getToday",
     "handling": "summary_or_own_work"
   },

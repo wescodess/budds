@@ -12,7 +12,7 @@ import { requireAudioOverviewOrchestrationCredential } from './audioOverviewOrch
 import { messageSigningSecret } from './learnV2MessageProvenance'
 import { isCurrentTeachingReadScope } from './learnV2TeachingReadScope'
 
-function unavailableScope(error: unknown): null {
+export function unavailableScope(error: unknown): null {
   if (!(error instanceof LearnAccessError) && !(error instanceof LearnBlueprintAuthorityError) && !(error instanceof LearnTeachingScopeError)) throw error
   return null
 }

@@ -55,6 +55,12 @@ async function updateOpportunity(ctx: MutationCtx, assignment: AdmittedAssignmen
   await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(row._id))!)
 }
 
+export async function closeUnplayableLearnCheck(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>, reasonCode: string) {
+  if (row.submissionId || !['preparing', 'ready', 'test_open'].includes(row.phase)) return
+  await updateOpportunity(ctx, assignment, row, { operationalEligibility: 'blocked', reasonCode })
+  await updateOpportunity(ctx, assignment, (await ctx.db.get(row._id))!, { phase: 'cancelled' })
+}
+
 async function emitEligibility(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>) {
   const semanticKey = `opportunity:${row._id}:eligible`
   const dedupeKeyHash = await privacyDigest([LEARN_MEASUREMENT_EVENT_TAXONOMY_VERSION, assignment.userId, semanticKey])

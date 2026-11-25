@@ -184,8 +184,8 @@ async function recordDenial(ctx: MutationCtx, userId: string, row: Doc<'learnAss
 
 const FUTURE_OPPORTUNITY_LIMIT = 64
 
-function futurePreparing(row: Doc<'learnAssessmentOpportunities'>, now: number) {
-  return row.phase === 'preparing' && Number.isFinite(row.openAt) && row.openAt > now
+function futureUnopened(row: Doc<'learnAssessmentOpportunities'>, now: number) {
+  return row.phase !== 'test_open' && row.openAt > now
 }
 
 async function recordInterveningLearning(ctx: MutationCtx, userId: string, rows: Doc<'learnAssessmentOpportunities'>[], scopeDigest: string, now: number) {
@@ -219,30 +219,14 @@ export async function hasOpenLearnHelp(ctx: ReadCtx, userId: string) {
 export async function relevantOpenLearnCheck(ctx: ReadCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>): Promise<'yes' | 'no' | 'unknown'> {
   const resolver = scopeResolver(ctx, userId)
   const scope = emptyScope()
-  const rows: Doc<'learnAssessmentOpportunities'>[] = []
-  const now = Date.now()
-  let future = 0
-  for (const phase of LEARN_HELP_OPEN_PHASES) {
-    const limit = LEARN_HELP_LIMITS.openOpportunities + FUTURE_OPPORTUNITY_LIMIT + 1 - rows.length - future
-    const candidates = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
-      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
-    for (const row of candidates) {
-      if (!Number.isFinite(row.openAt) || !Number.isFinite(row.closeAt)) return 'unknown'
-      if (row.phase !== 'test_open' && row.openAt > now) future++
-      else rows.push(row)
-    }
-    if (rows.length > LEARN_HELP_LIMITS.openOpportunities || future > FUTURE_OPPORTUNITY_LIMIT) return 'unknown'
-  }
+  const collected = await collectOpenChecks(ctx, userId, Date.now(), null)
+  if (collected.kind === 'limit') return 'unknown'
   try {
     await resolver.learningVoid(scope, opportunity.learningVoidId)
-    for (const row of rows) {
+    if (opportunity.contextPins.kind === 'session' && opportunity.contextPins.canvas) await resolver.thread(scope, opportunity.contextPins.canvas.threadId)
+    for (const row of collected.open) {
       if (row._id === opportunity._id) continue
-      if (row.submissionId) return 'unknown'
-      if (row.assignmentId && row.assignmentId === opportunity.assignmentId) return 'yes'
-      const other = emptyScope()
-      await resolver.learningVoid(other, row.learningVoidId)
-      if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(other, row.contextPins.canvas.threadId)
-      if (relevant(scope, other)) return 'yes'
+      if (await matchesOpenCheck(resolver, scope, row, opportunity.assignmentId)) return 'yes'
     }
     return 'no'
   } catch (error) {
@@ -266,6 +250,73 @@ export async function inspectLearnHelpForAudioJob(ctx: ReadCtx, job: Doc<'audioO
     idempotencyKey: `audio_read_${job._id}`, scope: { references: [{ kind: 'audio_job', id: job._id }] }, ordinaryOnly: true }, false, true)
 }
 
+type OpenChecks = { kind: 'limit' | 'rows', open: Doc<'learnAssessmentOpportunities'>[], future: Doc<'learnAssessmentOpportunities'>[] }
+
+async function collectOpenChecks(ctx: ReadCtx, userId: string, now: number, baselineSessionContent: Id<'sessionContent'> | null): Promise<OpenChecks> {
+  const open: Doc<'learnAssessmentOpportunities'>[] = []
+  const future: Doc<'learnAssessmentOpportunities'>[] = []
+  for (const phase of LEARN_HELP_OPEN_PHASES) {
+    const limit = LEARN_HELP_LIMITS.openOpportunities + FUTURE_OPPORTUNITY_LIMIT + 1 - open.length - future.length + Number(baselineSessionContent !== null)
+    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
+      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
+    const limited = rows.length === limit
+    for (const row of rows) {
+      if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'
+        && row.contextPins.sessionContentId === baselineSessionContent) continue
+      if (!Number.isFinite(row.openAt) || !Number.isFinite(row.closeAt)) return { kind: 'limit', open, future }
+      if (futureUnopened(row, now)) future.push(row)
+      else open.push(row)
+    }
+    if (limited || open.length > LEARN_HELP_LIMITS.openOpportunities || future.length > FUTURE_OPPORTUNITY_LIMIT) return { kind: 'limit', open, future }
+  }
+  return { kind: 'rows', open, future }
+}
+
+async function matchesOpenCheck(resolver: ReturnType<typeof scopeResolver>, scope: Scope, row: Doc<'learnAssessmentOpportunities'>, assignmentId?: Id<'learnMeasurementAssignments'>) {
+  if (row.submissionId) throw new ScopeUnavailable()
+  if (assignmentId && row.assignmentId === assignmentId) return true
+  const assessment = emptyScope()
+  await resolver.learningVoid(assessment, row.learningVoidId)
+  if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(assessment, row.contextPins.canvas.threadId)
+  return relevant(scope, assessment)
+}
+
+export type TeachingDisclosureCheck = { row: Doc<'learnAssessmentOpportunities'>, resolved: boolean }
+export type TeachingDisclosureChecks =
+  | { status: 'known', checks: TeachingDisclosureCheck[] }
+  | { status: 'unknown', reasonCode: 'disclosure_unknown' | 'unavailable', open: Doc<'learnAssessmentOpportunities'>[] }
+  | { status: 'unscoped' }
+
+// The open checks this guard considers for a teaching read. `resolved: false` rows fail scope resolution, which denies the read.
+// `unknown` denies every read; `unscoped` means the read has no current scope, which the guard denies whatever checks are open.
+export async function readTeachingDisclosureChecks(ctx: ReadCtx, userId: string, baselineSessionContent: Id<'sessionContent'> | null,
+  readScope: () => Promise<LearnHelpRequest['scope']>): Promise<TeachingDisclosureChecks> {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return { status: 'known', checks: [] }
+  const collected = await collectOpenChecks(ctx, userId, Date.now(), baselineSessionContent)
+  if (collected.kind === 'limit') return { status: 'unknown', reasonCode: 'disclosure_unknown', open: collected.open }
+  if (!collected.open.length) return { status: 'known', checks: [] }
+  const request = await readScope()
+  if (!request) return { status: 'unscoped' }
+  const resolver = scopeResolver(ctx, userId)
+  const scope = emptyScope()
+  try {
+    for (const reference of request.references) await resolver.reference(scope, reference)
+  } catch (error) {
+    if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+    return { status: 'unknown', reasonCode: error instanceof ScopeUnknown ? 'disclosure_unknown' : 'unavailable', open: collected.open }
+  }
+  const checks: TeachingDisclosureCheck[] = []
+  for (const row of collected.open) {
+    try {
+      if (await matchesOpenCheck(resolver, scope, row)) checks.push({ row, resolved: true })
+    } catch (error) {
+      if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
+      checks.push({ row, resolved: false })
+    }
+  }
+  return { status: 'known', checks }
+}
+
 async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequest, delivery = false, readOnly = false, baselineSessionContent: Id<'sessionContent'> | null = null): Promise<LearnHelpAdmission> {
   const ordinary: LearnHelpAdmission = { version: LEARN_HELP_ADMISSION_VERSION, status: 'ordinary' }
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return ordinary
@@ -275,21 +326,9 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   const record = async (row: Doc<'learnAssessmentOpportunities'>, reason: string, scopeDigest: string) => {
     if (!readOnly && isMutationContext(ctx)) await recordDenial(ctx, userId, row, request, reason, scopeDigest)
   }
-  const open: Doc<'learnAssessmentOpportunities'>[] = []
-  const future: Doc<'learnAssessmentOpportunities'>[] = []
-  for (const phase of LEARN_HELP_OPEN_PHASES) {
-    const limit = LEARN_HELP_LIMITS.openOpportunities + 1 - open.length + (phase === 'preparing' ? FUTURE_OPPORTUNITY_LIMIT - future.length : 0)
-    const rows = await ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_phase_and_closeAt', q =>
-      q.eq('userId', userId).eq('phase', phase).gt('closeAt', now)).take(limit)
-    if ((phase === 'preparing' || baselineSessionContent) && rows.length === limit) return deny('disclosure_unknown')
-    for (const row of rows) {
-      if (baselineSessionContent && row.purpose.kind === 'independent_application' && row.contextPins.kind === 'session'
-        && row.contextPins.sessionContentId === baselineSessionContent) continue
-      if (futurePreparing(row, now)) future.push(row)
-      else open.push(row)
-    }
-    if (open.length > LEARN_HELP_LIMITS.openOpportunities) return deny('disclosure_unknown')
-  }
+  const collected = await collectOpenChecks(ctx, userId, now, baselineSessionContent)
+  if (collected.kind === 'limit') return deny('disclosure_unknown')
+  const { open, future } = collected
   if (!open.length && !future.length) return ordinary
   if (!request.scope) {
     if (!open.length) return ordinary
@@ -302,13 +341,7 @@ async function admitLearnHelp(ctx: ReadCtx, userId: string, input: LearnHelpRequ
   const scope = emptyScope()
   try {
     for (const reference of request.scope.references) await resolver.reference(scope, reference)
-    for (const row of open) {
-      if (row.submissionId) throw new ScopeUnavailable()
-      const assessment = emptyScope()
-      await resolver.learningVoid(assessment, row.learningVoidId)
-      if (row.contextPins.kind === 'session' && row.contextPins.canvas) await resolver.thread(assessment, row.contextPins.canvas.threadId)
-      if (relevant(scope, assessment)) matches.push(row)
-    }
+    for (const row of open) if (await matchesOpenCheck(resolver, scope, row)) matches.push(row)
   } catch (error) {
     if (!(error instanceof ScopeUnknown || error instanceof ScopeUnavailable)) throw error
     if (!open.length) return ordinary

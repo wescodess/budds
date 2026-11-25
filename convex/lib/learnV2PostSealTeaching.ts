@@ -4,6 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { requireOwnedResponseTarget } from './learnV2PublicAccess'
 import { resolveAssessmentDisclosureContext, canReadSourceEvidence } from './learnV2AssessmentDisclosure'
 import { relevantOpenLearnCheck } from './learnV2HelpAdmission'
+import { learnCheckUsesCanvasSurface } from './learnV2DelayedDelivery'
 import { normalizedInstructionalCaseFingerprints, resolveArtifactLineageForOwner } from './learnV2ArtifactLineage'
 import { measurementItemAdapters } from './learnV2MeasurementItems'
 import { learnCasePromptsMatch } from '../../shared/learn-v2-case-prompt'
@@ -23,7 +24,7 @@ import {
   type learnAuthorizePracticeAssistanceSchema,
 } from '../../shared/learn-v2-assessment-disclosure'
 import { resolveLearnAssessmentCapabilities } from '../../shared/learn-v2-delayed-check'
-import { isLearnScoringReceiptCommittable, LEARN_V2_SCORER_IDENTITY_POLICY_VERSION } from '../../shared/learn-v2-measurement'
+import { isLearnScoringReceiptCommittable, LEARN_V2_SCORER_IDENTITY_POLICY_VERSION, learnAssessmentBoundSurface } from '../../shared/learn-v2-measurement'
 import { learnArtifactSourceDependencySchema } from '../../shared/learn-v2-artifact-lineage'
 import {
   fingerprintLearnPracticeHelpRequest, learnPostSealTeachingSourceStorageSchema, learnPostSealPracticeBindingStorageSchema,
@@ -135,6 +136,13 @@ async function checkAuthority(ctx: ReadCtx, userId: string, id: Id<'learnAssessm
   if (!('assessmentPins' in row)) deny('unavailable')
   const disclosure = await resolveAssessmentDisclosureContext(ctx, id, true)
   if (!disclosure) deny()
+  if (row.assessmentPins.kind === 'measurement' && row.assignmentId) {
+    const assignment = await ctx.db.get(row.assignmentId)
+    if (!assignment || assignment.status !== 'admitted') deny()
+    const canvasSurface = learnCheckUsesCanvasSurface(assignment)
+    if (canvasSurface !== Boolean(row.contextPins.kind === 'session' && row.contextPins.canvas)
+      || assignment.checkSurface && learnAssessmentBoundSurface(assignment, row.contextPins) !== (canvasSurface ? 'canvas' : 'today')) deny()
+  }
   const response = row.submissionId ? await ctx.db.get(row.submissionId) : null
   const objective = await ctx.db.get(row.objectiveId)
   const learningVoid = await ctx.db.get(row.learningVoidId)
