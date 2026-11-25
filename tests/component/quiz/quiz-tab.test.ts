@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeAll, describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 
@@ -28,6 +28,10 @@ mockNuxtImport('useConvexMutation', () => {
 })
 
 const quizTabPath = ['~', 'components', 'quiz', 'Tab.vue'].join('/')
+
+beforeAll(async () => {
+  await import(quizTabPath)
+})
 
 describe('QuizTab — Story 6.1 AC #5, #6, #7', () => {
   beforeEach(() => {

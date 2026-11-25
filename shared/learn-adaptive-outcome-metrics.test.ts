@@ -141,7 +141,8 @@ test('operator retains experiment assignments frozen before the reporting window
 
 test('operator reproduces all frozen families without publishing private identities or approvals', () => {
   const result = run()
-  const publication = report()
+  expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' })
+  const publication = JSON.parse(result.stdout)
   expect(publication.metrics).toMatchObject({
     retention: { checkCoverage: { numerator: 1, denominator: 2, rate: 0.5 } },
     experiment: { fixed: { usefulness: { rate: 1 } }, adaptive: { usefulness: { rate: 0 } }, decisions: 'pending' },

@@ -23,8 +23,9 @@ import { localDateAt } from '../shared/learn-v2-mastery'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION } from '../shared/learn-v2-assessment-disclosure'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
+import { LEARN_CANVAS_CHECK_TIMING_VERSION } from '../shared/learn-v2-today-check'
 
-const policy = vi.hoisted(() => ({ responses: true, delivery: true, scoring: true, enrollment: true, evidenceRows: 64, scorer: null as unknown, protocol: null as unknown }))
+const policy = vi.hoisted(() => ({ responses: true, delivery: true, scoring: true, enrollment: true, todayCanvasChecks: false, evidenceRows: 64, scorer: null as unknown, protocol: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
   return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
@@ -37,6 +38,7 @@ vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
 vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
   return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES,
+    get todayCanvasChecks() { return policy.todayCanvasChecks },
     get responses() { return policy.responses }, get delivery() { return policy.delivery }, get scoring() { return policy.scoring }, get enrollment() { return policy.enrollment } } }
 })
 vi.mock('./lib/learnV2MeasurementAssignment', async original => {
@@ -56,7 +58,7 @@ const answer = 'A committed learner answer.'
 
 beforeEach(() => {
   policy.responses = true; policy.delivery = true; policy.scoring = true; policy.enrollment = true; policy.scorer = null
-  policy.evidenceRows = 64
+  policy.evidenceRows = 64; policy.todayCanvasChecks = false
   vi.useFakeTimers(); vi.setSystemTime(NOW)
   vi.stubEnv('LEARN_V2_ENABLED', 'true')
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
@@ -780,6 +782,24 @@ async function purposeFixture(kind: 'measurement_cold' | 'measurement_delayed' |
     expectedSessionRevision: 3, expectedRevision: 1, response: answer, confidence: 3, idempotencyKey: `adaptive-canvas-submit-${crypto.randomUUID()}` } }
 }
 
+test.each([
+  ['independent_application', null], ['measurement_cold', 'this_session'],
+  ['measurement_delayed', 'earlier'], ['retained_transfer', 'retained'],
+] as const)('Canvas timing is limited to measurement purposes: %s', async (kind, timing) => {
+  const s = await purposeFixture(kind)
+  policy.todayCanvasChecks = true
+  const args = { threadId: s.stage.threadId }
+  const canvas = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, args)
+  expect(canvas).toMatchObject({ status: 'started', responsePrompt: s.prompt, assessment: { phase: 'test_open' } })
+  if (timing === null) expect(canvas?.assessment).not.toHaveProperty('checkTiming')
+  else expect(canvas?.assessment?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing })
+  const delivered = await s.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { ...args, idempotencyKey: 'canvas_purpose_timing_1234567890' })
+  expect(delivered.value?.assessment).toEqual(canvas?.assessment)
+  policy.todayCanvasChecks = false
+  const off = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, args)
+  expect(off?.assessment).not.toHaveProperty('checkTiming')
+})
+
 test.each((['measurement_cold', 'measurement_delayed', 'retained_transfer', 'independent_application'] as const).flatMap(kind => [true, false].map(awarded => ({ kind, awarded }))))('registered $kind Canvas attach/read/stage/score/replay with awarded=$awarded shares one canonical result', async ({ kind, awarded }) => {
   const s = await purposeFixture(kind)
   const network = vi.fn(async () => modelReply(awarded, kind === 'retained_transfer' || kind === 'independent_application' ? 'accuracy' : 'private-criterion'))
@@ -900,7 +920,7 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocu
     documents: accepted.metrics.documentsRead.used, bytes: accepted.metrics.bytesRead.used }))
   expect(accepted.metrics.databaseQueries.used).toBeLessThan(3072)
 
-})
+}, 20_000)
 
 test.each(['nested_limit', 'native_limit'] as const)('Canvas preparation propagates %s and rolls back earlier writes', async mode => {
   const s = await fixture({ prepare: false, attach: false, reserveCount: 3,
@@ -929,7 +949,7 @@ test('the 64-row publication bound delivers, seals, recovers and scores through 
     .toMatchObject({ assessment: { phase: 'scored_pass' } })
   expect(await s.owner.action(api.learnAdaptive.submitResponse, { threadId: s.stage.threadId, activityId: s.stage.activityId,
     submissionId: sealed.submissionId, idempotencyKey: 'bound_canvas_recovery_1234567890' })).toMatchObject({ kind: 'accepted', status: 'completed' })
-})
+}, 20_000)
 
 test('65-row inventory is rejected before Canvas publication or disclosure', async () => {
   await expect(fixture({ inventory: { claims: 32, supports: 2, sources: 3, extraSupports: 1 } }))

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
@@ -156,6 +156,7 @@ describe('RoomEditor', () => {
 
   it('[P0] reorder rollback on failure reverts card order and shows toast', async () => {
     const toastError = vi.fn()
+    onTestFinished(() => { vi.doUnmock('vue-sonner'); vi.resetModules() })
     vi.doMock('vue-sonner', () => ({ toast: { error: toastError } }))
 
     mockReorderMutate.mockRejectedValue(new Error('OCC conflict'))

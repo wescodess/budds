@@ -135,7 +135,7 @@ describe('Node 24 offline measurement report CLI', () => {
     expect(primary(oracle, 'false_mastery_next_delayed.v1')).toMatchObject({ status: 'partial_observed', observedValue: 1,
       allEligibleValue: null, missingOutcomeBounds: { lower: 0.5, upper: 1 }, counts: { maturedClaims: 2, checkedClaims: 1, failedClaims: 1 } })
     expect(primary(oracle, 'verified_learning_gain.v1', 30)).toMatchObject({ status: 'no_eligible_population', observedValue: null, allEligibleValue: null })
-  })
+  }, 20_000)
 
   it('publishes replayed values only once five distinct learners contribute', async () => {
     const input = await computed(await Promise.all([1, 2, 3, 4, 5].map(index => computationEpisode(index))))

@@ -502,7 +502,7 @@ test('Canvas scoring preserves its sealed check and teaching authority', async (
   expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(response)
 })
 
-async function todayCanvasTeaching() {
+async function todayCanvasTeaching(options: { score?: boolean } = {}) {
   policy.todayCanvas = true
   const f = await fixture(true, undefined, undefined, { pass: false })
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true, startsAt: new Date(Date.now() - 86_400_000).toISOString(),
@@ -537,15 +537,77 @@ async function todayCanvasTeaching() {
   const response = (await f.t.run(ctx => ctx.db.get(receipt.submissionId)))!
   expect(response).toMatchObject({ flow: 'canvas', measurementContext: { status: 'admitted' },
     contextPins: { checkSurface: { surface: 'canvas', measurementFlow: 'v2_today' } } })
-  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+  if (options.score !== false) expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
     submissionId: receipt.submissionId, idempotencyKey: 'today_surface_post_seal_score_12345' })).toMatchObject({ kind: 'accepted', status: 'completed' })
   const reference = { version, assessmentOpportunityId: row._id }
   const read = () => f.owner.query(learnV2CanvasMeasurementApi.getPostSealTeaching, reference)
   const open = () => f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)
   const help = (slotId: Id<'learnResponseSlots'>, kind: 'hint' | 'worked_example') => f.owner.mutation(learnV2CanvasMeasurementApi.authorizePracticeAssistance,
     { ...reference, target: { responseSlotId: slotId }, expectedRevision: 1, kind, idempotencyKey: `today_surface_help_${kind}_12345` })
-  return { ...f, row, response, assignment, read, open, help }
+  const canvasReceipt = async () => (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, {
+    threadId: attached.threadId, checkReference: row.delayedCheckId }))?.checkReceipt
+  return { ...f, row, response, assignment, attached, canvasReceipt, read, open, help }
 }
+
+test.each(['result_unconfirmed', 'closed'] as const)('the %s Canvas receipt reaches only separate-case practice', async state => {
+  const f = await todayCanvasTeaching({ score: false })
+  if (state === 'result_unconfirmed') {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('lost provider receipt') }))
+    expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: f.attached.threadId, activityId: f.attached.activityId,
+      submissionId: f.response._id, idempotencyKey: 'receipt_unconfirmed_score_12345' }))
+      .toMatchObject({ kind: 'blocked', code: 'reconciliation_required', retryable: false })
+  } else await f.t.run(ctx => ctx.db.patch(f.row._id, { phase: 'cancelled' }))
+  const receipt = await f.canvasReceipt()
+  expect(receipt?.state).toBe(state)
+  const reference = receipt?.postSealReference
+  if (!reference) throw new Error('Expected receipt reference')
+  expect(reference).toEqual({ version, assessmentOpportunityId: f.row._id })
+  expect(await f.owner.query(learnV2CanvasMeasurementApi.getPostSealTeaching, reference))
+    .toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null })
+  const opened = await f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected separate practice')
+  expect(opened).toMatchObject({ feedback: null, lesson: null, availability: { practice: { status: 'available' } } })
+  expect(await f.help(opened.practice.responseSlotId, 'worked_example')).toMatchObject({ status: 'authorized' })
+  expect(await f.help(opened.practice.responseSlotId, 'hint')).toMatchObject({ status: 'denied', reasonCode: 'unavailable' })
+  expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+})
+
+test.each(['open_check', 'revoked', 'separation'] as const)('a receipt reference cannot bypass %s gates', async gate => {
+  const f = await todayCanvasTeaching({ score: false })
+  await f.t.run(ctx => ctx.db.patch(f.row._id, { phase: 'reconciliation_required' }))
+  const reference = (await f.canvasReceipt())?.postSealReference
+  if (!reference) throw new Error('Expected receipt reference')
+  const opened = await f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)
+  if (opened.status !== 'available' || !opened.practice) throw new Error('Expected separate practice')
+  const slotId = opened.practice.responseSlotId
+  await f.help(slotId, 'worked_example')
+  if (gate === 'open_check') {
+    const delayed = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').take(8))).find(row => row.horizonDays === 7)!
+    vi.setSystemTime(delayed.openAt)
+    await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  } else if (gate === 'revoked') await f.t.run(ctx => ctx.db.patch(f.graph.sourceSnapshotId, { rightsStatus: 'prohibited' }))
+  else await f.t.run(async ctx => {
+    const binding = (await ctx.db.query('learnPostSealPracticeBindings').take(2))[0]!
+    const checkCaseId = f.row.assessmentPins.kind === 'measurement' ? f.row.assessmentPins.itemPins.caseId : null
+    if (!checkCaseId) throw new Error('Expected measurement case')
+    await ctx.db.patch(binding._id, { practiceCaseId: checkCaseId })
+  })
+  const read = await f.owner.query(learnV2CanvasMeasurementApi.getPostSealTeaching, reference)
+  const retried = await f.owner.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)
+  if (gate === 'separation') {
+    expect(read).toMatchObject({ status: 'available', practice: null, availability: { practice: { status: 'unavailable' } } })
+    expect(retried).toMatchObject({ status: 'available', practice: null })
+  } else {
+    expect(read).toMatchObject({ status: 'unavailable', reasonCode: gate === 'open_check' ? 'test_open' : 'evidence_unavailable' })
+    expect(retried).toEqual(read)
+    if (gate === 'revoked') expect(await f.canvasReceipt()).toMatchObject({ state: 'closed', postSealReference: reference })
+  }
+  expect(await f.help(slotId, 'worked_example')).toMatchObject({ status: 'denied' })
+  expect(await f.t.run(ctx => ctx.db.query('learnPostSealPracticeBindings').take(2))).toHaveLength(1)
+  const foreign = f.t.withIdentity({ tokenIdentifier: 'foreign-owner', subject: 'foreign' })
+  await expect(foreign.query(learnV2CanvasMeasurementApi.getPostSealTeaching, reference)).rejects.toThrow('Learn access denied')
+  await expect(foreign.mutation(learnV2CanvasMeasurementApi.openPostSealPractice, reference)).rejects.toThrow('Learn access denied')
+})
 
 test('Today treatment on the Canvas surface seals, scores and delivers teaching, practice and both help kinds', async () => {
   const f = await todayCanvasTeaching()
