@@ -293,7 +293,9 @@ vi.spyOn = new Proxy(nativeVi.spyOn, {
     const mock = Reflect.apply(target, receiver, args)
     const scope = current()
     if (scope) scope.undo.set(mock, () => { mock.mockRestore() })
-    const proxy = guardMock(mock, typeof fallback === 'function' ? fallback : undefined)
+    const clockRead = (object === Date && key === 'now') || object === Math
+      || (typeof performance !== 'undefined' && object === performance && key === 'now')
+    const proxy = guardMock(mock, clockRead && typeof fallback === 'function' ? fallback : undefined)
     const descriptor = Object.getOwnPropertyDescriptor(object, key)!
     if (kind) Object.defineProperty(object, key, { ...descriptor, [kind]: proxy })
     else if ('value' in descriptor) Object.defineProperty(object, key, { ...descriptor, value: proxy })
@@ -374,7 +376,7 @@ aroundEach(async (runTest, context) => {
   const fakeTimers = vi.isFakeTimers()
   const original = getFn(context.task)
   setFn(context.task, () => scopes.run({ ...owner.scope, signal: context.signal }, async () => {
-    try { await original() } finally { owner.dispose() }
+    try { await original() } finally { owner.run(owner.dispose) }
   }))
   try {
     await owner.run(runTest)

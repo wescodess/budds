@@ -113,3 +113,15 @@ test('expired background clock reads use the original function without entering 
   expect(clock).toHaveBeenCalledTimes(1)
   clock.mockRestore()
 })
+
+test('expired calls cannot run original mutations through a successor spy', () => {
+  const values = new Map<string, number>()
+  const target = { write: values.set.bind(values) }
+  const write = vi.spyOn(target, 'write')
+  const predecessor = createTimeoutScope()
+  predecessor.close()
+  predecessor.run(target.write.bind(target, 'late', 1))
+  expect(values.has('late')).toBe(false)
+  expect(write).not.toHaveBeenCalled()
+  write.mockRestore()
+})
