@@ -25,6 +25,11 @@ export default defineNuxtConfig({
         file: fileURLToPath(new URL('../canvas-harness.vue', import.meta.url)),
       })
       pages.push({
+        name: 'delayed-check-harness',
+        path: '/__e2e/delayed-check-harness',
+        file: fileURLToPath(new URL('../delayed-check-harness.vue', import.meta.url)),
+      })
+      pages.push({
         name: 'map-editor-harness',
         path: '/__e2e/map-editor-harness',
         file: fileURLToPath(new URL('../map-editor-harness.vue', import.meta.url)),

@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "kind": "routes",
+  "notes": "Build capture of the delayed check (#441 Today, #442 Canvas), compared in fidelity mode with the approved TARGET surface learn-delayed-check. Each case mounts the shipped components on an E2E-only fixture route: TodaySession with its check rows for the Today frames, and CanvasCheck for the Canvas frames. A local client answers their reads and commands with server-shaped projections parsed by the shared schemas, and the harness scripts interactive states through the real controls. Approved states: On Today (today-locked), Canvas entry (entry), Check open (open), Answer not accepted (rejected), Back after a refresh (restored), Couldn’t submit (save-failed, offline), Saved, waiting for a result (pending and today-saved), Scoring didn’t finish (scoring-failed), Result can’t be confirmed (unconfirmed and today-unconfirmed), Check can’t count (invalid), Passed (passed and today-result-ready), Not yet (not-yet), No check ready (unavailable). States approved as built after the mockup: the refused start (entry-refused), the help limit (help-limit), feedback publishing (publishing) and the closed Today row (today-closed). Omitted: the Today page’s calendar card and the Void route shell around the Canvas check (its thread header, and the Open your Void link under the check); CanvasCheck renders its own header. Synthetic copy only, with no learner data, answer keys, rubrics, criteria or scores shown.",
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "viewports": [
+    {
+      "width": 1280,
+      "height": 832
+    },
+    {
+      "width": 390,
+      "height": 844
+    },
+    {
+      "width": 320,
+      "height": 640
+    }
+  ],
+  "contentSelector": "[data-testid=delayed-check-frame]",
+  "readySelector": "[data-testid=delayed-check-harness][data-ready=true] [data-testid=delayed-check-frame]",
+  "requiredFonts": [
+    "DM Sans",
+    "Inter"
+  ],
+  "cases": [
+    {
+      "kind": "today",
+      "state": "today-locked",
+      "path": "/__e2e/delayed-check-harness?state=today-locked"
+    },
+    {
+      "kind": "today",
+      "state": "today-saved",
+      "path": "/__e2e/delayed-check-harness?state=today-saved"
+    },
+    {
+      "kind": "today",
+      "state": "today-unconfirmed",
+      "path": "/__e2e/delayed-check-harness?state=today-unconfirmed"
+    },
+    {
+      "kind": "today",
+      "state": "today-result-ready",
+      "path": "/__e2e/delayed-check-harness?state=today-result-ready"
+    },
+    {
+      "kind": "today",
+      "state": "today-closed",
+      "path": "/__e2e/delayed-check-harness?state=today-closed"
+    },
+    {
+      "kind": "canvas",
+      "state": "entry",
+      "path": "/__e2e/delayed-check-harness?state=entry"
+    },
+    {
+      "kind": "canvas",
+      "state": "entry-refused",
+      "path": "/__e2e/delayed-check-harness?state=entry-refused"
+    },
+    {
+      "kind": "canvas",
+      "state": "open",
+      "path": "/__e2e/delayed-check-harness?state=open"
+    },
+    {
+      "kind": "canvas",
+      "state": "rejected",
+      "path": "/__e2e/delayed-check-harness?state=rejected"
+    },
+    {
+      "kind": "canvas",
+      "state": "restored",
+      "path": "/__e2e/delayed-check-harness?state=restored"
+    },
+    {
+      "kind": "canvas",
+      "state": "save-failed",
+      "path": "/__e2e/delayed-check-harness?state=save-failed"
+    },
+    {
+      "kind": "canvas",
+      "state": "pending",
+      "path": "/__e2e/delayed-check-harness?state=pending"
+    },
+    {
+      "kind": "canvas",
+      "state": "help-limit",
+      "path": "/__e2e/delayed-check-harness?state=help-limit"
+    },
+    {
+      "kind": "canvas",
+      "state": "scoring-failed",
+      "path": "/__e2e/delayed-check-harness?state=scoring-failed"
+    },
+    {
+      "kind": "canvas",
+      "state": "unconfirmed",
+      "path": "/__e2e/delayed-check-harness?state=unconfirmed"
+    },
+    {
+      "kind": "canvas",
+      "state": "invalid",
+      "path": "/__e2e/delayed-check-harness?state=invalid"
+    },
+    {
+      "kind": "canvas",
+      "state": "passed",
+      "path": "/__e2e/delayed-check-harness?state=passed"
+    },
+    {
+      "kind": "canvas",
+      "state": "publishing",
+      "path": "/__e2e/delayed-check-harness?state=publishing"
+    },
+    {
+      "kind": "canvas",
+      "state": "not-yet",
+      "path": "/__e2e/delayed-check-harness?state=not-yet"
+    },
+    {
+      "kind": "canvas",
+      "state": "unavailable",
+      "path": "/__e2e/delayed-check-harness?state=unavailable"
+    }
+  ]
+}
