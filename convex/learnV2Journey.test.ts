@@ -28,6 +28,34 @@ async function setup() {
 }
 
 describe('Learn V2 public journey read model', () => {
+  test.each([32, 33])('capability-off Hub and Mission retain the %s ordinary-session boundary', async count => {
+    const { t, asOwner, learningVoid } = await setup()
+    await t.run(async ctx => {
+      const userId = owner.tokenIdentifier
+      const blueprintId = await ctx.db.insert('learnBlueprints', { userId, learningVoidId: learningVoid!._id, revision: 1, createdAt: 1 })
+      const blueprintRevisionId = await ctx.db.insert('learnBlueprintRevisions', { userId, blueprintId, learningVoidId: learningVoid!._id,
+        revision: 1, recordRevision: 1, status: 'accepted', createdAt: 1, updatedAt: 1 })
+      await ctx.db.patch(learningVoid!._id, { activeBlueprintRevisionId: blueprintRevisionId, status: 'scheduled' })
+      const objectiveId = await ctx.db.insert('learnObjectives', { userId, blueprintRevisionId, order: 0, title: 'Bounded ordinary work' })
+      const studyPlanId = await ctx.db.insert('studyPlans', { userId, learningVoidId: learningVoid!._id, revision: 1, createdAt: 1 })
+      const studyPlanRevisionId = await ctx.db.insert('studyPlanRevisions', { userId, studyPlanId, learningVoidId: learningVoid!._id,
+        blueprintRevisionId, blueprintRecordRevision: 1, status: 'accepted', revision: 1, recordRevision: 1, createdAt: 1 })
+      await ctx.db.patch(studyPlanId, { activeRevisionId: studyPlanRevisionId })
+      for (let index = 0; index < count; index++) await ctx.db.insert('studySessions', { userId, studyPlanRevisionId,
+        primaryObjectiveId: objectiveId, status: 'planned', revision: 1, scheduledStartAt: 1_800_000_000_000 + index })
+    })
+    const hub = asOwner.query(api.learnV2Journey.listHub, {})
+    if (count === 33) await expect(hub).rejects.toThrow('Learn V2 sessions exceed their bounded contract')
+    else expect(await hub).toMatchObject({ items: [{ nextAction: 'study_session', nextScheduledAt: 1_800_000_000_000 }] })
+    const mission = asOwner.query(api.learnV2Journey.getMission, { learningVoidId: learningVoid!._id })
+    if (count === 33) await expect(mission).rejects.toThrow('Learn V2 sessions exceed their bounded contract')
+    else {
+      const result = (await mission)!
+      expect(result.plan.sessions).toHaveLength(32)
+      expect(result.plan).not.toHaveProperty('fixedChecks')
+    }
+  })
+
   test('keeps live canonical answer history and denies its purged body before alias cleanup', async () => {
     vi.useFakeTimers()
     const { t, asOwner } = await setup()

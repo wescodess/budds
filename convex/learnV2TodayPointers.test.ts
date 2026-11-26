@@ -1601,7 +1601,7 @@ test('Today defers pointer discovery before its remaining budget is insufficient
   const f = await fixture()
   await f.start()
   const original = privacyContext.createResponsePrivacyReadContext
-  const budget = vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 70, options))
+  const budget = vi.spyOn(privacyContext, 'createResponsePrivacyReadContext').mockImplementation((ctx, owner, _limit, options) => original(ctx, owner, 80, options))
   expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: f.graph.studySessionId, checkPointers: {
     status: 'unavailable', reasonCode: 'pointer_page_budget', checks: [], isDone: false, continueCursor: null,
   } })

@@ -10,7 +10,7 @@ import { getLearnMeasurementScorer } from './learnV2MeasurementScorerInventory'
 import { grantLearnAssessmentDeliveryForOwner } from './learnV2AssessmentDelivery'
 import { privacyDigest } from './learnV2ResponsePrivacy'
 
-export async function bindSessionApplication(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>, content: Doc<'sessionContent'>) {
+export async function bindSessionApplication(ctx: MutationCtx, userId: string, session: Doc<'studySessions'>, content: Doc<'sessionContent'>, surface: 'today' | 'canvas' = 'today') {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !LEARN_MEASUREMENT_CAPABILITIES.enrollment || !LEARN_MEASUREMENT_CAPABILITIES.delivery) return
   const catalog = await ctx.db.query('learnAssessmentCatalogs').withIndex('by_userId', q => q.eq('userId', userId)).unique()
   if (!catalog?.measurementCapability?.enabled) return
@@ -51,7 +51,9 @@ export async function bindSessionApplication(ctx: MutationCtx, userId: string, s
     checkSequence: 0, originalSlot: true, deliveryPins: { version: LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION, confidenceRequested: true } })
   await ctx.db.patch(session._id, { assessmentPurpose: 'independent_application', assessmentOpportunityId: id,
     assistanceRevision: session.assistanceRevision ?? (historyKnown ? 0 : undefined) })
+  if (surface === 'canvas') return id
   const grant = await grantLearnAssessmentDeliveryForOwner(ctx, userId, { assessmentOpportunityId: id, expectedRevision: 1,
     idempotencyKey: (await privacyDigest(['learn-v2.session-application.v1', session._id])).slice(7), flow: 'today' })
   if (grant.status !== 'granted') throw new Error(`Learn application delivery unavailable: ${grant.status === 'unavailable' ? grant.reasonCodes.join(',') : 'disabled'}`)
+  return id
 }

@@ -234,7 +234,7 @@ async function blockAuthority(ctx: ReadCtx, userId: string, authority: Authority
     validationDigest: await privacyDigest({ policy, checkCaseId, validation: bound.validation, cases: bound.cases }) }
 }
 async function separateCaseProof(ctx: ReadCtx, userId: string, authority: Authority, proof: Awaited<ReturnType<typeof blockAuthority>>,
-  validate: boolean, delivery: { kind: 'practice' | 'hint' | 'worked_example' | 'feedback' | 'lesson', content: unknown, texts: string[] }) {
+  validate: boolean, delivery: { kind: 'practice' | 'hint' | 'worked_example' | 'feedback' | 'lesson' | 'independent_application', content: unknown, texts: string[] }) {
   const pins = authority.row.assessmentPins
   let prompt: string
   let stimulus: string | null = null
@@ -294,6 +294,24 @@ async function separateCaseProof(ctx: ReadCtx, userId: string, authority: Author
   return { ...proof, caseId: candidate._id,
     validationDigest: await privacyDigest({ policy: separationPolicy, corpusDigest, decision: 'pass', coverage: 'complete' }) }
 }
+
+export async function postSealApplicationAdmissionForOwner(ctx: ReadCtx, userId: string, id: Id<'learnAssessmentOpportunities'>,
+  contentId: Id<'sessionContent'>): Promise<Reason | null> {
+  ctx = measurementReadContext(ctx, userId)
+  await requireOwnedResponseTarget(ctx, userId, { assessmentOpportunityId: id })
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return 'disabled'
+  try {
+    const authority = await checkAuthority(ctx, userId, id)
+    const blocks = await ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
+      q.eq('userId', userId).eq('sessionContentId', contentId)).take(17)
+    const applications = blocks.filter(block => block.kind === 'independent_application')
+    if (blocks.length > 16 || applications.length !== 1) deny()
+    const proof = await blockAuthority(ctx, userId, authority, applications[0]!._id, 'independent_application')
+    await separateCaseProof(ctx, userId, authority, proof, true, { kind: 'independent_application', content: proof.block.content, texts: [proof.block.content!] })
+    return null
+  } catch (error) { return validationReason(error) }
+}
+
 async function publication(payload: unknown, dependencies: Dependency[], validationDigest: string, publishedAt = Date.now(), policyVersion = policy) {
   return { policyVersion, payloadDigest: await privacyDigest(payload), sourceManifestDigest: await privacyDigest(dependencies), validationDigest, publishedAt }
 }

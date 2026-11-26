@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 const exec = promisify(execFile)
 const root = fileURLToPath(new URL('..', import.meta.url))
 const sandbox = await mkdtemp(path.join(tmpdir(), 'budds-c7-awaiting-start-'))
-const pin = '39ab8a744cd025757ce3c0dc125a492c989ce4da'
+const pin = 'b4f2c8d49da8b87dc302abfa73500fc4353969a1'
 const canvasPath = 'convex/learnAdaptiveCanvas.ts'
 const deliveryPath = 'convex/lib/learnV2AssessmentDelivery.ts'
 const testPath = 'convex/learnV2CanvasContract.test.ts'
@@ -61,7 +61,7 @@ try {
   `    if (gate === 'replay_invalid') await expect(s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).rejects.toThrow('Factual activity requires complete generation inputs')
     else expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).toMatchObject({ kind: 'not_admitted' })`)
   await writeFile(path.join(sandbox, testPath), devTests)
-  await run(`Pinned dev ${pin}`, name => name.includes('stored_action'))
+  await run(`Pinned baseline ${pin}`, name => name.includes('stored_action'))
 
   await writeFile(path.join(sandbox, testPath), tests)
   await writeFile(path.join(sandbox, deliveryPath), delivery)

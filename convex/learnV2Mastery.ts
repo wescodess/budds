@@ -47,7 +47,7 @@ import { canEmitLearnMeasurementOutcomeEvent, LEARN_MEASUREMENT_EVENT_TAXONOMY_V
 import { freezeFirstIndependentClaimForOwner, writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork'
 import { resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
-import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnDedicatedCheckCapacity, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
 import { stampPostSealTeachingAttempt } from './lib/learnV2PostSealStamp'
@@ -265,7 +265,8 @@ async function sessionScope(ctx: MutationCtx | QueryCtx, userId: string, session
   const folder = voidRow && await ctx.db.get(voidRow.folderId)
   if (!plan || !root || !content || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || content.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId) throw new Error('Started session pin is unavailable')
   await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id)
-  if (root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id
+  const carried = await hasLearnCarriedSessionAuthority(ctx, userId, session, plan)
+  if ((root.activeRevisionId !== plan._id || plan.status !== 'accepted') && !carried || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id
     || content.status !== 'published' || content.studySessionId !== session._id || content.blueprintRevisionId !== blueprint._id || content.objectiveId !== objective._id || content.studyPlanRevisionId !== plan._id
     || session.startedSessionContentRevision !== content.revision) throw new Error('Started session pin is no longer current')
   return { session, plan, root, content, blueprint, objective, voidRow }
@@ -581,6 +582,8 @@ async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: 
   const date = kind === 'retained_review' && input.firstIndependentLocalDate ? addCalendarDays(input.firstIndependentLocalDate, 7) : undefined
   const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now
   const durationMinutes = Math.max(15, Math.min(60, input.scope.objective.estimatedMinutes ?? 30))
+  if (kind === 'retained_review' && input.testOnly && !await hasLearnDedicatedCheckCapacity(ctx, input.userId, plan))
+    return await resolveLearnRetainedShell(ctx, input.userId, null, input.attemptId)
   const sessionId = await ctx.db.insert('studySessions', { userId: input.userId, studyPlanRevisionId: plan._id, primaryObjectiveId: input.scope.objective._id, status: 'planned', revision: 1, scheduledStartAt, scheduledEndAt: scheduledStartAt + durationMinutes * 60_000, timezone: input.timezone, placementKind: kind, schedulingPriority: priority, schedulerVersion: 'learn-v2.mastery-followup.v1', auditReasonCode: `mastery_followup:${input.attemptId}`,
     ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { placementId: `mastery-followup:${input.attemptId}` } : {}) })
   if (kind === 'retained_review' && input.testOnly) return await resolveLearnRetainedShell(ctx, input.userId, sessionId, input.attemptId)

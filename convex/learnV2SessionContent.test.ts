@@ -5,6 +5,7 @@ import { internalMutation } from './_generated/server'
 import { api, internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
 import schema from './schema'
+import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import { LEARN_V2_MASTERY_LOOP_BLOCKS, learnV2SessionCandidateFailureReason, normalizeLearnV2SessionContentProviderOutput, validateLearnV2EntailmentDecisions, validateLearnV2SessionContentCandidate } from '../shared/learn-v2-session-content'
 
 const sourceId = 'source-snapshot-1'
@@ -79,6 +80,65 @@ async function leaseAndBegin(t: ReturnType<typeof convexTest>, jobId: Id<'learnJ
   if (begun.status !== 'running') throw new Error('expected running job')
   return { lease, begun }
 }
+
+test.each([1, 2])('ordinary started content keeps dev behavior through %s reflows with measurement off', async count => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+  const f = await seedGenerationGraph()
+  const { lease, begun } = await leaseAndBegin(f.t, f.graph.jobId)
+  const published = await f.t.mutation(internal.learnV2SessionContent.commitSessionContentCandidate, {
+    tokenIdentifier: identity.tokenIdentifier, jobId: f.graph.jobId, leaseToken: lease.leaseToken, expectedRevision: begun.revision,
+    candidateJson: JSON.stringify(candidate()).replaceAll(sourceId, String(f.graph.snapshotId)),
+    verifierDecisionsJson: verifierDecisionsJson(f.graph.snapshotId, f.graph.excerptId) })
+  if (published.status !== 'ready') throw new Error('Expected published content')
+  await f.t.run(async ctx => {
+    const { futureId } = await seedFixedCheckPlan(ctx, identity.tokenIdentifier, { studyPlanRevisionId: f.graph.planRevisionId,
+      studySessionId: f.graph.sessionId, objectiveId: f.graph.objectiveId }, Date.now())
+    await ctx.db.delete(futureId)
+    await ctx.db.patch(f.graph.sessionId, { status: 'ready', missedAt: undefined, scheduledStartAt: Date.now(), scheduledEndAt: Date.now() + 30 * 60_000 })
+    await ctx.db.patch(f.graph.planRevisionId, { acceptedAt: Date.now() })
+    await ctx.db.patch(f.graph.blueprintRevisionId, { acceptedAt: Date.now() })
+  })
+  const start = { studySessionId: f.graph.sessionId, expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'ordinary_before_reflow_12345' }
+  expect(await f.owner.mutation(api.learnV2SessionContent.startStudySession, start)).toMatchObject({ status: 'in_progress' })
+  const before = await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.sessionId })
+  expect(before).not.toBeNull()
+  let planId = f.graph.planRevisionId
+  for (let index = 0; index < count; index++) {
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: planId,
+      expectedPlanRecordRevision: 1, idempotencyKey: `ordinary_started_reflow_${index}_12345` })
+    if (!reflow.successorPlanRevisionId) throw new Error('Expected reflow successor')
+    planId = reflow.successorPlanRevisionId
+    expect(await f.owner.query(api.learnV2SessionContent.getSessionContent, { studySessionId: f.graph.sessionId })).toBeNull()
+    const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+      q.eq('userId', identity.tokenIdentifier).eq('studyPlanRevisionId', planId)).take(8))
+    expect(sessions).toEqual([expect.objectContaining({ status: 'in_progress' })])
+    expect(sessions[0]).not.toHaveProperty('startedSessionContentId')
+    expect(sessions[0]).not.toHaveProperty('assessmentOpportunityId')
+    expect(sessions[0]).not.toHaveProperty('carriedPlanRevisionId')
+  }
+})
+
+test.each([false, true])('ordinary empty started shell permits unrelated reflow with responses=%s', async responses => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+  policy.responses = responses
+  const f = await seedGenerationGraph()
+  const futureId = await f.t.run(async ctx => {
+    const { futureId } = await seedFixedCheckPlan(ctx, identity.tokenIdentifier, { studyPlanRevisionId: f.graph.planRevisionId,
+      studySessionId: f.graph.sessionId, objectiveId: f.graph.objectiveId }, Date.now())
+    await ctx.db.patch(f.graph.sessionId, { status: 'in_progress', missedAt: undefined,
+      scheduledStartAt: Date.now(), scheduledEndAt: Date.now() + 30 * 60_000 })
+    await ctx.db.patch(f.graph.planRevisionId, { acceptedAt: Date.now() })
+    return futureId
+  })
+  const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.planRevisionId,
+    expectedPlanRecordRevision: 1, idempotencyKey: 'ordinary_empty_shell_reflow_12345' })
+  expect(reflow.changedSessionIds).toContain(String(futureId))
+  expect((await f.t.run(ctx => ctx.db.get(f.graph.planId)))!.activeRevisionId).toBe(reflow.successorPlanRevisionId)
+  const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', identity.tokenIdentifier).eq('studyPlanRevisionId', reflow.successorPlanRevisionId!)).take(8))
+  expect(sessions).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'in_progress' }), expect.objectContaining({ status: 'planned' })]))
+  expect(sessions.every(row => !row.carriedPlanRevisionId && !row.startedSessionContentId && !row.assessmentOpportunityId)).toBe(true)
+})
 
 describe('Learn V2 session-content publication contract', () => {
   test.each([false, true].flatMap(responses => (['unexpected', 'limit'] as const).map(failure => ({ responses, failure }))))(

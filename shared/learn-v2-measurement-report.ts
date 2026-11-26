@@ -4,7 +4,7 @@ import {
   learnRevisionSchema, learnScoreSchema, learnObservationSchema, learnReasonCodesSchema, learnTimezoneSchema,
   learnAssistanceSnapshotSchema, learnValiditySnapshotSchema, parseLearnContract, learnSerializedBytes,
 } from './learn-v2-responses'
-import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema, isLearnRetainedPromotionTimeEligible, LEARN_SYSTEM_DUE_WORK_LATE } from './learn-v2-delayed-check'
+import { learnAssessmentClockSchema, learnFirstCheckClaimSchema, learnAssessmentPhaseSchema, isLearnRetainedPromotionTimeEligible, isLearnSystemMissingReason } from './learn-v2-delayed-check'
 import { learnMeasurementFlowSchema, learnMeasurementDepthSchema, learnHistoryStatusSchema, learnFamilyStatusSchema, learnMeasurementHorizonSchema, LEARN_V2_FORM_ORDERS } from './learn-v2-measurement'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS } from './learn-v2-measurement-storage-manifest'
 import { addCalendarDays, localDateAt } from './learn-v2-mastery'
@@ -871,7 +871,7 @@ function computeEpisodeRow(row: ReportEpisode, horizon: 7 | 30, cutoff: number):
   const assigned = horizon === 7 ? assignment.assignedDay7 : assignment.assignedDay30
   const stage = assigned ? slotStage(row.clock, assignment.anchorAt, cutoff) : 'not_assigned'
   const reasons = [
-    ...(row.reasonCodes.includes(LEARN_SYSTEM_DUE_WORK_LATE) ? [LEARN_SYSTEM_DUE_WORK_LATE] : []),
+    ...row.reasonCodes.filter(isLearnSystemMissingReason),
     ...endpointReasons(selectedCold, selectedColdAcceptance, cutoff, configuration, coldWindow),
     ...endpointReasons(selectedDelayed, selectedDelayedAcceptance, cutoff, configuration, selectedClock),
   ]
@@ -939,7 +939,7 @@ function computeClaimRow(row: ReportClaim, cutoff: number, cold: ReportResult | 
   const result = resultBy(row.result, cutoff)
   const timeEligible = localDateAt(row.clock.dueAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7)
     && (row.acceptance === null || localDateAt(row.acceptance.acceptedAt, row.claim.firstIndependentTimezone) >= addCalendarDays(row.claim.firstIndependentLocalDate, 7))
-  const systemLate = row.unresolvedReason === LEARN_SYSTEM_DUE_WORK_LATE && row.acceptance === null
+  const systemLate = isLearnSystemMissingReason(row.unresolvedReason) && row.acceptance === null
   const stateEligible = ['independent', 'retained'].includes(row.stateAtEligibility)
     && (row.stateAtAcceptance === null || ['independent', 'retained'].includes(row.stateAtAcceptance))
   const valid = timeEligible && stateEligible && row.unresolvedReason === null
