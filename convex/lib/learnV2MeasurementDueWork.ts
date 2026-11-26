@@ -1,5 +1,5 @@
 import { measurementReadContext } from './learnV2MeasurementReadContext'
-import { LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
+import { LEARN_SYSTEM_DUE_WORK_LATE, LEARN_SYSTEM_CHECK_CAPACITY } from '../../shared/learn-v2-delayed-check'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import {
@@ -128,6 +128,7 @@ export async function processLearnMeasurementDueOpportunity(ctx: MutationCtx, as
   if (LEARN_MEASUREMENT_CAPABILITIES.responses && LEARN_MEASUREMENT_CAPABILITIES.delivery) {
     const binding = await bindLearnDelayedCheck(ctx, assignment, row)
     if (binding.kind === 'blocked') {
+      if (binding.reasonCode === LEARN_SYSTEM_CHECK_CAPACITY) return
       await updateOpportunity(ctx, assignment, row, { operationalEligibility: 'blocked', reasonCode: binding.reasonCode })
       await enqueueLearnDueWork(ctx, { userId: row.userId, learningVoidId: row.learningVoidId, assignmentId: assignment._id,
         assessmentOpportunityId: row._id, key: `${row._id}:open`, kind: 'open', dueAt: Date.now() })

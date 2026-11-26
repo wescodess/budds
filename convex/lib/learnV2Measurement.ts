@@ -10,7 +10,7 @@ import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, learnOpeningWorkFaul
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
-import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority, isDedicatedLearnCheck, learnSessionReadLimit, MAX_LEARN_DEDICATED_CHECKS } from './learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority, hasLearnDedicatedCheckCapacity, readLearnOrdinaryPlanSessions } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { getScopedMasteryRecord, masteryScopeKey } from './learnV2MasteryScope'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readEarliestLearnFirstSlot, readLearnFirstSlotInventory, writeLearnMeasurementEnrollmentFact } from './learnV2MeasurementFacts'
@@ -24,7 +24,7 @@ import {
 } from '../../shared/learn-v2-measurement'
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION, LEARN_MEASUREMENT_STORAGE_LIMITS as storageLimits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_VALIDITY_POLICY_VERSION, learnTimezoneSchema, parseLearnContract } from '../../shared/learn-v2-responses'
-import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
+import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE, LEARN_SYSTEM_CHECK_CAPACITY } from '../../shared/learn-v2-delayed-check'
 import { LEARN_V2_FIRST_INDEPENDENT_CLAIM_VERSION, learnReportIndependentClaimV2Schema, resolveLearnReportFirstSlotV2, type LearnReportIndependentClaimV2 } from '../../shared/learn-v2-measurement-report'
 import { localDateAt } from '../../shared/learn-v2-mastery'
 import { adaptiveV2PilotDecision, validateAdaptiveProviderPayload } from '../../shared/adaptive-v2-pilot-policy'
@@ -210,19 +210,15 @@ const PRIOR_TEACHING_PLAN_LIMIT = 32
 
 async function priorObjectiveTeaching(ctx: ReadCtx, userId: string, session: Doc<'studySessions'>) {
   let remaining = PRIOR_TEACHING_SESSION_LIMIT
-  let remainingChecks = MAX_LEARN_DEDICATED_CHECKS
   const seen = new Set<string>()
   let plan = await ctx.db.get(session.studyPlanRevisionId)
   while (plan) {
     if (plan.userId !== userId || seen.has(plan._id) || seen.size === PRIOR_TEACHING_PLAN_LIMIT) return 'unknown' as const
     seen.add(plan._id)
     const planId = plan._id
-    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
-      q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(learnSessionReadLimit(remaining, remainingChecks))
-    const checks = rows.filter(isDedicatedLearnCheck).length
-    if (rows.length - checks > remaining || checks > remainingChecks) return 'unknown' as const
-    remaining -= rows.length - checks
-    remainingChecks -= checks
+    const rows = await readLearnOrdinaryPlanSessions(ctx, userId, planId, remaining)
+    if (rows.length > remaining) return 'unknown' as const
+    remaining -= rows.length
     if (rows.some(row => row._id !== session._id && row.primaryObjectiveId === session.primaryObjectiveId
       && row.assessmentOpportunityId === undefined && row.assessmentPurpose === undefined
       && (row.startedSessionContentId !== undefined || ['in_progress', 'completed'].includes(row.status)))) return 'returning' as const
@@ -255,7 +251,7 @@ export async function writeMeasurementOpportunityFact(ctx: MutationCtx, assignme
   const faulted = await retireLearnOpportunityDueWork(ctx, row)
   if (faulted && row.purpose.kind === 'measurement_delayed' && ['abandoned', 'cancelled', 'invalid'].includes(row.phase) && Date.now() >= row.closeAt
     && !row.submissionId && !row.deliveryGrantId && !row.authoritativeAttemptId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
-    && (row.phase !== 'abandoned' || row.reasonCode !== LEARN_SYSTEM_DUE_WORK_LATE)) {
+    && (row.phase !== 'abandoned' || row.reasonCode !== LEARN_SYSTEM_DUE_WORK_LATE) && row.reasonCode !== LEARN_SYSTEM_CHECK_CAPACITY) {
     row = { ...row, phase: 'abandoned', operationalEligibility: 'blocked', reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
     await ctx.db.patch(row._id, { phase: row.phase, operationalEligibility: row.operationalEligibility, reasonCode: row.reasonCode, revision: row.revision })
     await finalizeLearnDelayedCheckSession(ctx, assignment.userId, row)
@@ -293,6 +289,7 @@ export async function retireLearnMeasurementDueWork(ctx: MutationCtx, reference:
   if (work.kind === 'open' && work.assessmentOpportunityId && !await hasAccountDeletionTombstone(ctx, work.userId)) {
     const row = await ctx.db.get(work.assessmentOpportunityId)
     if (row && row.userId === work.userId && row.purpose.kind === 'measurement_delayed' && Date.now() >= row.closeAt
+      && row.reasonCode !== LEARN_SYSTEM_CHECK_CAPACITY
       && !row.submissionId && !row.deliveryGrantId && !row.authoritativeAttemptId && !(row.eligibleAt !== undefined && row.eligibleAt < row.closeAt)
       && learnOpeningWorkFaultedInWindow(work, row.closeAt)) {
       const closed = { ...row, phase: 'abandoned' as const, operationalEligibility: 'blocked' as const, reasonCode: LEARN_SYSTEM_DUE_WORK_LATE, revision: row.revision + 1 }
@@ -351,8 +348,10 @@ export async function enrollLearnMeasurementForOwner(ctx: MutationCtx, userId: s
   const core = items.filter(item => !item.reserve)
   const pins: LearnMeasurementItemPins[] = []
   const reasons = new Set<string>(request.exclusionReason ? [request.exclusionReason] : [])
+  const capacityBlocked = !historySession && (checkSurface?.surface === 'canvas' || flow === 'v2_canvas') && !await hasLearnDedicatedCheckCapacity(ctx, userId, revision)
+  if (capacityBlocked) reasons.add(LEARN_SYSTEM_CHECK_CAPACITY)
   const scopeReason = await measurementScopeReason(ctx, userId, scope)
-  const flowReason = checkSurface?.surface === 'canvas' && !await hasAdaptiveExperienceAccess(ctx, userId) ? 'canvas_not_admitted'
+  const flowReason = capacityBlocked ? null : checkSurface?.surface === 'canvas' && !await hasAdaptiveExperienceAccess(ctx, userId) ? 'canvas_not_admitted'
     : await measurementFlowReason(ctx, userId, flow, scope, protocol)
   if (checkSurface && checkSurface.measurementFlow !== flow) reasons.add('pins_mismatch')
   if (scopeReason) reasons.add(scopeReason)
@@ -455,7 +454,7 @@ export async function recordLearnMeasurementInstructionForOwner(ctx: MutationCtx
   }
   const mixed = input.flow !== assignment.flow
   if (mixed && !assignment.exclusionReasons.includes('mixed_flow')) await ctx.db.patch(assignment._id, { exclusionReasons: [...assignment.exclusionReasons, 'mixed_flow'] })
-  if (mixed || !cold.submissionId) {
+  if ((mixed || !cold.submissionId) && cold.reasonCode !== LEARN_SYSTEM_CHECK_CAPACITY) {
     await ctx.db.patch(cold._id, { reasonCode: mixed ? 'mixed_flow' : 'cold_after_teaching', operationalEligibility: 'blocked', revision: cold.revision + 1 })
     await writeMeasurementOpportunityFact(ctx, assignment, (await ctx.db.get(cold._id))!)
   }

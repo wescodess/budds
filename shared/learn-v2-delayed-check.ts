@@ -166,3 +166,7 @@ export function evaluateLearnAssessmentEligibility(input: z.infer<typeof learnAs
   })
 }
 export const LEARN_SYSTEM_DUE_WORK_LATE = 'system_due_work_late' as const
+export const LEARN_SYSTEM_CHECK_CAPACITY = 'system_check_capacity' as const
+export function isLearnSystemMissingReason(reason: string | null | undefined) {
+  return reason === LEARN_SYSTEM_DUE_WORK_LATE || reason === LEARN_SYSTEM_CHECK_CAPACITY
+}

@@ -4,7 +4,7 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { ADAPTIVE_ASSESSMENT_PLAN_VERSION, composeAdaptiveActivityPlan } from '../../shared/learn-adaptive-activity-plan'
 import { adaptiveV2PilotDecision } from '../../shared/adaptive-v2-pilot-policy'
-import { isLearnRetainedPromotionTimeEligible, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
+import { isLearnRetainedPromotionTimeEligible, isLearnSystemMissingReason, LEARN_SYSTEM_CHECK_CAPACITY } from '../../shared/learn-v2-delayed-check'
 import { learnMeasurementItemPinsSchema, learnAssessmentBoundSurface } from '../../shared/learn-v2-measurement'
 import { hasAdaptiveExperienceAccess } from './adaptiveLearnAccess'
 import { LEARN_V2_RESPONSE_DELIVERY_PINS_VERSION } from '../../shared/learn-v2-responses'
@@ -14,7 +14,7 @@ import { materializeLearnMeasurementAssignment } from './learnV2MeasurementDueWo
 import { masteryScopeKey } from './learnV2MasteryScope'
 import { privacyDigest } from './learnV2ResponsePrivacy'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
-import { hasLearnReflowPlanAuthority, LEARN_DELAYED_DELIVERY_VERSION } from './learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnDedicatedCheckCapacity, LEARN_DELAYED_DELIVERY_VERSION } from './learnV2FixedChecks'
 
 const VERSION = LEARN_DELAYED_DELIVERY_VERSION
 type Binding = { kind: 'ready', sessionId: Id<'studySessions'>, scheduledStartAt: number } | { kind: 'blocked', reasonCode: string }
@@ -45,7 +45,7 @@ export async function readLearnDelayedCheckBinding(ctx: MutationCtx | QueryCtx, 
 export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>,
   current?: Doc<'studySessions'>): Promise<'completed' | 'missed' | 'cancelled' | null> {
   const now = Date.now()
-  const systemLate = row.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE
+  const systemLate = isLearnSystemMissingReason(row.reasonCode)
   const status = row.submissionId ? 'completed' : systemLate || ['invalid', 'cancelled'].includes(row.phase) ? 'cancelled'
     : row.phase === 'abandoned' || now >= row.closeAt ? 'missed' : null
   if (!status) return null
@@ -59,6 +59,16 @@ export async function finalizeLearnDelayedCheckSession(ctx: MutationCtx, userId:
 }
 
 type CanvasPreparation = { providerModel?: string, pilotConfigurationVersion: string }
+
+async function recordCheckCapacityMissing(ctx: MutationCtx, assignment: AdmittedAssignment, row: Doc<'learnAssessmentOpportunities'>) {
+  if (row.userId !== assignment.userId || row.assignmentId !== assignment._id) throw new Error('Learn check capacity scope conflicts')
+  if (row.submissionId || row.authoritativeAttemptId || !['preparing', 'ready', 'test_open'].includes(row.phase)) return
+  await ctx.db.patch(row._id, { phase: 'cancelled', operationalEligibility: 'blocked', reasonCode: LEARN_SYSTEM_CHECK_CAPACITY,
+    eligibleAt: undefined, revision: row.revision + 1 })
+  const closed = (await ctx.db.get(row._id))!
+  await finalizeLearnDelayedCheckSession(ctx, assignment.userId, closed)
+  await writeMeasurementOpportunityFact(ctx, assignment, closed)
+}
 
 export function learnCheckUsesCanvasSurface(assignment: Pick<AdmittedAssignment, 'flow' | 'checkSurface'>) {
   return assignment.checkSurface ? assignment.checkSurface.surface === 'canvas' : assignment.flow === 'v2_canvas'
@@ -119,12 +129,20 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
   const blocked = (reasonCode: string): Binding => ({ kind: 'blocked', reasonCode })
   const reason = await learnDelayedCheckBindingBlock(ctx, assignment, row, canvasPreparation)
   if (reason) return blocked(reason)
-  const cold = row.purpose.kind === 'measurement_cold' && assignment.checkSurface?.surface === 'canvas'
-  if (row.purpose.kind !== 'measurement_delayed' && !cold || row.assessmentPins.kind !== 'measurement' || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
-  const userId = assignment.userId
-  const canvasSurface = learnCheckUsesCanvasSurface(assignment)
+  if (row.userId !== assignment.userId || row.contextPins.kind === 'calibration') return blocked('pins_mismatch')
   const existing = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.studySessionId) : null
   const priorContent = row.contextPins.kind === 'session' ? await ctx.db.get(row.contextPins.sessionContentId) : null
+  if (existing?.userId !== assignment.userId || existing.assessmentOpportunityId !== row._id || priorContent?.assessmentOpportunityId !== row._id) {
+    const source = await ctx.db.get(row.contextPins.studyPlanRevisionId)
+    if (source && !await hasLearnDedicatedCheckCapacity(ctx, assignment.userId, source)) {
+      await recordCheckCapacityMissing(ctx, assignment, row)
+      return blocked(LEARN_SYSTEM_CHECK_CAPACITY)
+    }
+  }
+  const cold = row.purpose.kind === 'measurement_cold' && assignment.checkSurface?.surface === 'canvas'
+  if (row.purpose.kind !== 'measurement_delayed' && !cold || row.assessmentPins.kind !== 'measurement') return blocked('pins_mismatch')
+  const userId = assignment.userId
+  const canvasSurface = learnCheckUsesCanvasSurface(assignment)
   if (row.contextPins.kind === 'session' && existing?.userId === userId && existing.assessmentOpportunityId === row._id && priorContent?.assessmentOpportunityId === row._id)
     return { kind: 'ready', sessionId: existing._id, scheduledStartAt: existing.scheduledStartAt }
   const item = (await ctx.db.get(row.assessmentPins.itemPins.itemId))!
@@ -190,8 +208,8 @@ export async function bindLearnDelayedCheck(ctx: MutationCtx, assignment: Admitt
   return { kind: 'ready', sessionId, scheduledStartAt: row.openAt }
 }
 
-export async function resolveLearnRetainedShell(ctx: MutationCtx, userId: string, sessionId: Id<'studySessions'>, basisAttemptId: Id<'masteryAttempts'>) {
-  const session = (await ctx.db.get(sessionId))!
+export async function resolveLearnRetainedShell(ctx: MutationCtx, userId: string, sessionId: Id<'studySessions'> | null, basisAttemptId: Id<'masteryAttempts'>) {
+  const session = sessionId ? (await ctx.db.get(sessionId))! : null
   const basis = (await ctx.db.get(basisAttemptId))!
   const protocol = getFrozenLearnMeasurementProtocol()
   let reasonCode = 'no_item'
@@ -211,17 +229,22 @@ export async function resolveLearnRetainedShell(ctx: MutationCtx, userId: string
         if (first) {
           if (Date.now() >= first.closeAt) reasonCode = 'missed_window'
           else {
-            const bound = await bindLearnDelayedCheck(ctx, assignment, first, session)
+            const bound = await bindLearnDelayedCheck(ctx, assignment, first, session ?? undefined)
             if (bound.kind === 'ready') {
-              if (bound.sessionId !== sessionId) await ctx.db.delete(sessionId)
+              if (sessionId && bound.sessionId !== sessionId) await ctx.db.delete(sessionId)
               return { sessionId: bound.sessionId, scheduledStartAt: bound.scheduledStartAt }
             }
             reasonCode = bound.reasonCode
+            if (reasonCode === LEARN_SYSTEM_CHECK_CAPACITY) {
+              if (sessionId) await ctx.db.delete(sessionId)
+              return null
+            }
           }
         }
       }
     }
   }
+  if (!sessionId || !session) return null
   await ctx.db.patch(sessionId, { status: 'blocked', assessmentPurpose: 'retained_transfer', auditReasonCode: reasonCode, revision: session.revision + 1 })
   return { sessionId, scheduledStartAt: session.scheduledStartAt }
 }

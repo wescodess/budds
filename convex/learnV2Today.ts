@@ -18,7 +18,7 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import type { LearnV2AssessmentState } from './lib/learnV2PublicContract'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnSessionReflowAuthority, isDedicatedLearnCheck, learnSessionReadLimit, MAX_LEARN_DEDICATED_CHECKS } from './lib/learnV2FixedChecks'
+import { hasLearnSessionReflowAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION, readLearnOrdinaryStatusSessions, MAX_LEARN_DEDICATED_CHECKS } from './lib/learnV2FixedChecks'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { prepareCanvasSessionForOwner, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { LEARN_TODAY_CHECK_LIMIT, LEARN_TODAY_CLOSED_CHECK_DAYS, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
@@ -436,19 +436,21 @@ export const getCheckPointers = query({
 // to-do item: it remains invisible until the plan/generation path repairs it.
 async function projectToday(ctx: QueryCtx, userId: string) {
     const sessions: Doc<'studySessions'>[] = []
-    let ordinaryCount = 0
-    let dedicatedCount = 0
+    const dedicated: Doc<'studySessions'>[] = []
+    let dedicatedOverflow = false
     for (const status of ACTIVE_SESSION_STATUSES) {
-      const remaining = MAX_SESSIONS - ordinaryCount
-      const rows = await ctx.db.query('studySessions')
-        .withIndex('by_userId_and_status_and_scheduledStartAt', q => q.eq('userId', userId).eq('status', status))
-        .take(learnSessionReadLimit(remaining, MAX_LEARN_DEDICATED_CHECKS - dedicatedCount))
-      const checks = rows.filter(isDedicatedLearnCheck).length
-      ordinaryCount += rows.length - checks
-      dedicatedCount += checks
-      if (ordinaryCount > MAX_SESSIONS || dedicatedCount > MAX_LEARN_DEDICATED_CHECKS) return { status: 'blocked' as const, reason: 'today_candidate_limit' }
+      const remaining = MAX_SESSIONS - sessions.length
+      const rows = await readLearnOrdinaryStatusSessions(ctx, userId, status, remaining)
+      if (rows.length > remaining) return { status: 'blocked' as const, reason: 'today_candidate_limit' }
       sessions.push(...rows)
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !dedicatedOverflow) {
+        const checks = await ctx.db.query('studySessions').withIndex('by_userId_and_status_and_schedulerVersion', q =>
+          q.eq('userId', userId).eq('status', status).eq('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(MAX_LEARN_DEDICATED_CHECKS - dedicated.length + 1)
+        if (checks.length + dedicated.length > MAX_LEARN_DEDICATED_CHECKS) dedicatedOverflow = true
+        else dedicated.push(...checks)
+      }
     }
+    if (!dedicatedOverflow) sessions.push(...dedicated.filter(isDedicatedLearnCheck))
     const now = Date.now()
     const candidates: Candidate[] = []
     for (const session of sessions) {

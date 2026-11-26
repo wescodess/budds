@@ -25,7 +25,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, hasLearnSessionReflowAuthority, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan, readLearnOrdinaryPlanSessions } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnSessionReflowAuthority, hasLearnDedicatedCheckCapacity, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan, readLearnOrdinaryPlanSessions } from './lib/learnV2FixedChecks'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
@@ -159,13 +159,21 @@ export async function prepareCanvasSessionForOwner(ctx: MutationCtx, args: Canva
     if (assignment.status !== 'admitted' || !opportunity) throw new Error('Learn Canvas preparation conflicts')
     const binding = await bindLearnDelayedCheck(ctx, assignment, opportunity, undefined, { providerModel: content.providerModel,
       pilotConfigurationVersion: process.env.LEARN_ADAPTIVE_V2_PILOT_MANIFEST ?? '' })
-    if (binding.kind !== 'ready') throw new LearnScoringInputError(`Learn Canvas preparation unavailable: ${binding.reasonCode}`)
+    if (binding.kind !== 'ready') {
+      if (binding.reasonCode === 'system_check_capacity') return canvasUnavailable(binding.reasonCode)
+      throw new LearnScoringInputError(`Learn Canvas preparation unavailable: ${binding.reasonCode}`)
+    }
     const bound = (await ctx.db.get(opportunity._id))!
     if (bound.contextPins.kind !== 'session' || !bound.contextPins.canvas) throw new Error('Learn Canvas preparation conflicts')
     const owner = await ctx.db.query('users').withIndex('by_tokenIdentifier', q => q.eq('tokenIdentifier', userId)).unique()
     if (!owner) throw new Error('Learn Canvas owner unavailable')
     if (!owner.learnTodayCheckSurfaceVersion) await ctx.db.patch(owner._id, { learnTodayCheckSurfaceVersion: LEARN_CHECK_SURFACE_VERSION })
     return await complete(bound.contextPins.canvas.threadId, bound._id, bound.contextPins.sessionContentId)
+  }
+  if (!await hasLearnDedicatedCheckCapacity(ctx, userId, revision)) {
+    await enrollLearnMeasurementForOwner(ctx, userId, { studySessionId: session._id, familyId: manifest.familyId,
+      entryPoint, exclusionReason: 'system_check_capacity' })
+    return canvasUnavailable('system_check_capacity')
   }
   const checkSessionId = await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: revision._id,
     primaryObjectiveId: objective._id, status: 'ready', revision: session.revision, scheduledStartAt: now,

@@ -18,10 +18,23 @@ export function learnSessionReadLimit(ordinaryLimit: number, dedicatedLimit = MA
 }
 
 export async function readLearnOrdinaryPlanSessions(ctx: ReadCtx, userId: string, planId: Id<'studyPlanRevisions'>, limit: number) {
-  const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
-    q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(learnSessionReadLimit(limit))
-  if (rows.filter(isDedicatedLearnCheck).length > MAX_LEARN_DEDICATED_CHECKS) throw new Error('Fixed checks exceed the bounded Study Plan contract')
-  return rows.filter(row => !isDedicatedLearnCheck(row))
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(limit + 1)
+  const before = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_schedulerVersion', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', planId).lt('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(limit + 1)
+  const after = before.length > limit ? [] : await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_schedulerVersion', q =>
+    q.eq('userId', userId).eq('studyPlanRevisionId', planId).gt('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(limit - before.length + 1)
+  return [...before, ...after].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || a._creationTime - b._creationTime || String(a._id).localeCompare(String(b._id)))
+}
+
+export async function readLearnOrdinaryStatusSessions(ctx: ReadCtx, userId: string, status: Doc<'studySessions'>['status'], limit: number) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return await ctx.db.query('studySessions').withIndex('by_userId_and_status_and_scheduledStartAt', q =>
+    q.eq('userId', userId).eq('status', status)).take(limit + 1)
+  const before = await ctx.db.query('studySessions').withIndex('by_userId_and_status_and_schedulerVersion', q =>
+    q.eq('userId', userId).eq('status', status).lt('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(limit + 1)
+  const after = before.length > limit ? [] : await ctx.db.query('studySessions').withIndex('by_userId_and_status_and_schedulerVersion', q =>
+    q.eq('userId', userId).eq('status', status).gt('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(limit - before.length + 1)
+  return [...before, ...after].sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || a._creationTime - b._creationTime || String(a._id).localeCompare(String(b._id)))
 }
 
 function samePlanScope(left: Plan, right: Plan, userId: string) {
@@ -134,9 +147,7 @@ export async function readLearnCarriedSessions(ctx: ReadCtx, userId: string, act
   return continuations.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || String(a._id).localeCompare(String(b._id)))
 }
 
-export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan) {
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
-  const purposes = ['measurement_delayed', 'measurement_cold'] as const
+async function fixedPlanLineage(ctx: ReadCtx, userId: string, active: Plan) {
   const plans = [active]
   let current = active
   const seen = new Set<string>([active._id])
@@ -146,12 +157,31 @@ export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, act
       || seen.has(parent._id) || plans.length >= MAX_REFLOWS) throw new Error('Study plan reflow lineage is unavailable')
     plans.push(parent); seen.add(parent._id); current = parent
   }
+  return plans
+}
+
+export async function hasLearnDedicatedCheckCapacity(ctx: ReadCtx, userId: string, source: Plan) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return true
+  const active = await requireLearnActiveWorkPlan(ctx, userId, source)
+  let remaining = MAX_LEARN_DEDICATED_CHECKS
+  for (const plan of await fixedPlanLineage(ctx, userId, active)) {
+    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_schedulerVersion', q =>
+      q.eq('userId', userId).eq('studyPlanRevisionId', plan._id).eq('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(remaining)
+    remaining -= rows.length
+    if (!remaining) return false
+  }
+  return true
+}
+
+export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
   const checks: Doc<'studySessions'>[] = []
-  for (const plan of plans) for (const purpose of purposes) {
-    const remaining = MAX_LEARN_DEDICATED_CHECKS - checks.length
-    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', q =>
-      q.eq('userId', userId).eq('studyPlanRevisionId', plan._id).eq('assessmentPurpose', purpose)).take(remaining + 1)
-    if (rows.length > remaining) throw new Error('Fixed checks exceed the bounded Study Plan contract')
+  let remaining = MAX_LEARN_DEDICATED_CHECKS
+  for (const plan of await fixedPlanLineage(ctx, userId, active)) {
+    if (!remaining) break
+    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_schedulerVersion', q =>
+      q.eq('userId', userId).eq('studyPlanRevisionId', plan._id).eq('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(remaining)
+    remaining -= rows.length
     checks.push(...rows.filter(isDedicatedLearnCheck))
   }
   return checks.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || String(a._id).localeCompare(String(b._id)))
