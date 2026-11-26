@@ -26,6 +26,7 @@ Current sealed scorer identity is parser v2 / receipt guard v3 / transport v2. F
 
 | Site | Scope | Disposition |
 | --- | --- | --- |
+| [convex/learnV2PostSealTeaching.ts:22](../../convex/learnV2PostSealTeaching.ts#L22) | `getPostSealCitationSource` | Read-only exception under the [citation source contract](../plans/learn-v2-post-seal-teaching-contract.md#citation-source-runtime-amendment-598): all handler failures, including authentication, validation, unexpected and resource errors, return the same fixed unavailable envelope without content or detail. Responses off returns disabled before authentication. Convex wire validation occurs before the handler. No mutation or delivery acknowledgement. |
 | [convex/accountDeletion.ts:975](../../convex/accountDeletion.ts#L975) | `performConvexStorageCleanup` | Outside delivery/grant/acceptance/scoring/due-work execution; unchanged ingestion, scheduling, calendar, producer, deletion or bootstrap function. |
 | [convex/audioOverviewJobs.ts:623](../../convex/audioOverviewJobs.ts#L623) | `storageSha256AsHex` | Outside delivery/grant/acceptance/scoring/due-work execution; unchanged ingestion, scheduling, calendar, producer, deletion or bootstrap function. |
 | [convex/audioOverviews.ts:142](../../convex/audioOverviews.ts#L142) | `listByFolder` | Outside delivery/grant/acceptance/scoring/due-work execution; unchanged ingestion, scheduling, calendar, producer, deletion or bootstrap function. |

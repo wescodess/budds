@@ -135,6 +135,7 @@ The original C4 inventory below lists 128 public query names. C5 and C6 addition
 | `worker_ordinary_only` | Capability/owner and lineage checks remain. Relevant formative, held-out, unavailable and unknown scopes cannot return worker inputs; these are not learner delivery acknowledgements. |
 | `personal_export` | Existing mandatory `authorizePersonalExport` and `requirePersonalExportAuthorization`; original files and personal records remain available under the disclosure resolution, with imported/unknown exposure before release. |
 | `assessment_or_own_response` | Existing C1/C2 fixed assessment, grant, own-work and unavailable projections. No implicit teaching or new assessment grant. |
+| `post_seal_citation_source` | Current post-seal teaching authority and disclosed citation membership, then a recomputed digest over verified instructional sources only. One sanitized drawer source; full dependency revocation remains required. Responses off returns disabled; handler failures return fixed unavailable. |
 | `message_metadata` | With responses enabled, metadata and permitted learner prose only. Assistant/source replay uses `messages.replayByConversation`, which verifies retained signatures and commits delivery. |
 
 | Public query | Handling | Capability |
@@ -225,6 +226,7 @@ The original C4 inventory below lists 128 public query names. C5 and C6 addition
 | `learnV2Assessments.getFeatureReadiness` | `assessment_or_own_response` | Always on original access and fixed projection |
 | `learnV2Assessments.getPostSealTeaching` | `post_seal_teaching` | Owned sealed submission, current grant, pins, evidence, publication and relevant open checks; fixed unavailable result while responses are off |
 | `learnV2Assistance.authorizePracticeAssistance` | `post_seal_practice_authorization` | Same check authority plus the immutable separate-case binding, live practice revision and renewed help receipt authority; atomic practice exposure and accounting |
+| `learnV2PostSealTeaching.getPostSealCitationSource` | `post_seal_citation_source` | Responses; same owned sealed submission, grant, pins, evidence, publication and relevant-open-check gates as disclosed feedback/lesson; instructional source allowlist and recomputed digest; fixed disabled/unavailable envelope, no writes |
 | `learnV2PostSealTeaching.openPractice` | `post_seal_practice_preparation` | Authenticated opening first retries teaching publication independently, then selects the proven separate instructional case and atomically binds its slot, source links and prompt exposure; retries preserve the binding and serialize with relevant check acceptance |
 | `learnV2PostSealTeaching.publishFeedback` | `post_seal_feedback_publication` | Authenticated publish-only retry; rechecks the full check authority and relevant-open-check gate, publishes a pending source once and writes no practice binding, slot or exposure |
 | `learnV2Blueprints.getBlueprintGenerationJob` | `summary_or_own_work` | Always on original access and fixed projection |
