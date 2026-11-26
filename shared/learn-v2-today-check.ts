@@ -13,6 +13,7 @@ export function learnTodayCheckRoute(threadId: string, reference: string) {
 export const LEARN_TODAY_CLOSED_CHECK_DAYS = 90
 export const LEARN_CANVAS_CHECK_RECEIPT_VERSION = 'learn-v2.canvas-check-receipt.v1' as const
 export const LEARN_CANVAS_CHECK_TIMING_VERSION = 'learn-v2.canvas-check-timing.v1' as const
+export const LEARN_CANVAS_ASSESSMENT_PURPOSES = ['measurement_cold', 'measurement_delayed', 'retained_transfer'] as const
 export const learnCanvasCheckTimingSchema = z.strictObject({
   version: z.literal(LEARN_CANVAS_CHECK_TIMING_VERSION), timing: z.enum(LEARN_TODAY_CHECK_TIMINGS),
 })
@@ -21,6 +22,7 @@ const receiptFields = {
   version: z.literal(LEARN_CANVAS_CHECK_RECEIPT_VERSION), reference: z.string().min(1).max(256),
   submissionId: learnIdSchema<'learnResponses'>(), acceptedAt: z.number().finite().nonnegative(),
   confidence: z.number().optional(), body: learnAttemptHistorySchema.shape.body,
+  assessmentPurpose: z.enum(LEARN_CANVAS_ASSESSMENT_PURPOSES).optional(),
   checkTiming: learnCanvasCheckTimingSchema.optional(),
   postSealReference: learnPostSealTeachingReferenceSchema.optional(),
 }

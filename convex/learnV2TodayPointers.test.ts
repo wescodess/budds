@@ -16,7 +16,7 @@ import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/l
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import type { Doc, Id } from './_generated/dataModel'
 import * as privacyContext from './lib/learnV2PrivacyReadContext'
-import { readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
+import { loadReadyCanvas, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { prepareSavedLearnModelScoring } from './lib/learnV2MeasurementScoring'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
@@ -204,12 +204,13 @@ test.each([undefined, 7, 30] as const)('topic pointers expose only the current m
   expect(learnTodayCheckPointerSchema.parse(pointer)).toEqual(pointer)
   expect(JSON.stringify(pointer)).not.toMatch(/Hypothetical|PRIVATE|rubric|scorePercent|openAt|closeAt|dueAt|horizonDays|itemId/)
   const checkTiming = { version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: pointer.version === LEARN_TODAY_CHECK_POINTER_VERSION ? pointer.timing : '' }
+  const assessmentPurpose = horizon === undefined ? 'measurement_cold' : 'measurement_delayed'
   const opened = await attach(f, row, true)
-  expect(opened.canvas.assessment).toMatchObject({ checkTiming })
+  expect(opened.canvas.assessment).toMatchObject({ checkTiming, assessmentPurpose })
   await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
   const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
-  expect(canvas?.checkReceipt).toMatchObject({ checkTiming })
-  expect(canvas?.assessment).toMatchObject({ checkTiming })
+  expect(canvas?.checkReceipt).toMatchObject({ checkTiming, assessmentPurpose })
+  expect(canvas?.assessment).toMatchObject({ checkTiming, assessmentPurpose })
   const delivery = await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId,
     checkReference: row.delayedCheckId, idempotencyKey: 'canvas_timing_receipt_delivery_12345' })
   expect(delivery.value?.checkReceipt).toEqual(canvas?.checkReceipt)
@@ -394,6 +395,8 @@ test('retained pointers classify the retained purpose without exposing its clock
   const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: cold.delayedCheckId })
   expect(canvas?.checkReceipt?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: 'retained' })
   expect(canvas?.assessment?.checkTiming).toEqual(canvas?.checkReceipt?.checkTiming)
+  expect(canvas?.checkReceipt?.assessmentPurpose).toBe('retained_transfer')
+  expect(canvas?.assessment?.assessmentPurpose).toBe('retained_transfer')
 })
 
 test.each([false, true])('topic pointers use the renamed objective title after saved=%s', async saved => {
@@ -444,24 +447,48 @@ test.each(['objective_deleted', 'objective_foreign', 'objective_unlinked', 'blan
   expect(JSON.stringify(canvas?.checkReceipt)).not.toMatch(/topic|FOREIGN-TOPIC-CANARY/)
 })
 
-test('Canvas timing and post-seal references disappear byte-for-byte through capability rollback', async () => {
+test('Canvas purpose survives frozen-cohort rollback while timing and post-seal references disappear byte-for-byte', async () => {
   const f = await fixture()
   await f.start()
   const row = await coldFor(f)
   const opened = await attach(f, row)
   const { checkTiming: _timing, ...legacyAssessment } = opened.canvas.assessment!
+  expect(legacyAssessment.assessmentPurpose).toBe('measurement_cold')
   policy.pointers = false
   expect((await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId }))?.assessment).toEqual(legacyAssessment)
   policy.pointers = true
   await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
   const enabled = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId }))!
   const { checkTiming: _receiptTiming, postSealReference: _reference, ...legacyReceipt } = enabled.checkReceipt!
+  expect(legacyReceipt.assessmentPurpose).toBe('measurement_cold')
   expect(_receiptTiming).toBeTruthy()
   expect(_reference).toBeTruthy()
   policy.pointers = false
   const disabled = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })
   expect(JSON.stringify(disabled?.checkReceipt)).toBe(JSON.stringify(legacyReceipt))
   expect(disabled?.assessment).not.toHaveProperty('checkTiming')
+  expect(disabled?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  const delivery = await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId,
+    checkReference: row.delayedCheckId, idempotencyKey: 'purpose_rollback_receipt_1234567890' })
+  expect(delivery.value?.checkReceipt).toEqual(disabled?.checkReceipt)
+  expect(delivery.value?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  const withoutBody = await f.owner.query(ctx => loadReadyCanvas(ctx, userId, opened.attached.threadId,
+    { checkReference: row.delayedCheckId, includeSavedResponse: false }))
+  expect(withoutBody?.checkReceipt).toMatchObject({ assessmentPurpose: 'measurement_cold', body: { bodyAvailability: 'unavailable' } })
+  expect(withoutBody?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'reconciliation_required' }))
+  const unconfirmed = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(unconfirmed?.checkReceipt).toMatchObject({ state: 'result_unconfirmed', assessmentPurpose: 'measurement_cold' })
+  expect(unconfirmed?.assessment).toBeUndefined()
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'cancelled' }))
+  const closed = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(closed?.checkReceipt).toMatchObject({ state: 'closed', assessmentPurpose: 'measurement_cold' })
+  expect(closed?.assessment).toBeUndefined()
+  policy.responses = false
+  const responsesOff = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(responsesOff?.checkReceipt).toBeUndefined()
+  expect(responsesOff?.assessment).not.toHaveProperty('assessmentPurpose')
+  policy.responses = true
   policy.pointers = true
   const foreign = f.t.withIdentity({ tokenIdentifier: 'foreign-owner', subject: 'foreign' })
   await expect(foreign.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
