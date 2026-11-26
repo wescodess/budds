@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { beforeAll, describe, it, expect, vi, beforeEach } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 import { resetTeachingReads, teachingClient, teachingRead } from '../support/teaching-reads'
@@ -28,6 +28,10 @@ mockNuxtImport('useTasks', () => () => ({ tasks: ref([]), activeCount: ref(0), c
 
 const shellPath = ['~', 'components', 'flashcards', 'RoomShell.vue'].join('/')
 const panelPath = ['~', 'components', 'flashcards', 'RoomHistoryPanel.vue'].join('/')
+
+beforeAll(async () => {
+  await Promise.all([import(shellPath), import(panelPath)])
+})
 
 async function mountShell() {
   const Comp = await import(shellPath)

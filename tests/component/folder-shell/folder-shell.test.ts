@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { mockMatchMedia } from '../../support/match-media'
@@ -7,6 +7,8 @@ const mode = ref<'light' | 'dark'>('light')
 const folderThemeEnabled = ref(true)
 const allFolders = ref<any[]>([])
 const queryData = ref<any[]>([])
+
+beforeAll(async () => { await import('~/components/folder-shell/FolderShell.vue') })
 
 mockNuxtImport('useAppTheme', () => {
   return () => ({
@@ -42,31 +44,47 @@ const FolderShellHierarchyDrawerStub = defineComponent({
   template: '<div data-testid="drawer-stub" />',
 })
 
-async function mountFolderShell() {
-  const FolderShell = (await import('~/components/folder-shell/FolderShell.vue')).default
+function ownFolderShellMount<T extends { unmount: () => void }>(create: (check: () => void, finish: () => void) => Promise<T>): Promise<T> {
+  let finished = false
+  let wrapper: T | undefined
+  const check = () => { if (finished) throw new Error('FolderShell fixture finished') }
+  const finish = () => { finished = true; wrapper?.unmount(); wrapper = undefined }
+  onTestFinished(finish)
+  return create(check, finish).then(mounted => {
+    if (finished) { mounted.unmount(); check() }
+    wrapper = mounted
+    return mounted
+  })
+}
 
-  return mountSuspended(FolderShell, {
-    props: {
-      folderId: 'folder-1' as any,
-      folder: {
-        _id: 'folder-1',
-        name: 'Biology 101',
-        color: null,
-      } as any,
-      activeTab: 'chat',
-      activeConversationId: null,
-      activeVoidId: null,
-    },
-    slots: {
-      default: '<div data-testid="shell-content">Content</div>',
-      'top-bar': '<div data-testid="top-bar">Top bar</div>',
-    },
-    global: {
-      stubs: {
-        FolderShellRail: FolderShellRailStub,
-        FolderShellHierarchyDrawer: FolderShellHierarchyDrawerStub,
+function mountFolderShell() {
+  return ownFolderShellMount(async check => {
+    const FolderShell = (await import('~/components/folder-shell/FolderShell.vue')).default
+    check()
+
+    return mountSuspended(FolderShell, {
+      props: {
+        folderId: 'folder-1' as any,
+        folder: {
+          _id: 'folder-1',
+          name: 'Biology 101',
+          color: null,
+        } as any,
+        activeTab: 'chat',
+        activeConversationId: null,
+        activeVoidId: null,
       },
-    },
+      slots: {
+        default: '<div data-testid="shell-content">Content</div>',
+        'top-bar': '<div data-testid="top-bar">Top bar</div>',
+      },
+      global: {
+        stubs: {
+          FolderShellRail: FolderShellRailStub,
+          FolderShellHierarchyDrawer: FolderShellHierarchyDrawerStub,
+        },
+      },
+    })
   })
 }
 
@@ -103,5 +121,22 @@ describe('FolderShell', () => {
     await wrapper.get('[data-testid="rail-toggle"]').trigger('click')
 
     expect(wrapper.get('[data-testid="folder-main-pane"]').attributes('style') ?? '').toBe('')
+  })
+})
+
+
+describe('FolderShell fixture ownership', () => {
+  it('unmounts a late predecessor without continuing into the successor', async () => {
+    const nextTestWork = vi.fn()
+    let release!: (wrapper: { unmount: () => void }) => void
+    let finish!: () => void
+    const pending = new Promise<{ unmount: () => void }>(resolve => { release = resolve })
+    const result = ownFolderShellMount((_check, retire) => { finish = retire; return pending }).then(nextTestWork)
+    finish()
+    const unmount = vi.fn()
+    release({ unmount })
+    await expect(result).rejects.toEqual(new Error('FolderShell fixture finished'))
+    expect(unmount).toHaveBeenCalledTimes(1)
+    expect(nextTestWork).not.toHaveBeenCalled()
   })
 })

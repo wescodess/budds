@@ -256,7 +256,7 @@ describe('verified stack group ownership', () => {
       await expect(acquireCaptureStackLock(lock)).rejects.toThrow('Another route capture owns')
       process.kill(-backendPid, 'SIGTERM')
       await stopping
-      expect(() => process.kill(-backendPid, 0)).toThrow()
+      await vi.waitFor(() => expect(() => process.kill(-backendPid, 0)).toThrow(), { timeout: 2000 })
       const next = await acquireCaptureStackLock(lock)
       await next()
     }

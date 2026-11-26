@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
+
+beforeAll(async () => {
+  await import('~/components/folder-shell/FolderShellFilesPanel.vue')
+})
 
 const documents = [
   {

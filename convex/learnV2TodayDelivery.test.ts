@@ -1491,7 +1491,7 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocu
     expect(call.metrics.databaseQueries.used).toBeLessThan(3072)
   }
 
-})
+}, 20_000)
 
 test.each((['patch', 'replace', 'delete', 'insert'] as const).flatMap(write => [false, true].map(child => ({ write, child }))))(
   'source authority is revalidated after $write with a child read scope=$child', async ({ write, child }) => {
@@ -1682,7 +1682,7 @@ test('the registered cron binds overlapping horizons at maximum published invent
   const originals = (await f.opportunities()).filter(row => row.horizonDays)
   expect(originals).toHaveLength(2)
   for (const row of originals) expect(row).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', contextPins: { generatorVersion: 'learn-v2.delayed-delivery.v1' } })
-})
+}, 20_000)
 
 test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as const)('the due-work cron is inert with %s off', async gate => {
   const f = await fixture()

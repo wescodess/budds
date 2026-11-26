@@ -1,6 +1,6 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, todayCanvasChecksEnabled } from '../../shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, todayCanvasChecksEnabled } from '../../shared/learn-v2-today-check'
 import { privacyRead } from './learnV2PrivacyReadContext'
 
 async function timingForCheck(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
@@ -15,6 +15,11 @@ async function timingForCheck(ctx: QueryCtx | MutationCtx, userId: string, oppor
     || taught.learningVoidId !== opportunity.learningVoidId || !Number.isFinite(taught.serverTime) || taught.serverTime < 0 || taught.serverTime > now) return 'earlier' as const
   const days = (now - taught.serverTime) / 86_400_000
   return days >= 4 && days < 14 ? 'about_a_week' as const : days >= 14 && days < 46 ? 'about_a_month' as const : 'earlier' as const
+}
+
+export async function canvasCheckTiming(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
+  if (!todayCanvasChecksEnabled() || !['measurement_cold', 'measurement_delayed', 'retained_transfer'].includes(opportunity.purpose.kind)) return {}
+  return { checkTiming: { version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: await timingForCheck(ctx, userId, opportunity) } }
 }
 
 export async function todayCheckLabel(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>,

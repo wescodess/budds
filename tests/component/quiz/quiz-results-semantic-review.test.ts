@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
 
@@ -12,6 +12,10 @@ mockNuxtImport('useMotionPresets', () => () => ({ springGentle: {} }))
 mockNuxtImport('$fetch', () => fetchMock)
 
 const resultsViewPath = ['~', 'components', 'quiz', 'ResultsView.vue'].join('/')
+
+beforeAll(async () => {
+  await import(resultsViewPath)
+})
 
 function attempt(status: 'pending' | 'available') {
   return {

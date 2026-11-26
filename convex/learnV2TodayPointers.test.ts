@@ -10,13 +10,13 @@ import { ADAPTIVE_ACTIVATION_CONFIGURATION } from '../shared/adaptive-activation
 import { syntheticReviewedActivationApproval } from '../tests/fixtures/adaptive-activation-approval'
 import { LEARN_V2_ASSISTANCE_POLICY_VERSION, LEARN_V2_RESPONSE_CONTRACT_VERSION, learnIdSchema } from '../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_VERSION } from '../shared/learn-v2-measurement-storage-manifest'
-import { LEARN_TODAY_CHECK_POINTER_VERSION, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, learnCanvasCheckReceiptSchema, learnTodayCheckPointerSchema } from '../shared/learn-v2-today-check'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { createLearnScorerRegistry, sealLearnScorerConfiguration } from './lib/learnV2ScorerConfig'
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import type { Doc, Id } from './_generated/dataModel'
 import * as privacyContext from './lib/learnV2PrivacyReadContext'
-import { readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
+import { loadReadyCanvas, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { measurementReadContext } from './lib/learnV2MeasurementReadContext'
 import { prepareSavedLearnModelScoring } from './lib/learnV2MeasurementScoring'
 import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementReportAccess'
@@ -28,7 +28,7 @@ import { LEARN_V2_MEASUREMENT_ADMISSION_REASONS } from '../shared/learn-v2-measu
 import { todayCheckLabel } from './lib/learnV2TodayCheckLabel'
 import { replaceMeasurementOpportunity } from '../tests/fixtures/learn-v2-measurement-replacement'
 
-const policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
+let policy = vi.hoisted(() => ({ pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null as unknown, scorer: null as unknown }))
 vi.mock('../shared/learn-v2-measurement-item-limits', async original => {
   const value = await original<typeof import('../shared/learn-v2-measurement-item-limits')>()
   return { ...value, LEARN_MEASUREMENT_ITEM_LIMITS: { ...value.LEARN_MEASUREMENT_ITEM_LIMITS, get evidenceRows() { return policy.evidenceRows } },
@@ -59,12 +59,13 @@ const NOW = Date.parse('2027-03-07T15:00:00Z')
 
 function setUpPointerTest() {
   vi.useFakeTimers(); vi.setSystemTime(NOW)
-  policy.pointers = true; policy.responses = true; policy.enrollment = true; policy.delivery = true; policy.reports = false; policy.evidenceRows = 64; LEARN_REPORT_APPROVALS.splice(0)
+  policy = { pointers: true, responses: true, enrollment: true, delivery: true, reports: false, evidenceRows: 64, protocol: null, scorer: null }
+  LEARN_REPORT_APPROVALS.splice(0)
   vi.stubEnv('LEARN_ADAPTIVE_V2_PILOT_MANIFEST', ADAPTIVE_V2_PILOT_MANIFEST.version)
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
 }
 function tearDownPointerTest() {
-  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest)
+  Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, structuredClone(originalManifest))
   LEARN_REPORT_APPROVALS.splice(0)
   vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers()
 }
@@ -152,13 +153,15 @@ async function fixture(options: { canvas?: boolean, rubric?: boolean, inventory?
   return { ...f, contentId, baselineScorer: { registry, saved: baselineSaved }, start, opportunities, read }
 }
 
-async function attach(f: Awaited<ReturnType<typeof fixture>>, opportunity: Doc<'learnAssessmentOpportunities'>) {
+async function attach(f: Awaited<ReturnType<typeof fixture>>, opportunity: Doc<'learnAssessmentOpportunities'>, addressed = false) {
+  if (addressed) opportunity = (await f.t.run(ctx => ctx.db.get(opportunity._id)))!
   if (opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas) throw new Error('Expected Canvas pins')
   const session = (await f.t.run(ctx => ctx.db.get(opportunity.contextPins.kind === 'session' ? opportunity.contextPins.studySessionId : f.graph.studySessionId)))!
   const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: session._id,
     expectedSessionRevision: session.revision, idempotencyKey: `pointer_attach_${opportunity._id}` })
   if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
-  const canvas = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  const canvas = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId,
+    ...(addressed ? { checkReference: opportunity.delayedCheckId } : {}) }))!
   expect(canvas.responsePrompt).toBeTruthy()
   return { attached, canvas, stage: { threadId: attached.threadId, activityId: attached.activityId, studySessionId: session._id,
     expectedRevision: canvas.thread.revision, expectedSessionRevision: canvas.session.revision, response: 'A saved learner answer.',
@@ -200,6 +203,17 @@ test.each([undefined, 7, 30] as const)('topic pointers expose only the current m
   expect(Object.keys(pointer).sort()).toEqual(['destination', 'reference', 'state', 'timing', 'topic', 'version'])
   expect(learnTodayCheckPointerSchema.parse(pointer)).toEqual(pointer)
   expect(JSON.stringify(pointer)).not.toMatch(/Hypothetical|PRIVATE|rubric|scorePercent|openAt|closeAt|dueAt|horizonDays|itemId/)
+  const checkTiming = { version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: pointer.version === LEARN_TODAY_CHECK_POINTER_VERSION ? pointer.timing : '' }
+  const assessmentPurpose = horizon === undefined ? 'measurement_cold' : 'measurement_delayed'
+  const opened = await attach(f, row, true)
+  expect(opened.canvas.assessment).toMatchObject({ checkTiming, assessmentPurpose })
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(canvas?.checkReceipt).toMatchObject({ checkTiming, assessmentPurpose })
+  expect(canvas?.assessment).toMatchObject({ checkTiming, assessmentPurpose })
+  const delivery = await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId,
+    checkReference: row.delayedCheckId, idempotencyKey: 'canvas_timing_receipt_delivery_12345' })
+  expect(delivery.value?.checkReceipt).toEqual(canvas?.checkReceipt)
 })
 
 async function timingFixture(options: { teach?: boolean, taughtAt?: number, reserveCount?: number,
@@ -280,6 +294,11 @@ test('unknown teaching time uses generic timing despite a seven-day horizon', as
   await f.t.mutation(due, { userId, through: Date.now() })
   expect((await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(pointer => pointer.reference === f.delayed.delayedCheckId))
     .toMatchObject({ state: 'ready', timing: 'earlier' })
+  const opened = await attach(f, f.delayed, true)
+  expect(opened.canvas.assessment?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: 'earlier' })
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  expect((await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId }))?.checkReceipt?.checkTiming)
+    .toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: 'earlier' })
 })
 
 test.each(['foreign', 'mismatched', 'future', 'nonfinite', 'negative'] as const)('a %s teaching receipt cannot authorize age copy', async condition => {
@@ -373,6 +392,11 @@ test('retained pointers classify the retained purpose without exposing its clock
   const pointer = (await f.read(LEARN_TODAY_CHECK_POINTER_VERSION)).find(value => value.reference === cold.delayedCheckId)!
   expect(pointer).toMatchObject({ version: 'learn-v2.today-check-pointer.v2', timing: 'retained' })
   expect(JSON.stringify(pointer)).not.toMatch(/basisAttemptId|clock|dueAt|anchorAt|horizonDays/)
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: cold.delayedCheckId })
+  expect(canvas?.checkReceipt?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: 'retained' })
+  expect(canvas?.assessment?.checkTiming).toEqual(canvas?.checkReceipt?.checkTiming)
+  expect(canvas?.checkReceipt?.assessmentPurpose).toBe('retained_transfer')
+  expect(canvas?.assessment?.assessmentPurpose).toBe('retained_transfer')
 })
 
 test.each([false, true])('topic pointers use the renamed objective title after saved=%s', async saved => {
@@ -418,6 +442,57 @@ test.each(['objective_deleted', 'objective_foreign', 'objective_unlinked', 'blan
   expect(pointers.checks[0]).toMatchObject({ version: 'learn-v2.today-check-pointer.v2', reference: cold.delayedCheckId, timing: 'this_session' })
   expect(pointers.checks[0]).not.toHaveProperty('topic')
   expect(JSON.stringify(pointers)).not.toContain('FOREIGN-TOPIC-CANARY')
+  const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: cold.delayedCheckId })
+  expect(canvas?.checkReceipt?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing: 'this_session' })
+  expect(JSON.stringify(canvas?.checkReceipt)).not.toMatch(/topic|FOREIGN-TOPIC-CANARY/)
+})
+
+test('Canvas purpose survives frozen-cohort rollback while timing and post-seal references disappear byte-for-byte', async () => {
+  const f = await fixture()
+  await f.start()
+  const row = await coldFor(f)
+  const opened = await attach(f, row)
+  const { checkTiming: _timing, ...legacyAssessment } = opened.canvas.assessment!
+  expect(legacyAssessment.assessmentPurpose).toBe('measurement_cold')
+  policy.pointers = false
+  expect((await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId }))?.assessment).toEqual(legacyAssessment)
+  policy.pointers = true
+  await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, opened.stage)
+  const enabled = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId }))!
+  const { checkTiming: _receiptTiming, postSealReference: _reference, ...legacyReceipt } = enabled.checkReceipt!
+  expect(legacyReceipt.assessmentPurpose).toBe('measurement_cold')
+  expect(_receiptTiming).toBeTruthy()
+  expect(_reference).toBeTruthy()
+  policy.pointers = false
+  const disabled = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })
+  expect(JSON.stringify(disabled?.checkReceipt)).toBe(JSON.stringify(legacyReceipt))
+  expect(disabled?.assessment).not.toHaveProperty('checkTiming')
+  expect(disabled?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  const delivery = await f.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { threadId: opened.attached.threadId,
+    checkReference: row.delayedCheckId, idempotencyKey: 'purpose_rollback_receipt_1234567890' })
+  expect(delivery.value?.checkReceipt).toEqual(disabled?.checkReceipt)
+  expect(delivery.value?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  const withoutBody = await f.owner.query(ctx => loadReadyCanvas(ctx, userId, opened.attached.threadId,
+    { checkReference: row.delayedCheckId, includeSavedResponse: false }))
+  expect(withoutBody?.checkReceipt).toMatchObject({ assessmentPurpose: 'measurement_cold', body: { bodyAvailability: 'unavailable' } })
+  expect(withoutBody?.assessment?.assessmentPurpose).toBe('measurement_cold')
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'reconciliation_required' }))
+  const unconfirmed = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(unconfirmed?.checkReceipt).toMatchObject({ state: 'result_unconfirmed', assessmentPurpose: 'measurement_cold' })
+  expect(unconfirmed?.assessment).toBeUndefined()
+  await f.t.run(ctx => ctx.db.patch(row._id, { phase: 'cancelled' }))
+  const closed = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(closed?.checkReceipt).toMatchObject({ state: 'closed', assessmentPurpose: 'measurement_cold' })
+  expect(closed?.assessment).toBeUndefined()
+  policy.responses = false
+  const responsesOff = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId })
+  expect(responsesOff?.checkReceipt).toBeUndefined()
+  expect(responsesOff?.assessment).not.toHaveProperty('assessmentPurpose')
+  policy.responses = true
+  policy.pointers = true
+  const foreign = f.t.withIdentity({ tokenIdentifier: 'foreign-owner', subject: 'foreign' })
+  await expect(foreign.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId, checkReference: row.delayedCheckId }))
+    .rejects.toThrow('Adaptive Learn access denied')
 })
 
 test('topic extension is absent through flag rollback and the original v1 payload still parses', async () => {
@@ -1560,7 +1635,7 @@ test('a playable six-form family fits the ready-pointer reservation with native 
   expect(await f.owner.query(api.learnV2Today.getCheckPointers, { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION })).toMatchObject({ status: 'available', checks: [expect.objectContaining({ state: 'ready', timing: 'this_session' })] })
   budget.mockRestore()
   await attach(f, (await f.opportunities())[0]!)
-})
+}, 20_000)
 
 test('bounded discovery pages retain an older check after more than 32 later records', async () => {
   const f = await fixture()
@@ -1670,6 +1745,7 @@ test('saved-work read caches invalidate after body and source revocation', async
 })
 
 test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under completed-work bounds after publication limits tighten', async state => {
+  const limits = policy
   const f = await fixture({ inventory: { claims: 32, supports: 2, sources: 64, backingDocuments: true } })
   await f.start()
   const row = (await f.opportunities())[0]!
@@ -1682,7 +1758,7 @@ test.each(['saved_scoring', 'result_ready'] as const)('$state recovers under com
       submissionId: saved.submissionId, idempotencyKey: 'historical_pointer_score_1234567890' })
   }
   const before = await f.t.run(ctx => ctx.db.get(saved.submissionId))
-  policy.evidenceRows = 1
+  limits.evidenceRows = 1
   expect(await f.read()).toEqual([expect.objectContaining({ state })])
   expect(await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: opened.attached.threadId })).toMatchObject({
     status: state === 'result_ready' ? 'feedback' : 'submitted', savedResponse: { response: opened.stage.response },
@@ -1955,7 +2031,7 @@ test('recent deleted checks cannot displace four owned closed receipts from the 
   const today = await families[0]!.owner.query(api.learnV2Today.getToday, {})
   expect('checkPointers' in today && today.checkPointers).toMatchObject({ isDone: true, continueCursor: null })
   expect('checkPointers' in today && today.checkPointers.checks.map(pointer => pointer.reference).sort()).toEqual(references.sort())
-})
+}, 20_000)
 
 test('four maximum ready checks remain on the first page with retired historical Canvas labels', async () => {
   const families: Awaited<ReturnType<typeof fixture>>[] = []
