@@ -19,11 +19,7 @@ function samePlanScope(left: Plan, right: Plan, userId: string) {
 }
 
 export async function hasLearnReflowPlanAuthority(ctx: ReadCtx, userId: string, plan: Plan, pinnedRecordRevision?: number) {
-  return LEARN_MEASUREMENT_CAPABILITIES.responses && await reflowPlanAuthority(ctx, userId, plan, pinnedRecordRevision)
-}
-
-async function reflowPlanAuthority(ctx: ReadCtx, userId: string, plan: Plan, pinnedRecordRevision?: number) {
-  if (plan.userId !== userId || plan.status !== 'superseded'
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses || plan.userId !== userId || plan.status !== 'superseded'
     || plan.acceptedAt === undefined || pinnedRecordRevision !== undefined && plan.recordRevision !== pinnedRecordRevision + 1) return false
   const root = await ctx.db.get(plan.studyPlanId)
   if (!root || root.userId !== userId || root.learningVoidId !== plan.learningVoidId || !root.activeRevisionId) return false
@@ -42,8 +38,8 @@ async function reflowPlanAuthority(ctx: ReadCtx, userId: string, plan: Plan, pin
   return false
 }
 
-export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, source: Plan, carriedWork = false) {
-  if (!LEARN_MEASUREMENT_CAPABILITIES.responses && !carriedWork) return source
+export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, source: Plan) {
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return source
   const [root, learningVoid, blueprint] = await Promise.all([ctx.db.get(source.studyPlanId), ctx.db.get(source.learningVoidId),
     source.blueprintRevisionId ? ctx.db.get(source.blueprintRevisionId) : null])
   const active = root?.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : null
@@ -53,15 +49,20 @@ export async function requireLearnActiveWorkPlan(ctx: ReadCtx, userId: string, s
     || blueprint.learningVoidId !== learningVoid._id || learningVoid.activeBlueprintRevisionId !== blueprint._id
     || root.learningVoidId !== learningVoid._id || !active || active.status !== 'accepted' || !samePlanScope(source, active, userId)
     || active.blueprintRecordRevision !== blueprint.recordRevision
-    || active._id !== source._id && !await reflowPlanAuthority(ctx, userId, source)) throw new Error('Learn follow-up active plan unavailable')
+    || active._id !== source._id && !await hasLearnReflowPlanAuthority(ctx, userId, source)) throw new Error('Learn follow-up active plan unavailable')
   const latest = await ctx.db.query('studyPlanRevisions').withIndex('by_userId_and_studyPlanId_and_revision', q =>
     q.eq('userId', userId).eq('studyPlanId', root._id)).order('desc').first()
   if (!latest || latest._id !== active._id && latest.status !== 'draft') throw new Error('Learn follow-up active plan unavailable')
   return active
 }
 
+export function isLearnCanvasColdContinuation(session: Doc<'studySessions'>) {
+  return LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'independent_application'
+    && session.assessmentOpportunityId !== undefined && session.canvasColdCheckId !== undefined
+}
+
 export async function hasLearnStartedSessionBinding(ctx: ReadCtx, userId: string, session: Doc<'studySessions'>, plan: Plan) {
-  if (session.userId !== userId || session.studyPlanRevisionId !== plan._id || !['in_progress', 'completed'].includes(session.status)
+  if (!isLearnCanvasColdContinuation(session) || session.userId !== userId || session.studyPlanRevisionId !== plan._id || !['in_progress', 'completed'].includes(session.status)
     || !session.startedSessionContentId || session.startedSessionContentRevision === undefined) return false
   const content = await ctx.db.get(session.startedSessionContentId)
   const objective = await ctx.db.get(session.primaryObjectiveId)
@@ -71,22 +72,35 @@ export async function hasLearnStartedSessionBinding(ctx: ReadCtx, userId: string
     || content.assessmentPurpose !== undefined && content.assessmentPurpose !== session.assessmentPurpose
     || content.assessmentOpportunityId !== undefined && content.assessmentOpportunityId !== session.assessmentOpportunityId
     || !objective || objective.userId !== userId || objective.blueprintRevisionId !== plan.blueprintRevisionId) return false
-  if (!session.assessmentPurpose && !session.assessmentOpportunityId) return true
-  if (!['independent_application', 'retained_transfer'].includes(session.assessmentPurpose ?? '') || !session.assessmentOpportunityId) return false
-  const opportunity = await ctx.db.get(session.assessmentOpportunityId)
+  const opportunity = await ctx.db.get(session.assessmentOpportunityId!)
   const pins = opportunity?.contextPins
-  return opportunity?.userId === userId && opportunity.purpose.kind === session.assessmentPurpose && pins?.kind === 'session'
+  if (!(opportunity?.userId === userId && opportunity.purpose.kind === 'independent_application' && opportunity.assessmentPins.kind === 'session_application'
+    && pins?.kind === 'session' && pins.canvas
     && pins.studySessionId === session._id && pins.studyPlanRevisionId === plan._id && pins.sessionContentId === content._id
     && pins.contentRevision === content.revision && pins.contentInputDigest === content.inputDigest && pins.generatorVersion === content.generatorVersion
-    && opportunity.objectiveId === session.primaryObjectiveId && opportunity.blueprintRevisionId === plan.blueprintRevisionId
+    && opportunity.objectiveId === session.primaryObjectiveId && opportunity.blueprintRevisionId === plan.blueprintRevisionId)) return false
+  const cold = await ctx.db.get(session.canvasColdCheckId!)
+  if (!cold || cold.userId !== userId || cold.purpose.kind !== 'measurement_cold' || !cold.assignmentId
+    || cold.learningVoidId !== plan.learningVoidId || cold.blueprintRevisionId !== plan.blueprintRevisionId || cold.objectiveId !== session.primaryObjectiveId
+    || cold.contextPins.kind !== 'session' || !cold.contextPins.canvas || cold.contextPins.studySessionId === session._id) return false
+  const assignment = await ctx.db.get(cold.assignmentId)
+  const check = await ctx.db.get(cold.contextPins.studySessionId)
+  const source = await ctx.db.get(cold.contextPins.studyPlanRevisionId)
+  return assignment?.userId === userId && assignment.status === 'admitted' && assignment.flow === 'v2_canvas'
+    && assignment.learningVoidId === cold.learningVoidId && assignment.blueprintRevisionId === cold.blueprintRevisionId && assignment.objectiveId === cold.objectiveId
+    && !!check && check.userId === userId && isDedicatedLearnCheck(check) && check.assessmentPurpose === 'measurement_cold'
+    && check.assessmentOpportunityId === cold._id && check.studyPlanRevisionId === cold.contextPins.studyPlanRevisionId
+    && check.primaryObjectiveId === cold.objectiveId && check.startedSessionContentId === cold.contextPins.sessionContentId
+    && check.startedSessionContentRevision === cold.contextPins.contentRevision && !!source && samePlanScope(plan, source, userId)
+    && source.revision <= plan.revision && (source._id === plan._id || await hasLearnReflowPlanAuthority(ctx, userId, source, cold.contextPins.planRecordRevision))
 }
 
 export async function hasLearnCarriedSessionAuthority(ctx: ReadCtx, userId: string, session: Doc<'studySessions'>, plan: Plan, pinnedRecordRevision?: number) {
-  if (!session.carriedPlanRevisionId || !await reflowPlanAuthority(ctx, userId, plan, pinnedRecordRevision)) return false
+  if (!isLearnCanvasColdContinuation(session) || !session.carriedPlanRevisionId || !await hasLearnReflowPlanAuthority(ctx, userId, plan, pinnedRecordRevision)) return false
   const destination = await ctx.db.get(session.carriedPlanRevisionId)
   const root = await ctx.db.get(plan.studyPlanId)
   return !!destination && samePlanScope(plan, destination, userId) && destination.revision > plan.revision
-    && (destination._id === root?.activeRevisionId && destination.status === 'accepted' || await reflowPlanAuthority(ctx, userId, destination))
+    && (destination._id === root?.activeRevisionId && destination.status === 'accepted' || await hasLearnReflowPlanAuthority(ctx, userId, destination))
     && await hasLearnStartedSessionBinding(ctx, userId, session, plan)
 }
 
@@ -96,14 +110,16 @@ export async function hasLearnSessionReflowAuthority(ctx: ReadCtx, userId: strin
 }
 
 export async function readLearnCarriedSessions(ctx: ReadCtx, userId: string, active: Plan, limit: number) {
-  const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_carriedPlanRevisionId_and_scheduledStartAt', q =>
-    q.eq('userId', userId).eq('carriedPlanRevisionId', active._id)).take(limit + 1)
+  if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return []
+  const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_carriedPlanRevisionId_and_canvasColdCheckId', q =>
+    q.eq('userId', userId).eq('carriedPlanRevisionId', active._id).gt('canvasColdCheckId', undefined)).take(limit + 1)
   if (rows.length > limit) throw new Error('Carried sessions exceed the bounded Study Plan contract')
-  for (const row of rows) {
+  const continuations = rows.filter(isLearnCanvasColdContinuation)
+  for (const row of continuations) {
     const plan = await ctx.db.get(row.studyPlanRevisionId)
     if (!plan || !await hasLearnCarriedSessionAuthority(ctx, userId, row, plan)) throw new Error('Carried session authority unavailable')
   }
-  return rows
+  return continuations.sort((a, b) => a.scheduledStartAt - b.scheduledStartAt || String(a._id).localeCompare(String(b._id)))
 }
 
 export async function readLearnFixedPlanChecks(ctx: ReadCtx, userId: string, active: Plan, limit: number) {

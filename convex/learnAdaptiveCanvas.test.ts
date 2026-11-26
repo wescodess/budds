@@ -10,6 +10,7 @@ import { authorizeExport } from '../tests/fixtures/learn-v2-personal-export'
 import { appendActivityResponseTargets } from '../tests/fixtures/learn-v2-activity-responses'
 import { tracePrivacyReads, invokePrivacyQuery, privacyHistoryFixture, addDistinctActivitySources } from '../tests/fixtures/learn-v2-privacy-reads'
 import { getCanvas } from './learnAdaptiveCanvas'
+import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import { getThread, listResumeCandidates } from './learnAdaptive'
 import { storedPlan } from './learnAdaptiveRecovery'
 import * as privacyReads from './lib/learnV2PrivacyReadContext'
@@ -19,8 +20,14 @@ const OWNER = { tokenIdentifier: 'https://auth.example.com|canvas-owner' }
 const OTHER = { tokenIdentifier: 'https://auth.example.com|canvas-other' }
 const originalFlag = process.env.LEARN_V2_ENABLED
 const originalManifest = structuredClone(ADAPTIVE_V2_PILOT_MANIFEST)
+const measurementPolicy = vi.hoisted(() => ({ responses: false }))
+vi.mock('../shared/learn-v2-measurement-storage-manifest', async original => {
+  const value = await original<typeof import('../shared/learn-v2-measurement-storage-manifest')>()
+  return { ...value, LEARN_MEASUREMENT_CAPABILITIES: { ...value.LEARN_MEASUREMENT_CAPABILITIES,
+    get responses() { return measurementPolicy.responses } } }
+})
 
-beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true' })
+beforeEach(() => { process.env.LEARN_V2_ENABLED = 'true'; measurementPolicy.responses = false })
 afterEach(() => { Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, originalManifest); vi.useRealTimers(); vi.restoreAllMocks() })
 afterAll(() => { if (originalFlag === undefined) delete process.env.LEARN_V2_ENABLED; else process.env.LEARN_V2_ENABLED = originalFlag })
 
@@ -82,6 +89,41 @@ async function fixture() {
 }
 
 describe('ready V2 adaptive Canvas', () => {
+  test.each([false, true])('ordinary Canvas keeps dev read and submit behavior after reflow with responses=%s', async responses => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+    const { t, owner, ids } = await fixture()
+    const planId = await t.run(async ctx => {
+      const session = (await ctx.db.get(ids.studySessionId))!
+      const { futureId } = await seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, { studyPlanRevisionId: session.studyPlanRevisionId,
+        studySessionId: session._id, objectiveId: session.primaryObjectiveId }, Date.now())
+      await ctx.db.delete(futureId)
+      await ctx.db.patch(session._id, { status: 'ready', missedAt: undefined,
+        scheduledStartAt: Date.now(), scheduledEndAt: Date.now() + 30 * 60_000 })
+      await ctx.db.patch(session.studyPlanRevisionId, { acceptedAt: Date.now() })
+      return session.studyPlanRevisionId
+    })
+    const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId,
+      expectedSessionRevision: 2, idempotencyKey: 'ordinary_canvas_reflow_attach_12345' })
+    if (attached.kind !== 'attached') throw new Error('Expected ordinary Canvas attachment')
+    await owner.mutation(api.learnV2SessionContent.startStudySession, { studySessionId: ids.studySessionId,
+      expectedSessionRevision: 2, expectedContentRevision: 1, idempotencyKey: 'ordinary_canvas_reflow_start_12345' })
+    const before = (await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+    expect(before.status).toBe('started')
+    measurementPolicy.responses = responses
+    const reflow = await owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: planId,
+      expectedPlanRecordRevision: 5, idempotencyKey: 'ordinary_canvas_reflow_12345' })
+    expect(await t.run(ctx => ctx.db.get(ids.studySessionId))).not.toHaveProperty('carriedPlanRevisionId')
+    await t.run(ctx => ctx.db.patch(ids.studySessionId, { carriedPlanRevisionId: reflow.successorPlanRevisionId! }))
+    expect(await owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })).toMatchObject({
+      status: 'blocked', recoveryState: 'stale', responsePrompt: null })
+    const submission = owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { studySessionId: ids.studySessionId,
+      threadId: attached.threadId, activityId: attached.activityId, expectedSessionRevision: before.session.revision,
+      expectedRevision: before.thread.revision, response: 'Earth attracts the apple.', confidence: 4,
+      idempotencyKey: 'ordinary_canvas_after_reflow_submit_12345' })
+    if (responses) await expect(submission).resolves.toEqual({ version: 'learn-v2.responses.v1', kind: 'rejected', reasonCode: 'unavailable' })
+    else await expect(submission).rejects.toThrow('Started Canvas activity is unavailable')
+  })
+
   test('thread and resume readers skip saved-answer work, share a budget and retain safe thread metadata', async () => {
     const { t, owner, ids } = await fixture()
     const attached = await owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: ids.studySessionId, expectedSessionRevision: 2, idempotencyKey: 'budget-thread-readers-control' })

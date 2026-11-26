@@ -298,7 +298,7 @@ export const startCanvasSession = mutation({
       if (reason) return canvasUnavailable(reason)
     }
     await ctx.db.patch(session._id, { status: 'in_progress', revision: session.revision + 1,
-      startedSessionContentId: content._id, startedSessionContentRevision: content.revision })
+      startedSessionContentId: content._id, startedSessionContentRevision: content.revision, canvasColdCheckId: cold._id })
     const applicationId = await bindSessionApplication(ctx, userId, (await ctx.db.get(session._id))!, content, 'canvas')
     if (!applicationId) throw new Error('Learn Canvas application unavailable')
     const attached = await attachAssessmentCanvas(ctx, { studySessionId: session._id, expectedSessionRevision: session.revision + 1,

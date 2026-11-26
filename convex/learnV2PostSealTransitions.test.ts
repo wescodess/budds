@@ -746,6 +746,7 @@ test.each([1, 2])('Canvas continuation start survives %s later reflows and reach
   const before = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
   expect(before.status).toBe('started')
   const started = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  expect(started.canvasColdCheckId).toBe(f.row._id)
   const application = (await f.t.run(ctx => ctx.db.get(started.assessmentOpportunityId!)))!
   const grant = await f.t.run(ctx => ctx.db.get(application.deliveryGrantId!))
   const coldCheck = await f.t.run(ctx => ctx.db.get(f.row._id))
@@ -834,7 +835,7 @@ test.each(['placement', 'plan_root', 'objective', 'parent', 'blueprint', 'origin
     expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
   })
 
-test.each(['missing_membership', 'foreign_membership', 'broken_lineage', 'binding', 'source_purge'] as const)(
+test.each(['missing_membership', 'foreign_membership', 'broken_lineage', 'binding', 'source_purge', 'cold_link', 'cold_assignment', 'cold_session'] as const)(
   'carried Canvas application rejects %s without changing its frozen pins', async failure => {
     const f = await canvasColdTeaching('canvas')
     await f.t.run(async ctx => {
@@ -858,6 +859,9 @@ test.each(['missing_membership', 'foreign_membership', 'broken_lineage', 'bindin
     const destination = reflow.successorPlanRevisionId
     await f.t.run(async ctx => {
       if (failure === 'missing_membership') await ctx.db.patch(session._id, { carriedPlanRevisionId: undefined })
+      if (failure === 'cold_link') await ctx.db.patch(session._id, { canvasColdCheckId: application._id })
+      if (failure === 'cold_assignment') await ctx.db.patch(f.assignment._id, { flow: 'v2_today' })
+      if (failure === 'cold_session' && coldPins.kind === 'session') await ctx.db.patch(coldPins.studySessionId, { schedulerVersion: 'ordinary-session.v1' })
       if (failure === 'broken_lineage') await ctx.db.patch(destination, { parentRevisionId: undefined })
       if (failure === 'binding' && application.contextPins.kind === 'session') await ctx.db.patch(application._id, {
         contextPins: { ...application.contextPins, contentInputDigest: 'mismatched-application-input' } })

@@ -574,10 +574,10 @@ function localDayAtNineUtcMs(localDate: string, timezone: string) {
   return instant
 }
 
-async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Pick<Awaited<ReturnType<typeof sessionScope>>, 'plan' | 'objective' | 'voidRow' | 'blueprint'> & Partial<Pick<Awaited<ReturnType<typeof sessionScope>>, 'session'>>, testOnly?: boolean, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
+async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Pick<Awaited<ReturnType<typeof sessionScope>>, 'plan' | 'objective' | 'voidRow' | 'blueprint'>, testOnly?: boolean, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
   const kind = input.outcome.remediation ? 'review' as const : input.outcome.state === 'guided' ? 'review' as const : input.outcome.setFirstIndependent ? 'retained_review' as const : null
   if (!kind) return null
-  const plan = await requireLearnActiveWorkPlan(ctx, input.userId, input.scope.plan, !!input.scope.session?.carriedPlanRevisionId)
+  const plan = await requireLearnActiveWorkPlan(ctx, input.userId, input.scope.plan)
   const priority = input.outcome.remediation ? 'prerequisite_remediation' : input.outcome.state === 'guided' ? 'due_review' : 'overdue_retained_review'
   const date = kind === 'retained_review' && input.firstIndependentLocalDate ? addCalendarDays(input.firstIndependentLocalDate, 7) : undefined
   const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now
