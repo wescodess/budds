@@ -204,7 +204,7 @@ export function useCanvasCheck(options: {
   })
 
   const sealed = computed(() => view.value.kind === 'receipt')
-  const draftKey = opportunityId ? `learn-response:${options.ownerId}:${options.threadId}:check:${opportunityId}` : null
+  const draftKey = postSealId ? `learn-response:${options.ownerId}:${options.threadId}:check:${postSealId}` : null
   const { restored } = useAdaptiveResponseDraft(draftKey, answer, sealed, confidence)
 
   const canTeachSeparateCase = computed(() => opportunityId ? available.value?.capabilities.canTeachSeparateCase === true : Boolean(postSealId))
@@ -360,7 +360,16 @@ export function useCanvasCheck(options: {
   const practiceMissing = ref(false)
   const practiceBusy = ref(false)
   const practiceFailed = ref(false)
-  const practiceSaved = ref(false)
+  const practiceAcceptedHere = ref(false)
+  const practiceStateQuery = useSkippableConvexQuery(checkApi.getResponseState, () => import.meta.client && practice.value
+    ? { version: PUBLIC_API_VERSION, target: { responseSlotId: practice.value.responseSlotId as never } }
+    : 'skip')
+  const practiceAcceptedOnServer = computed(() => {
+    const value = practiceStateQuery.data.value
+    return Boolean(practice.value) && value?.status === 'available' && value.state === 'accepted'
+  })
+  const practiceSaved = computed(() => practiceAcceptedHere.value || practiceAcceptedOnServer.value)
+  watch(practiceAcceptedOnServer, accepted => { if (accepted) practiceFailed.value = false })
   useAdaptiveResponseDraft(postSealId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${postSealId}` : null, practiceAnswer, practiceSaved)
   const assistance = shallowRef<PracticeHelpContent | null>(null)
   const assistanceDenied = ref(false)
@@ -412,7 +421,7 @@ export function useCanvasCheck(options: {
         idempotencyKey: practiceKey!,
         response: { target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, payload: { kind: 'text', text } },
       })
-      if (receipt?.kind === 'accepted') practiceSaved.value = true
+      if (receipt?.kind === 'accepted' || (receipt?.kind === 'rejected' && receipt.reasonCode === 'already_accepted')) practiceAcceptedHere.value = true
       else {
         practiceKey = null
         practicePayload = null

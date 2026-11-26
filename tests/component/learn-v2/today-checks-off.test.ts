@@ -54,6 +54,9 @@ describe('Today checks with responses off', () => {
 
     const emptyBaseline = await render({ status: 'empty', nextScheduledAt: null })
     expect(await render({ status: 'empty', nextScheduledAt: null, checkPointers })).toBe(emptyBaseline)
+    const pendingBaseline = await render({ status: 'pending', nextScheduledAt: null })
+    expect(await render({ status: 'pending', nextScheduledAt: null, checkPointers })).toBe(pendingBaseline)
+    expect(pendingBaseline).not.toContain('learn-v2-today-checks')
     expect(onUpdate).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ cursor: 'next' }), expect.anything(), expect.anything())
   })
 })

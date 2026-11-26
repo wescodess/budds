@@ -75,7 +75,7 @@ function leaveSession() {
   <main class="min-h-full">
     <section v-if="checkingAccess" data-testid="learn-v2-today-access-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" data-testid="learn-v2-today-denied" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
-    <section v-else-if="!result || result.status === 'pending'" data-testid="learn-v2-today-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result?.reason ?? 'Preparing your study session…' }}</p></section>
+    <section v-else-if="!result || result.status === 'pending'" data-testid="learn-v2-today-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result?.reason ?? 'Preparing your study session…' }}</p><LearnV2MeasurementTodayChecks v-if="checkPointers" class="mt-5" :envelope="checkPointers" /></section>
     <section v-else-if="result.status === 'blocked'" data-testid="learn-v2-today-blocked" class="mx-auto max-w-2xl p-6">
       <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-primary">Session recovery</p>
       <h1 class="mt-2 font-dm-sans text-2xl font-semibold">Your learning plan is safe</h1>

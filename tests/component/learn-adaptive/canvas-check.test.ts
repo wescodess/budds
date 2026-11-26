@@ -18,6 +18,7 @@ const stateData = shallowRef<unknown>(null)
 const deliveryData = shallowRef<unknown>(null)
 const workData = shallowRef<unknown>(null)
 const teachingData = shallowRef<unknown>(null)
+const practiceWorkData = shallowRef<unknown>(null)
 const subscriptions = vi.fn()
 const isOnline = ref(true)
 const grant = vi.fn()
@@ -37,7 +38,7 @@ mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference) ?? ''
   subscriptions(name, args)
-  return { data: name.includes('getPostSealTeaching') ? teachingData : name.includes('getAssessmentState') ? stateData : name.includes('getAssessment') ? deliveryData : name.includes('getResponseState') ? workData : ref(null), pending: ref(false) }
+  return { data: name.includes('getPostSealTeaching') ? teachingData : name.includes('getAssessmentState') ? stateData : name.includes('getAssessment') ? deliveryData : name.includes('getResponseState') ? ((args as { target?: { responseSlotId?: string } } | undefined)?.target?.responseSlotId ? practiceWorkData : workData) : ref(null), pending: ref(false) }
 })
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
@@ -135,6 +136,7 @@ describe('Canvas check', () => {
     deliveryData.value = delivered()
     workData.value = null
     teachingData.value = teachingAvailable()
+    practiceWorkData.value = null
     subscriptions.mockClear()
     isOnline.value = true
     attach.mockReset().mockResolvedValue({ kind: 'attached', threadId: 'thread_1', activityId: 'activity_1', replayed: false })
@@ -230,6 +232,33 @@ describe('Canvas check', () => {
       await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('Your question'))
       expect(wrapper.get('[data-testid="learn-canvas-check-question"]').text()).toContain('Two enzymes are tested')
       expect(wrapper.get('[data-testid="learn-canvas-check-question"]').text()).toContain('Explain why both results make sense.')
+    })
+
+    it('keeps the Start focus intent through loading and focuses the question once delivery arrives', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const wrapper = await mountCheck({ canvas: awaiting() })
+      await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce())
+      await flushPromises()
+      await wrapper.setProps({ canvas: canvas() })
+      stateData.value = open()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-loading"]').exists()).toBe(true)
+      await new Promise(resolve => setTimeout(resolve, 0))
+      deliveryData.value = delivered()
+      await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('Your question'))
+    })
+
+    it('does not move focus to the question when it opens without a Start', async () => {
+      stateData.value = open()
+      deliveryData.value = null
+      const wrapper = await mountCheck()
+      expect(wrapper.find('[data-testid="learn-canvas-check-loading"]').exists()).toBe(true)
+      deliveryData.value = delivered()
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-question"]').exists()).toBe(true)
+      expect(document.activeElement?.textContent).not.toBe('Your question')
     })
 
     it('keeps Start and its key after an ambiguous failure', async () => {
@@ -1224,6 +1253,80 @@ describe('Canvas check', () => {
       await second.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
       await vi.waitFor(() => expect(second.find('[data-testid="learn-canvas-check-practice-saved"]').exists()).toBe(true))
       expect(sessionStorage.getItem(practiceKey)).toBeNull()
+    })
+
+    const practiceSlotState = (state: 'open' | 'accepted') => ({
+      version: LEARN_V2_PUBLIC_API_VERSION, status: 'available', target: { responseSlotId: 'slot_1' }, revision: state === 'accepted' ? 2 : 1, state,
+      work: state === 'accepted' ? learnAttemptHistorySchema.parse({ version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, submissionId: 'submission_2', acceptedAt: 1_800_000_300_000,
+        assistanceSnapshot, validitySnapshot: validSnapshot, currentEligibility: 'eligible', body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'Habitat sets the range.' } }, result: null }) : null,
+    })
+    const practiceKey = `learn-response:owner_1:thread_1:practice:${OPPORTUNITY}`
+
+    it('shows an accepted practice answer as saved after a remount, with no form and no stored draft', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      sessionStorage.setItem(practiceKey, JSON.stringify({ response: 'Habitat sets the range.', confidence: null, savedAt: Date.now() }))
+      practiceWorkData.value = practiceSlotState('accepted')
+      const wrapper = await mountCheck()
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check-practice-saved"]').text()).toBe('Response submitted.')
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-answer"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-submit"]').exists()).toBe(false)
+      expect(sessionStorage.getItem(practiceKey)).toBeNull()
+      const reads = subscriptions.mock.calls.filter(([name, args]) => String(name).includes('getResponseState') && (args as { target?: { responseSlotId?: string } })?.target?.responseSlotId)
+      expect(reads[0]![1]).toEqual({ version: LEARN_V2_PUBLIC_API_VERSION, target: { responseSlotId: 'slot_1' } })
+      expect(acceptPractice).not.toHaveBeenCalled()
+    })
+
+    it('converges on the server’s acceptance after an ambiguous practice submit, before and after a refresh', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      practiceWorkData.value = practiceSlotState('open')
+      acceptPractice.mockRejectedValueOnce(new Error('network'))
+      const first = await mountCheck()
+      await first.get('[data-testid="learn-canvas-check-practice-answer"]').setValue('Habitat sets the range.')
+      await first.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
+      await vi.waitFor(() => expect(first.find('[data-testid="learn-canvas-check-practice-error"]').exists()).toBe(true))
+      practiceWorkData.value = practiceSlotState('accepted')
+      await flushPromises()
+      expect(first.get('[data-testid="learn-canvas-check-practice-saved"]').exists()).toBe(true)
+      expect(first.find('[data-testid="learn-canvas-check-practice-error"]').exists()).toBe(false)
+      expect(sessionStorage.getItem(practiceKey)).toBeNull()
+      first.unmount()
+      wrappers.splice(wrappers.indexOf(first), 1)
+      const second = await mountCheck()
+      await flushPromises()
+      expect(second.get('[data-testid="learn-canvas-check-practice-saved"]').exists()).toBe(true)
+      expect(second.find('[data-testid="learn-canvas-check-practice-answer"]').exists()).toBe(false)
+      expect(acceptPractice).toHaveBeenCalledOnce()
+    })
+
+    it('treats an already-accepted practice answer as saved, not as an error', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      practiceWorkData.value = practiceSlotState('open')
+      acceptPractice.mockResolvedValueOnce(rejectedReceipt('already_accepted'))
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-practice-answer"]').setValue('Habitat sets the range.')
+      await wrapper.get('[data-testid="learn-canvas-check-practice-submit"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice-saved"]').exists()).toBe(true))
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-error"]').exists()).toBe(false)
+      expect(sessionStorage.getItem(practiceKey)).toBeNull()
+    })
+
+    it.each([
+      ['result_unconfirmed', 'reconciliation_required'],
+      ['closed', 'invalid'],
+    ] as const)('clears a stale check draft when a %s receipt confirms the answer was accepted', async (state, phase) => {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ response: ANSWER, confidence: 3, savedAt: Date.now() }))
+      teachingData.value = unavailableTeaching('test_open')
+      const receipt = serverCheckReceipt({ reference: 'check_ref_1', state, answer: ANSWER, confidence: 3, postSealOpportunityId: OPPORTUNITY })
+      const projection = serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase, receipt })
+      expect(projection).not.toHaveProperty('assessment')
+      const wrapper = await mountCheck({ canvas: projection })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-receipt"]').exists()).toBe(true)
+      expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull()
     })
 
     it.each([

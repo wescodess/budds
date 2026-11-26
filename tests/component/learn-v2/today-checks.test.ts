@@ -288,6 +288,23 @@ describe('Today check rows', () => {
     expect(wrapper.get('[data-testid="learn-v2-session-locked"]').exists()).toBe(true)
   })
 
+  it('keeps check rows on Today while the lesson is still pending', async () => {
+    const Page = await import(pagePath)
+    today.value = { status: 'pending', nextScheduledAt: null }
+    const wrapper = await mountSuspended(Page.default, { global: { stubs: { LearnV2CalendarProjectionCard: true } } })
+    const pending = wrapper.get('[data-testid="learn-v2-today-pending"]')
+    expect(pending.text()).toBe('TodayPreparing your study session…')
+    expect(pending.find('[data-testid="learn-v2-today-checks"]').exists()).toBe(false)
+
+    today.value = { status: 'pending', nextScheduledAt: null, checkPointers: envelope([pointer('pending_a', 'result_ready'), pointer('pending_b', 'saved_scoring'), pointer('pending_c', 'ready')]) }
+    await flushPromises()
+    const rows = wrapper.findAll('[data-testid="learn-v2-today-pending"] [data-check-reference]')
+    expect(rows.map((row: any) => row.attributes('data-check-reference'))).toEqual(['pending_a', 'pending_b', 'pending_c'])
+    expect(wrapper.get('[data-testid="learn-v2-today-pending"] [data-testid="learn-v2-check-row-result_ready"] a').attributes('href')).toBe('/app/learn/void/thread_pending_a?check=pending_a')
+    expect(wrapper.get('[data-testid="learn-v2-today-pending"] [data-testid="learn-v2-check-row-ready"] a').text()).toBe('Start check')
+    expect(wrapper.get('[data-testid="learn-v2-today-pending"]').text()).toContain('Preparing your study session…')
+  })
+
   it('passes Today pointers and the lesson lock through the page, including on an empty Today', async () => {
     const Page = await import(pagePath)
     const check = legacy('page_lock')
