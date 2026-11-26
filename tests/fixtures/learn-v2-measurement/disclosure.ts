@@ -38,6 +38,7 @@ export const disclosureProofInventory = [
   { surface: 'learnV2SessionContent.startStudySession', owner: 'C5.4 #435', tests: ['convex/learnV2TodayDelivery.test.ts', 'convex/learnV2TodayPointers.test.ts'] },
   { surface: 'learnV2SessionContent.retrySessionContentGeneration', owner: 'C5.4 #435', tests: ['convex/learnV2TodayDelivery.test.ts', 'convex/learnV2TodayPointers.test.ts'] },
   { surface: 'learnAdaptiveCanvas.attachReadySession', owner: 'C5.5 #436', tests: ['convex/learnV2CanvasContract.test.ts'] },
+  { surface: 'learnAdaptiveCanvas.startCanvasSession', owner: 'C5.5 #436', tests: ['convex/learnV2PostSealTransitions.test.ts', 'convex/learnV2Measurement.e2e.test.ts'] },
   { surface: 'learnAdaptiveCanvas.getCanvas', owner: 'C5.5 #436', tests: ['convex/learnV2CanvasContract.test.ts'] },
   { surface: 'learnAdaptiveCanvas.submitCanvasResponse', owner: 'C5.5 #436', tests: ['convex/learnV2CanvasContract.test.ts'] },
   { surface: 'learnAdaptiveCanvas.loadReadyCanvas', owner: 'C5.5 #436', tests: ['convex/learnV2CanvasContract.test.ts'] },

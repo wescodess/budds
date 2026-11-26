@@ -29,7 +29,7 @@ export async function createMeasurementLearner(input: { route: ProofRoute, scena
       sourceVersion: LEARN_V2_MEASUREMENT_REPORT_SOURCE_VERSION, sequence: 0, dueWorkThrough: null, historyCoverage: 'complete', updatedAt: PROOF_START })
   })
   const teachingContentId = await publishDeliveryTeaching(f)
-  if (input.runtime) await registerMeasurementTeaching({ ...f, userId, teachingContentId })
+  if (input.runtime || input.route === 'canvas') await registerMeasurementTeaching({ ...f, userId, teachingContentId })
   const start = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
     entryPoint: 'today' as const, idempotencyKey: 'c64_start_cold_1234567890' }
   const begun = input.route === 'canvas'
@@ -145,6 +145,67 @@ export async function teachToday(f: MeasurementLearner, setVerdict: (score: numb
   if (f.runtime) await postSealPractice(f, application, 100)
   expect(await f.t.run(ctx => ctx.db.get(f.teachingContentId))).toEqual(content)
   return result
+}
+
+export async function teachCanvas(f: MeasurementLearner, setVerdict: (score: number) => void) {
+  const content = await f.t.run(ctx => ctx.db.get(f.teachingContentId))
+  const cold = (await f.t.run(ctx => ctx.db.get(f.cold._id)))!
+  if (cold.contextPins.kind !== 'session') throw new Error('Expected dedicated Canvas cold check')
+  expect(cold.contextPins.studySessionId).not.toBe(f.graph.studySessionId)
+  const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  const request = { studySessionId: session._id, expectedSessionRevision: session.revision,
+    expectedContentRevision: 1, idempotencyKey: 'canvasstartstart' }
+  if (!cold.submissionId) {
+    expect(await f.owner.mutation(api.learnAdaptiveCanvas.startCanvasSession, request))
+      .toMatchObject({ kind: 'not_admitted', reasonCode: 'not_sealed' })
+    expect(await f.t.run(ctx => ctx.db.get(session._id))).toEqual(session)
+    expect((await f.opportunities()).filter(row => row.purpose.kind === 'independent_application')).toEqual([])
+    return null
+  }
+  const response = await f.t.run(ctx => ctx.db.get(cold.submissionId!))
+  const reference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: cold._id }
+  expect(await f.owner.query(api.learnV2Assessments.getPostSealTeaching, reference)).toMatchObject({ status: 'available',
+    feedback: { tier: 'T0' }, lesson: f.scenario.cold === 100 ? null : { tier: 'T0' } })
+  if (f.runtime) await postSealPractice(f, cold, f.scenario.cold!)
+  const attached = await f.owner.mutation(api.learnAdaptiveCanvas.startCanvasSession, request)
+  if (attached.kind !== 'attached') throw new Error(`Canvas continuation: ${JSON.stringify(attached)}`)
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.startCanvasSession, request)).toEqual({ ...attached, replayed: true })
+  expect(await f.owner.query(api.learnV2Assessments.getPostSealTeaching, reference))
+    .toMatchObject({ status: 'unavailable', reasonCode: 'test_open' })
+  const canvas = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  expect(canvas.responsePrompt).toBeTruthy()
+  const submission = { studySessionId: session._id, threadId: attached.threadId, activityId: attached.activityId,
+    expectedRevision: canvas.thread.revision, expectedSessionRevision: canvas.session.revision,
+    response: 'Separate ordinary application.', confidence: 3, idempotencyKey: 'c64_independent_key' }
+  const receipt = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, submission)
+  if (receipt.kind !== 'accepted') throw new Error(`Canvas application: ${JSON.stringify(receipt)}`)
+  const applicationResponse = await f.t.run(ctx => ctx.db.get(receipt.submissionId))
+  expect(applicationResponse).toMatchObject({ flow: 'canvas', assistanceSnapshot: { state: 'unassisted' },
+    contextPins: { kind: 'session', studySessionId: session._id, canvas: { threadId: attached.threadId } } })
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, submission)).toEqual(receipt)
+  setVerdict(100)
+  const score = { threadId: attached.threadId, activityId: attached.activityId, submissionId: receipt.submissionId,
+    idempotencyKey: 'canvasscorescore' }
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, score)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, score)).toMatchObject({ kind: 'accepted', status: 'completed' })
+  const applications = (await f.opportunities()).filter(row => row.purpose.kind === 'independent_application')
+  expect(applications).toHaveLength(1)
+  const application = applications[0]!
+  expect(application).toMatchObject({ submissionId: receipt.submissionId, phase: 'scored_pass' })
+  const basis = (await f.t.run(ctx => ctx.db.get(application.authoritativeAttemptId!)))!
+  expect(basis).toMatchObject({ kind: 'independent_application', studySessionId: session._id,
+    masteryStateAfter: 'independent', serverScorePercent: 100 })
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures')
+    .withIndex('by_userId_and_assignmentId_and_purpose_and_status_and_serverTime', q => q.eq('userId', f.userId)
+      .eq('assignmentId', cold.assignmentId).eq('purpose', 'teaching').eq('status', 'granted')).take(2)))
+    .toEqual([expect.objectContaining({ provenanceVersion: 'learn-v2.instructional-flow.v2_canvas.v1' })])
+  if (f.runtime) await postSealPractice(f, application, 100)
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.startCanvasSession, request)).toEqual({ ...attached, replayed: true })
+  expect(await f.t.run(ctx => ctx.db.get(cold._id))).toEqual(cold)
+  expect(await f.t.run(ctx => ctx.db.get(cold.submissionId!))).toEqual(response)
+  expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(applicationResponse)
+  expect(await f.t.run(ctx => ctx.db.get(f.teachingContentId))).toEqual(content)
+  return { application, basis, submissionId: receipt.submissionId }
 }
 
 export async function postSealPractice(f: MeasurementLearner, opportunity: Doc<'learnAssessmentOpportunities'>, score: number) {

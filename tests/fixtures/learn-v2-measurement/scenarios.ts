@@ -20,4 +20,5 @@ export const expectedMeasurement = {
   day30: { population: 30, pairs: 21, observed: 400 / 7, bounds: [30, 70], accepted: 27,
     dispositions: { valid_scored: 21, abandoned: 3, missing_cold: 3, assisted_contaminated: 0, scoring_pending: 3 } },
   firstCheck: { population: 30, checked: 15, failed: 6, observed: 2 / 5, bounds: [1 / 5, 7 / 10] },
+  canvasFirstCheck: { population: 27, checked: 12, failed: 6, observed: 1 / 2, bounds: [2 / 9, 7 / 9] },
 } as const

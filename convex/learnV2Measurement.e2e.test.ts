@@ -11,7 +11,6 @@ import { LEARN_REPORT_APPROVALS, reportControl } from './lib/learnV2MeasurementR
 import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { LEARN_V2_PUBLIC_API_VERSION } from './lib/learnV2PublicContract'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
-import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '../shared/learn-v2-assessment-disclosure'
 import { instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
 import { syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { sealedMeasurementReportInput } from '../tests/fixtures/learn-v2-measurement-report-run'
@@ -22,10 +21,10 @@ import { ASSESSMENT_DISCLOSURE_READS, ASSESSMENT_DISCLOSURE_OTHER_OWNERS } from 
 import { LEARN_MEASUREMENT_COLLECTIONS, LEARN_MEASUREMENT_STORAGE_MANIFEST } from '../shared/learn-v2-measurement-storage-manifest'
 import { PERSONAL_EXPORT_COLLECTIONS } from './lib/learnV2PersonalExportCollections'
 import { ADAPTIVE_ROUTING_ASSIGNMENT_UNIT, ADAPTIVE_ROUTING_ASSIGNMENT_CONTRACT_VERSION } from '../shared/learn-adaptive-experiment'
-import { ANSWER_CANARY, PROOF_START, advanceProofClock, createMeasurementLearner, postSealPractice, submitMeasurement, teachToday,
+import { ANSWER_CANARY, PROOF_START, advanceProofClock, createMeasurementLearner, postSealPractice, submitMeasurement, teachCanvas, teachToday,
   type MeasurementLearner, type ProofRoute } from '../tests/fixtures/learn-v2-measurement/commands'
 import { expectedMeasurement, measurementScenarios } from '../tests/fixtures/learn-v2-measurement/scenarios'
-import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION, learnReportFactPayloadSchema,
+import { LEARN_V2_MEASUREMENT_REPORT_QUERY_VERSION, LEARN_V2_MEASUREMENT_REPORT_VERSION, learnReportCheckSurface, learnReportFactPayloadSchema,
   buildLearningMeasurementReport, type LearnPublishedReportMetric } from '../shared/learn-v2-measurement-report'
 
 const policy = vi.hoisted(() => ({ pointers: false, protocol: null as unknown, registry: null as unknown, saved: null as unknown, legacy: null as unknown, alternate: null as unknown }))
@@ -94,15 +93,18 @@ async function cohort(route: ProofRoute) {
   const { binding } = await configure(route)
   const learners: MeasurementLearner[] = []
   for (const scenario of measurementScenarios) for (let ordinal = 0; ordinal < 3; ordinal++) {
-    const f = await createMeasurementLearner({ route, scenario, ordinal, binding, test: learners[0]?.t, runtime: route !== 'canvas' && ordinal === 0 })
+    const f = await createMeasurementLearner({ route, scenario, ordinal, binding, test: learners[0]?.t, runtime: ordinal === 0 })
     learners.push(f)
     await submitMeasurement(f, f.cold, scenario.cold, setVerdict)
   }
   const first = learners[0]!
   await advanceProofClock(first.t, first.cold.closeAt + 1)
-  if (route !== 'canvas') for (const f of learners) {
-    await teachToday(f, setVerdict)
-    if (f.ordinal === 0 && f.scenario.cold !== null) await postSealPractice(f, f.cold, f.scenario.cold)
+  for (const f of learners) {
+    if (route === 'canvas') await teachCanvas(f, setVerdict)
+    else {
+      await teachToday(f, setVerdict)
+      if (f.ordinal === 0 && f.scenario.cold !== null) await postSealPractice(f, f.cold, f.scenario.cold)
+    }
   }
   for (const horizon of [7, 30] as const) {
     const original = (await first.opportunities()).find(row => row.horizonDays === horizon)!
@@ -171,11 +173,10 @@ function assertArithmetic(cells: LearnPublishedReportMetric[], route: ProofRoute
       expect(cell.missingOutcomeBounds).toEqual({ lower: expected.bounds[0], upper: expected.bounds[1] })
     }
   }
-  if (route === 'canvas') expect(cells.filter(cell => cell.metric === 'false_mastery_next_delayed.v1')).toEqual([])
-  else for (const weighting of ['capability_episode', 'learner_sensitivity']) {
-    const expected = expectedMeasurement.firstCheck
+  for (const weighting of ['capability_episode', 'learner_sensitivity']) {
+    const expected = route === 'canvas' ? expectedMeasurement.canvasFirstCheck : expectedMeasurement.firstCheck
     const cell = cells.find(cell => cell.metric === 'false_mastery_next_delayed.v1' && cell.weighting === weighting && cell.stratum.startingBand === 'all')!
-    expect(cell.stratum).toMatchObject({ flow: 'v2_today', checkSurface: route === 'today' ? 'today' : 'canvas' })
+    expect(cell.stratum).toMatchObject({ flow: route === 'canvas' ? 'v2_canvas' : 'v2_today', checkSurface: route === 'today' ? 'today' : 'canvas' })
     expect(cell.counts).toMatchObject({ maturedClaims: expected.population, checkedClaims: expected.checked, failedClaims: expected.failed })
     expect(cell.observedValue).toBeCloseTo(expected.observed, 10)
     expect(cell.allEligibleValue).toBeNull()
@@ -200,8 +201,22 @@ function replay(input: Awaited<ReturnType<typeof sealedMeasurementReportInput>>,
 test.each(['today', 'today_canvas', 'canvas'] as const)('registered collection, scheduler, bounded report and CLI: %s', async route => {
   const learners = await cohort(route)
   const report = await snapshot(learners)
-  expect(report.input.rows.filter(row => row.kind === 'first_check_claim_v2')).toHaveLength(route === 'canvas' ? 0 : 30)
-  if (route !== 'canvas') expect(report.cells.length).toBeGreaterThan(8)
+  const claims = report.input.rows.filter(row => row.kind === 'first_check_claim_v2')
+  expect(claims).toHaveLength(route === 'canvas' ? 27 : 30)
+  expect(new Set(claims.map(row => row.claim.claimKey)).size).toBe(claims.length)
+  expect(new Set(claims.map(row => row.claim.basisAttemptId)).size).toBe(claims.length)
+  expect(new Set(claims.map(row => row.learnerKey)).size).toBe(claims.length)
+  const episodes = report.input.rows.filter(row => row.kind === 'episode')
+  expect(new Set(episodes.map(row => `${row.assignmentId}:${row.horizonDays}`)).size).toBe(60)
+  for (const row of episodes) {
+    expect(row).toMatchObject({ mixedFlow: false, assignment: { flow: route === 'canvas' ? 'v2_canvas' : 'v2_today' } })
+    expect(learnReportCheckSurface(row.assignment)).toBe(route === 'today' ? 'today' : 'canvas')
+  }
+  for (const row of claims) {
+    expect(row.stratum).toMatchObject({ flow: route === 'canvas' ? 'v2_canvas' : 'v2_today' })
+    expect(learnReportCheckSurface(row.stratum)).toBe(route === 'today' ? 'today' : 'canvas')
+  }
+  expect(report.cells.length).toBeGreaterThan(8)
   assertArithmetic(report.cells, route)
   const unpublished = await buildLearningMeasurementReport(report.input)
   expect(unpublished.report.status).toBe('sealed')
@@ -224,11 +239,9 @@ test.each(['today', 'today_canvas', 'canvas'] as const)('registered collection, 
     const episodes = report.input.rows.filter(row => row.kind === 'episode' && row.assignmentId === learner.cold.assignmentId)
     expect(episodes).toEqual(expect.arrayContaining([expect.objectContaining({ horizonDays: 7, delayed: expect.objectContaining({ scorePercent: 0 }) }),
       expect.objectContaining({ horizonDays: 30, delayed: expect.objectContaining({ scorePercent: 100 }) })]))
-    if (route !== 'canvas') {
-      const original = (await learner.opportunities()).find(row => row.horizonDays === 7)!
-      const claim = report.input.rows.find(row => row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'linked' && row.firstSlot.firstCheckOpportunityId === original._id)
-      expect(claim).toMatchObject({ firstSlot: { result: { scorePercent: 0 }, acceptance: { submissionId: learner.accepted.get(7) } } })
-    }
+    const original = (await learner.opportunities()).find(row => row.horizonDays === 7)!
+    const claim = report.input.rows.find(row => row.kind === 'first_check_claim_v2' && row.firstSlot.kind === 'linked' && row.firstSlot.firstCheckOpportunityId === original._id)
+    expect(claim).toMatchObject({ firstSlot: { result: { scorePercent: 0 }, acceptance: { submissionId: learner.accepted.get(7) } } })
   }
   const outsider = f.t.withIdentity({ tokenIdentifier: 'https://other.invalid|c64-viewer', subject: viewerIdentity.subject })
   await expect(outsider.query(api.learnV2Assessments.getAssessment, { version: LEARN_V2_PUBLIC_API_VERSION,
@@ -278,32 +291,30 @@ test('bound Today first-Independent commit persists one claim and first slot aft
     .toEqual([expect.objectContaining({ state: 'independent' })])
 })
 
-test('Canvas cold scoring cannot yet continue its original session into teaching or Independent', async () => {
+test('Canvas cold teaching and original-session continuation commit exactly one Independent claim', async () => {
   const { binding } = await configure('canvas')
   const f = await createMeasurementLearner({ route: 'canvas', binding, scenario: measurementScenarios[0], ordinal: 0, runtime: true })
-  const content = await f.t.run(ctx => ctx.db.get(f.teachingContentId))
+  const session = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
   await submitMeasurement(f, f.cold, 0, setVerdict)
-  const reference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: f.cold._id }
-  expect(await f.owner.query(api.learnV2Assessments.getPostSealTeaching, reference))
-    .toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null })
-  expect(await f.owner.mutation(api.learnV2PostSealTeaching.publishFeedback, reference))
-    .toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null })
-  expect(await f.owner.mutation(api.learnV2PostSealTeaching.openPractice, reference))
-    .toMatchObject({ status: 'available', feedback: null, lesson: null, practice: null,
-      availability: { practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' } } })
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toEqual(session)
   await advanceProofClock(f.t, f.cold.closeAt + 1)
-  await expect(f.owner.mutation(api.learnV2SessionContent.startStudySession, f.start)).rejects.toThrow('Study session is not ready')
-  const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
-  await expect(f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: session._id,
-    expectedSessionRevision: session.revision, expectedContentRevision: 1, expectedPlanRecordRevision: 1,
-    expectedBlueprintRecordRevision: 1, response: 'Separate ordinary application.', confidence: 3,
-    idempotencyKey: 'c64_independent_key' })).rejects.toThrow('Learn assessment opportunity unavailable')
+  const result = await teachCanvas(f, setVerdict)
+  if (!result) throw new Error('Expected Canvas Independent continuation')
   expect(await f.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', f.userId)).take(8)))
-    .toEqual([expect.objectContaining({ kind: 'measurement_cold' })])
-  expect((await f.opportunities()).filter(row => row.purpose.kind === 'independent_application')).toEqual([])
-  expect(await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_kind_and_sequence', q =>
-    q.eq('userId', f.userId).eq('fact.kind', 'independent_claim_v2')).take(1))).toEqual([])
-  expect(await f.t.run(ctx => ctx.db.get(f.teachingContentId))).toEqual(content)
+    .toEqual([expect.objectContaining({ kind: 'measurement_cold' }), result.basis])
+  const claims = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_kind_and_sequence', q =>
+    q.eq('userId', f.userId).eq('fact.kind', 'independent_claim_v2')).take(2))
+  expect(claims).toHaveLength(1)
+  const claim = claims[0]!.fact
+  expect(learnReportFactPayloadSchema.parse(claim)).toEqual(claim)
+  const day7 = (await f.opportunities()).find(row => row.horizonDays === 7)!
+  expect(claim).toMatchObject({ basisAttemptId: result.basis._id, stratum: { flow: 'v2_canvas', entryPoint: 'canvas' },
+    firstSlot: { kind: 'linked', firstCheckOpportunityId: day7._id, stratum: { flow: 'v2_canvas', entryPoint: 'canvas' } } })
+  if (claim.kind !== 'independent_claim_v2' || claim.firstSlot.kind !== 'linked') throw new Error('Expected fixed first slot')
+  expect(learnReportCheckSurface(claim.stratum)).toBe('canvas')
+  expect(learnReportCheckSurface(claim.firstSlot.stratum)).toBe('canvas')
+  expect(day7.firstCheckClaim).toMatchObject({ claimKey: claim.claimKey, basisAttemptId: result.basis._id, claimSequence: 1 })
+  expect(await f.t.run(ctx => ctx.db.get(f.cold.assignmentId!))).toMatchObject({ flow: 'v2_canvas', exclusionReasons: [] })
 })
 
 test('one trusted snapshot separates teaching flow, check surface and scorer, then source purge invalidates it', async () => {
@@ -375,9 +386,11 @@ test('every disclosure surface has an explicit owner and existing regression sui
   const postSeal = [...audit.matchAll(/^\| `([^`]+)` \| `post_seal_[^`]+` \|/gmu)].map(match => ({ surface: match[1]!, owner: 'C5.6 #535' }))
   expect(postSeal).toHaveLength(4)
   expect(audit).toMatch(/^\| `learnV2Today.getCheckPointers` \| `summary_or_own_work` \|/mu)
+  expect(readFileSync('docs/plans/learn-v2-c1-public-api-contract.md', 'utf8')).toContain('`learnAdaptiveCanvas.startCanvasSession`')
   const expected = [...ASSESSMENT_DISCLOSURE_READS.map(([surface]) => ({ surface, owner: 'C4.1 #429' })),
     ...Object.entries(ASSESSMENT_DISCLOSURE_OTHER_OWNERS).flatMap(([owner, surfaces]) => surfaces.map(surface => ({ owner, surface }))),
-    ...postSeal, { surface: 'learnV2Today.getCheckPointers', owner: 'C5.4 #435' }]
+    ...postSeal, { surface: 'learnV2Today.getCheckPointers', owner: 'C5.4 #435' },
+    { surface: 'learnAdaptiveCanvas.startCanvasSession', owner: 'C5.5 #436' }]
   const bySurface = <T extends { surface: string }>(rows: T[]) => rows.sort((a, b) => a.surface.localeCompare(b.surface))
   expect(bySurface(disclosureProofInventory.map(({ owner, surface }) => ({ owner, surface })))).toEqual(bySurface(expected))
   expect(new Set(disclosureProofInventory.map(row => row.surface)).size).toBe(disclosureProofInventory.length)
