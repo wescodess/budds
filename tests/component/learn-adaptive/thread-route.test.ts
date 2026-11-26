@@ -941,10 +941,13 @@ describe('adaptive thread route isolation', () => {
       mismatched.unmount()
     })
 
-    it('keeps an ordinary application check on the dev Canvas while responses are on', async () => {
+    it.each([
+      ['an ordinary application check', () => serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open', timing: null, purpose: null })],
+      ['a not-admitted measurement projection', () => serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'ready', timing: null, delivered: false })],
+    ])('keeps %s on the dev Canvas while responses are on', async (_name, value) => {
       const Page = await import(path)
       projection.value = missionThread()
-      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open', timing: null })
+      canvas.value = value()
       const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
       expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
@@ -953,6 +956,28 @@ describe('adaptive thread route isolation', () => {
       const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
       expect(shell.attributes('class')).toBe('mx-auto w-full max-w-3xl px-4 py-8 sm:px-6')
       expect(shell.get('header p').attributes('class')).toBe('text-xs font-medium uppercase tracking-wide text-primary')
+      wrapper.unmount()
+    })
+
+    it('gives a Canvas-native measurement check without Today timing the check experience', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open', timing: null, purpose: 'measurement_delayed' })
+      checkState.value = assessment('test_open')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
+      expectToolsHidden(wrapper)
+      wrapper.unmount()
+    })
+
+    it('renders a frozen-cohort receipt after rollback as a check', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      const receipt = serverCheckReceipt({ reference: 'frozen_ref', state: 'result_unconfirmed', answer: 'My saved answer', confidence: 3, timing: null, postSealOpportunityId: null })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_1', phase: 'reconciliation_required', receipt })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"]').attributes('data-receipt')).toBe('unconfirmed')
+      expectToolsHidden(wrapper)
       wrapper.unmount()
     })
 
@@ -967,7 +992,7 @@ describe('adaptive thread route isolation', () => {
       expect(recordedArgs('learnAdaptiveCanvas:getCanvas')).toEqual({ threadId: 'thread_1' })
       loading.unmount()
       canvasPending.value = false
-      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open', delivered: false })
+      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open' })
       const offCheck = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
       expect(offCheck.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
       expect(offCheck.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)

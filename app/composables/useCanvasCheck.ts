@@ -4,7 +4,7 @@ import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAda
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
-import { LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_TIMINGS, learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
+import { LEARN_CANVAS_ASSESSMENT_PURPOSES, LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_TIMINGS, learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '~~/shared/learn-v2-measurement-storage-manifest'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
@@ -13,8 +13,15 @@ const MAX_ANSWER_LENGTH = 12_000
 const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
 export type CanvasCheckTiming = typeof LEARN_TODAY_CHECK_TIMINGS[number]
-export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming }
-type CanvasCheckProjection = { assessment?: { assessmentOpportunityId: string, checkTiming?: unknown } | null, checkReceipt?: unknown } | null | undefined
+export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming | null }
+type CanvasCheckProjection = {
+  assessment?: { assessmentOpportunityId: string, checkTiming?: unknown, assessmentPurpose?: unknown, reasonCode?: string | null, observations?: unknown } | null
+  checkReceipt?: unknown
+} | null | undefined
+
+function measurementPurpose(value: unknown) {
+  return typeof value === 'string' && (LEARN_CANVAS_ASSESSMENT_PURPOSES as readonly string[]).includes(value)
+}
 
 function checkTiming(value: unknown): CanvasCheckTiming | null {
   if (!value || typeof value !== 'object') return null
@@ -35,9 +42,12 @@ export function canvasCheckBinding(canvas: CanvasCheckProjection): CanvasCheckBi
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !canvas) return null
   const receipt = canvas.checkReceipt === undefined ? null : parseReceipt(canvas.checkReceipt)
   if (canvas.checkReceipt !== undefined && !receipt) return null
-  const timing = checkTiming(canvas.assessment?.checkTiming) ?? receipt?.checkTiming?.timing ?? null
-  if (!timing) return null
-  const assessmentOpportunityId = canvas.assessment?.assessmentOpportunityId ?? null
+  const assessment = canvas.assessment ?? null
+  if (!measurementPurpose(assessment?.assessmentPurpose ?? receipt?.assessmentPurpose)) return null
+  const delivered = Boolean(receipt) || (assessment !== null && assessment.reasonCode !== 'not_admitted' && assessment.observations === undefined)
+  if (!delivered) return null
+  const timing = checkTiming(assessment?.checkTiming) ?? receipt?.checkTiming?.timing ?? null
+  const assessmentOpportunityId = assessment?.assessmentOpportunityId ?? null
   return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt, timing } : null
 }
 

@@ -1164,17 +1164,59 @@ describe('Canvas check', () => {
     })
 
     it.each([
-      ['an ordinary application check', null],
-      ['a projection with malformed timing', { version: 'learn-v2.canvas-check-timing.v0', timing: 'about_a_week' }],
-    ])('keeps the dev Canvas for %s and reads no check state', async (_name, checkTiming) => {
-      const { checkTiming: _timing, ...assessment } = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null }).assessment
-      const projection = canvas({ assessment: checkTiming ? { ...assessment, checkTiming } : assessment })
-      const wrapper = await mountCheck({ canvas: projection })
+      ['an ordinary application check', () => serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null, purpose: null })],
+      ['a not-admitted projection that carries a measurement purpose', () => serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', timing: null, delivered: false })],
+      ['a receipt without a measurement purpose', () => serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'invalid', receipt: serverCheckReceipt({ reference: 'r', state: 'closed', answer: ANSWER, purpose: null, timing: null, postSealOpportunityId: null }) })],
+    ])('keeps the dev Canvas for %s and reads no check state', async (_name, projection) => {
+      const wrapper = await mountCheck({ canvas: projection() })
       expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
       expect(wrapper.text()).not.toMatch(/A check on/)
       expect(subscribed('getAssessmentState')).toBe(false)
       expect(subscribed('getPostSealTeaching')).toBe(false)
+    })
+
+    it.each(['measurement_cold', 'measurement_delayed', 'retained_transfer'] as const)('gives a Canvas-native %s check the check experience without Today timing', async (purpose) => {
+      const projection = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null, purpose })
+      expect(projection.assessment).not.toHaveProperty('checkTiming')
+      const wrapper = await mountCheck({ canvas: projection })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="learn-canvas-check-question"]').text()).toContain('Explain why both results make sense.')
+      expect(wrapper.text()).not.toMatch(/measurement|retained|transfer|cold|delayed/i)
+    })
+
+    it.each([
+      ['no timing', null],
+      ['malformed timing', { version: 'learn-v2.canvas-check-timing.v0', timing: 'about_a_week' }],
+    ])('uses the generic heading for a measurement check with %s', async (_name, checkTiming) => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const { checkTiming: _timing, ...assessment } = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null }).assessment
+      const wrapper = await mountCheck({ canvas: canvas({ assessment: checkTiming ? { ...assessment, checkTiming } : assessment }) })
+      const entry = wrapper.get('[data-testid="learn-canvas-check-entry"]')
+      expect(entry.get('h2').text()).toBe('A check on an earlier topic')
+      expect(entry.attributes('aria-labelledby')).toBe(entry.get('h2').attributes('id'))
+    })
+
+    it.each([
+      ['saved_scoring', 'saved'],
+      ['result_unconfirmed', 'unconfirmed'],
+      ['closed', 'invalid'],
+    ] as const)('renders a frozen-cohort %s receipt after rollback as a check, with no post-seal reads', async (state, kind) => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = null
+      teachingData.value = null
+      const receipt = serverCheckReceipt({ reference: 'frozen_ref', state, answer: ANSWER, confidence: 3, timing: null, postSealOpportunityId: null })
+      expect(receipt).not.toHaveProperty('checkTiming')
+      expect(receipt).not.toHaveProperty('postSealReference')
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'scoring_pending', receipt }) })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
+      expect(receiptKind(wrapper)).toBe(kind)
+      expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain(ANSWER)
+      if (state !== 'saved_scoring') {
+        expect(subscribed('getAssessmentState')).toBe(false)
+        expect(subscribed('getPostSealTeaching')).toBe(false)
+      }
     })
 
     it('opens practice from an unconfirmed receipt through its post-seal reference only', async () => {

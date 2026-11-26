@@ -85,7 +85,7 @@ const entryHeadings = {
   earlier: 'A check on an earlier topic',
   retained: 'A check on an earlier topic',
 } as const
-const entryHeading = computed(() => entryHeadings[props.binding.timing] ?? entryHeadings.earlier)
+const entryHeading = computed(() => (props.binding.timing && entryHeadings[props.binding.timing]) || entryHeadings.earlier)
 
 const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 const savedAtLabel = computed(() => receipt.value?.acceptedAt ? savedAtFormat.format(receipt.value.acceptedAt) : null)
