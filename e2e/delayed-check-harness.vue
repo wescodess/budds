@@ -17,7 +17,7 @@ useHead({ title: 'Delayed check fixture', htmlAttrs: { lang: 'en' } })
 // components render unchanged; a local client answers their reads and commands.
 const states = [
   'today-locked', 'today-saved', 'today-unconfirmed', 'today-result-ready', 'today-closed',
-  'entry', 'entry-refused', 'open', 'rejected', 'restored', 'save-failed', 'pending', 'help-limit', 'scoring-failed',
+  'entry', 'entry-refused', 'open', 'rejected', 'restored', 'save-failed', 'pending', 'help-limit', 'practice-submitted', 'scoring-failed',
   'unconfirmed', 'invalid', 'passed', 'publishing', 'not-yet', 'unavailable',
 ] as const
 type State = typeof states[number]
@@ -100,9 +100,18 @@ const lesson = { tier: 'T0', citations: [SOURCE], paragraphs: [
   'Every enzyme has a temperature range where its shape holds and its active site fits the substrate. Inside that range, warming speeds the reaction because molecules collide more often. Past the top of the range, the bonds holding the shape break, the active site deforms, and activity falls fast.',
   'Where that range sits depends on where the organism lives. Enzymes from hot springs hold their shape far above body temperature; enzymes from cold-water fish start to unfold at temperatures we would call mild.',
 ] }
+const practiceSlot = (accepted: boolean) => ({
+  version: 'learn-v2.public-api.v1', status: 'available', target: { responseSlotId: PRACTICE.responseSlotId }, revision: accepted ? 2 : 1,
+  state: accepted ? 'accepted' : 'open',
+  work: accepted ? learnAttemptHistorySchema.parse({
+    version: LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, submissionId: 'fixture_practice_submission', acceptedAt: ACCEPTED_AT + 120_000, assistanceSnapshot,
+    validitySnapshot: validSnapshot, currentEligibility: 'eligible', result: null,
+    body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'Each enzyme’s best temperature matches where its organism lives.' } },
+  }) : null,
+})
 const practiceTeaching = (feedbackState: string, help?: unknown) => teaching({ feedbackState, practiceState: 'available', practice: PRACTICE, help })
 
-type CanvasFixture = { binding: CanvasCheckBinding, queries: Record<string, unknown>, attach?: unknown, offline?: boolean }
+type CanvasFixture = { binding: CanvasCheckBinding, queries: Record<string, unknown>, attach?: unknown, offline?: boolean, practiceAccepted?: boolean }
 const delivered: CanvasCheckBinding = { assessmentOpportunityId: OPPORTUNITY, receipt: null, timing: 'about_a_week', start: null }
 const awaiting: CanvasCheckBinding = { ...delivered, start: { studySessionId: 'fixture_session', expectedSessionRevision: 2 } }
 const readyState = assessmentState('ready', 1, null, capabilities({ canDeliver: true }))
@@ -118,6 +127,7 @@ const canvasFixtures: Partial<Record<State, CanvasFixture>> = {
   'pending': { binding: delivered, queries: { getAssessmentState: assessmentState('scoring_pending', 3, SUBMISSION, sealedCaps), getResponseState: work(), getPostSealTeaching: practiceTeaching('scoring_pending') } },
   'help-limit': { binding: delivered, queries: { getAssessmentState: assessmentState('scoring_pending', 3, SUBMISSION, sealedCaps), getResponseState: work(),
     getPostSealTeaching: practiceTeaching('scoring_pending', { remaining: 0, hint: { status: 'unavailable', reasonCode: 'help_limit_reached' }, worked_example: { status: 'delivered' } }) } },
+  'practice-submitted': { binding: delivered, practiceAccepted: true, queries: { getAssessmentState: assessmentState('scoring_pending', 3, SUBMISSION, sealedCaps), getResponseState: work(), getPostSealTeaching: practiceTeaching('scoring_pending') } },
   'scoring-failed': { binding: delivered, queries: { getAssessmentState: assessmentState('retryable_failure', 3, SUBMISSION, sealedCaps), getResponseState: work(), getPostSealTeaching: practiceTeaching('scoring_pending') } },
   'unconfirmed': { binding: delivered, queries: { getAssessmentState: assessmentState('reconciliation_required', 3, SUBMISSION, sealedCaps), getResponseState: work(), getPostSealTeaching: practiceTeaching('scoring_pending') } },
   'invalid': { binding: delivered, queries: { getAssessmentState: assessmentState('invalid', 3, SUBMISSION, sealedCaps), getResponseState: work({ excluded: true }), getPostSealTeaching: practiceTeaching('unavailable') } },
@@ -143,8 +153,9 @@ const expected: Record<State, string> = {
   'rejected': '[data-testid=learn-canvas-check-answer-error]',
   'restored': '[data-testid=learn-canvas-check-restored]',
   'save-failed': '[data-testid=learn-canvas-check-submit-error]',
-  'pending': '[data-testid=learn-canvas-check-practice]',
+  'pending': '[data-testid=learn-canvas-check-practice] [data-testid=learn-canvas-check-practice-answer]',
   'help-limit': '[data-testid=learn-canvas-check-help-limit]',
+  'practice-submitted': '[data-testid=learn-canvas-check-practice-saved]',
   'scoring-failed': '[data-testid=learn-canvas-check-practice-collapsed]',
   'unconfirmed': '[data-testid=learn-canvas-check-practice-collapsed]',
   'invalid': '[data-testid=learn-canvas-check-receipt][data-receipt=invalid]',
@@ -154,8 +165,9 @@ const expected: Record<State, string> = {
   'unavailable': '[data-testid=learn-canvas-check-unavailable]',
 }
 
-function queryValue(name: string) {
+function queryValue(name: string, args?: unknown) {
   if (!canvasFixture) return null
+  if (name.endsWith(':getResponseState') && (args as { target?: { responseSlotId?: string } } | undefined)?.target?.responseSlotId) return practiceSlot(canvasFixture.practiceAccepted === true)
   const key = Object.keys(canvasFixture.queries).find(suffix => name.endsWith(`:${suffix}`))
   return key ? canvasFixture.queries[key] : null
 }
@@ -165,14 +177,14 @@ function command(name: string) {
   throw new Error(`Delayed check fixture does not dispatch ${name}`)
 }
 const fixtureClient = {
-  onUpdate(query: never, _args: unknown, onValue: (value: unknown) => void) {
-    const value = queryValue(getFunctionName(query))
+  onUpdate(query: never, args: unknown, onValue: (value: unknown) => void) {
+    const value = queryValue(getFunctionName(query), args)
     queueMicrotask(() => onValue(value))
     return () => {}
   },
   mutation: async (reference: never) => command(getFunctionName(reference)),
   action: async (reference: never) => command(getFunctionName(reference)),
-  query: async (query: never) => queryValue(getFunctionName(query)),
+  query: async (query: never, args: unknown) => queryValue(getFunctionName(query), args),
   client: { localQueryResult: () => undefined },
 }
 if (import.meta.client) {

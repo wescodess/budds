@@ -170,6 +170,16 @@ describe('Today check rows', () => {
     expect(wrapper.find('[data-testid="learn-v2-check-header"]').exists()).toBe(false)
   })
 
+  it('names the waiting state in foreground text and keeps other row details muted', async () => {
+    const states = ['ready', 'saved_scoring', 'result_unconfirmed', 'result_ready', 'closed'] as const
+    const wrapper = await mountChecks({ envelope: envelope(states.map(state => pointer(`ref_${state}`, state))) })
+    for (const state of states) {
+      const body = wrapper.get(`[data-testid="learn-v2-check-row-${state}"] p:last-of-type`)
+      expect(body.classes()).toContain(state === 'saved_scoring' ? 'text-foreground' : 'text-muted-foreground')
+    }
+    expect(wrapper.get('[data-testid="learn-v2-check-row-saved_scoring"] p:last-of-type').text()).toBe('Getting your result.')
+  })
+
   it('shows no row without a check, and drops malformed or foreign-route pointers', async () => {
     const empty = await mountChecks({ envelope: envelope([]) })
     expect(empty.find('[data-testid="learn-v2-today-checks"]').exists()).toBe(false)

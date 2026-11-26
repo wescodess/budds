@@ -39,7 +39,7 @@ const textLink = 'inline-flex min-h-11 items-center gap-1 rounded-sm text-sm fon
       <div class="min-w-0">
         <p :id="`${id}-title`" class="font-medium text-foreground">{{ row.title }}</p>
         <p v-if="topic" :id="`${id}-topic`" data-testid="learn-v2-check-row-topic" class="text-sm leading-6 text-foreground">{{ topic }}</p>
-        <p class="text-sm leading-6 text-muted-foreground">{{ row.body }}</p>
+        <p :class="['text-sm leading-6', pointer.state === 'saved_scoring' ? 'text-foreground' : 'text-muted-foreground']">{{ row.body }}</p>
       </div>
     </div>
     <NuxtLink :to data-testid="learn-v2-check-row-link" :aria-describedby="topic ? `${id}-title ${id}-topic` : `${id}-title`" :class="pointer.state === 'ready' ? startClass : textLink">

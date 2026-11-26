@@ -122,6 +122,19 @@ async function onSubmit() {
   else if (confidenceMissing.value) confidenceChoices.value[0]?.focus()
 }
 
+function tailIndex(text: string) {
+  const at = text.trimEnd().search(/\S+$/u)
+  return at < 0 ? text.length : at
+}
+
+function textHead(text: string) {
+  return text.slice(0, tailIndex(text))
+}
+
+function textTail(text: string) {
+  return text.trimEnd().slice(tailIndex(text))
+}
+
 function inspectCitation(event: MouseEvent) {
   if (event.currentTarget instanceof HTMLButtonElement) emit('inspectEvidence', event.currentTarget)
 }
@@ -151,7 +164,7 @@ async function openPractice() {
 
     <section v-else-if="view.kind === 'entry'" data-testid="learn-canvas-check-entry" :aria-labelledby="`${id}-entry`" :class="card">
       <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">{{ entryHeading }}</h2>
-      <p class="mt-2 max-w-xl text-[15px] leading-7 text-muted-foreground">You’ll get one question you haven’t seen. Answer on your own. Once you submit, your answer is locked, practice opens right away, and your result arrives on this page.</p>
+      <p v-if="!startRefused" class="mt-2 max-w-xl text-[15px] leading-7 text-muted-foreground">You’ll get one question you haven’t seen. Answer on your own. Once you submit, your answer is locked, practice opens right away, and your result arrives on this page.</p>
       <div class="mt-6 flex flex-wrap gap-3">
         <button v-if="!startRefused" type="button" data-testid="learn-canvas-check-start" :disabled="busy || !isOnline" :class="primaryAction" @click="onStart">Start check<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
         <button type="button" data-testid="learn-canvas-check-leave" :class="textLink" @click="emit('leave')">Back to Learn</button>
@@ -196,7 +209,7 @@ async function openPractice() {
           <component :is="receiptCopy.icon" :class="['mt-1 h-5 w-5 shrink-0', receiptCopy.iconClass]" aria-hidden="true" />
           <div class="min-w-0 flex-1" role="status">
             <h2 :id="`${id}-receipt`" ref="receiptHeading" tabindex="-1" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">{{ receiptCopy.title }}</h2>
-            <div v-if="receipt.receipt === 'saved'" class="mt-1 text-sm leading-6 text-muted-foreground"><span class="flex items-center gap-2"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting your result. It will appear here.</span></div>
+            <div v-if="receipt.receipt === 'saved'" class="mt-1 text-sm leading-6 text-foreground"><span class="flex items-center gap-2"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting your result. It will appear here.</span></div>
             <div v-else-if="receiptBody" class="mt-1 text-sm leading-6 text-muted-foreground">{{ receiptBody }}</div>
           </div>
         </div>
@@ -214,10 +227,10 @@ async function openPractice() {
           </template>
           <template v-if="feedback">
             <p data-testid="learn-canvas-check-feedback-caption" class="mt-4 font-inter text-xs font-medium text-muted-foreground">Feedback on your answer<template v-if="feedback.tier === 'T1'"> · <span data-testid="learn-canvas-check-feedback-label" class="text-foreground">from the web, not yet verified</span></template></p>
-            <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ feedback.text }}<button v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
+            <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(feedback.text) }}<span class="whitespace-nowrap">{{ textTail(feedback.text) }}<button v-for="(citation, index) in feedback.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></span><button v-for="(citation, index) in feedback.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 2 }}</button></p>
             <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
           </template>
-          <p v-else-if="feedbackPublishing" role="status" data-testid="learn-canvas-check-feedback-publishing" class="mt-4 flex items-center gap-2 text-sm leading-6 text-muted-foreground"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting feedback on your answer.</p>
+          <p v-else-if="feedbackPublishing" role="status" data-testid="learn-canvas-check-feedback-publishing" class="mt-4 flex items-center gap-2 text-sm leading-6 text-foreground"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting feedback on your answer.</p>
         </div>
         <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('leave')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
         <div v-if="lessonUnavailable" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button></div>
@@ -226,7 +239,7 @@ async function openPractice() {
       <section v-if="lesson" data-testid="learn-canvas-check-lesson" :aria-labelledby="`${id}-lesson`" :class="card">
         <h2 :id="`${id}-lesson`" class="font-dm-sans text-lg font-semibold text-foreground">Let’s rebuild the missing part</h2>
         <p v-if="lesson.tier === 'T1'" data-testid="learn-canvas-check-lesson-label" class="mt-1 font-inter text-xs font-medium text-foreground">From the web, not yet verified</p>
-        <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ paragraph }}<button v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></p>
+        <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(paragraph) }}<span class="whitespace-nowrap">{{ textTail(paragraph) }}<button v-for="(citation, index) in lesson.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></span><button v-for="(citation, index) in lesson.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 2 }}</button></p>
         <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
         <div class="mt-5 flex flex-wrap items-center gap-3">
           <button v-if="practiceOffered && !showFullPractice" type="button" data-testid="learn-canvas-check-try-practice" :disabled="practiceOpening || !isOnline" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>

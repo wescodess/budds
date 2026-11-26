@@ -269,6 +269,7 @@ describe('Canvas check', () => {
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-start-error"]').exists()).toBe(true))
       expect(wrapper.get('[data-testid="learn-canvas-check-start-error"]').text()).toBe('Could not start this session. Try again.')
       expect(wrapper.text()).not.toContain('This check isn’t available right now.')
+      expect(wrapper.text()).toContain('You’ll get one question')
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
       await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2))
       expect(attach.mock.calls[1]![0].idempotencyKey).toBe(attach.mock.calls[0]![0].idempotencyKey)
@@ -282,6 +283,8 @@ describe('Canvas check', () => {
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-start-error"]').exists()).toBe(true))
       expect(wrapper.get('[data-testid="learn-canvas-check-start-error"]').text()).toBe('This check isn’t available right now.')
       expect(wrapper.text()).not.toContain('Try again')
+      expect(wrapper.text()).not.toContain('You’ll get one question')
+      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on this topic')
       expect(wrapper.find('[data-testid="learn-canvas-check-start"]').exists()).toBe(false)
       expect(wrapper.get('[data-testid="learn-canvas-check-entry"] [data-testid="learn-canvas-check-leave"]').text()).toBe('Back to Learn')
       expect(wrapper.text()).not.toContain(reasonCode)
@@ -1450,6 +1453,49 @@ describe('Canvas check', () => {
       expect(receiptKind(wrapper)).toBe('unconfirmed')
       expect(subscribed('getPostSealTeaching')).toBe(false)
       expect(wrapper.find('[data-testid="learn-canvas-check-practice-collapsed"]').exists()).toBe(false)
+    })
+  })
+
+  describe('status text and citations', () => {
+    it('names the waiting state in foreground text beside the warning spinner', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      const line = wrapper.get('[data-testid="learn-canvas-check-receipt"] [role="status"] > div')
+      expect(line.text()).toBe('Getting your result. It will appear here.')
+      expect(line.classes()).toContain('text-foreground')
+      expect(line.classes()).not.toContain('text-muted-foreground')
+      expect(line.get('svg').classes()).toContain('text-[var(--learn-attention)]')
+    })
+
+    it('names feedback publishing in foreground text beside the warning spinner', async () => {
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
+      publishFeedbackCommand.mockImplementation(async () => teachingData.value)
+      const wrapper = await mountCheck()
+      const line = wrapper.get('[data-testid="learn-canvas-check-feedback-publishing"]')
+      expect(line.classes()).toContain('text-foreground')
+      expect(line.classes()).not.toContain('text-muted-foreground')
+      expect(line.get('svg').classes()).toContain('text-[var(--learn-attention)]')
+    })
+
+    it('keeps each first citation badge attached to the word before it', async () => {
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      const extra = { sourceRef: 'source_2', label: 'Lab handout' }
+      teachingData.value = teachingAvailable({ feedback: { ...feedback, text: 'You explained both results.  ', citations: [feedback.citations[0], extra] }, lesson: { ...lesson, citations: [lesson.citations[0], extra] } })
+      const wrapper = await mountCheck()
+      const paragraph = wrapper.get('[data-testid="learn-canvas-check-feedback"]')
+      const joined = paragraph.get('span.whitespace-nowrap')
+      expect(joined.text()).toBe('results.1')
+      expect(joined.get('button').attributes('aria-label')).toBe('Source 1: Biology notes')
+      expect(paragraph.findAll('button').map(button => button.attributes('aria-label'))).toEqual(['Source 1: Biology notes', 'Source 2: Lab handout'])
+      expect(paragraph.text()).toBe('You explained both results.12')
+      const lessonJoined = wrapper.get('[data-testid="learn-canvas-check-lesson"] span.whitespace-nowrap')
+      expect(lessonJoined.text()).toBe('range.1')
+      expect(wrapper.get('[data-testid="learn-canvas-check-lesson"]').text()).toContain('Every enzyme has a range.12')
     })
   })
 
