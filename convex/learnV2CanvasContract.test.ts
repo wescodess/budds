@@ -785,7 +785,7 @@ async function purposeFixture(kind: 'measurement_cold' | 'measurement_delayed' |
 test.each([
   ['independent_application', null], ['measurement_cold', 'this_session'],
   ['measurement_delayed', 'earlier'], ['retained_transfer', 'retained'],
-] as const)('Canvas timing is limited to measurement purposes: %s', async (kind, timing) => {
+] as const)('Canvas purpose and timing are limited to measurement purposes: %s', async (kind, timing) => {
   const s = await purposeFixture(kind)
   policy.todayCanvasChecks = true
   const args = { threadId: s.stage.threadId }
@@ -793,11 +793,26 @@ test.each([
   expect(canvas).toMatchObject({ status: 'started', responsePrompt: s.prompt, assessment: { phase: 'test_open' } })
   if (timing === null) expect(canvas?.assessment).not.toHaveProperty('checkTiming')
   else expect(canvas?.assessment?.checkTiming).toEqual({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing })
+  if (timing === null) expect(canvas?.assessment).not.toHaveProperty('assessmentPurpose')
+  else expect(canvas?.assessment?.assessmentPurpose).toBe(kind)
   const delivered = await s.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { ...args, idempotencyKey: 'canvas_purpose_timing_1234567890' })
   expect(delivered.value?.assessment).toEqual(canvas?.assessment)
   policy.todayCanvasChecks = false
   const off = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, args)
   expect(off?.assessment).not.toHaveProperty('checkTiming')
+  if (timing === null) expect(off?.assessment).not.toHaveProperty('assessmentPurpose')
+  else expect(off?.assessment?.assessmentPurpose).toBe(kind)
+  const offDelivery = await s.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { ...args, idempotencyKey: 'canvas_purpose_off_1234567890' })
+  expect(offDelivery.value?.assessment).toEqual(off?.assessment)
+  policy.responses = false
+  for (const todayCanvasChecks of [false, true]) {
+    policy.todayCanvasChecks = todayCanvasChecks
+    const disabled = await s.owner.query(api.learnAdaptiveCanvas.getCanvas, args)
+    expect(disabled?.assessment).not.toHaveProperty('assessmentPurpose')
+    expect(disabled?.checkReceipt).toBeUndefined()
+    const disabledDelivery = await s.owner.mutation(api.learnAdaptiveCanvas.getCanvasDelivery, { ...args, idempotencyKey: `canvas_purpose_disabled_${todayCanvasChecks}_1234567890` })
+    expect(disabledDelivery.value).toEqual(disabled)
+  }
 })
 
 test.each((['measurement_cold', 'measurement_delayed', 'retained_transfer', 'independent_application'] as const).flatMap(kind => [true, false].map(awarded => ({ kind, awarded }))))('registered $kind Canvas attach/read/stage/score/replay with awarded=$awarded shares one canonical result', async ({ kind, awarded }) => {

@@ -170,10 +170,27 @@ retain separate-case practice, while evidence loss, relevant open checks,
 revocation or failed separation deny content. Lessons and hints still require a
 valid scored failure; worked examples retain the separate-practice gate.
 
-Neither extension is emitted with `todayCanvasChecks` off, including frozen
-Canvas recovery receipts, and responses off retains its existing path. No
+Neither `checkTiming` nor `postSealReference` is emitted with `todayCanvasChecks`
+off, including frozen Canvas recovery receipts, and responses off retains its existing path. No
 additional timing reads run in the off state. Today v1 pointers and C4 goldens
 are unchanged. These fields introduce no storage, grant, authority or UI change.
+
+Canvas `assessment` (from both question and saved-check reads) and `checkReceipt`
+also carry the optional additive field:
+
+```ts
+assessmentPurpose?: 'measurement_cold' | 'measurement_delayed' | 'retained_transfer'
+```
+
+It copies `opportunity.purpose.kind` only for these three purposes whenever the
+responses capability is on, independently of `todayCanvasChecks`. This includes
+Canvas-native checks with `todayCanvasChecks` off and frozen-cohort recovery
+receipts after rollback, including closed or unconfirmed receipts that omit
+`assessment`. `independent_application` and every other purpose omit the field;
+responses off omits it everywhere and preserves the existing off-state shape.
+The field carries no timing, content or authority and grants no delivery,
+scoring or post-seal access. Existing envelope versions and C4 goldens remain
+unchanged.
 
 Argument and return validators live in `convex/lib/learnV2PublicContract.ts`. They are importable by application and server adapters and contain no private scorer or source loader. Existing shared schemas supply semantic validation, including original-envelope bytes, finite numbers, exact response text, code-unit limits and URL-safe command keys. Invalid wire input produces a bounded generic error. The new public functions accept no owner, cohort, scorer, phase, trusted grant object or draft payload.
 

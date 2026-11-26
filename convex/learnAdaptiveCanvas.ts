@@ -741,6 +741,14 @@ async function canvasPilotAllowed(userId: string, scope: NonNullable<Awaited<Ret
     activity.evaluationContract.version, canvas.pilotConfigurationVersion))
 }
 
+function canvasAssessmentPurpose(opportunity: Doc<'learnAssessmentOpportunities'>) {
+  const kind = opportunity.purpose.kind
+  if (LEARN_MEASUREMENT_CAPABILITIES.responses && (kind === 'measurement_cold' || kind === 'measurement_delayed' || kind === 'retained_transfer')) {
+    return { assessmentPurpose: kind }
+  }
+  return {}
+}
+
 async function savedCanvasCheckForOwner(ctx: QueryCtx | MutationCtx, userId: string, opportunity: Doc<'learnAssessmentOpportunities'>) {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || opportunity.userId !== userId || !opportunity.submissionId
     || opportunity.contextPins.kind !== 'session' || !opportunity.contextPins.canvas
@@ -812,6 +820,7 @@ async function savedCanvasCheckForOwner(ctx: QueryCtx | MutationCtx, userId: str
       if (state === 'result_ready' && saved?.status === 'scored') result = saved.result
     }
     const receipt = learnCanvasCheckReceiptSchema.parse({ version: LEARN_CANVAS_CHECK_RECEIPT_VERSION,
+      ...canvasAssessmentPurpose(opportunity),
       reference: opportunity.delayedCheckId, state, submissionId: response._id, acceptedAt: response.acceptedAt,
       ...(confidence === undefined ? {} : { confidence }), ...(result === undefined ? {} : { result }), body })
     return { thread, response, opportunity, receipt }
@@ -935,7 +944,8 @@ type CanvasProjection = Omit<LegacyCanvasProjection, 'session'> & {
   responseSpec?: Extract<LearnV2AssessmentDelivery, { status: 'delivered' }>['responseSpec'] | null,
   assessment?: { assessmentOpportunityId: Id<'learnAssessmentOpportunities'>, phase: Doc<'learnAssessmentOpportunities'>['phase'], revision: number,
     submissionId: Id<'learnResponses'> | null, bodyAvailability: string, currentEligibility: string,
-    reasonCode: string | null, observations?: 'no_observations', checkTiming?: LearnCanvasCheckTiming },
+    reasonCode: string | null, observations?: 'no_observations', checkTiming?: LearnCanvasCheckTiming,
+    assessmentPurpose?: LearnCanvasCheckReceipt['assessmentPurpose'] },
 }
 
 function assessmentPrimitive(prompt: string | undefined) {
@@ -957,8 +967,10 @@ async function loadSavedCheckCanvas(ctx: QueryCtx | MutationCtx, userId: string,
   ])
   if (!owner) return null
   const timing = await canvasCheckTiming(ctx, userId, opportunity)
+  const assessmentPurpose = canvasAssessmentPurpose(opportunity)
   const baseReceipt = options.includeSavedResponse === false ? learnCanvasCheckReceiptSchema.parse({
     version: saved.receipt.version, reference: saved.receipt.reference, state: saved.receipt.state,
+    ...assessmentPurpose,
     submissionId: response._id, acceptedAt: response.acceptedAt,
     ...(saved.receipt.state === 'result_ready' ? { result: saved.receipt.result } : {}),
     body: { bodyAvailability: 'unavailable', reasonCode: 'evidence_unavailable' },
@@ -994,7 +1006,7 @@ async function loadSavedCheckCanvas(ctx: QueryCtx | MutationCtx, userId: string,
     savedResponse: receipt.confidence !== undefined && (payload?.kind === 'text' || payload?.kind === 'source_comparison')
       ? { response: payload.kind === 'text' ? payload.text : encodeSourceComparisonResponse(payload.sourceRef, payload.comparison), confidence: receipt.confidence } : null,
     ...(!recoverable ? { assessment: { assessmentOpportunityId: opportunity._id, phase: opportunity.phase, revision: opportunity.revision,
-      submissionId: response._id, bodyAvailability: receipt.body.bodyAvailability, currentEligibility: response.currentEligibility, reasonCode: null, ...timing } } : {}),
+      submissionId: response._id, bodyAvailability: receipt.body.bodyAvailability, currentEligibility: response.currentEligibility, reasonCode: null, ...timing, ...assessmentPurpose } } : {}),
   }
 }
 
@@ -1041,6 +1053,7 @@ async function loadAssessmentCanvas(ctx: QueryCtx | MutationCtx, userId: string,
     savedResponse: work?.confidence !== undefined && (payload?.kind === 'text' || payload?.kind === 'source_comparison')
       ? { response: payload.kind === 'text' ? payload.text : encodeSourceComparisonResponse(payload.sourceRef, payload.comparison), confidence: work.confidence } : null,
     assessment: { assessmentOpportunityId: opportunity._id, phase: opportunity.phase, revision: opportunity.revision,
+      ...canvasAssessmentPurpose(opportunity),
       ...await canvasCheckTiming(ctx, userId, opportunity),
       submissionId: opportunity.submissionId ?? null, bodyAvailability: work?.body.bodyAvailability ?? 'unavailable',
       currentEligibility: work?.currentEligibility ?? 'unknown', reasonCode: delivered ? opportunity.reasonCode ?? null : 'not_admitted',
