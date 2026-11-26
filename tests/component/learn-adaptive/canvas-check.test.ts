@@ -7,6 +7,7 @@ import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VER
 import { LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, learnAssessmentCapabilitiesSchema, type LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
 import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
 import { serverAssessmentCanvas, serverCheckReceipt, serverSavedCheckCanvas } from '../support/canvas-check-projection'
+import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 
 vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
   const actual = await importOriginal<typeof import('#shared/learn-v2-measurement-storage-manifest')>()
@@ -231,20 +232,53 @@ describe('Canvas check', () => {
       expect(wrapper.get('[data-testid="learn-canvas-check-question"]').text()).toContain('Explain why both results make sense.')
     })
 
-    it('keeps the attach key on an ambiguous start failure and rotates it after a definite denial', async () => {
+    it('keeps Start and its key after an ambiguous failure', async () => {
       stateData.value = ready()
       attach.mockRejectedValueOnce(new Error('network'))
-        .mockResolvedValueOnce({ kind: 'not_admitted', reasonCode: 'session_unavailable', observations: 'no_observations' })
       const wrapper = await mountCheck({ canvas: awaiting() })
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-start-error"]').exists()).toBe(true))
       expect(wrapper.get('[data-testid="learn-canvas-check-start-error"]').text()).toBe('Could not start this session. Try again.')
+      expect(wrapper.text()).not.toContain('This check isn’t available right now.')
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
       await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2))
       expect(attach.mock.calls[1]![0].idempotencyKey).toBe(attach.mock.calls[0]![0].idempotencyKey)
+    })
+
+    it.each(['outside_window', 'canvas_not_admitted', 'session_unavailable'])('treats a %s refusal as final for this view, leaving a way out', async (reasonCode) => {
+      stateData.value = ready()
+      attach.mockResolvedValueOnce({ kind: 'not_admitted', reasonCode, observations: 'no_observations' })
+      const wrapper = await mountCheck({ canvas: awaiting() })
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
-      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(3))
-      expect(attach.mock.calls[2]![0].idempotencyKey).not.toBe(attach.mock.calls[1]![0].idempotencyKey)
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-start-error"]').exists()).toBe(true))
+      expect(wrapper.get('[data-testid="learn-canvas-check-start-error"]').text()).toBe('This check isn’t available right now.')
+      expect(wrapper.text()).not.toContain('Try again')
+      expect(wrapper.find('[data-testid="learn-canvas-check-start"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] [data-testid="learn-canvas-check-leave"]').text()).toBe('Back to Learn')
+      expect(wrapper.text()).not.toContain(reasonCode)
+      await wrapper.setProps({ canvas: awaiting() })
+      expect(wrapper.find('[data-testid="learn-canvas-check-start"]').exists()).toBe(false)
+      expect(attach).toHaveBeenCalledOnce()
+      await wrapper.get('[data-testid="learn-canvas-check-leave"]').trigger('click')
+      expect(wrapper.emitted('leave')).toHaveLength(1)
+    })
+
+    it('lets the awaiting-start check take precedence over the blocked projection around it', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const projection = awaiting()
+      const recovery = adaptiveRecoveryCopy('blocked')
+      expect(projection).toMatchObject({ status: 'blocked', recoveryState: 'blocked', recovery, activity: { evidenceScope: { integrityState: 'blocked' }, primitive: null } })
+      expect(projection.assessment).toMatchObject({ reasonCode: 'awaiting_start' })
+      expect(projection.assessment).not.toHaveProperty('observations')
+      const wrapper = await mountCheck({ canvas: projection })
+      expect(wrapper.find('[data-testid="learn-canvas-check-entry"]').exists()).toBe(true)
+      for (const text of [recovery.title, recovery.body]) expect(wrapper.text()).not.toContain(text)
+      const actions = wrapper.findAll('button, a').filter(node => node.text().trim() === recovery.action)
+      expect(actions.map(node => node.attributes('data-testid'))).toEqual(['learn-canvas-check-leave'])
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas-fallback-action"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-activity-fallback"]').exists()).toBe(false)
     })
 
     it('gives a Canvas-native check awaiting its start the entry card without Today timing', async () => {

@@ -162,6 +162,7 @@ export function useCanvasCheck(options: {
   const confidenceMissing = ref(false)
   const submitFailure = ref<SubmitFailure>(null)
   const startFailed = ref(false)
+  const startRefused = ref(false)
   const scoreFailed = ref(false)
   const busy = ref(false)
 
@@ -244,10 +245,11 @@ export function useCanvasCheck(options: {
   async function start() {
     const current = available.value
     const attach = options.binding().start
-    if (!current || !current.capabilities.canDeliver || busy.value || !options.isOnline.value) return
+    if (!current || !current.capabilities.canDeliver || busy.value || startRefused.value || !options.isOnline.value) return
     startFailed.value = false
     if (!attach) {
       startFailed.value = true
+      startRefused.value = true
       return
     }
     busy.value = true
@@ -257,6 +259,7 @@ export function useCanvasCheck(options: {
       if (result?.kind !== 'attached') {
         startKey = null
         startFailed.value = true
+        startRefused.value = true
       }
     }
     catch { startFailed.value = true }
@@ -446,7 +449,7 @@ export function useCanvasCheck(options: {
   }
 
   return {
-    view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
+    view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, startRefused, busy, restored,
     canTeachSeparateCase, invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
     practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
     assistance, assistanceDenied, assistanceLimit,

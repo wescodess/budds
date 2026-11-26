@@ -978,6 +978,12 @@ describe('adaptive thread route isolation', () => {
       const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
       expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on an earlier topic')
       expectToolsHidden(wrapper)
+      const recovery = adaptiveRecoveryCopy('blocked')
+      expect(canvas.value).toMatchObject({ status: 'blocked', recoveryState: 'blocked', recovery })
+      for (const text of [recovery.title, recovery.body]) expect(wrapper.text()).not.toContain(text)
+      expect(wrapper.find('[data-testid="learn-current-source-recovery"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas-fallback-action"]').exists()).toBe(false)
+      expect(wrapper.findAll('[data-testid="learn-adaptive-safe-destination"]')).toHaveLength(1)
       wrapper.unmount()
     })
 

@@ -16,7 +16,7 @@ const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElemen
 
 const { isOnline } = useOnlineStatus()
 const {
-  view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, busy, restored,
+  view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, startRefused, busy, restored,
   invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
   practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
   assistance, assistanceDenied, assistanceLimit,
@@ -141,10 +141,10 @@ async function openPractice() {
       <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">{{ entryHeading }}</h2>
       <p class="mt-2 max-w-xl text-[15px] leading-7 text-muted-foreground">You’ll get one question you haven’t seen. Answer on your own. Once you submit, your answer is locked, practice opens right away, and your result arrives on this page.</p>
       <div class="mt-6 flex flex-wrap gap-3">
-        <button type="button" data-testid="learn-canvas-check-start" :disabled="busy || !isOnline" :class="primaryAction" @click="start">Start check<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
+        <button v-if="!startRefused" type="button" data-testid="learn-canvas-check-start" :disabled="busy || !isOnline" :class="primaryAction" @click="start">Start check<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
         <button type="button" data-testid="learn-canvas-check-leave" :class="textLink" @click="emit('leave')">Back to Learn</button>
       </div>
-      <div v-if="startFailed" role="alert" data-testid="learn-canvas-check-start-error" class="mt-5 flex items-start gap-3 border-t border-border pt-4"><CircleAlert class="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" /><p class="min-w-0 font-medium text-foreground">Could not start this session. Try again.</p></div>
+      <div v-if="startFailed" role="alert" data-testid="learn-canvas-check-start-error" class="mt-5 flex items-start gap-3 border-t border-border pt-4"><CircleAlert class="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" /><p class="min-w-0 font-medium text-foreground">{{ startRefused ? 'This check isn’t available right now.' : 'Could not start this session. Try again.' }}</p></div>
     </section>
 
     <template v-else-if="view.kind === 'open'">
