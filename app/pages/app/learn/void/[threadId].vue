@@ -437,7 +437,9 @@ const selectedActivityId = computed(() => typeof route.query.activity === 'strin
 const selectedHistory = computed(() => checkBound.value ? null : thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
 const showCurrent = computed(() => toolsHiddenForCheck.value || !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
-const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
+const savedReceiptBound = computed(() => Boolean(checkBinding.value?.receipt))
+const lifecycleHidesCanvas = computed(() => (rollback.value || endedReadOnly.value) && !savedReceiptBound.value)
+const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !lifecycleHidesCanvas.value)
 const checkPresented = computed(() => checkBound.value && currentCanvasVisible.value)
 const checkOpen = computed(() => checkPresented.value && checkPhaseOpen.value)
 const currentActivityRoute = computed(() => {
@@ -597,12 +599,12 @@ function leave() { void router.push(safeDestination.value) }
           <p class="mt-2 text-sm text-muted-foreground">This factual activity cannot continue until its source is reviewed. Your response draft remains in place.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-if="showCurrent && rollback" data-testid="learn-thread-rollback-recovery" class="rounded-lg border border-border p-5" role="status">
+        <div v-if="showCurrent && rollback && !savedReceiptBound" data-testid="learn-thread-rollback-recovery" class="rounded-lg border border-border p-5" role="status">
           <h2 class="font-dm-sans text-lg font-semibold">This activity is unavailable</h2>
           <p class="mt-2 text-sm text-muted-foreground">Your goal and past activity remain available for review. Open Learn to choose a safe next step.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-if="showCurrent && endedReadOnly" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
+        <div v-if="showCurrent && endedReadOnly && !savedReceiptBound" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
           <h2 class="font-dm-sans text-lg font-semibold">This Void has ended</h2>
           <p class="mt-2 text-sm text-muted-foreground">Your learning memory and past activity remain available for review.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>

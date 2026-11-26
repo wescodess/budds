@@ -1332,6 +1332,64 @@ describe('Canvas check', () => {
       expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull()
     })
 
+    it('drops delivered help once its authorization is withdrawn', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      authorizePractice.mockResolvedValueOnce(helpAuthorized('worked_example', WORKED)).mockResolvedValueOnce(helpDenied('evidence_unavailable'))
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(WORKED))
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-assistance-denied"]').exists()).toBe(true))
+      expect(wrapper.html()).not.toContain(WORKED)
+    })
+
+    it('shows cached help only for the slot and revision it was authorized for', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(WORKED))
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null, practice: { ...practice, revision: 2 } })
+      await flushPromises()
+      expect(wrapper.html()).not.toContain(WORKED)
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check-assistance"]').text()).toBe(WORKED)
+      const withdrawn = teachingAvailable({ feedback: null, lesson: null }) as { availability: Record<string, unknown> }
+      teachingData.value = { ...withdrawn, availability: { ...withdrawn.availability, help: { remaining: 7, hint: { status: 'available' }, worked_example: { status: 'unavailable', reasonCode: 'evidence_unavailable' } } } }
+      await flushPromises()
+      expect(wrapper.html()).not.toContain(WORKED)
+    })
+
+    it('offers the practice retry once practice can open again after a definite refusal, without retrying by itself', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const notOpened = () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' }, help: null } })
+      teachingData.value = notOpened()
+      openPracticeCommand.mockImplementationOnce(async () => {
+        teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+          feedback: null, lesson: null, practice: null, availability: { feedback: 'scoring_pending', practice: { status: 'unavailable', reasonCode: 'test_open' }, help: null } })
+        return teachingData.value
+      })
+      const wrapper = await mountCheck()
+      await vi.waitFor(() => expect(openPracticeCommand).toHaveBeenCalledOnce())
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-collapsed"]').exists()).toBe(false)
+      teachingData.value = notOpened()
+      await flushPromises()
+      expect(openPracticeCommand).toHaveBeenCalledOnce()
+      const row = wrapper.get('[data-testid="learn-canvas-check-practice-collapsed"]')
+      expect(row.get('[data-testid="learn-canvas-check-practice-open-error"]').text()).toBe('Could not load support. Try again.')
+      await row.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true))
+      expect(openPracticeCommand).toHaveBeenCalledTimes(2)
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-open-error"]').exists()).toBe(false)
+    })
+
     it.each([
       ['about_a_week', 'A check on last week’s work'],
       ['about_a_month', 'A check on work from about a month ago'],

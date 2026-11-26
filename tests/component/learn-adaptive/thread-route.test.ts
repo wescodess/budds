@@ -998,6 +998,53 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    const hiddenByShow = (element: Element) => {
+      for (let node: Element | null = element; node; node = node.parentElement) if ((node as HTMLElement).style?.display === 'none') return true
+      return false
+    }
+
+    it.each(['ended', 'rollback'] as const)('shows an addressed closed receipt on a %s thread instead of the lifecycle recovery', async (lifecycle) => {
+      const Page = await import(path)
+      projection.value = { ...missionThread(), thread: { ...missionThread().thread, lifecycle } }
+      requestedRoute.query.check = 'closed_ref'
+      const receipt = serverCheckReceipt({ reference: 'closed_ref', state: 'closed', answer: 'My saved answer', confidence: 3 })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_1', phase: 'invalid', activityId: 'activity_0', receipt })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?check=closed_ref' })
+      const card = wrapper.get('[data-testid="learn-canvas-check-receipt"]')
+      expect(card.attributes('data-receipt')).toBe('invalid')
+      expect(hiddenByShow(card.element)).toBe(false)
+      expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain('My saved answer')
+      expect(wrapper.find('[data-testid="learn-thread-rollback-recovery"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-thread-ended-history"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-answer"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it.each([
+      ['ended', 'learn-thread-ended-history'],
+      ['rollback', 'learn-thread-rollback-recovery'],
+    ] as const)('keeps an ordinary %s thread on its lifecycle recovery with the activity hidden', async (lifecycle, recovery) => {
+      const Page = await import(path)
+      projection.value = { ...missionThread(), thread: { ...missionThread().thread, lifecycle } }
+      canvas.value = checkCanvas(null)
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.get(`[data-testid="${recovery}"]`).exists()).toBe(true)
+      expect(hiddenByShow(wrapper.get('[data-testid="learn-adaptive-canvas"]').element)).toBe(true)
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('keeps an ended thread’s open check hidden behind the lifecycle recovery', async () => {
+      const Page = await import(path)
+      projection.value = { ...missionThread(), thread: { ...missionThread().thread, lifecycle: 'ended' } }
+      canvas.value = checkCanvas()
+      checkState.value = assessment('test_open')
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.get('[data-testid="learn-thread-ended-history"]').exists()).toBe(true)
+      expect(hiddenByShow(wrapper.get('[data-testid="learn-canvas-check"]').element)).toBe(true)
+      wrapper.unmount()
+    })
+
     it('keeps the existing Canvas while responses are off: no check, no hidden tools, no reference', async () => {
       capabilities.responses = false
       const Page = await import(path)

@@ -371,7 +371,14 @@ export function useCanvasCheck(options: {
   const practiceSaved = computed(() => practiceAcceptedHere.value || practiceAcceptedOnServer.value)
   watch(practiceAcceptedOnServer, accepted => { if (accepted) practiceFailed.value = false })
   useAdaptiveResponseDraft(postSealId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${postSealId}` : null, practiceAnswer, practiceSaved)
-  const assistance = shallowRef<PracticeHelpContent | null>(null)
+  const cachedAssistance = shallowRef<{ content: PracticeHelpContent, responseSlotId: string, revision: number } | null>(null)
+  const assistance = computed(() => {
+    const cached = cachedAssistance.value
+    const current = practice.value
+    if (!cached || !current || cached.responseSlotId !== current.responseSlotId || cached.revision !== current.revision) return null
+    const state = help.value?.[cached.content.kind]
+    return state?.status === 'unavailable' && state.reasonCode !== 'help_limit_reached' ? null : cached.content
+  })
   const assistanceDenied = ref(false)
   const assistanceLimit = ref(false)
   const practiceOpening = ref(false)
@@ -388,7 +395,9 @@ export function useCanvasCheck(options: {
     practiceOpenFailed.value = false
     try {
       const result = await openPracticeMutation.mutate(teachingReference)
-      return result?.status === 'available' && result.availability.practice.status === 'available' && result.practice !== null
+      const opened = result?.status === 'available' && result.availability.practice.status === 'available' && result.practice !== null
+      if (!opened) practiceOpenFailed.value = true
+      return opened
     }
     catch {
       practiceOpenFailed.value = true
@@ -446,11 +455,16 @@ export function useCanvasCheck(options: {
         ...teachingReference,
         target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, kind, idempotencyKey,
       })
-      if (result?.status === 'authorized' && result.content.kind === kind) assistance.value = result.content
+      if (result?.status === 'authorized' && result.content.kind === kind) {
+        cachedAssistance.value = { content: result.content, responseSlotId: current.responseSlotId, revision: current.revision }
+      }
       else {
         helpKeys.delete(helpKey)
         if (result?.status === 'denied' && result.reasonCode === 'help_limit_reached') assistanceLimit.value = true
-        else assistanceDenied.value = true
+        else {
+          if (result?.status === 'denied') cachedAssistance.value = null
+          assistanceDenied.value = true
+        }
       }
     }
     catch { assistanceDenied.value = true }
