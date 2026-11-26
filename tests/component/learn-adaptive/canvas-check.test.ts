@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises, type VueWrapper } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
@@ -101,10 +101,15 @@ const teachingAvailable = (overrides: Record<string, unknown> = {}) => {
   const value = { feedback, lesson, practice, ...overrides }
   return learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY, availability: availabilityFor(value), ...value })
 }
+const unavailableTeaching = (reasonCode: string) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode })
 const teachingUnavailable = (reasonCode: string) => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'unavailable', reasonCode })
 const helpAuthorized = (kind: 'hint' | 'worked_example', text: string, revision = 1, workedTier: 'T0' | 'T2' = 'T2') => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'authorized', assessmentOpportunityId: OPPORTUNITY, target: { responseSlotId: 'slot_1' }, revision, authorizationId: 'exposure_1', deliveredAt: 1_800_000_200_000, content: kind === 'hint' ? { kind, tier: 'T0', text } : { kind, tier: workedTier, text } })
 const helpDenied = (reasonCode: string) => learnPracticeAssistanceAuthorizationSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'denied', reasonCode })
 const canvas = (overrides: Record<string, unknown> = {}) => ({ ...serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open' }), ...overrides })
+
+beforeAll(async () => {
+  await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+})
 
 const wrappers: VueWrapper[] = []
 async function mountCheck(props: Record<string, unknown> = {}) {
@@ -1070,6 +1075,7 @@ describe('Canvas check', () => {
       ['closed', 'invalid', 'This check won’t count'],
       ['result_unconfirmed', 'unconfirmed', 'We couldn’t confirm your result'],
     ] as const)('renders a %s recovery receipt from checkReceipt alone, with its saved answer', async (state, kind, title) => {
+      teachingData.value = unavailableTeaching('test_open')
       const receipt = serverCheckReceipt({ reference: 'check_ref_1', state, answer: ANSWER, confidence: 4 })
       const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: OPPORTUNITY, phase: 'invalid', receipt }) })
       expect(receiptKind(wrapper)).toBe(kind)
@@ -1077,7 +1083,7 @@ describe('Canvas check', () => {
       expect(wrapper.get('[data-testid="learn-canvas-check-saved-answer"]').text()).toContain(ANSWER)
       expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
       expect(subscribed('getAssessmentState')).toBe(false)
-      expect(subscribed('getPostSealTeaching')).toBe(false)
+      expect(subscribed('getResponseState')).toBe(false)
       expect(wrapper.find('[data-testid="learn-canvas-check-retry-score"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
     })
@@ -1139,12 +1145,84 @@ describe('Canvas check', () => {
       expect(sessionStorage.getItem(practiceKey)).toBeNull()
     })
 
-    it('states no teaching age the server did not give', async () => {
+    it.each([
+      ['about_a_week', 'A check on last week’s work'],
+      ['about_a_month', 'A check on work from about a month ago'],
+      ['this_session', 'A check on this topic'],
+      ['earlier', 'A check on an earlier topic'],
+      ['retained', 'A check on an earlier topic'],
+      ['a_future_class', 'A check on an earlier topic'],
+    ])('heads the entry from the server timing %s', async (timing, heading) => {
       stateData.value = ready()
       deliveryData.value = null
-      const wrapper = await mountCheck()
-      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on an earlier topic')
-      expect(wrapper.text()).not.toMatch(/week|month|yesterday|days? ago/i)
+      const projection = canvas({ assessment: { ...canvas().assessment, checkTiming: { version: 'learn-v2.canvas-check-timing.v1', timing } } })
+      const wrapper = await mountCheck({ canvas: projection })
+      const entry = wrapper.get('[data-testid="learn-canvas-check-entry"]')
+      const title = entry.get('h2')
+      expect(title.text()).toBe(heading)
+      expect(entry.attributes('aria-labelledby')).toBe(title.attributes('id'))
+    })
+
+    it.each([
+      ['an ordinary application check', null],
+      ['a projection with malformed timing', { version: 'learn-v2.canvas-check-timing.v0', timing: 'about_a_week' }],
+    ])('keeps the dev Canvas for %s and reads no check state', async (_name, checkTiming) => {
+      const { checkTiming: _timing, ...assessment } = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null }).assessment
+      const projection = canvas({ assessment: checkTiming ? { ...assessment, checkTiming } : assessment })
+      const wrapper = await mountCheck({ canvas: projection })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toMatch(/A check on/)
+      expect(subscribed('getAssessmentState')).toBe(false)
+      expect(subscribed('getPostSealTeaching')).toBe(false)
+    })
+
+    it('opens practice from an unconfirmed receipt through its post-seal reference only', async () => {
+      const receipt = serverCheckReceipt({ reference: 'check_ref_9', state: 'result_unconfirmed', answer: ANSWER, confidence: 4, postSealOpportunityId: 'opportunity_9' })
+      teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: 'opportunity_9',
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' }, help: null } })
+      openPracticeCommand.mockImplementation(async () => {
+        teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: 'opportunity_9',
+          feedback: null, lesson: null, practice, availability: { feedback: 'scoring_pending', practice: { status: 'available' }, help: helpOpen } })
+        return teachingData.value
+      })
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: 'opportunity_9', phase: 'reconciliation_required', receipt }) })
+      expect(receiptKind(wrapper)).toBe('unconfirmed')
+      const reads = subscriptions.mock.calls.filter(([name]) => String(name).includes('getPostSealTeaching')).map(([, args]) => args)
+      expect(reads.map(args => learnPostSealTeachingReferenceSchema.parse(args))).toContainEqual({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: 'opportunity_9' })
+      expect(openPracticeCommand).not.toHaveBeenCalled()
+      await wrapper.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true))
+      expect(learnPostSealTeachingReferenceSchema.parse(openPracticeCommand.mock.calls[0]![0])).toEqual({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: 'opportunity_9' })
+      expect(wrapper.get('[data-testid="learn-canvas-check-practice"]').text()).not.toContain('How sure are you?')
+      await wrapper.get('[data-testid="learn-canvas-check-worked-example"]').trigger('click')
+      await vi.waitFor(() => expect(authorizePractice).toHaveBeenCalledOnce())
+      expect(learnAuthorizePracticeAssistanceSchema.parse(authorizePractice.mock.calls[0]![0])).toMatchObject({ assessmentOpportunityId: 'opportunity_9', target: { responseSlotId: 'slot_1' } })
+      expect(subscribed('getAssessmentState')).toBe(false)
+      expect(wrapper.text()).not.toContain('Passed')
+    })
+
+    it.each([
+      ['the read is unavailable', () => unavailableTeaching('evidence_unavailable')],
+      ['practice is unavailable', () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: 'opportunity_9',
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'unavailable', practice: { status: 'unavailable', reasonCode: 'disclosure_unknown' }, help: null } })],
+    ])('offers no practice on a closed receipt when %s', async (_name, read) => {
+      teachingData.value = read()
+      const receipt = serverCheckReceipt({ reference: 'check_ref_9', state: 'closed', answer: ANSWER, postSealOpportunityId: 'opportunity_9' })
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: 'opportunity_9', phase: 'invalid', receipt }) })
+      await flushPromises()
+      expect(receiptKind(wrapper)).toBe('invalid')
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-collapsed"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(false)
+      expect(openPracticeCommand).not.toHaveBeenCalled()
+    })
+
+    it('makes no post-seal reads for a receipt without a post-seal reference', async () => {
+      const receipt = serverCheckReceipt({ reference: 'check_ref_9', state: 'result_unconfirmed', answer: ANSWER, postSealOpportunityId: null })
+      const wrapper = await mountCheck({ canvas: serverSavedCheckCanvas({ opportunityId: 'opportunity_9', phase: 'reconciliation_required', receipt }) })
+      expect(receiptKind(wrapper)).toBe('unconfirmed')
+      expect(subscribed('getPostSealTeaching')).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-collapsed"]').exists()).toBe(false)
     })
   })
 

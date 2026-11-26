@@ -4,7 +4,7 @@ import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAda
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
-import { learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_TIMINGS, learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '~~/shared/learn-v2-measurement-storage-manifest'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 
@@ -12,16 +12,33 @@ const PUBLIC_API_VERSION: typeof LEARN_V2_PUBLIC_API_VERSION = 'learn-v2.public-
 const MAX_ANSWER_LENGTH = 12_000
 const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
-export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null }
-type CanvasCheckProjection = { assessment?: { assessmentOpportunityId: string } | null, checkReceipt?: unknown } | null | undefined
+export type CanvasCheckTiming = typeof LEARN_TODAY_CHECK_TIMINGS[number]
+export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming }
+type CanvasCheckProjection = { assessment?: { assessmentOpportunityId: string, checkTiming?: unknown } | null, checkReceipt?: unknown } | null | undefined
+
+function checkTiming(value: unknown): CanvasCheckTiming | null {
+  if (!value || typeof value !== 'object') return null
+  const { version, timing } = value as { version?: unknown, timing?: unknown }
+  if (version !== LEARN_CANVAS_CHECK_TIMING_VERSION || typeof timing !== 'string') return null
+  return (LEARN_TODAY_CHECK_TIMINGS as readonly string[]).includes(timing) ? timing as CanvasCheckTiming : 'earlier'
+}
+
+function parseReceipt(value: unknown) {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as { checkTiming?: unknown }
+  const timing = checkTiming(raw.checkTiming)
+  const parsed = learnCanvasCheckReceiptSchema.safeParse(timing ? { ...raw, checkTiming: { version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing } } : raw)
+  return parsed.success ? parsed.data : null
+}
 
 export function canvasCheckBinding(canvas: CanvasCheckProjection): CanvasCheckBinding | null {
   if (!LEARN_MEASUREMENT_CAPABILITIES.responses || !canvas) return null
-  const parsed = canvas.checkReceipt === undefined ? null : learnCanvasCheckReceiptSchema.safeParse(canvas.checkReceipt)
-  if (parsed && !parsed.success) return null
+  const receipt = canvas.checkReceipt === undefined ? null : parseReceipt(canvas.checkReceipt)
+  if (canvas.checkReceipt !== undefined && !receipt) return null
+  const timing = checkTiming(canvas.assessment?.checkTiming) ?? receipt?.checkTiming?.timing ?? null
+  if (!timing) return null
   const assessmentOpportunityId = canvas.assessment?.assessmentOpportunityId ?? null
-  const receipt = parsed?.data ?? null
-  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt } : null
+  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt, timing } : null
 }
 
 export function canvasCheckIdentity(binding: CanvasCheckBinding) {
@@ -92,6 +109,7 @@ export function useCanvasCheck(options: {
   isOnline: Readonly<Ref<boolean>>
 }) {
   const opportunityId = options.binding().assessmentOpportunityId
+  const postSealId = opportunityId ?? options.binding().receipt?.postSealReference?.assessmentOpportunityId ?? null
   const assessmentOpportunityId = opportunityId as never
   const serverReceipt = computed(() => options.binding().receipt)
   const reference = { version: PUBLIC_API_VERSION, assessmentOpportunityId }
@@ -173,15 +191,15 @@ export function useCanvasCheck(options: {
   const draftKey = opportunityId ? `learn-response:${options.ownerId}:${options.threadId}:check:${opportunityId}` : null
   const { restored } = useAdaptiveResponseDraft(draftKey, answer, sealed, confidence)
 
-  const canTeachSeparateCase = computed(() => available.value?.capabilities.canTeachSeparateCase === true)
+  const canTeachSeparateCase = computed(() => opportunityId ? available.value?.capabilities.canTeachSeparateCase === true : Boolean(postSealId))
   const invalidBySource = computed(() => {
     const current = work.value
     if (!current) return serverReceipt.value?.body.bodyAvailability === 'unavailable' && serverReceipt.value.body.reasonCode === 'evidence_unavailable'
     return current.body.bodyAvailability !== 'available'
       || current.validitySnapshot.exclusionReasons.some(reason => reason === 'evidence_unavailable' || reason === 'pins_mismatch')
   })
-  const hasSealedReceipt = computed(() => Boolean(opportunityId) && view.value.kind === 'receipt' && submissionId.value !== null)
-  const teachingReference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId }
+  const hasSealedReceipt = computed(() => Boolean(postSealId) && view.value.kind === 'receipt' && submissionId.value !== null)
+  const teachingReference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: postSealId as never }
   const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value ? teachingReference : 'skip')
   const teaching = computed(() => {
     const value = teachingQuery.data.value
@@ -320,7 +338,7 @@ export function useCanvasCheck(options: {
   const practiceBusy = ref(false)
   const practiceFailed = ref(false)
   const practiceSaved = ref(false)
-  useAdaptiveResponseDraft(opportunityId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${opportunityId}` : null, practiceAnswer, practiceSaved)
+  useAdaptiveResponseDraft(postSealId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${postSealId}` : null, practiceAnswer, practiceSaved)
   const assistance = shallowRef<PracticeHelpContent | null>(null)
   const assistanceDenied = ref(false)
   const assistanceLimit = ref(false)
@@ -393,7 +411,7 @@ export function useCanvasCheck(options: {
     assistanceLimit.value = false
     try {
       const result = await authorizePracticeMutation.mutate({
-        version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId,
+        ...teachingReference,
         target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, kind, idempotencyKey,
       })
       if (result?.status === 'authorized' && result.content.kind === kind) assistance.value = result.content

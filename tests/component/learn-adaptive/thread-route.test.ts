@@ -941,6 +941,21 @@ describe('adaptive thread route isolation', () => {
       mismatched.unmount()
     })
 
+    it('keeps an ordinary application check on the dev Canvas while responses are on', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'test_open', timing: null })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
+      expectToolsShown(wrapper)
+      expect(calls.mock.calls.some(([name]) => name === 'learnV2Assessments:getAssessmentState')).toBe(false)
+      const shell = wrapper.get('[data-testid="learn-adaptive-thread-shell"]')
+      expect(shell.attributes('class')).toBe('mx-auto w-full max-w-3xl px-4 py-8 sm:px-6')
+      expect(shell.get('header p').attributes('class')).toBe('text-xs font-medium uppercase tracking-wide text-primary')
+      wrapper.unmount()
+    })
+
     it('keeps the existing Canvas while responses are off: no check, no hidden tools, no reference', async () => {
       capabilities.responses = false
       const Page = await import(path)

@@ -1,7 +1,14 @@
 import { projectAdaptiveControls } from '~~/shared/learn-adaptive-controls'
 import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
-import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, learnCanvasCheckReceiptSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
+import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_CANVAS_CHECK_TIMING_VERSION, learnCanvasCheckReceiptSchema, learnCanvasCheckTimingSchema, type LearnCanvasCheckReceipt } from '~~/shared/learn-v2-today-check'
+import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
+
+export type CheckTiming = 'this_session' | 'about_a_week' | 'about_a_month' | 'earlier' | 'retained'
+
+function timingField(timing: CheckTiming | null) {
+  return timing ? { checkTiming: learnCanvasCheckTimingSchema.parse({ version: LEARN_CANVAS_CHECK_TIMING_VERSION, timing }) } : {}
+}
 
 type Thread = { id: string, outcome?: string, intent?: string, revision?: number }
 
@@ -34,6 +41,7 @@ export function serverAssessmentCanvas(input: {
   delivered?: boolean
   bodyAvailability?: 'available' | 'unavailable'
   currentEligibility?: string
+  timing?: CheckTiming | null
 }) {
   const delivered = input.delivered ?? true
   const submissionId = input.submissionId ?? null
@@ -52,7 +60,8 @@ export function serverAssessmentCanvas(input: {
     session: session(),
     responsePrompt: null, declaredStimulus: null, responseSpec: null, savedResponse: null,
     assessment: {
-      assessmentOpportunityId: input.opportunityId, phase: input.phase, revision: input.revision ?? 2, submissionId,
+      assessmentOpportunityId: input.opportunityId, phase: input.phase, revision: input.revision ?? 2,
+      ...timingField(input.timing === undefined ? 'this_session' : input.timing), submissionId,
       bodyAvailability: input.bodyAvailability ?? 'unavailable', currentEligibility: input.currentEligibility ?? 'unknown',
       reasonCode: delivered ? null : 'not_admitted', ...(delivered ? {} : { observations: 'no_observations' as const }),
     },
@@ -68,6 +77,8 @@ export function serverCheckReceipt(input: {
   answer?: string | null
   bodyReason?: 'evidence_unavailable' | 'unavailable' | 'disclosure_unknown' | 'not_delivered'
   result?: Record<string, unknown>
+  timing?: CheckTiming | null
+  postSealOpportunityId?: string | null
 }): LearnCanvasCheckReceipt {
   const body = input.answer ? { bodyAvailability: 'available', payload: { kind: 'text', text: input.answer } }
     : { bodyAvailability: 'unavailable', reasonCode: input.bodyReason ?? 'unavailable' }
@@ -76,6 +87,8 @@ export function serverCheckReceipt(input: {
     submissionId: input.submissionId ?? 'submission_1', acceptedAt: input.acceptedAt ?? 1_800_000_000_000,
     ...(input.confidence === undefined ? {} : { confidence: input.confidence }), body,
     ...(input.state === 'result_ready' ? { result: input.result } : {}),
+    ...timingField(input.timing === undefined ? 'this_session' : input.timing),
+    ...(input.postSealOpportunityId === null ? {} : { postSealReference: { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: input.postSealOpportunityId ?? 'opportunity_1' } }),
   })
 }
 
@@ -101,6 +114,7 @@ export function serverSavedCheckCanvas(input: {
     responsePrompt: null, declaredStimulus: null, responseSpec: null,
     savedResponse: receipt.confidence !== undefined && payload?.kind === 'text' ? { response: payload.text, confidence: receipt.confidence } : null,
     ...(!recoverable ? { assessment: { assessmentOpportunityId: input.opportunityId, phase: input.phase, revision: 3,
-      submissionId: receipt.submissionId, bodyAvailability: receipt.body.bodyAvailability, currentEligibility: 'eligible', reasonCode: null } } : {}),
+      submissionId: receipt.submissionId, bodyAvailability: receipt.body.bodyAvailability, currentEligibility: 'eligible', reasonCode: null,
+      ...(receipt.checkTiming ? { checkTiming: receipt.checkTiming } : {}) } } : {}),
   }
 }

@@ -78,6 +78,15 @@ const submitFailureBody = computed(() => submitFailure.value === 'offline'
   ? 'You’re offline. It’s still here on this device. Submit again when you’re back online.'
   : 'It’s still here on this device. Submit again.')
 
+const entryHeadings = {
+  about_a_week: 'A check on last week’s work',
+  about_a_month: 'A check on work from about a month ago',
+  this_session: 'A check on this topic',
+  earlier: 'A check on an earlier topic',
+  retained: 'A check on an earlier topic',
+} as const
+const entryHeading = computed(() => entryHeadings[props.binding.timing] ?? entryHeadings.earlier)
+
 const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 const savedAtLabel = computed(() => receipt.value?.acceptedAt ? savedAtFormat.format(receipt.value.acceptedAt) : null)
 
@@ -129,7 +138,7 @@ async function openPractice() {
     </section>
 
     <section v-else-if="view.kind === 'entry'" data-testid="learn-canvas-check-entry" :aria-labelledby="`${id}-entry`" :class="card">
-      <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">A check on an earlier topic</h2>
+      <h2 :id="`${id}-entry`" class="font-dm-sans text-xl font-semibold text-foreground focus:outline-none">{{ entryHeading }}</h2>
       <p class="mt-2 max-w-xl text-[15px] leading-7 text-muted-foreground">You’ll get one question you haven’t seen. Answer on your own. Once you submit, your answer is locked, practice opens right away, and your result arrives on this page.</p>
       <div class="mt-6 flex flex-wrap gap-3">
         <button type="button" data-testid="learn-canvas-check-start" :disabled="busy || !isOnline" :class="primaryAction" @click="start">Start check<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
