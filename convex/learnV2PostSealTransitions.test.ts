@@ -513,7 +513,9 @@ test('Canvas scoring preserves its sealed check and teaching authority', async (
   expect(await f.t.run(ctx => ctx.db.get(receipt.submissionId))).toEqual(response)
 })
 
-async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', options: { score?: boolean, pass?: boolean } = {}) {
+async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', options: { score?: boolean, pass?: boolean,
+  beforePreparation?: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void>,
+  afterPreparation?: (f: Awaited<ReturnType<typeof fixture>>) => Promise<void> } = {}) {
   policy.todayCanvas = entryPoint === 'today'
   const f = await fixture(true, undefined, undefined, { pass: options.pass ?? false })
   Object.assign(ADAPTIVE_V2_PILOT_MANIFEST, { pilotApproved: true, startsAt: new Date(Date.now() - 86_400_000).toISOString(),
@@ -529,6 +531,7 @@ async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', opti
   })
   const instructionalSession = await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))
   const instructionalContent = await f.t.run(ctx => ctx.db.get(f.contentId))
+  await options.beforePreparation?.(f)
   if (entryPoint === 'canvas') {
     expect(await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, { studySessionId: f.graph.studySessionId,
       expectedSessionRevision: 2, idempotencyKey: 'canvas_cold_post_seal_prepare_12345' })).toMatchObject({ kind: 'prepared' })
@@ -537,6 +540,7 @@ async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', opti
       expectedSessionRevision: 2, expectedContentRevision: 1, entryPoint: 'today', idempotencyKey: 'today_surface_post_seal_start_12345' }))
       .toMatchObject({ status: 'assessment' })
   }
+  await options.afterPreparation?.(f)
   const row = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).find(row => row.purpose.kind === 'measurement_cold')!
   const assignment = (await f.t.run(ctx => ctx.db.get(row.assignmentId!)))!
@@ -568,6 +572,160 @@ async function canvasColdTeaching(entryPoint: 'today' | 'canvas' = 'today', opti
     threadId: attached.threadId, checkReference: row.delayedCheckId }))?.checkReceipt
   return { ...f, row, response, assignment, instructionalSession, instructionalContent, attached, canvasReceipt, read, open, help }
 }
+
+async function fillOrdinaryPlan(f: Awaited<ReturnType<typeof fixture>>, count: number) {
+  await f.t.run(async ctx => {
+    const { futureId } = await seedFixedCheckPlan(ctx, deliveryIdentity.tokenIdentifier, f.graph, Date.now())
+    await ctx.db.patch(f.graph.studySessionId, { status: 'ready', missedAt: undefined })
+    const { _id, _creationTime, ...future } = (await ctx.db.get(futureId))!
+    for (let index = 2; index < count; index++) await ctx.db.insert('studySessions', {
+      ...future, placementId: `ordinary-boundary-${index}`, status: 'completed',
+    })
+  })
+}
+
+async function fillDedicatedPlan(f: Awaited<ReturnType<typeof canvasColdTeaching>>, count: number) {
+  if (count === 1) return
+  const delayed = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).find(row => row.horizonDays === 7)!
+  const now = Date.now()
+  vi.setSystemTime(delayed.openAt)
+  await f.t.mutation(materializeDue, { userId: deliveryIdentity.tokenIdentifier, through: Date.now() })
+  const ready = (await f.t.run(ctx => ctx.db.get(delayed._id)))!
+  if (ready.contextPins.kind !== 'session') throw new Error('Expected dedicated delayed check')
+  const sessionId = ready.contextPins.studySessionId
+  const attached = await f.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, { studySessionId: sessionId,
+    expectedSessionRevision: ready.contextPins.sessionRevision, idempotencyKey: 'boundary_delayed_attach_12345' })
+  if (attached.kind !== 'attached') throw new Error('Expected delayed attachment')
+  const canvas = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  const receipt = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    studySessionId: sessionId, expectedRevision: canvas.thread.revision, expectedSessionRevision: canvas.session.revision,
+    response: 'A separately sealed delayed boundary check.', confidence: 3, idempotencyKey: 'boundary_delayed_submit_12345' })
+  if (receipt.kind !== 'accepted') throw new Error('Expected delayed acceptance')
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    submissionId: receipt.submissionId, idempotencyKey: 'boundary_delayed_score_12345' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  await f.t.run(async ctx => {
+    const { _id, _creationTime, ...session } = (await ctx.db.get(sessionId))!
+    for (let index = 2; index < count; index++) await ctx.db.insert('studySessions', session)
+  })
+  vi.setSystemTime(now)
+}
+
+let boundaryMissionRead = 0
+async function boundaryMission(f: Awaited<ReturnType<typeof fixture>>) {
+  const result = await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId,
+    idempotencyKey: `boundary_mission_${++boundaryMissionRead}_12345` })
+  expect(result.admission.status).not.toBe('denied')
+  if (!result.value) throw new Error('Expected readable Mission')
+  return result.value
+}
+
+test.each(['hub', 'mission'] as const)('32 ordinary sessions remain readable on %s through cold preparation, sealing and scoring', async reader => {
+  const read = async (f: Awaited<ReturnType<typeof fixture>>) => reader === 'hub'
+    ? await f.owner.query(api.learnV2Journey.listHub, {})
+    : (await boundaryMission(f)).plan.sessions
+  let baseline: Awaited<ReturnType<typeof read>>
+  const f = await canvasColdTeaching('canvas', { score: false, beforePreparation: async f => {
+    await fillOrdinaryPlan(f, 32)
+    baseline = await read(f)
+  }, afterPreparation: async f => {
+    if (reader === 'hub') expect(await read(f)).toEqual(baseline!)
+    else expect(await f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId,
+      idempotencyKey: 'boundary_open_mission_12345' })).toMatchObject({ admission: { status: 'denied' }, value: null })
+  } })
+  expect(await read(f)).toEqual(baseline!)
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: f.attached.threadId, activityId: f.attached.activityId,
+    submissionId: f.response._id, idempotencyKey: `boundary_${reader}_score_12345` })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await read(f)).toEqual(baseline!)
+})
+
+test.each(['hub', 'mission', 'reflow'] as const)('32 ordinary sessions retain their contract on %s at the dedicated-check allowance', async reader => {
+  let before = ''
+  const f = await canvasColdTeaching('canvas', { beforePreparation: async f => {
+    await fillOrdinaryPlan(f, 32)
+    before = JSON.stringify((await f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.graph.learningVoidId }))!.plan.sessions)
+  } })
+  await fillDedicatedPlan(f, 128)
+  if (reader === 'hub') expect(await f.owner.query(api.learnV2Journey.listHub, {})).toMatchObject({ items: [{ nextAction: 'study_session', nextScheduledAt: Date.now() }] })
+  else if (reader === 'mission') {
+    const mission = await boundaryMission(f)
+    expect(mission.plan.sessions).toHaveLength(32)
+    expect(JSON.stringify(mission.plan.sessions)).toBe(before)
+    expect(mission.plan.fixedChecks).toHaveLength(128)
+    expect(mission.plan.fixedChecks?.filter(row => row.assessmentPurpose === 'measurement_cold')).toHaveLength(1)
+  } else {
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'boundary_maximum_checks_reflow_12345' })
+    expect(reflow.changedSessionIds).toHaveLength(1)
+    expect(reflow.preservedSessionIds).toHaveLength(159)
+    const mission = await boundaryMission(f)
+    expect(mission.plan.fixedChecks).toHaveLength(128)
+    expect(mission.plan.sessions).toHaveLength(2)
+  }
+})
+
+test.each(['hub', 'mission'] as const)('33 ordinary sessions still exceed the %s contract with dedicated checks', async reader => {
+  const f = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 33) })
+  await expect(reader === 'hub' ? f.owner.query(api.learnV2Journey.listHub, {})
+    : f.owner.query(api.learnV2Journey.getMission, { learningVoidId: f.graph.learningVoidId }))
+    .rejects.toThrow('Learn V2 sessions exceed their bounded contract')
+})
+
+test.each(['reflow', 'expiry'] as const)('600 ordinary sessions keep their %s allowance separate from dedicated checks', async reader => {
+  const f = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 600) })
+  await fillDedicatedPlan(f, 128)
+  if (reader === 'reflow') {
+    const receipt = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'boundary_large_plan_reflow_12345' })
+    expect(receipt.changedSessionIds).toHaveLength(1)
+    expect(receipt.preservedSessionIds).toHaveLength(727)
+  } else expect(await f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId,
+    idempotencyKey: 'boundary_large_plan_expiry_12345' })).toEqual({ missedSessionIds: [] })
+})
+
+test('128 ordinary Today candidates retain their allowance alongside dedicated checks', async () => {
+  const f = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 128) })
+  await f.t.run(async ctx => {
+    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+      q.eq('userId', deliveryIdentity.tokenIdentifier).eq('studyPlanRevisionId', f.graph.studyPlanRevisionId)).take(130)
+    for (const row of rows) if (!row.assessmentPurpose && row.status === 'completed') await ctx.db.patch(row._id, { status: 'planned' })
+  })
+  const before = await f.owner.query(api.learnV2Today.getToday, {})
+  expect(before).not.toMatchObject({ status: 'blocked', reason: 'today_candidate_limit' })
+  await fillDedicatedPlan(f, 128)
+  await f.t.run(async ctx => {
+    const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_assessmentPurpose', q =>
+      q.eq('userId', deliveryIdentity.tokenIdentifier).eq('studyPlanRevisionId', f.graph.studyPlanRevisionId).eq('assessmentPurpose', 'measurement_delayed')).take(128)
+    for (const row of rows) await ctx.db.patch(row._id, { status: 'ready' })
+  })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toEqual(before)
+  await f.t.run(ctx => ctx.db.insert('studySessions', { userId: deliveryIdentity.tokenIdentifier,
+    studyPlanRevisionId: f.graph.studyPlanRevisionId, primaryObjectiveId: f.graph.objectiveId,
+    status: 'planned', revision: 1, scheduledStartAt: Date.now() + 3 * 86_400_000 }))
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'blocked', reason: 'today_candidate_limit' })
+})
+
+test.each(['hub', 'mission', 'reflow'] as const)('the dedicated-check allowance is independently bounded on %s', async reader => {
+  const f = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 32) })
+  await fillDedicatedPlan(f, 129)
+  const result = reader === 'hub' ? f.owner.query(api.learnV2Journey.listHub, {})
+    : reader === 'mission' ? f.owner.mutation(api.learnV2Journey.getMissionDelivery, { learningVoidId: f.graph.learningVoidId,
+      idempotencyKey: 'boundary_dedicated_overflow_mission_12345' })
+      : f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+        expectedPlanRecordRevision: 1, idempotencyKey: 'boundary_dedicated_overflow_reflow_12345' })
+  await expect(result).rejects.toThrow('Fixed checks exceed the bounded Study Plan contract')
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studyPlanRevisionId))).toMatchObject({ status: 'accepted', recordRevision: 1 })
+})
+
+test.each(['reflow', 'expiry'] as const)('601 ordinary sessions still exceed the %s contract', async reader => {
+  const f = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 601) })
+  await expect(reader === 'reflow'
+    ? f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'boundary_ordinary_overflow_reflow_12345' })
+    : f.owner.mutation(api.learnV2Plans.markExpiredSessionsMissed, { learningVoidId: f.graph.learningVoidId,
+      idempotencyKey: 'boundary_ordinary_overflow_expiry_12345' }))
+    .rejects.toThrow('Study plan session count is outside the bounded contract')
+})
 
 test.each(['result_unconfirmed', 'closed'] as const)('the %s Canvas receipt reaches only separate-case practice', async state => {
   const f = await canvasColdTeaching('today', { score: false })
@@ -656,8 +814,8 @@ test('Today treatment on the Canvas surface seals, scores and delivers teaching,
   }
 })
 
-async function reflowCanvasTeaching(f: Awaited<ReturnType<typeof canvasColdTeaching>>) {
-  await f.t.run(async ctx => {
+async function reflowCanvasTeaching(f: Awaited<ReturnType<typeof canvasColdTeaching>>, preparedPlan = false) {
+  if (!preparedPlan) await f.t.run(async ctx => {
     const { futureId } = await seedFixedCheckPlan(ctx, deliveryIdentity.tokenIdentifier, f.graph, Date.now())
     await ctx.db.delete(futureId)
     await ctx.db.patch(f.graph.studySessionId, { status: 'ready', missedAt: undefined })
@@ -681,6 +839,16 @@ async function reflowCanvasTeaching(f: Awaited<ReturnType<typeof canvasColdTeach
   const instructionalContent = await f.t.run(ctx => ctx.db.get(contentId))
   return { ...f, graph, contentId, instructionalSession, instructionalContent }
 }
+
+test('Canvas continuation resolves reflow lineage at the ordinary and dedicated session limits', async () => {
+  const original = await canvasColdTeaching('canvas', { beforePreparation: f => fillOrdinaryPlan(f, 600) })
+  await fillDedicatedPlan(original, 128)
+  const f = await reflowCanvasTeaching(original, true)
+  const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  expect(await f.owner.mutation(api.learnAdaptiveCanvas.startCanvasSession, { studySessionId: session._id,
+    expectedSessionRevision: session.revision, expectedContentRevision: 1, idempotencyKey: 'boundary_canvas_successor_start_12345' }))
+    .toMatchObject({ kind: 'attached' })
+})
 
 test.each([0, 1, 2])('Canvas cold original-session control delivers teaching and reaches Independent after %s reflows', async reflows => {
   let f = await canvasColdTeaching('canvas')
@@ -972,12 +1140,12 @@ test.each(['unsealed', 'open_check', 'separation_unknown', 'evidence'] as const)
   expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
 })
 
-test.each([false, true])('Canvas successor origin lookup keeps the plan bound with overflow=%s', async overflow => {
+test.each([false, true])('Canvas successor origin lookup keeps the ordinary plan bound with overflow=%s', async overflow => {
   const original = await canvasColdTeaching('canvas')
   const f = await reflowCanvasTeaching(original)
   await f.t.run(async ctx => {
     const { _id: _id, _creationTime: _time, ...source } = (await ctx.db.get(original.graph.studySessionId))!
-    for (let index = 0; index < 598; index++) await ctx.db.insert('studySessions', { ...source, placementId: `other-placement-${index}` })
+    for (let index = 0; index < 599; index++) await ctx.db.insert('studySessions', { ...source, placementId: `other-placement-${index}` })
   })
   expect(await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, { studySessionId: f.graph.studySessionId,
     expectedSessionRevision: 2, idempotencyKey: 'canvas_successor_bounded_prepare_12345' })).toMatchObject({ kind: 'prepared', assessmentOpportunityId: f.row._id })

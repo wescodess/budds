@@ -10,7 +10,7 @@ import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, learnOpeningWorkFaul
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
-import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority, isDedicatedLearnCheck, learnSessionReadLimit, MAX_LEARN_DEDICATED_CHECKS } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { getScopedMasteryRecord, masteryScopeKey } from './learnV2MasteryScope'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readEarliestLearnFirstSlot, readLearnFirstSlotInventory, writeLearnMeasurementEnrollmentFact } from './learnV2MeasurementFacts'
@@ -210,6 +210,7 @@ const PRIOR_TEACHING_PLAN_LIMIT = 32
 
 async function priorObjectiveTeaching(ctx: ReadCtx, userId: string, session: Doc<'studySessions'>) {
   let remaining = PRIOR_TEACHING_SESSION_LIMIT
+  let remainingChecks = MAX_LEARN_DEDICATED_CHECKS
   const seen = new Set<string>()
   let plan = await ctx.db.get(session.studyPlanRevisionId)
   while (plan) {
@@ -217,9 +218,11 @@ async function priorObjectiveTeaching(ctx: ReadCtx, userId: string, session: Doc
     seen.add(plan._id)
     const planId = plan._id
     const rows = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
-      q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(remaining + 1)
-    if (rows.length > remaining) return 'unknown' as const
-    remaining -= rows.length
+      q.eq('userId', userId).eq('studyPlanRevisionId', planId)).take(learnSessionReadLimit(remaining, remainingChecks))
+    const checks = rows.filter(isDedicatedLearnCheck).length
+    if (rows.length - checks > remaining || checks > remainingChecks) return 'unknown' as const
+    remaining -= rows.length - checks
+    remainingChecks -= checks
     if (rows.some(row => row._id !== session._id && row.primaryObjectiveId === session.primaryObjectiveId
       && row.assessmentOpportunityId === undefined && row.assessmentPurpose === undefined
       && (row.startedSessionContentId !== undefined || ['in_progress', 'completed'].includes(row.status)))) return 'returning' as const

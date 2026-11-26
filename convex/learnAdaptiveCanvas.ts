@@ -25,7 +25,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, hasLearnSessionReflowAuthority, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnSessionReflowAuthority, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan, readLearnOrdinaryPlanSessions } from './lib/learnV2FixedChecks'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
@@ -64,8 +64,7 @@ async function canvasInstructionMatches(ctx: QueryCtx | MutationCtx, userId: str
     || !await hasLearnReflowPlanAuthority(ctx, userId, sourcePlan, cold.contextPins.planRecordRevision)) return false
   const active = await requireLearnActiveWorkPlan(ctx, userId, sourcePlan)
   if (active._id !== session.studyPlanRevisionId) return false
-  const sessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
-    q.eq('userId', userId).eq('studyPlanRevisionId', sourcePlan._id)).take(MAX_CANVAS_INSTRUCTIONAL_SESSIONS + 1)
+  const sessions = await readLearnOrdinaryPlanSessions(ctx, userId, sourcePlan._id, MAX_CANVAS_INSTRUCTIONAL_SESSIONS)
   const origins = sessions.filter(row => row.placementId === session.placementId && row.primaryObjectiveId === cold.objectiveId && !row.assessmentPurpose)
   if (sessions.length > MAX_CANVAS_INSTRUCTIONAL_SESSIONS || origins.length !== 1) return false
   const publications = await ctx.db.query('sessionContent').withIndex('by_userId_and_studySessionId_and_revision', q =>

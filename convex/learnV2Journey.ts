@@ -2,7 +2,7 @@ import { LearnBlueprintAuthorityError } from '../shared/learn-v2-errors'
 import { defineTeachingRead } from './lib/learnV2TeachingReads'
 import { teachingReadScope } from './lib/learnV2TeachingReadScope'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnSessionReflowAuthority, isDedicatedLearnCheck, readLearnCarriedSessions, readLearnFixedPlanChecks } from './lib/learnV2FixedChecks'
+import { hasLearnSessionReflowAuthority, readLearnOrdinaryPlanSessions, readLearnCarriedSessions, readLearnFixedPlanChecks } from './lib/learnV2FixedChecks'
 import { v, type Infer } from 'convex/values'
 import { query, mutation } from './_generated/server'
 import type { Doc, Id } from './_generated/dataModel'
@@ -142,13 +142,13 @@ async function planProjection(ctx: Parameters<typeof requireLearnV2QueryAccess>[
   if (revisions.length > MAX_REVISIONS) throw new Error('Learn V2 plan revisions exceed their bounded contract')
   const preview = revisions.find(row => row.status === 'draft') ?? null
   const accepted = root.activeRevisionId ? await ctx.db.get(root.activeRevisionId) : revisions.find(row => row.status === 'accepted') ?? null
-  const sessions = accepted ? await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', accepted._id)).take(MAX_SESSIONS + 1) : []
+  const sessions = accepted ? await readLearnOrdinaryPlanSessions(ctx, userId, accepted._id, MAX_SESSIONS) : []
   if (sessions.length > MAX_SESSIONS) throw new Error('Learn V2 sessions exceed their bounded contract')
   if (LEARN_MEASUREMENT_CAPABILITIES.responses && accepted && (accepted.userId !== userId || accepted.studyPlanId !== root._id || accepted.learningVoidId !== voidRow._id)) throw new Error('Learn V2 plan scope is unavailable')
   const carried = accepted ? await readLearnCarriedSessions(ctx, userId, accepted, MAX_SESSIONS - sessions.length) : []
-  const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses && accepted ? await readLearnFixedPlanChecks(ctx, userId, accepted, MAX_SESSIONS) : []
+  const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses && accepted ? await readLearnFixedPlanChecks(ctx, userId, accepted) : []
   return { root: projectFields(planRootSummary.fields, root), preview: preview ? projectPlan(preview, true) : null,
-    accepted: accepted ? projectPlan(accepted, true) : null, sessions: [...sessions, ...carried].filter(row => !isDedicatedLearnCheck(row)).map(row => projectFields(sessionSummary.fields, row)),
+    accepted: accepted ? projectPlan(accepted, true) : null, sessions: [...sessions, ...carried].map(row => projectFields(sessionSummary.fields, row)),
     ...(LEARN_MEASUREMENT_CAPABILITIES.responses ? { fixedChecks: fixed.map(row => ({ ...projectFields(sessionSummary.fields, row),
       assessmentPurpose: row.assessmentPurpose === 'measurement_cold' ? 'measurement_cold' as const : 'measurement_delayed' as const,
       assessmentOpportunityId: row.assessmentOpportunityId! })) } : {}) }
