@@ -192,6 +192,20 @@ The field carries no timing, content or authority and grants no delivery,
 scoring or post-seal access. Existing envelope versions and C4 goldens remain
 unchanged.
 
+Before a Canvas check starts, its `assessment` returns `reasonCode: 'awaiting_start'`
+and omits `observations` only when the shared Canvas attachment predicate would
+allow a fresh delivery grant: responses and delivery are on, the pilot admits the
+learner, the ungranted plan rebuilds exactly, the session is ready, and the
+opportunity is `ready` with no delivery grant or submission, inside its open
+window, with all current attachment and delivery authority intact. Start calls
+`attachReadySession` with the projection's `session.studySessionId` and
+`session.revision` as `studySessionId` and `expectedSessionRevision`; a successful
+attach grants delivery and the next Canvas read returns the delivered check. This adds no
+prompt, response specification, answer content or timing authority. It changes
+neither `assessmentPurpose` nor `checkTiming`. True not-admitted and closed checks
+retain `reasonCode: 'not_admitted'` and `observations: 'no_observations'`;
+responses-off, delivered and saved projections remain unchanged.
+
 Argument and return validators live in `convex/lib/learnV2PublicContract.ts`. They are importable by application and server adapters and contain no private scorer or source loader. Existing shared schemas supply semantic validation, including original-envelope bytes, finite numbers, exact response text, code-unit limits and URL-safe command keys. Invalid wire input produces a bounded generic error. The new public functions accept no owner, cohort, scorer, phase, trusted grant object or draft payload.
 
 Authentication derives ownership from `tokenIdentifier` through `requireAuth`, including the account-deletion tombstone. Targeted calls check the record and its owning Void/Blueprint/objective/plan/session or standalone thread/activity. Canvas attribution retains the additional adaptive access conjunction; a wrapper cannot remove it. Unauthenticated, foreign, missing or mismatched authority is denied without returning stored payloads. A new handler never returns a successful save, grant, terminalization, score or report from an unimplemented operation.
