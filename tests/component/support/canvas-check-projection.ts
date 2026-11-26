@@ -48,8 +48,10 @@ export function serverAssessmentCanvas(input: {
   currentEligibility?: string
   timing?: CheckTiming | null
   purpose?: CheckPurpose | null
+  awaitingStart?: boolean
 }) {
-  const delivered = input.delivered ?? true
+  const awaitingStart = input.awaitingStart === true
+  const delivered = !awaitingStart && (input.delivered ?? true)
   const submissionId = input.submissionId ?? null
   const status = !delivered ? 'blocked'
     : input.phase === 'test_open' ? 'started'
@@ -70,7 +72,8 @@ export function serverAssessmentCanvas(input: {
       ...timingField(input.timing === undefined ? 'this_session' : input.timing),
       ...purposeField(input.purpose === undefined ? 'measurement_cold' : input.purpose), submissionId,
       bodyAvailability: input.bodyAvailability ?? 'unavailable', currentEligibility: input.currentEligibility ?? 'unknown',
-      reasonCode: delivered ? null : 'not_admitted', ...(delivered ? {} : { observations: 'no_observations' as const }),
+      reasonCode: awaitingStart ? 'awaiting_start' : delivered ? null : 'not_admitted',
+      ...(delivered || awaitingStart ? {} : { observations: 'no_observations' as const }),
     },
   }
 }

@@ -970,6 +970,17 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    it('presents the entry card for a check awaiting its start, with the tools hidden', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'ready', timing: null, awaitingStart: true })
+      checkState.value = { ...assessment('ready'), capabilities: { ...assessment('ready').capabilities, canDeliver: true } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on an earlier topic')
+      expectToolsHidden(wrapper)
+      wrapper.unmount()
+    })
+
     it('renders a frozen-cohort receipt after rollback as a check', async () => {
       const Page = await import(path)
       projection.value = missionThread()

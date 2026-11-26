@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import type { LEARN_V2_PUBLIC_API_VERSION, LearnV2AssessmentDelivery, LearnV2AssessmentState, LearnV2PracticeAssistanceAuthorization, LearnV2ResponseState } from '~~/convex/lib/learnV2PublicContract'
 import { learnV2CanvasMeasurementApi as checkApi } from '~~/convex/learnV2ApiAdapters'
+import { api } from '#convex/api'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, type LearnResponsePayload } from '~~/shared/learn-v2-responses'
 import { LEARN_V2_POST_SEAL_TEACHING_VERSION } from '~~/shared/learn-v2-assessment-disclosure'
 import type { LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
@@ -13,10 +14,12 @@ const MAX_ANSWER_LENGTH = 12_000
 const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 'test_open']
 
 export type CanvasCheckTiming = typeof LEARN_TODAY_CHECK_TIMINGS[number]
-export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming | null }
+export type CanvasCheckStart = { studySessionId: string, expectedSessionRevision: number }
+export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming | null, start: CanvasCheckStart | null }
 type CanvasCheckProjection = {
   assessment?: { assessmentOpportunityId: string, checkTiming?: unknown, assessmentPurpose?: unknown, reasonCode?: string | null, observations?: unknown } | null
   checkReceipt?: unknown
+  session?: { studySessionId: string, revision: number } | null
 } | null | undefined
 
 function measurementPurpose(value: unknown) {
@@ -44,11 +47,13 @@ export function canvasCheckBinding(canvas: CanvasCheckProjection): CanvasCheckBi
   if (canvas.checkReceipt !== undefined && !receipt) return null
   const assessment = canvas.assessment ?? null
   if (!measurementPurpose(assessment?.assessmentPurpose ?? receipt?.assessmentPurpose)) return null
-  const delivered = Boolean(receipt) || (assessment !== null && assessment.reasonCode !== 'not_admitted' && assessment.observations === undefined)
-  if (!delivered) return null
+  const awaitingStart = !receipt && assessment?.reasonCode === 'awaiting_start' && assessment.observations === undefined
+  const delivered = Boolean(receipt) || (assessment !== null && !awaitingStart && assessment.reasonCode !== 'not_admitted' && assessment.observations === undefined)
+  if (!delivered && !awaitingStart) return null
   const timing = checkTiming(assessment?.checkTiming) ?? receipt?.checkTiming?.timing ?? null
   const assessmentOpportunityId = assessment?.assessmentOpportunityId ?? null
-  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt, timing } : null
+  const start = awaitingStart && canvas.session ? { studySessionId: canvas.session.studySessionId, expectedSessionRevision: canvas.session.revision } : null
+  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt, timing, start } : null
 }
 
 export function canvasCheckIdentity(binding: CanvasCheckBinding) {
@@ -143,7 +148,7 @@ export function useCanvasCheck(options: {
     return null
   })
 
-  const grantMutation = import.meta.client ? useConvexMutation(checkApi.grantAssessmentDelivery) : { mutate: async () => undefined }
+  const attachMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.attachReadySession) : { mutate: async () => undefined }
   const acceptMutation = import.meta.client ? useConvexMutation(checkApi.acceptMasterySubmission) : { mutate: async () => undefined }
   const acceptPracticeMutation = import.meta.client ? useConvexMutation(checkApi.acceptResponse) : { mutate: async () => undefined }
   const scoreAction = import.meta.client ? useConvexAction(checkApi.scoreMasterySubmission) : { mutate: async () => undefined }
@@ -238,13 +243,18 @@ export function useCanvasCheck(options: {
 
   async function start() {
     const current = available.value
+    const attach = options.binding().start
     if (!current || !current.capabilities.canDeliver || busy.value || !options.isOnline.value) return
-    busy.value = true
     startFailed.value = false
+    if (!attach) {
+      startFailed.value = true
+      return
+    }
+    busy.value = true
     startKey ??= commandKey('adaptive-canvas-check-start')
     try {
-      const result = await grantMutation.mutate({ ...reference, expectedRevision: current.revision, idempotencyKey: startKey })
-      if (result?.status !== 'granted') {
+      const result = await attachMutation.mutate({ studySessionId: attach.studySessionId as never, expectedSessionRevision: attach.expectedSessionRevision, idempotencyKey: startKey })
+      if (result?.kind !== 'attached') {
         startKey = null
         startFailed.value = true
       }

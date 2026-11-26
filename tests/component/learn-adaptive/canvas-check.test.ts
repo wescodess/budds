@@ -5,7 +5,7 @@ import { getFunctionName } from 'convex/server'
 import { LEARN_V2_RESPONSE_CONTRACT_VERSION, learnAcceptResponseRequestSchema, learnResponseIdempotencyKeySchema, learnResponseReceiptSchema } from '~~/shared/learn-v2-responses'
 import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, LEARN_V2_POST_SEAL_TEACHING_VERSION, learnAttemptHistorySchema, learnAuthorizePracticeAssistanceSchema, learnDeliveredAssessmentSchema, learnPostSealPracticeSchema, learnPostSealTeachingReferenceSchema, learnPostSealTeachingSchema, learnPracticeAssistanceAuthorizationSchema } from '~~/shared/learn-v2-assessment-disclosure'
 import { LEARN_V2_ASSESSMENT_CAPABILITIES_VERSION, learnAssessmentCapabilitiesSchema, type LearnAssessmentPhase } from '~~/shared/learn-v2-delayed-check'
-import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, grantAssessmentDeliverySchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
+import { acceptMasterySubmissionSchema, scoreMasterySubmissionSchema, LEARN_V2_PUBLIC_API_VERSION } from '~~/convex/lib/learnV2PublicContract'
 import { serverAssessmentCanvas, serverCheckReceipt, serverSavedCheckCanvas } from '../support/canvas-check-projection'
 
 vi.mock('#shared/learn-v2-measurement-storage-manifest', async (importOriginal) => {
@@ -20,6 +20,7 @@ const teachingData = shallowRef<unknown>(null)
 const subscriptions = vi.fn()
 const isOnline = ref(true)
 const grant = vi.fn()
+const attach = vi.fn()
 const accept = vi.fn()
 const acceptPractice = vi.fn()
 const score = vi.fn()
@@ -39,7 +40,7 @@ mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
 })
 mockNuxtImport('useConvexMutation', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
-  return { mutate: name.includes('learnV2PostSealTeaching:openPractice') ? openPracticeCommand : name.includes('learnV2PostSealTeaching:publishFeedback') ? publishFeedbackCommand : name.includes('grantAssessmentDelivery') ? grant : name.includes('acceptMasterySubmission') ? accept : name.includes('acceptResponse') ? acceptPractice : name.includes('authorizePracticeAssistance') ? authorizePractice : name.includes('authorizeAssistance') ? authorizeLegacy : name.includes('recordAssistanceUse') ? recordAssistance : name.includes('submitCanvasResponse') ? stageLegacy : vi.fn() }
+  return { mutate: name.includes('learnAdaptiveCanvas:attachReadySession') ? attach : name.includes('learnV2PostSealTeaching:openPractice') ? openPracticeCommand : name.includes('learnV2PostSealTeaching:publishFeedback') ? publishFeedbackCommand : name.includes('grantAssessmentDelivery') ? grant : name.includes('acceptMasterySubmission') ? accept : name.includes('acceptResponse') ? acceptPractice : name.includes('authorizePracticeAssistance') ? authorizePractice : name.includes('authorizeAssistance') ? authorizeLegacy : name.includes('recordAssistanceUse') ? recordAssistance : name.includes('submitCanvasResponse') ? stageLegacy : vi.fn() }
 })
 mockNuxtImport('useConvexAction', () => (reference: never) => {
   const name = getFunctionName(reference) ?? ''
@@ -135,6 +136,7 @@ describe('Canvas check', () => {
     teachingData.value = teachingAvailable()
     subscriptions.mockClear()
     isOnline.value = true
+    attach.mockReset().mockResolvedValue({ kind: 'attached', threadId: 'thread_1', activityId: 'activity_1', replayed: false })
     grant.mockReset().mockResolvedValue({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'granted', assessmentOpportunityId: OPPORTUNITY, deliveryGrantId: 'grant_1', revision: 2, phase: 'test_open' })
     accept.mockReset().mockResolvedValue(acceptedReceipt())
     acceptPractice.mockReset().mockResolvedValue(learnResponseReceiptSchema.parse({ kind: 'accepted', version: LEARN_V2_RESPONSE_CONTRACT_VERSION, target: { responseSlotId: 'slot_1' }, submissionId: 'submission_2', acceptedAt: 1, revision: 2, phase: 'accepted', bodyAvailability: 'available' }))
@@ -195,14 +197,33 @@ describe('Canvas check', () => {
   })
 
   describe('entry and open check', () => {
-    it('grants delivery with a generated key and moves focus to the question', async () => {
+    const awaiting = (overrides: Parameters<typeof serverAssessmentCanvas>[0] = { opportunityId: OPPORTUNITY, phase: 'ready' }) =>
+      serverAssessmentCanvas({ ...overrides, awaitingStart: true })
+
+    it('renders the approved entry card for a check awaiting its start', async () => {
       stateData.value = ready()
       deliveryData.value = null
-      const wrapper = await mountCheck()
+      const projection = awaiting({ opportunityId: OPPORTUNITY, phase: 'ready', timing: 'about_a_week' })
+      expect(projection.assessment).toMatchObject({ reasonCode: 'awaiting_start' })
+      expect(projection.assessment).not.toHaveProperty('observations')
+      const wrapper = await mountCheck({ canvas: projection })
+      const entry = wrapper.get('[data-testid="learn-canvas-check-entry"]')
+      expect(entry.get('h2').text()).toBe('A check on last week’s work')
+      expect(entry.get('[data-testid="learn-canvas-check-start"]').text()).toBe('Start check')
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(false)
+    })
+
+    it('starts through the Canvas attach with a generated key, then renders the delivered check', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const wrapper = await mountCheck({ canvas: awaiting() })
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
-      await vi.waitFor(() => expect(grant).toHaveBeenCalledOnce())
-      const request = grantAssessmentDeliverySchema.parse(grant.mock.calls[0]![0])
-      expect(request).toMatchObject({ assessmentOpportunityId: OPPORTUNITY, expectedRevision: 1 })
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce())
+      const request = attach.mock.calls[0]![0] as { studySessionId: string, expectedSessionRevision: number, idempotencyKey: string }
+      expect(request).toMatchObject({ studySessionId: 'session_1', expectedSessionRevision: 2 })
+      expect(learnResponseIdempotencyKeySchema.parse(request.idempotencyKey)).toBe(request.idempotencyKey)
+      expect(grant).not.toHaveBeenCalled()
+      await wrapper.setProps({ canvas: canvas() })
       stateData.value = open()
       deliveryData.value = delivered()
       await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('Your question'))
@@ -210,15 +231,41 @@ describe('Canvas check', () => {
       expect(wrapper.get('[data-testid="learn-canvas-check-question"]').text()).toContain('Explain why both results make sense.')
     })
 
-    it('keeps the grant key on an ambiguous start failure', async () => {
+    it('keeps the attach key on an ambiguous start failure and rotates it after a definite denial', async () => {
       stateData.value = ready()
-      grant.mockRejectedValueOnce(new Error('network')).mockResolvedValueOnce({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'granted', assessmentOpportunityId: OPPORTUNITY, deliveryGrantId: 'grant_1', revision: 2, phase: 'test_open' })
-      const wrapper = await mountCheck()
+      attach.mockRejectedValueOnce(new Error('network'))
+        .mockResolvedValueOnce({ kind: 'not_admitted', reasonCode: 'session_unavailable', observations: 'no_observations' })
+      const wrapper = await mountCheck({ canvas: awaiting() })
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-start-error"]').exists()).toBe(true))
+      expect(wrapper.get('[data-testid="learn-canvas-check-start-error"]').text()).toBe('Could not start this session. Try again.')
       await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
-      await vi.waitFor(() => expect(grant).toHaveBeenCalledTimes(2))
-      expect(grant.mock.calls[1]![0].idempotencyKey).toBe(grant.mock.calls[0]![0].idempotencyKey)
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2))
+      expect(attach.mock.calls[1]![0].idempotencyKey).toBe(attach.mock.calls[0]![0].idempotencyKey)
+      await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(3))
+      expect(attach.mock.calls[2]![0].idempotencyKey).not.toBe(attach.mock.calls[1]![0].idempotencyKey)
+    })
+
+    it('gives a Canvas-native check awaiting its start the entry card without Today timing', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const projection = awaiting({ opportunityId: OPPORTUNITY, phase: 'ready', timing: null, purpose: 'measurement_delayed' })
+      expect(projection.assessment).not.toHaveProperty('checkTiming')
+      const wrapper = await mountCheck({ canvas: projection })
+      expect(wrapper.get('[data-testid="learn-canvas-check-entry"] h2').text()).toBe('A check on an earlier topic')
+      await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce())
+    })
+
+    it('keeps the dev Canvas for a not-admitted check and never attaches', async () => {
+      stateData.value = ready()
+      const projection = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', delivered: false })
+      expect(projection.assessment).toMatchObject({ reasonCode: 'not_admitted', observations: 'no_observations' })
+      const wrapper = await mountCheck({ canvas: projection })
+      expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-adaptive-canvas"]').exists()).toBe(true)
+      expect(attach).not.toHaveBeenCalled()
     })
 
     it('hides every help, Why, Evidence and activity control while the check is open', async () => {
@@ -1155,7 +1202,8 @@ describe('Canvas check', () => {
     ])('heads the entry from the server timing %s', async (timing, heading) => {
       stateData.value = ready()
       deliveryData.value = null
-      const projection = canvas({ assessment: { ...canvas().assessment, checkTiming: { version: 'learn-v2.canvas-check-timing.v1', timing } } })
+      const base = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', awaitingStart: true })
+      const projection = { ...base, assessment: { ...base.assessment, checkTiming: { version: 'learn-v2.canvas-check-timing.v1', timing } } }
       const wrapper = await mountCheck({ canvas: projection })
       const entry = wrapper.get('[data-testid="learn-canvas-check-entry"]')
       const title = entry.get('h2')
@@ -1191,8 +1239,8 @@ describe('Canvas check', () => {
     ])('uses the generic heading for a measurement check with %s', async (_name, checkTiming) => {
       stateData.value = ready()
       deliveryData.value = null
-      const { checkTiming: _timing, ...assessment } = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'test_open', timing: null }).assessment
-      const wrapper = await mountCheck({ canvas: canvas({ assessment: checkTiming ? { ...assessment, checkTiming } : assessment }) })
+      const base = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', timing: null, awaitingStart: true })
+      const wrapper = await mountCheck({ canvas: { ...base, assessment: checkTiming ? { ...base.assessment, checkTiming } : base.assessment } })
       const entry = wrapper.get('[data-testid="learn-canvas-check-entry"]')
       expect(entry.get('h2').text()).toBe('A check on an earlier topic')
       expect(entry.attributes('aria-labelledby')).toBe(entry.get('h2').attributes('id'))
