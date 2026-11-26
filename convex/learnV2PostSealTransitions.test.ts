@@ -732,6 +732,71 @@ async function canvasContinuationWrites(f: Awaited<ReturnType<typeof canvasColdT
     receipts: await ctx.db.query('learnActivityCommandReceipts').withIndex('by_userId', q => q.eq('userId', deliveryIdentity.tokenIdentifier)).take(16) }))
 }
 
+test.each([1, 2])('Canvas continuation start survives %s later reflows and reaches Independent', async count => {
+  const f = await canvasColdTeaching('canvas')
+  await f.t.run(async ctx => {
+    const { futureId } = await seedFixedCheckPlan(ctx, deliveryIdentity.tokenIdentifier, f.graph, Date.now())
+    await ctx.db.delete(futureId)
+    await ctx.db.patch(f.graph.studySessionId, { status: 'ready', missedAt: undefined })
+  })
+  const request = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2,
+    expectedContentRevision: 1, idempotencyKey: 'canvas_start_before_reflow_12345' }
+  const attached = await f.owner.mutation(learnV2CanvasMeasurementApi.startSession, request)
+  if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
+  const before = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+  expect(before.status).toBe('started')
+  const started = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+  const application = (await f.t.run(ctx => ctx.db.get(started.assessmentOpportunityId!)))!
+  const grant = await f.t.run(ctx => ctx.db.get(application.deliveryGrantId!))
+  const coldCheck = await f.t.run(ctx => ctx.db.get(f.row._id))
+  let planId = f.graph.studyPlanRevisionId
+  for (let index = 0; index < count; index++) {
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: planId,
+      expectedPlanRecordRevision: 1, idempotencyKey: `canvas_started_reflow_${index}_12345` })
+    if (!reflow.successorPlanRevisionId) throw new Error('Expected reflow successor')
+    planId = reflow.successorPlanRevisionId
+    const canvas = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+    expect(canvas.status).toBe('started')
+    expect(canvas.responsePrompt).toBe(before.responsePrompt)
+    expect(await f.owner.mutation(learnV2CanvasMeasurementApi.startSession, request)).toEqual({ ...attached, replayed: true })
+    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: f.graph.studySessionId })
+    expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toEqual({ ...started, carriedPlanRevisionId: planId })
+    expect(await f.t.run(ctx => ctx.db.get(application._id))).toEqual(application)
+    expect(await f.t.run(ctx => ctx.db.get(application.deliveryGrantId!))).toEqual(grant)
+    expect(await f.owner.query(api.learnV2Journey.getSessionCandidate, { learningVoidId: f.graph.learningVoidId,
+      studySessionId: f.graph.studySessionId })).toMatchObject({ studySessionId: f.graph.studySessionId, status: 'in_progress', content: { revision: 1 } })
+  }
+  vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({ id: 'canvas-carried-independent-execution', model: 'synthetic/model',
+    choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+      criterionResults: [{ key: 'accuracy', awarded: true }], misconceptionTags: [] }) } }],
+    usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 }, openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
+      endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } })))
+  const sealed = await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { studySessionId: f.graph.studySessionId,
+    threadId: attached.threadId, activityId: attached.activityId, expectedRevision: before.thread.revision,
+    expectedSessionRevision: before.session.revision, response: 'A supported continuation response.', confidence: 3,
+    idempotencyKey: 'canvas_carried_submit_12345' })
+  if (sealed.kind !== 'accepted') throw new Error(JSON.stringify(sealed))
+  expect(await f.owner.action(api.learnAdaptive.submitResponse, { threadId: attached.threadId, activityId: attached.activityId,
+    submissionId: sealed.submissionId, idempotencyKey: 'canvas_carried_score_12345' })).toMatchObject({ kind: 'accepted', status: 'completed' })
+  expect(await f.t.run(ctx => ctx.db.get(f.graph.studySessionId))).toMatchObject({ status: 'completed', carriedPlanRevisionId: planId })
+  const attempts = await f.t.run(ctx => ctx.db.query('masteryAttempts').withIndex('by_userId', q => q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))
+  expect(attempts).toEqual([expect.objectContaining({ kind: 'measurement_cold' }), expect.objectContaining({ kind: 'independent_application',
+    masteryStateAfter: 'independent', serverScorePercent: 100, studySessionId: f.graph.studySessionId,
+    assistanceSnapshot: expect.objectContaining({ state: 'unassisted' }) })])
+  const day7 = (await f.t.run(ctx => ctx.db.query('learnAssessmentOpportunities').withIndex('by_userId_and_assignmentId_and_horizonDays', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('assignmentId', f.assignment._id).eq('horizonDays', 7)).unique()))!
+  const claims = await f.t.run(ctx => ctx.db.query('learnMeasurementReportFacts').withIndex('by_userId_and_fact_kind_and_sequence', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('fact.kind', 'independent_claim_v2')).take(2))
+  expect(claims).toEqual([expect.objectContaining({ fact: expect.objectContaining({ basisAttemptId: attempts[1]!._id,
+    stratum: expect.objectContaining({ flow: 'v2_canvas' }), firstSlot: expect.objectContaining({ firstCheckOpportunityId: day7._id }) }) })])
+  expect(await f.t.run(ctx => ctx.db.get(f.assignment._id))).toMatchObject({ flow: 'v2_canvas', exclusionReasons: [] })
+  expect(await f.t.run(ctx => ctx.db.get(f.row._id))).toEqual(coldCheck)
+  expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+  expect(await f.t.run(ctx => ctx.db.query('learnAssessmentExposures').withIndex('by_userId_and_assignmentId_and_purpose_and_status_and_serverTime', q =>
+    q.eq('userId', deliveryIdentity.tokenIdentifier).eq('assignmentId', f.assignment._id).eq('purpose', 'teaching').eq('status', 'granted')).take(2)))
+    .toEqual([expect.objectContaining({ provenanceVersion: 'learn-v2.instructional-flow.v2_canvas.v1' })])
+})
+
 test.each(['placement', 'plan_root', 'objective', 'parent', 'blueprint', 'origin_digest', 'ambiguous_origin'] as const)(
   'Canvas successor continuation rejects unrelated or broken %s lineage', async failure => {
     const original = await canvasColdTeaching('canvas')
@@ -767,6 +832,53 @@ test.each(['placement', 'plan_root', 'objective', 'parent', 'blueprint', 'origin
     expect(await f.owner.mutation(api.learnAdaptiveCanvas.prepareCanvasSession, request)).toMatchObject({ kind: 'not_admitted' })
     expect(await canvasContinuationWrites(f)).toEqual(before)
     expect(await f.t.run(ctx => ctx.db.get(f.response._id))).toEqual(f.response)
+  })
+
+test.each(['missing_membership', 'foreign_membership', 'broken_lineage', 'binding', 'source_purge'] as const)(
+  'carried Canvas application rejects %s without changing its frozen pins', async failure => {
+    const f = await canvasColdTeaching('canvas')
+    await f.t.run(async ctx => {
+      const { futureId } = await seedFixedCheckPlan(ctx, deliveryIdentity.tokenIdentifier, f.graph, Date.now())
+      await ctx.db.delete(futureId)
+      await ctx.db.patch(f.graph.studySessionId, { status: 'ready', missedAt: undefined })
+    })
+    const start = { studySessionId: f.graph.studySessionId, expectedSessionRevision: 2, expectedContentRevision: 1,
+      idempotencyKey: 'canvas_carried_denial_start_12345' }
+    const attached = await f.owner.mutation(learnV2CanvasMeasurementApi.startSession, start)
+    if (attached.kind !== 'attached') throw new Error(JSON.stringify(attached))
+    const before = (await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId }))!
+    const session = (await f.t.run(ctx => ctx.db.get(f.graph.studySessionId)))!
+    const application = (await f.t.run(ctx => ctx.db.get(session.assessmentOpportunityId!)))!
+    const coldPins = (await f.t.run(ctx => ctx.db.get(f.row._id)))!.contextPins
+    if (!('contextPins' in f.response)) throw new Error('Expected assessment response')
+    const responsePins = f.response.contextPins
+    const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      expectedPlanRecordRevision: 1, idempotencyKey: 'canvas_carried_denial_reflow_12345' })
+    if (!reflow.successorPlanRevisionId) throw new Error('Expected successor')
+    const destination = reflow.successorPlanRevisionId
+    await f.t.run(async ctx => {
+      if (failure === 'missing_membership') await ctx.db.patch(session._id, { carriedPlanRevisionId: undefined })
+      if (failure === 'broken_lineage') await ctx.db.patch(destination, { parentRevisionId: undefined })
+      if (failure === 'binding' && application.contextPins.kind === 'session') await ctx.db.patch(application._id, {
+        contextPins: { ...application.contextPins, contentInputDigest: 'mismatched-application-input' } })
+      if (failure === 'foreign_membership') {
+        const { _id: _id, _creationTime: _time, ...plan } = (await ctx.db.get(destination))!
+        const foreign = await ctx.db.insert('studyPlanRevisions', { ...plan, userId: 'https://auth.example|foreign' })
+        await ctx.db.patch(session._id, { carriedPlanRevisionId: foreign })
+      }
+    })
+    if (failure === 'source_purge') await f.owner.mutation(api.learnV2Sources.markUnavailable, { sourceSnapshotId: f.graph.sourceSnapshotId,
+      expectedRevision: 1, reason: 'source_deleted', idempotencyKey: 'canvas_carried_source_withdrawal_12345' })
+    const canvas = await f.owner.query(api.learnAdaptiveCanvas.getCanvas, { threadId: attached.threadId })
+    expect(canvas?.status ?? 'blocked').toBe('blocked')
+    expect(canvas?.responsePrompt).toBeFalsy()
+    expect(await f.owner.mutation(learnV2CanvasMeasurementApi.startSession, start)).toMatchObject({ kind: 'not_admitted' })
+    expect(await f.owner.mutation(api.learnAdaptiveCanvas.submitCanvasResponse, { threadId: attached.threadId, activityId: attached.activityId,
+      studySessionId: session._id, expectedRevision: before.thread.revision, expectedSessionRevision: before.session.revision,
+      response: 'A response with withdrawn authority.', confidence: 3, idempotencyKey: 'canvas_carried_denied_submit_12345' })).toMatchObject({ kind: 'rejected' })
+    expect((await f.t.run(ctx => ctx.db.get(f.row._id)))!.contextPins).toEqual(coldPins)
+    expect((await f.t.run(ctx => ctx.db.get(f.response._id)))!).toMatchObject({ contextPins: responsePins })
+    expect(await f.t.run(ctx => ctx.db.query('learnResponses').withIndex('by_userId', q => q.eq('userId', deliveryIdentity.tokenIdentifier)).take(8))).toHaveLength(1)
   })
 
 test.each(['unsealed', 'open_check', 'separation_unknown', 'evidence'] as const)('Canvas successor retains the %s gate', async failure => {

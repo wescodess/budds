@@ -39,7 +39,7 @@ import { LEARN_V2_ASSESSMENT_DISCLOSURE_VERSION, learnAttemptHistorySchema } fro
 import { LEARN_MEASUREMENT_CAPABILITIES, LEARN_MEASUREMENT_STORAGE_VERSION } from '../../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
-import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import {
   appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readLearnFirstCheckFact, writeLearnMeasurementEnrollmentFact, writeLearnResponseAcceptanceFact,
 } from './learnV2MeasurementFacts'
@@ -121,8 +121,10 @@ async function currentScope(ctx: ReadCtx, userId: string, row: Target) {
   const context = pins.contextPins
   if (context.kind === 'calibration') return { pins, session: null, content: null }
   const [plan, revision] = await Promise.all([ctx.db.get(context.studyPlanId), ctx.db.get(context.studyPlanRevisionId)])
-  const frozenPlan = revision && 'purpose' in row && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
+  const carriedSession = context.kind === 'session' ? await ctx.db.get(context.studySessionId) : null
+  const frozenPlan = revision && ('purpose' in row && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
     && await hasLearnReflowPlanAuthority(ctx, userId, revision, context.planRecordRevision)
+    || carriedSession && await hasLearnCarriedSessionAuthority(ctx, userId, carriedSession, revision, context.planRecordRevision))
   if (!plan || !revision || !frozenPlan && (plan.activeRevisionId !== revision._id || revision.status !== 'accepted'
       || revision.recordRevision !== context.planRecordRevision)
     || revision.blueprintRevisionId !== blueprint._id || revision.blueprintRecordRevision !== blueprint.recordRevision

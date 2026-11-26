@@ -1,6 +1,6 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnStartedSessionBinding, isDedicatedLearnCheck, readLearnCarriedSessions, readLearnFixedPlanChecks, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -324,8 +324,9 @@ export const reflowFutureIncomplete = mutation({
     await requireLearnActiveWorkPlan(ctx, userId, plan)
     const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
     if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    const carried = await readLearnCarriedSessions(ctx, userId, plan, MAX_SESSIONS - currentSessions.length)
     const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan, MAX_SESSIONS) : []
-    const sessions = currentSessions.filter(row => !isDedicatedLearnCheck(row))
+    const sessions = [...currentSessions, ...carried].filter(row => !isDedicatedLearnCheck(row))
     const storedInput = JSON.parse(plan.inputSnapshot ?? '{}') as StudyPlanSchedulingInput
     const validPriorities = new Set<SchedulingPriority>(['overdue_retained_review', 'prerequisite_remediation', 'due_review', 'new_learning', 'optional_enrichment'])
     const reflow = rescheduleStudySessions({
@@ -356,7 +357,14 @@ export const reflowFutureIncomplete = mutation({
     const carriedStatuses = new Set(['planned', 'ready', 'in_progress', 'blocked', 'generation_failed', 'needs_reschedule'])
     for (const sessionId of reflow.preservedSessionIds) {
       const session = sessions.find(row => String(row._id) === sessionId)
+      if (session?.status === 'in_progress' && session.startedSessionContentId) {
+        const sourcePlan = await ctx.db.get(session.studyPlanRevisionId)
+        if (!sourcePlan || !await hasLearnStartedSessionBinding(ctx, userId, session, sourcePlan)) throw new Error('Started session binding is unavailable')
+        await ctx.db.patch(session._id, { carriedPlanRevisionId: successorId })
+        continue
+      }
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
+      if (session.status === 'in_progress') throw new Error('Started session content is unavailable')
       // Content belongs to the immutable old session identity. A successor
       // shell must regenerate rather than exposing `ready` without content.
       const retainedBlock = LEARN_MEASUREMENT_CAPABILITIES.responses && session.status === 'blocked'

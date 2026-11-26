@@ -47,7 +47,7 @@ import { canEmitLearnMeasurementOutcomeEvent, LEARN_MEASUREMENT_EVENT_TAXONOMY_V
 import { freezeFirstIndependentClaimForOwner, writeMeasurementOpportunityFact } from './lib/learnV2Measurement'
 import { materializeLearnMeasurementAssignment } from './lib/learnV2MeasurementDueWork'
 import { resolveLearnRetainedShell } from './lib/learnV2DelayedDelivery'
-import { requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { getFrozenLearnMeasurementProtocol } from './lib/learnV2MeasurementAssignment'
 import { appendLearnMeasurementFact, writeLearnResponseAcceptanceFact } from './lib/learnV2MeasurementFacts'
 import { stampPostSealTeachingAttempt } from './lib/learnV2PostSealStamp'
@@ -265,7 +265,8 @@ async function sessionScope(ctx: MutationCtx | QueryCtx, userId: string, session
   const folder = voidRow && await ctx.db.get(voidRow.folderId)
   if (!plan || !root || !content || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || content.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId) throw new Error('Started session pin is unavailable')
   await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id)
-  if (root.activeRevisionId !== plan._id || plan.status !== 'accepted' || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id
+  const carried = await hasLearnCarriedSessionAuthority(ctx, userId, session, plan)
+  if ((root.activeRevisionId !== plan._id || plan.status !== 'accepted') && !carried || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id
     || content.status !== 'published' || content.studySessionId !== session._id || content.blueprintRevisionId !== blueprint._id || content.objectiveId !== objective._id || content.studyPlanRevisionId !== plan._id
     || session.startedSessionContentRevision !== content.revision) throw new Error('Started session pin is no longer current')
   return { session, plan, root, content, blueprint, objective, voidRow }
@@ -573,10 +574,10 @@ function localDayAtNineUtcMs(localDate: string, timezone: string) {
   return instant
 }
 
-async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Pick<Awaited<ReturnType<typeof sessionScope>>, 'plan' | 'objective' | 'voidRow' | 'blueprint'>, testOnly?: boolean, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
+async function createFollowUp(ctx: MutationCtx, input: { userId: string, scope: Pick<Awaited<ReturnType<typeof sessionScope>>, 'plan' | 'objective' | 'voidRow' | 'blueprint'> & Partial<Pick<Awaited<ReturnType<typeof sessionScope>>, 'session'>>, testOnly?: boolean, attemptId: Id<'masteryAttempts'>, outcome: { state: string, remediation: boolean, setFirstIndependent: boolean }, now: number, timezone: string, firstIndependentLocalDate?: string, sourceIds: Id<'learnSourceSnapshots'>[] }) {
   const kind = input.outcome.remediation ? 'review' as const : input.outcome.state === 'guided' ? 'review' as const : input.outcome.setFirstIndependent ? 'retained_review' as const : null
   if (!kind) return null
-  const plan = await requireLearnActiveWorkPlan(ctx, input.userId, input.scope.plan)
+  const plan = await requireLearnActiveWorkPlan(ctx, input.userId, input.scope.plan, !!input.scope.session?.carriedPlanRevisionId)
   const priority = input.outcome.remediation ? 'prerequisite_remediation' : input.outcome.state === 'guided' ? 'due_review' : 'overdue_retained_review'
   const date = kind === 'retained_review' && input.firstIndependentLocalDate ? addCalendarDays(input.firstIndependentLocalDate, 7) : undefined
   const scheduledStartAt = date ? Math.max(input.now, localDayAtNineUtcMs(date, input.timezone)) : input.now

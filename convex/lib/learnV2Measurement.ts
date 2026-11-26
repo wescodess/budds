@@ -10,7 +10,7 @@ import { enqueueLearnOpportunityEdges, learnDueWorkEnabled, learnOpeningWorkFaul
 import { finalizeLearnDelayedCheckSession } from './learnV2DelayedDelivery'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
 import { privacyDigest, sourceBodyAvailable } from './learnV2ResponsePrivacy'
-import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import { documentMatchesSnapshot } from './learnV2BackingSource'
 import { getScopedMasteryRecord, masteryScopeKey } from './learnV2MasteryScope'
 import { appendLearnMeasurementFact, nextLearnMeasurementSourceSequence, readEarliestLearnFirstSlot, readLearnFirstSlotInventory, writeLearnMeasurementEnrollmentFact } from './learnV2MeasurementFacts'
@@ -74,8 +74,11 @@ export async function measurementScopeReason(ctx: ReadCtx, userId: string, scope
   const pins = scope.contextPins
   if (pins.kind === 'calibration') return 'pins_mismatch'
   const [plan, revision] = await Promise.all([ctx.db.get(pins.studyPlanId), ctx.db.get(pins.studyPlanRevisionId)])
-  const frozenPlan = revision && (scope.purpose?.kind === 'measurement_cold' || scope.purpose?.kind === 'measurement_delayed')
+  const carriedSession = pins.kind === 'session' && (scope.purpose?.kind === 'independent_application' || scope.purpose?.kind === 'retained_transfer')
+    ? await ctx.db.get(pins.studySessionId) : null
+  const frozenPlan = revision && ((scope.purpose?.kind === 'measurement_cold' || scope.purpose?.kind === 'measurement_delayed')
     && await hasLearnReflowPlanAuthority(ctx, userId, revision, pins.planRecordRevision)
+    || carriedSession && await hasLearnCarriedSessionAuthority(ctx, userId, carriedSession, revision, pins.planRecordRevision))
   if (!plan || !revision || plan.userId !== userId || revision.userId !== userId
     || plan.learningVoidId !== learningVoid._id || revision.learningVoidId !== learningVoid._id
     || revision.studyPlanId !== plan._id || !frozenPlan && (plan.activeRevisionId !== revision._id

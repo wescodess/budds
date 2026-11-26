@@ -18,7 +18,7 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import type { LearnV2AssessmentState } from './lib/learnV2PublicContract'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
+import { hasLearnSessionReflowAuthority } from './lib/learnV2FixedChecks'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { prepareCanvasSessionForOwner, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { LEARN_TODAY_CHECK_LIMIT, LEARN_TODAY_CLOSED_CHECK_DAYS, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
@@ -462,7 +462,7 @@ async function projectToday(ctx: QueryCtx, userId: string) {
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
       const currentPlan = plan && root && (root.activeRevisionId === plan._id && plan.status === 'accepted'
-        || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))
+        || await hasLearnSessionReflowAuthority(ctx, userId, session, plan))
       if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || !currentPlan || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
       try { await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id) }
       catch (error) {

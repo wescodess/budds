@@ -25,7 +25,7 @@ import { ADAPTIVE_ACTIVITY_VALIDATION_ANALYTICS_VERSION, validateAdaptiveActivit
 import { decodeSourceComparisonResponse, encodeSourceComparisonResponse } from '../shared/learn-adaptive-source-comparison-response'
 import { activityResponseAvailable, privacyDigest, retainedSourceExcerpt } from './lib/learnV2ResponsePrivacy'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnSessionReflowAuthority, LEARN_DELAYED_DELIVERY_VERSION, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
 import { ADAPTIVE_V2_PILOT_MANIFEST, adaptiveV2PilotDecision } from '../shared/adaptive-v2-pilot-policy'
 import type { LearnV2AssessmentDelivery } from './lib/learnV2PublicContract'
 import { canvasCheckReadArgs } from './lib/learnV2PublicContract'
@@ -577,7 +577,7 @@ export const attachReadySession = mutation({
     const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId)
     const objective = await ctx.db.get(session.primaryObjectiveId)
     const currentPlan = plan && stablePlan && (stablePlan.activeRevisionId === plan._id && plan.status === 'accepted'
-      || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))
+      || await hasLearnSessionReflowAuthority(ctx, userId, session, plan))
     if (!plan || !stablePlan || !learningVoid || !blueprint || !objective
       || plan.userId !== userId || learningVoid.userId !== userId || blueprint.userId !== userId || objective.userId !== userId
       || !currentPlan || blueprint.status !== 'accepted'
@@ -770,7 +770,7 @@ async function loadLegacyReadyCanvas(ctx: QueryCtx | MutationCtx, userId: string
       && scoredAttempt.objectiveId === objective._id && scoredAttempt.contentRevision === content.revision
       && session.startedSessionContentId === content._id && session.startedSessionContentRevision === content.revision
     const planCurrent = plan.status === 'accepted' && stablePlan.activeRevisionId === plan._id
-      || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan)
+      || await hasLearnSessionReflowAuthority(ctx, userId, session, plan)
     const current = planCurrent && blueprint.status === 'accepted' && content.status === 'published'
       && bodyAuthority
       && activity.sessionContentId === content._id && activity.objectiveId === objective._id

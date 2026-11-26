@@ -10,6 +10,7 @@ import { LEARN_V2_MASTERY_SCORING_ADMISSION } from './learnV2Mastery'
 import { ADAPTIVE_V2_PILOT_MANIFEST } from '../shared/adaptive-v2-pilot-policy'
 import { masteryScopeKey } from './lib/learnV2MasteryScope'
 import schema from './schema'
+import { seedFixedCheckPlan } from '../tests/fixtures/learn-v2-fixed-check-plan'
 import { legacyBaselineRequest } from '../tests/fixtures/learn-v2-mastery-baseline'
 import { serializeCompletionRequest } from '../server/utils/ai-gateway'
 
@@ -79,6 +80,39 @@ async function addAdaptiveActivity(setup: Awaited<ReturnType<typeof fixture>>, a
     return { threadId, activityDocumentId }
   })
 }
+
+test.each([1, 2])('ordinary in-progress mastery survives %s reflows with measurement off', async count => {
+  vi.useFakeTimers(); vi.setSystemTime(Date.parse('2027-03-07T15:00:00Z'))
+  const f = await fixture()
+  try {
+    await f.t.run(async ctx => {
+      const { futureId } = await seedFixedCheckPlan(ctx, OWNER.tokenIdentifier, { studyPlanRevisionId: f.ids.planRevisionId,
+        studySessionId: f.ids.sessionId, objectiveId: f.ids.objectiveId }, Date.now())
+      await ctx.db.delete(futureId)
+      await ctx.db.patch(f.ids.sessionId, { status: 'in_progress', missedAt: undefined })
+      await ctx.db.patch(f.ids.planRevisionId, { acceptedAt: Date.now() })
+      await ctx.db.patch(f.ids.blueprintIdRevision, { acceptedAt: Date.now() })
+    })
+    let planId = f.ids.planRevisionId
+    for (let index = 0; index < count; index++) {
+      const reflow = await f.owner.mutation(api.learnV2Plans.reflowFutureIncomplete, { studyPlanRevisionId: planId,
+        expectedPlanRecordRevision: index === 0 ? 5 : 1, idempotencyKey: `ordinary_mastery_reflow_${index}_12345` })
+      if (!reflow.successorPlanRevisionId) throw new Error('Expected reflow successor')
+      planId = reflow.successorPlanRevisionId
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ id: 'carried-ordinary-score', model: 'test/mastery-model',
+      choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        criterionResults: verdict(100).criterionResults, misconceptionTags: [] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }))))
+    for (const key of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(key, 'synthetic-unused')
+    const { tokenIdentifier: _owner, scorerVerdict: _verdict, ...request } = f.args('carried_ordinary_mastery_12345')
+    expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { ...request, expectedPlanRecordRevision: 6 }))
+      .toMatchObject({ status: 'completed', state: 'independent', scorePercent: 100 })
+    const sessions = await f.t.run(ctx => ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q =>
+      q.eq('userId', OWNER.tokenIdentifier).eq('studyPlanRevisionId', planId)).take(8))
+    expect(sessions).toEqual([expect.objectContaining({ placementKind: 'retained_review', status: 'planned' })])
+    expect(await f.t.run(ctx => ctx.db.get(f.ids.sessionId))).toMatchObject({ status: 'completed', carriedPlanRevisionId: planId })
+  } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); vi.useRealTimers() }
+})
 
 async function configureSyntheticPilot(identities: Array<typeof OWNER>) {
   const hash = async (value: unknown) => {
