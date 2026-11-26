@@ -1731,6 +1731,137 @@ describe('Canvas check', () => {
     })
   })
 
+  describe('stable identity and stale command responses', () => {
+    const later = <T>() => {
+      let resolve!: (value: T) => void
+      let reject!: (cause: unknown) => void
+      const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+      return { promise, resolve, reject }
+    }
+    const savedProjection = (state: 'saved_scoring' | 'result_unconfirmed' | 'closed', options: { postSeal?: string | null, opportunityId?: string, reference?: string, submissionId?: string } = {}) => {
+      const opportunityId = options.opportunityId ?? OPPORTUNITY
+      const receipt = serverCheckReceipt({ reference: options.reference ?? 'check_ref_1', state, answer: ANSWER, confidence: 4, submissionId: options.submissionId ?? SUBMISSION,
+        postSealOpportunityId: options.postSeal === undefined ? opportunityId : options.postSeal })
+      return serverSavedCheckCanvas({ opportunityId, phase: state === 'saved_scoring' ? 'scoring_pending' : state === 'closed' ? 'invalid' : 'reconciliation_required', receipt })
+    }
+
+    it('keeps the check mounted with practice, draft and focus through saved_scoring, receipt-only unconfirmed and closed projections', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      const wrapper = await mountCheck({ canvas: savedProjection('saved_scoring') })
+      const check = wrapper.get('[data-testid="learn-canvas-check"]').element
+      const field = wrapper.get('[data-testid="learn-canvas-check-practice-answer"]')
+      ;(field.element as HTMLTextAreaElement).focus()
+      await field.setValue('Habitat sets the range')
+      const reads = () => subscriptions.mock.calls.filter(([name]) => String(name).includes('getAssessmentState')).length
+      const before = reads()
+      for (const state of ['result_unconfirmed', 'closed'] as const) {
+        const projection = savedProjection(state)
+        expect(projection).not.toHaveProperty('assessment')
+        await wrapper.setProps({ canvas: projection })
+        await flushPromises()
+        expect(wrapper.get('[data-testid="learn-canvas-check"]').element).toBe(check)
+        const current = wrapper.get('[data-testid="learn-canvas-check-practice-answer"]')
+        expect(current.element).toBe(field.element)
+        expect((current.element as HTMLTextAreaElement).value).toBe('Habitat sets the range')
+        expect(document.activeElement).toBe(field.element)
+      }
+      expect(receiptKind(wrapper)).toBe('invalid')
+      expect(reads()).toBe(before)
+    })
+
+    it('keeps a frozen receipt mounted through its reference and submission, and remounts for a replacement check', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck({ canvas: savedProjection('saved_scoring', { postSeal: null }) })
+      const check = wrapper.get('[data-testid="learn-canvas-check"]').element
+      await wrapper.setProps({ canvas: savedProjection('result_unconfirmed', { postSeal: null }) })
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check"]').element).toBe(check)
+      expect(receiptKind(wrapper)).toBe('unconfirmed')
+      await wrapper.setProps({ canvas: savedProjection('result_unconfirmed', { postSeal: null, opportunityId: 'opportunity_2', reference: 'check_ref_2', submissionId: 'submission_2' }) })
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check"]').element).not.toBe(check)
+    })
+
+    it('ignores a late Start refusal once the projection has moved on', async () => {
+      stateData.value = ready()
+      deliveryData.value = null
+      const pending = later<unknown>()
+      attach.mockImplementationOnce(() => pending.promise)
+      const wrapper = await mountCheck({ canvas: serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', awaitingStart: true }) })
+      await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledOnce())
+      const moved = serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', awaitingStart: true })
+      await wrapper.setProps({ canvas: { ...moved, session: { ...moved.session, revision: 3 } } })
+      await flushPromises()
+      pending.resolve({ kind: 'not_admitted', reasonCode: 'session_unavailable', observations: 'no_observations' })
+      await flushPromises()
+      expect(wrapper.text()).not.toContain('This check isn’t available right now.')
+      expect(wrapper.get('[data-testid="learn-canvas-check-start"]').exists()).toBe(true)
+      await wrapper.get('[data-testid="learn-canvas-check-start"]').trigger('click')
+      await vi.waitFor(() => expect(attach).toHaveBeenCalledTimes(2))
+      expect(attach.mock.calls[1]![0]).toMatchObject({ expectedSessionRevision: 3 })
+    })
+
+    it('keeps submit and score failures from overwriting a sealed or advanced server state', async () => {
+      const { useCanvasCheck } = await import('~/composables/useCanvasCheck')
+      let check!: ReturnType<typeof useCanvasCheck>
+      const pending = later<unknown>()
+      accept.mockImplementationOnce(() => pending.promise)
+      const probe = await mountSuspended(defineComponent({ setup() {
+        check = useCanvasCheck({ ownerId: 'owner_1', threadId: 'thread_1', binding: () => ({ assessmentOpportunityId: OPPORTUNITY, submissionId: null, receipt: null, timing: null, start: null }), isOnline })
+        return () => h('div')
+      } }))
+      wrappers.push(probe)
+      check.answer.value = ANSWER
+      check.confidence.value = 3
+      const submitted = check.submit()
+      await vi.waitFor(() => expect(accept).toHaveBeenCalledOnce())
+      stateData.value = sealed('scoring_pending')
+      await flushPromises()
+      pending.reject(new Error('network'))
+      await submitted
+      expect(check.submitFailure.value).toBeNull()
+
+      const scoring = later<unknown>()
+      score.mockImplementationOnce(() => scoring.promise)
+      stateData.value = available('submitted_sealed', SUBMISSION, 3, capabilities({ canRequestAssistance: true, canTeachSeparateCase: true }))
+      await vi.waitFor(() => expect(score).toHaveBeenCalledOnce())
+      stateData.value = sealed('scoring_pending')
+      await flushPromises()
+      scoring.resolve({ version: LEARN_V2_PUBLIC_API_VERSION, status: 'unavailable', reasonCodes: ['unavailable'] })
+      await flushPromises()
+      expect(check.view.value).toMatchObject({ kind: 'receipt', receipt: 'saved' })
+    })
+
+    it('ignores a late practice-opening refusal once the server shows practice open', async () => {
+      const { useCanvasCheck } = await import('~/composables/useCanvasCheck')
+      let check!: ReturnType<typeof useCanvasCheck>
+      stateData.value = sealed('reconciliation_required')
+      workData.value = workState()
+      teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' }, help: null } })
+      const pending = later<unknown>()
+      openPracticeCommand.mockImplementationOnce(() => pending.promise)
+      const probe = await mountSuspended(defineComponent({ setup() {
+        check = useCanvasCheck({ ownerId: 'owner_1', threadId: 'thread_1', binding: () => ({ assessmentOpportunityId: OPPORTUNITY, submissionId: SUBMISSION, receipt: null, timing: null, start: null }), isOnline })
+        return () => h('div')
+      } }))
+      wrappers.push(probe)
+      await flushPromises()
+      const opening = check.openPractice()
+      await vi.waitFor(() => expect(openPracticeCommand).toHaveBeenCalledOnce())
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      await flushPromises()
+      pending.resolve(unavailableTeaching('test_open'))
+      expect(await opening).toBe(true)
+      expect(check.practiceOpenFailed.value).toBe(false)
+      expect(check.practice.value).not.toBeNull()
+    })
+  })
+
   describe('content labels', () => {
     const label = (wrapper: VueWrapper, name: string) => wrapper.find(`[data-testid="learn-canvas-check-${name}-label"]`)
     const expectForegroundLabel = (wrapper: VueWrapper, name: string, text: string) => {

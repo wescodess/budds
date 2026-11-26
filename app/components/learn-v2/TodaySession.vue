@@ -75,7 +75,11 @@ const meaningfulStartRetryTick = ref(0)
 const adaptiveActionElement = ref<HTMLButtonElement | null>(null)
 const meaningfulStartOperableSeen = ref(false)
 const startLock = shallowRef<LearnTodayCheckPointer | null>(null)
-watch(() => [checkPointers, checkLock], () => { startLock.value = null })
+let authoritativeVersion = 0
+watch(() => [checkPointers, checkLock], () => {
+  authoritativeVersion++
+  startLock.value = null
+})
 const lessonLock = computed(() => started.value ? null : startLock.value ?? checkLock)
 const showChecks = computed(() => Boolean(checkPointers || lessonLock.value))
 const listedChecks = shallowRef<LearnTodayCheckPointer[]>([])
@@ -199,12 +203,14 @@ async function start() {
   if (!isOnline.value || busy.value || started.value || lessonLock.value) return
   busy.value = true; error.value = null
   startKey.value ??= makeKey('learn-v2-start')
+  const requestedVersion = authoritativeVersion
   try {
     const result = await startMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, idempotencyKey: startKey.value }) as { sessionContentRevision?: number, status?: string, assessment?: { kind?: string, check?: unknown } }
     const lock = canvasLock(result)
     if (lock) {
-      startLock.value = lock
       startKey.value = null
+      if (requestedVersion !== authoritativeVersion) return
+      startLock.value = lock
       notice.value = 'Your check comes first. Today’s session opens after your check.'
       return
     }

@@ -15,9 +15,15 @@ const PRE_SEAL_PHASES: readonly LearnAssessmentPhase[] = ['preparing', 'ready', 
 
 export type CanvasCheckTiming = typeof LEARN_TODAY_CHECK_TIMINGS[number]
 export type CanvasCheckStart = { studySessionId: string, expectedSessionRevision: number }
-export type CanvasCheckBinding = { assessmentOpportunityId: string | null, receipt: LearnCanvasCheckReceipt | null, timing: CanvasCheckTiming | null, start: CanvasCheckStart | null }
+export type CanvasCheckBinding = {
+  assessmentOpportunityId: string | null
+  submissionId: string | null
+  receipt: LearnCanvasCheckReceipt | null
+  timing: CanvasCheckTiming | null
+  start: CanvasCheckStart | null
+}
 type CanvasCheckProjection = {
-  assessment?: { assessmentOpportunityId: string, checkTiming?: unknown, assessmentPurpose?: unknown, reasonCode?: string | null, observations?: unknown } | null
+  assessment?: { assessmentOpportunityId: string, submissionId?: string | null, checkTiming?: unknown, assessmentPurpose?: unknown, reasonCode?: string | null, observations?: unknown } | null
   checkReceipt?: unknown
   session?: { studySessionId: string, revision: number } | null
 } | null | undefined
@@ -53,11 +59,36 @@ export function canvasCheckBinding(canvas: CanvasCheckProjection): CanvasCheckBi
   const timing = checkTiming(assessment?.checkTiming) ?? receipt?.checkTiming?.timing ?? null
   const assessmentOpportunityId = assessment?.assessmentOpportunityId ?? null
   const start = awaitingStart && canvas.session ? { studySessionId: canvas.session.studySessionId, expectedSessionRevision: canvas.session.revision } : null
-  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, receipt, timing, start } : null
+  const submissionId = receipt?.submissionId ?? assessment?.submissionId ?? null
+  return assessmentOpportunityId || receipt ? { assessmentOpportunityId, submissionId, receipt, timing, start } : null
 }
 
-export function canvasCheckIdentity(binding: CanvasCheckBinding) {
-  return binding.assessmentOpportunityId ?? `receipt:${binding.receipt?.reference ?? ''}`
+function checkAliases(binding: CanvasCheckBinding) {
+  const postSeal = binding.receipt?.postSealReference?.assessmentOpportunityId
+  return [
+    binding.assessmentOpportunityId && `check:${binding.assessmentOpportunityId}`,
+    postSeal && `check:${postSeal}`,
+    binding.receipt && `reference:${binding.receipt.reference}`,
+    binding.submissionId && `submission:${binding.submissionId}`,
+  ].filter((alias): alias is string => Boolean(alias))
+}
+
+export function useStableCheckIdentity(binding: () => CanvasCheckBinding | null | undefined) {
+  let current: { key: string, aliases: Set<string> } | null = null
+  return computed(() => {
+    const value = binding()
+    if (!value) {
+      current = null
+      return null
+    }
+    const aliases = checkAliases(value)
+    if (current && aliases.some(alias => current!.aliases.has(alias))) {
+      for (const alias of aliases) current.aliases.add(alias)
+      return current.key
+    }
+    current = { key: aliases[0] ?? 'check', aliases: new Set(aliases) }
+    return current.key
+  })
 }
 export type CanvasCheckHelpKind = 'hint' | 'worked_example'
 export type CanvasCheckReceiptKind = 'saved' | 'scoring_failed' | 'unconfirmed' | 'invalid' | 'passed' | 'not_yet'
@@ -123,20 +154,20 @@ export function useCanvasCheck(options: {
   binding: () => CanvasCheckBinding
   isOnline: Readonly<Ref<boolean>>
 }) {
-  const opportunityId = options.binding().assessmentOpportunityId
-  const postSealId = opportunityId ?? options.binding().receipt?.postSealReference?.assessmentOpportunityId ?? null
-  const assessmentOpportunityId = opportunityId as never
+  const opportunityId = computed(() => options.binding().assessmentOpportunityId)
+  const postSealId = computed(() => opportunityId.value ?? options.binding().receipt?.postSealReference?.assessmentOpportunityId ?? null)
+  const draftIdentity = postSealId.value
   const serverReceipt = computed(() => options.binding().receipt)
-  const reference = { version: PUBLIC_API_VERSION, assessmentOpportunityId }
-  const stateQuery = useSkippableConvexQuery(checkApi.getAssessmentState, () => import.meta.client && opportunityId ? reference : 'skip')
+  const reference = computed(() => ({ version: PUBLIC_API_VERSION, assessmentOpportunityId: opportunityId.value as never }))
+  const stateQuery = useSkippableConvexQuery(checkApi.getAssessmentState, () => import.meta.client && opportunityId.value ? reference.value : 'skip')
   const state = computed(() => stateQuery.data.value)
   const available = computed(() => state.value?.status === 'available' ? state.value : null)
 
   const local = shallowRef<LocalReceipt | null>(null)
   const submissionId = computed(() => available.value?.submissionId ?? serverReceipt.value?.submissionId ?? local.value?.submissionId ?? null)
-  const deliveryQuery = useSkippableConvexQuery(checkApi.getAssessment, () => import.meta.client && opportunityId && available.value?.phase === 'test_open' ? reference : 'skip')
-  const workQuery = useSkippableConvexQuery(checkApi.getResponseState, () => import.meta.client && opportunityId && submissionId.value
-    ? { version: PUBLIC_API_VERSION, target: { assessmentOpportunityId } }
+  const deliveryQuery = useSkippableConvexQuery(checkApi.getAssessment, () => import.meta.client && opportunityId.value && available.value?.phase === 'test_open' ? reference.value : 'skip')
+  const workQuery = useSkippableConvexQuery(checkApi.getResponseState, () => import.meta.client && opportunityId.value && submissionId.value
+    ? { version: PUBLIC_API_VERSION, target: { assessmentOpportunityId: opportunityId.value as never } }
     : 'skip')
   const work = computed(() => {
     const value = workQuery.data.value
@@ -177,7 +208,7 @@ export function useCanvasCheck(options: {
       answer: canonicalAnswer.value ? canonicalAnswer.value.text : local.value?.answer ?? null,
       acceptedAt: work.value?.acceptedAt ?? serverReceipt.value?.acceptedAt ?? local.value?.acceptedAt ?? null,
     })
-    if (!opportunityId) return serverReceipt.value ? receipt(receiptOnlyKind(serverReceipt.value)) : { kind: 'unavailable' }
+    if (!opportunityId.value) return serverReceipt.value ? receipt(receiptOnlyKind(serverReceipt.value)) : { kind: 'unavailable' }
     if (state.value === null) return { kind: 'loading' }
     if (!available.value) return { kind: 'unavailable' }
     const { phase, capabilities } = available.value
@@ -204,19 +235,19 @@ export function useCanvasCheck(options: {
   })
 
   const sealed = computed(() => view.value.kind === 'receipt')
-  const draftKey = postSealId ? `learn-response:${options.ownerId}:${options.threadId}:check:${postSealId}` : null
+  const draftKey = draftIdentity ? `learn-response:${options.ownerId}:${options.threadId}:check:${draftIdentity}` : null
   const { restored } = useAdaptiveResponseDraft(draftKey, answer, sealed, confidence)
 
-  const canTeachSeparateCase = computed(() => opportunityId ? available.value?.capabilities.canTeachSeparateCase === true : Boolean(postSealId))
+  const canTeachSeparateCase = computed(() => opportunityId.value ? available.value?.capabilities.canTeachSeparateCase === true : Boolean(postSealId.value))
   const invalidBySource = computed(() => {
     const current = work.value
     if (!current) return serverReceipt.value?.body.bodyAvailability === 'unavailable' && serverReceipt.value.body.reasonCode === 'evidence_unavailable'
     return current.body.bodyAvailability !== 'available'
       || current.validitySnapshot.exclusionReasons.some(reason => reason === 'evidence_unavailable' || reason === 'pins_mismatch')
   })
-  const hasSealedReceipt = computed(() => Boolean(postSealId) && view.value.kind === 'receipt' && submissionId.value !== null)
-  const teachingReference = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: postSealId as never }
-  const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value ? teachingReference : 'skip')
+  const hasSealedReceipt = computed(() => Boolean(postSealId.value) && view.value.kind === 'receipt' && submissionId.value !== null)
+  const teachingReference = computed(() => ({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: postSealId.value as never }))
+  const teachingQuery = useSkippableConvexQuery(checkApi.getPostSealTeaching, () => import.meta.client && hasSealedReceipt.value ? teachingReference.value : 'skip')
   const teaching = computed(() => {
     const value = teachingQuery.data.value
     return hasSealedReceipt.value && value?.status === 'available' ? value : null
@@ -254,15 +285,21 @@ export function useCanvasCheck(options: {
     }
     busy.value = true
     startKey ??= commandKey('adaptive-canvas-check-start')
+    const stillCurrent = () => {
+      const latest = options.binding().start
+      return latest?.studySessionId === attach.studySessionId && latest.expectedSessionRevision === attach.expectedSessionRevision
+    }
     try {
       const result = await attachMutation.mutate({ studySessionId: attach.studySessionId as never, expectedSessionRevision: attach.expectedSessionRevision, idempotencyKey: startKey })
       if (result?.kind !== 'attached') {
         startKey = null
-        startFailed.value = true
-        startRefused.value = true
+        if (stillCurrent()) {
+          startFailed.value = true
+          startRefused.value = true
+        }
       }
     }
-    catch { startFailed.value = true }
+    catch { if (stillCurrent()) startFailed.value = true }
     finally { busy.value = false }
   }
 
@@ -278,11 +315,13 @@ export function useCanvasCheck(options: {
     busy.value = true
     scoreFailed.value = false
     scoreRequestedFor = id
+    const requestedPhase = available.value?.phase
+    const stillCurrent = () => available.value?.phase === requestedPhase && submissionId.value === id
     try {
       const result = await scoreAction.mutate({ version: PUBLIC_API_VERSION, submissionId: id as never, idempotencyKey: `adaptive-canvas-check-score-${id}` })
-      if (result?.status === 'disabled' || result?.status === 'unavailable') scoreFailed.value = true
+      if ((result?.status === 'disabled' || result?.status === 'unavailable') && stillCurrent()) scoreFailed.value = true
     }
-    catch { scoreFailed.value = true }
+    catch { if (stillCurrent()) scoreFailed.value = true }
     finally { busy.value = false }
   }
 
@@ -308,7 +347,7 @@ export function useCanvasCheck(options: {
         version: LEARN_V2_RESPONSE_CONTRACT_VERSION,
         idempotencyKey: submitKey!,
         response: {
-          target: { assessmentOpportunityId },
+          target: { assessmentOpportunityId: opportunityId.value as never },
           expectedRevision: current.revision,
           payload: { kind: 'text', text } satisfies LearnResponsePayload,
           confidence: confidence.value ?? undefined,
@@ -321,12 +360,13 @@ export function useCanvasCheck(options: {
       else {
         submitKey = null
         submitPayload = null
+        if (available.value?.submissionId) return { sealed: false }
         if (receipt?.kind === 'rejected' && receipt.reasonCode === 'empty_response') answerMissing.value = true
         else if (receipt?.kind === 'rejected' && receipt.reasonCode === 'confidence_required') confidenceMissing.value = true
         else if (receipt?.kind !== 'rejected' || (receipt.reasonCode !== 'already_accepted' && receipt.reasonCode !== 'idempotency_conflict')) submitFailure.value = 'request'
       }
     }
-    catch { submitFailure.value = 'request' }
+    catch { if (!available.value?.submissionId) submitFailure.value = 'request' }
     finally { busy.value = false }
     if (id) void score(id)
     return { sealed: id !== null }
@@ -356,7 +396,7 @@ export function useCanvasCheck(options: {
     if (publishAttempts >= MAX_PUBLISH_ATTEMPTS) return
     publishAttempts += 1
     feedbackPublishBusy.value = true
-    try { await publishFeedbackMutation.mutate(teachingReference).catch(() => undefined) }
+    try { await publishFeedbackMutation.mutate(teachingReference.value).catch(() => undefined) }
     finally {
       feedbackPublishBusy.value = false
       if (publishRecoveryPending) requestPublication()
@@ -393,7 +433,7 @@ export function useCanvasCheck(options: {
   })
   const practiceSaved = computed(() => practiceAcceptedHere.value || practiceAcceptedOnServer.value)
   watch(practiceAcceptedOnServer, accepted => { if (accepted) practiceFailed.value = false })
-  useAdaptiveResponseDraft(postSealId ? `learn-response:${options.ownerId}:${options.threadId}:practice:${postSealId}` : null, practiceAnswer, practiceSaved)
+  useAdaptiveResponseDraft(draftIdentity ? `learn-response:${options.ownerId}:${options.threadId}:practice:${draftIdentity}` : null, practiceAnswer, practiceSaved)
   const cachedAssistance = shallowRef<{ content: PracticeHelpContent, responseSlotId: string, revision: number } | null>(null)
   const assistance = computed(() => {
     const cached = cachedAssistance.value
@@ -417,17 +457,19 @@ export function useCanvasCheck(options: {
     practiceOpening.value = true
     practiceOpenFailed.value = false
     try {
-      const result = await openPracticeMutation.mutate(teachingReference)
+      const result = await openPracticeMutation.mutate(teachingReference.value)
       const opened = result?.status === 'available' && result.availability.practice.status === 'available' && result.practice !== null
-      if (!opened) practiceOpenFailed.value = true
-      return opened
+      if (!opened && !practice.value) practiceOpenFailed.value = true
+      return opened || Boolean(practice.value)
     }
     catch {
-      practiceOpenFailed.value = true
-      return false
+      if (!practice.value) practiceOpenFailed.value = true
+      return Boolean(practice.value)
     }
     finally { practiceOpening.value = false }
   }
+
+  watch(practice, (current) => { if (current) practiceOpenFailed.value = false })
 
   watch([() => view.value.kind === 'receipt' ? view.value.receipt : null, () => availability.value?.practice.status, submissionId, options.isOnline, practiceOpening], ([receipt, status, id, online, opening]) => {
     if (receipt === 'saved' && status === 'not_opened' && id && online && !opening && canTeachSeparateCase.value && autoOpenedFor !== id) {
@@ -475,7 +517,7 @@ export function useCanvasCheck(options: {
     assistanceLimit.value = false
     try {
       const result = await authorizePracticeMutation.mutate({
-        ...teachingReference,
+        ...teachingReference.value,
         target: { responseSlotId: current.responseSlotId }, expectedRevision: current.revision, kind, idempotencyKey,
       })
       if (result?.status === 'authorized' && result.content.kind === kind) {

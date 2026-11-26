@@ -230,6 +230,23 @@ describe('Today check rows', () => {
     await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-v2-phase-retrieval"]').exists()).toBe(true))
   })
 
+  it('drops a late Start lock once Today has already received the saved check', async () => {
+    let settle!: (value: unknown) => void
+    start.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
+    const wrapper = await mountSession({ checkPointers: envelope([]), checkLock: null })
+    await wrapper.get('[data-testid="learn-v2-start"]').trigger('click')
+    await vi.waitFor(() => expect(start).toHaveBeenCalledOnce())
+    await wrapper.setProps({ checkPointers: envelope([pointer('ref_raced', 'saved_scoring')]), checkLock: null })
+    settle({ status: 'assessment', sessionContentId: 'content_1', sessionContentRevision: 2, assessment: { kind: 'check', reasonCode: null, state: null, check: legacy('ref_raced') }, deliveryGrant: null })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="learn-v2-session-locked"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="learn-v2-check-row-saved_scoring"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="learn-v2-check-row-ready"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="learn-v2-start"]').trigger('click')
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2))
+    expect(start.mock.calls[1]![0].idempotencyKey).not.toBe(start.mock.calls[0]![0].idempotencyKey)
+  })
+
   it('retries a start whose receipt was lost with the same key, and never opens the lesson on its own', async () => {
     start.mockRejectedValueOnce(new Error('Network connection lost'))
     const wrapper = await mountSession({ checkPointers: envelope([pointer('ref_saved', 'saved_scoring')]), checkLock: null })

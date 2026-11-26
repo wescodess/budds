@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+import { flushPromises } from '@vue/test-utils'
 import { getFunctionName } from 'convex/server'
 import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
 import { serverAssessmentCanvas, serverCheckReceipt, serverSavedCheckCanvas } from '../support/canvas-check-projection'
@@ -1070,6 +1071,23 @@ describe('adaptive thread route isolation', () => {
       await entry.get('[data-testid="learn-canvas-check-entry"] [data-testid="learn-canvas-check-leave"]').trigger('click')
       expect(entryPush).toHaveBeenLastCalledWith('/app/learn/void_1')
       entry.unmount()
+    })
+
+    it('keeps the addressed check mounted when its projection changes shape and activity id', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      requestedRoute.query.check = 'shape_ref'
+      checkState.value = assessment('scoring_pending', 'submission_1')
+      const saved = serverCheckReceipt({ reference: 'shape_ref', state: 'saved_scoring', answer: 'My saved answer', confidence: 3 })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_1', phase: 'scoring_pending', activityId: 'activity_1', receipt: saved })
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?check=shape_ref' })
+      const check = wrapper.get('[data-testid="learn-canvas-check"]').element
+      const unconfirmed = serverCheckReceipt({ reference: 'shape_ref', state: 'result_unconfirmed', answer: 'My saved answer', confidence: 3 })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_1', phase: 'reconciliation_required', activityId: 'fallback_activity_pin', receipt: unconfirmed })
+      await flushPromises()
+      expect(wrapper.get('[data-testid="learn-canvas-check"]').element).toBe(check)
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"]').attributes('data-receipt')).toBe('unconfirmed')
+      wrapper.unmount()
     })
 
     it('keeps the existing Canvas while responses are off: no check, no hidden tools, no reference', async () => {

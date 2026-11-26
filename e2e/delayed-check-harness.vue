@@ -112,7 +112,7 @@ const practiceSlot = (accepted: boolean) => ({
 const practiceTeaching = (feedbackState: string, help?: unknown) => teaching({ feedbackState, practiceState: 'available', practice: PRACTICE, help })
 
 type CanvasFixture = { binding: CanvasCheckBinding, queries: Record<string, unknown>, attach?: unknown, offline?: boolean, practiceAccepted?: boolean }
-const delivered: CanvasCheckBinding = { assessmentOpportunityId: OPPORTUNITY, receipt: null, timing: 'about_a_week', start: null }
+const delivered: CanvasCheckBinding = { assessmentOpportunityId: OPPORTUNITY, submissionId: null, receipt: null, timing: 'about_a_week', start: null }
 const awaiting: CanvasCheckBinding = { ...delivered, start: { studySessionId: 'fixture_session', expectedSessionRevision: 2 } }
 const readyState = assessmentState('ready', 1, null, capabilities({ canDeliver: true }))
 const openState = assessmentState('test_open', 2, null, capabilities({ canSubmit: true }))
