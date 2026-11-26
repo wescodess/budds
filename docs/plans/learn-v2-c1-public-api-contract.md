@@ -195,7 +195,8 @@ unchanged.
 Before a Canvas check starts, its `assessment` returns `reasonCode: 'awaiting_start'`
 and omits `observations` only when the shared Canvas attachment predicate would
 allow a fresh delivery grant: responses and delivery are on, the pilot admits the
-learner, the ungranted plan rebuilds exactly, the session is ready, and the
+learner, the complete stored plan core matches its canonical snapshot, the
+ungranted assessment reference rebuilds exactly, the session is ready, and the
 opportunity is `ready` with no delivery grant or submission, inside its open
 window, with all current attachment and delivery authority intact. Start calls
 `attachReadySession` with the projection's `session.studySessionId` and

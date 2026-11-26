@@ -15,7 +15,7 @@ import { findCurrentAdaptiveActivityForSessionContent, hasLearnActivityEvent, wr
 import { loadAdaptiveClaimProjection } from './lib/adaptiveClaimProjection'
 import { isLearnV2ContentEvidenceReady } from './lib/learnV2ContentEvidenceReady'
 import { boundedAdaptiveCommandReference, prepareAdaptiveCommand } from '../shared/adaptive-command-authority'
-import { ADAPTIVE_ASSESSMENT_PLAN_VERSION, composeAdaptiveActivityPlan, readAdaptiveAssessmentReference, replayAdaptiveActivityPlan, type AdaptiveEvidenceState } from '../shared/learn-adaptive-activity-plan'
+import { ADAPTIVE_ASSESSMENT_PLAN_VERSION, canonicalAdaptiveActivityJson, composeAdaptiveActivityPlan, readAdaptiveAssessmentReference, replayAdaptiveActivityPlan, type AdaptiveEvidenceState } from '../shared/learn-adaptive-activity-plan'
 import { localDateAt } from '../shared/learn-v2-mastery'
 import { adaptiveRecoveryCopy } from '../shared/learn-adaptive-recovery'
 import { executeAdaptiveThreadCommand } from './learnAdaptiveCommands'
@@ -759,8 +759,11 @@ async function canvasAssessmentReplayAllowed(scope: NonNullable<Awaited<ReturnTy
   if (!canvasAssessmentUngranted(scope.opportunity)) return (await replayAdaptiveActivityPlan(storedPlan(scope.activity))).ok
   const reference = readAdaptiveAssessmentReference(scope.activity)
   if (!reference || reference.deliveryGrantId !== null) return false
-  const rebuilt = await composeAdaptiveActivityPlan({ ...storedPlan(scope.activity), replacesActivityId: undefined, primitiveSequence: [], assessmentReference: reference })
-  return rebuilt.inputDigest === scope.activity.inputDigest && rebuilt.canonicalInputSnapshot === scope.activity.canonicalInputSnapshot
+  const plan = storedPlan(scope.activity)
+  const { canonicalInputSnapshot, inputDigest, ...core } = plan
+  if (canonicalAdaptiveActivityJson({ ...core, assessmentReference: reference }) !== canonicalInputSnapshot) return false
+  const rebuilt = await composeAdaptiveActivityPlan({ ...plan, replacesActivityId: undefined, primitiveSequence: [], assessmentReference: reference })
+  return rebuilt.inputDigest === inputDigest && rebuilt.canonicalInputSnapshot === canonicalInputSnapshot
 }
 
 async function canvasAssessmentStartReason(ctx: QueryCtx | MutationCtx, userId: string,

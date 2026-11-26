@@ -35,7 +35,7 @@ async function run(label, expectedFailures) {
   }
   const result = JSON.parse(await readFile(report, 'utf8'))
   const cases = result.testResults.flatMap(suite => suite.assertionResults).filter(test => test.status !== 'pending' && test.status !== 'skipped')
-  assert.equal(cases.length, 24, `${label}: all registered cases must run; ${result.testResults.map(suite => suite.message).join(' ')}`)
+  assert.equal(cases.length, 25, `${label}: all registered cases must run; ${result.testResults.map(suite => suite.message).join(' ')}`)
   const failed = cases.filter(test => test.status === 'failed').map(test => test.fullName)
   const expected = cases.filter(test => expectedFailures(test.fullName)).map(test => test.fullName)
   assert.deepEqual(failed.sort(), expected.sort(), `${label}: unexpected failure set; ${cases.filter(test => test.status === 'failed').map(test => test.failureMessages.join(' ')).join(' ')}`)
@@ -55,11 +55,20 @@ try {
   let devTests = replaceOnce(tests, "assessment: { phase: 'ready', reasonCode: 'awaiting_start' }", "assessment: { phase: 'ready', reasonCode: 'not_admitted' }")
   devTests = replaceOnce(devTests, "expect(canvas.assessment).not.toHaveProperty('observations')\n  expectSafeCanvas(canvas, s)",
     "expect(canvas.assessment).toHaveProperty('observations', 'no_observations')\n  expectSafeCanvas(canvas, s)")
+  devTests = replaceOnce(devTests, `    if (gate === 'replay_invalid' || gate === 'stored_action') {
+      expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).toMatchObject({ kind: 'not_admitted', reasonCode: 'disclosure_unknown' })
+    } else expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).toMatchObject({ kind: 'not_admitted' })`,
+  `    if (gate === 'replay_invalid') await expect(s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).rejects.toThrow('Factual activity requires complete generation inputs')
+    else expect(await s.owner.mutation(api.learnAdaptiveCanvas.attachReadySession, attach)).toMatchObject({ kind: 'not_admitted' })`)
   await writeFile(path.join(sandbox, testPath), devTests)
-  await run(`Pinned dev ${pin}`, () => false)
+  await run(`Pinned dev ${pin}`, name => name.includes('stored_action'))
 
   await writeFile(path.join(sandbox, testPath), tests)
   await writeFile(path.join(sandbox, deliveryPath), delivery)
+  const coreCheck = '  if (canonicalAdaptiveActivityJson({ ...core, assessmentReference: reference }) !== canonicalInputSnapshot) return false\n'
+  await writeFile(path.join(sandbox, canvasPath), replaceOnce(canvas, coreCheck, ''))
+  await run('Removed stored-core validation', name => name.includes('stored_action') || name.includes('replay_invalid'))
+
   const condition = 'const awaitingStart = startReason === null'
   await writeFile(path.join(sandbox, canvasPath), replaceOnce(canvas, condition, 'const awaitingStart = false'))
   await run('Removed condition', name => name.includes('ready check'))
