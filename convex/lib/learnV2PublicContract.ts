@@ -3,7 +3,7 @@ import { LearnInputValidationError } from '../../shared/learn-v2-errors'
 import { v, type Infer, type Validator } from 'convex/values'
 import { z } from 'zod'
 import { learnReportMetricValidator } from './learnV2MeasurementReportContract'
-import { LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, LEARN_TODAY_CHECK_TIMINGS } from '../../shared/learn-v2-today-check'
+import { LEARN_CANVAS_ASSESSMENT_PURPOSES, LEARN_CANVAS_CHECK_RECEIPT_VERSION, LEARN_CANVAS_CHECK_TIMING_VERSION, LEARN_TODAY_CHECK_POINTER_VERSION, LEARN_TODAY_CHECK_POINTER_LEGACY_VERSION, LEARN_TODAY_CHECK_TIMINGS } from '../../shared/learn-v2-today-check'
 import type { learnResponseReceiptSchema} from '../../shared/learn-v2-responses';
 import {
   LEARN_V2_RESPONSE_CONTRACT_VERSION, LEARN_V2_RESPONSE_REJECTION_CODES,
@@ -130,6 +130,7 @@ const work = v.object({
 const canvasCheckReceiptFields = {
   version: v.literal(LEARN_CANVAS_CHECK_RECEIPT_VERSION), reference: v.string(),
   submissionId: v.id('learnResponses'), acceptedAt: v.number(), confidence: v.optional(v.number()), body: work.fields.body,
+  assessmentPurpose: v.optional(literals(LEARN_CANVAS_ASSESSMENT_PURPOSES)),
   checkTiming: v.optional(v.object({ version: v.literal(LEARN_CANVAS_CHECK_TIMING_VERSION), timing: literals(LEARN_TODAY_CHECK_TIMINGS) })),
   postSealReference: v.optional(v.object({ version: v.literal(LEARN_V2_POST_SEAL_TEACHING_VERSION), assessmentOpportunityId: v.id('learnAssessmentOpportunities') })),
 }
