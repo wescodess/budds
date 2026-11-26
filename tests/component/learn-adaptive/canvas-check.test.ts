@@ -34,7 +34,9 @@ const recordAssistance = vi.fn()
 const stageLegacy = vi.fn()
 const scoreLegacy = vi.fn()
 
+const oneShotQuery = vi.fn()
 mockNuxtImport('useOnlineStatus', () => () => ({ isOnline }))
+mockNuxtImport('useConvex', () => () => ({ query: oneShotQuery, mutation: vi.fn(), onUpdate: vi.fn(() => () => {}) }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference) ?? ''
   subscriptions(name, args)
@@ -137,6 +139,7 @@ describe('Canvas check', () => {
     workData.value = null
     teachingData.value = teachingAvailable()
     practiceWorkData.value = null
+    oneShotQuery.mockReset().mockResolvedValue(null)
     subscriptions.mockClear()
     isOnline.value = true
     attach.mockReset().mockResolvedValue({ kind: 'attached', threadId: 'thread_1', activityId: 'activity_1', replayed: false })
@@ -1769,6 +1772,45 @@ describe('Canvas check', () => {
       }
       expect(receiptKind(wrapper)).toBe('invalid')
       expect(reads()).toBe(before)
+    })
+
+    it.each([
+      ['result_unconfirmed', 'We couldn’t confirm your result', 'opportunity_1'],
+      ['result_unconfirmed', 'We couldn’t confirm your result', null],
+      ['closed', 'This check won’t count', 'opportunity_1'],
+      ['closed', 'This check won’t count', null],
+    ] as const)('lands a live check that jumps straight to a %s receipt on the announced receipt and clears its draft (%#)', async (state, title, postSeal) => {
+      teachingData.value = unavailableTeaching('test_open')
+      const wrapper = await mountCheck()
+      const check = wrapper.get('[data-testid="learn-canvas-check"]').element
+      const field = wrapper.get('[data-testid="learn-canvas-check-answer"]')
+      ;(field.element as HTMLTextAreaElement).focus()
+      await field.setValue('Half an answer')
+      await nextTick()
+      expect(sessionStorage.getItem(DRAFT_KEY)).not.toBeNull()
+      oneShotQuery.mockResolvedValue(available('reconciliation_required', SUBMISSION, 3, capabilities({ canRequestAssistance: true, canTeachSeparateCase: true })))
+      const projection = savedProjection(state, { postSeal })
+      expect(projection).not.toHaveProperty('assessment')
+      await wrapper.setProps({ canvas: projection })
+      await flushPromises()
+      expect(receiptKind(wrapper)).toBe(state === 'closed' ? 'invalid' : 'unconfirmed')
+      await vi.waitFor(() => expect(document.activeElement?.textContent).toBe(title))
+      expect(wrapper.get('p.sr-only[aria-live="polite"]').text()).toBe(title)
+      await vi.waitFor(() => expect(sessionStorage.getItem(DRAFT_KEY)).toBeNull())
+      if (postSeal) expect(wrapper.get('[data-testid="learn-canvas-check"]').element).toBe(check)
+      else expect(oneShotQuery).toHaveBeenCalledWith(expect.anything(), { version: LEARN_V2_PUBLIC_API_VERSION, assessmentOpportunityId: OPPORTUNITY })
+    })
+
+    it('keeps an unsubmitted draft when a remount finds the check still open on the server', async () => {
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-answer"]').setValue('Half an answer')
+      await nextTick()
+      oneShotQuery.mockResolvedValue(open())
+      await wrapper.setProps({ canvas: savedProjection('result_unconfirmed', { postSeal: null, opportunityId: 'opportunity_2', reference: 'check_ref_2', submissionId: 'submission_2' }) })
+      await flushPromises()
+      await vi.waitFor(() => expect(oneShotQuery).toHaveBeenCalled())
+      await flushPromises()
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_KEY)!).response).toBe('Half an answer')
     })
 
     it('keeps a frozen receipt mounted through its reference and submission, and remounts for a replacement check', async () => {

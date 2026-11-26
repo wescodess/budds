@@ -55,6 +55,8 @@ const { isOnline } = useOnlineStatus()
 const checkBinding = computed(() => canvasCheckBinding(props.canvas))
 const checkMode = computed(() => Boolean(checkBinding.value))
 const checkIdentity = useStableCheckIdentity(() => checkBinding.value)
+const checkReplaced = ref(false)
+watch(checkIdentity, (next, previous) => { if (next && previous && next !== previous) checkReplaced.value = true })
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
 const stageMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.submitCanvasResponse) : { mutate: async () => ({}) }
@@ -462,7 +464,7 @@ async function submitWithValidation() {
 </script>
 
 <template>
-  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="checkIdentity ?? undefined" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-evidence="emit('inspectEvidence', $event)" />
+  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="checkIdentity ?? undefined" :announce-on-mount="checkReplaced" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-evidence="emit('inspectEvidence', $event)" />
   <section v-else class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>

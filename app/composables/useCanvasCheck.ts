@@ -237,6 +237,25 @@ export function useCanvasCheck(options: {
   const sealed = computed(() => view.value.kind === 'receipt')
   const draftKey = draftIdentity ? `learn-response:${options.ownerId}:${options.threadId}:check:${draftIdentity}` : null
   const { restored } = useAdaptiveResponseDraft(draftKey, answer, sealed, confidence)
+  const convex = import.meta.client ? useConvex() : null
+
+  function storedDraft(key: string) {
+    try { return sessionStorage.getItem(key) !== null }
+    catch { return false }
+  }
+  function dropDraft(key: string) {
+    try { sessionStorage.removeItem(key) }
+    catch { return }
+  }
+
+  onScopeDispose(() => {
+    if (!draftKey || !draftIdentity || !convex || !storedDraft(draftKey)) return
+    const key = draftKey
+    if (available.value?.submissionId || serverReceipt.value) return dropDraft(key)
+    void Promise.resolve(convex.query(checkApi.getAssessmentState, { version: PUBLIC_API_VERSION, assessmentOpportunityId: draftIdentity as never }))
+      .then((state) => { if (state?.status === 'available' && state.submissionId) dropDraft(key) })
+      .catch(() => undefined)
+  })
 
   const canTeachSeparateCase = computed(() => opportunityId.value ? available.value?.capabilities.canTeachSeparateCase === true : Boolean(postSealId.value))
   const invalidBySource = computed(() => {

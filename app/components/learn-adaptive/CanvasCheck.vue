@@ -11,7 +11,8 @@ const props = withDefaults(defineProps<{
   binding: CanvasCheckBinding
   showHeader?: boolean
   active?: boolean
-}>(), { showHeader: true, active: true })
+  announceOnMount?: boolean
+}>(), { showHeader: true, active: true, announceOnMount: false })
 const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement] }>()
 
 const { isOnline } = useOnlineStatus()
@@ -98,6 +99,16 @@ async function focusOn(target: Ref<HTMLElement | null>) {
   if (props.active) target.value?.focus()
 }
 
+function isReceiptKind(value: string | undefined): value is CanvasCheckReceiptKind {
+  return Boolean(value && value in receiptContent)
+}
+
+async function announceReceipt(kind: CanvasCheckReceiptKind) {
+  notice.value = receiptContent[kind].title
+  await nextTick()
+  if (!checkHoldsFocus()) void focusOn(receiptHeading)
+}
+
 function checkHoldsFocus() {
   const active = document.activeElement
   return Boolean(active && active !== document.body && root.value?.contains(active))
@@ -121,11 +132,18 @@ watch(viewKey, (next, previous) => {
     notice.value = 'Answer saved and locked'
     void focusOn(receiptHeading)
   }
-  if (next === 'invalid' || next === 'passed' || next === 'not_yet') {
-    notice.value = receiptContent[next].title
-    if (!checkHoldsFocus()) void focusOn(receiptHeading)
+  else if (isReceiptKind(next) && next !== previous && (previous === 'open' || next === 'invalid' || next === 'passed' || next === 'not_yet')) {
+    void announceReceipt(next)
   }
+  if (mountAnnouncementPending && next !== 'loading' && !isReceiptKind(next)) mountAnnouncementPending = false
 })
+
+let mountAnnouncementPending = props.announceOnMount
+watch(receipt, (current) => {
+  if (!mountAnnouncementPending || !current) return
+  mountAnnouncementPending = false
+  void announceReceipt(current.receipt)
+}, { immediate: true })
 
 async function onSubmit() {
   await submit()
