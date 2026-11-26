@@ -148,6 +148,24 @@ async function assessmentProjection(ctx: ReadCtx, userId: string, row: Doc<'lear
     prompt: prompts[0]!.content!, declaredStimulus: null, instructions: 'Respond to the check.', responseSpec, projectionDigest: pins.promptDigest }
 }
 
+async function assessmentGrantReason(ctx: ReadCtx, userId: string, row: Doc<'learnAssessmentOpportunities'>, expectedRevision: number) {
+  if (row.phase !== 'ready' || row.submissionId) return 'assessment_unavailable'
+  if (row.revision !== expectedRevision) return 'revision_conflict'
+  if (row.assessmentPins.kind === 'measurement') {
+    const reason = await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(row.assessmentPins.itemPins), row, row.scoringBinding)
+    if (reason) return reason
+  }
+  return null
+}
+
+export async function readLearnAssessmentGrantReason(ctx: ReadCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, flow: Flow, expectedRevision: number) {
+  ctx = measurementReadContext(ctx, userId)
+  const authority = await deliveryAuthority(ctx, userId, id, flow)
+  if (authority.reasonCode) return authority.reasonCode
+  if (!await assessmentProjection(ctx, userId, authority.row)) return 'evidence_unavailable'
+  return await assessmentGrantReason(ctx, userId, authority.row, expectedRevision)
+}
+
 export async function grantLearnAssessmentDeliveryForOwner(
   ctx: MutationCtx,
   userId: string,
@@ -172,12 +190,8 @@ export async function grantLearnAssessmentDeliveryForOwner(
   }
   if (row.deliveryGrantId && row.phase === 'test_open') return { version: LEARN_V2_PUBLIC_API_VERSION, status: 'granted',
     assessmentOpportunityId: row._id, deliveryGrantId: row.deliveryGrantId, revision: row.revision, phase: 'test_open' }
-  if (row.phase !== 'ready' || row.submissionId) return unavailable('assessment_unavailable')
-  if (row.revision !== request.expectedRevision) return unavailable('revision_conflict')
-  if (row.assessmentPins.kind === 'measurement') {
-    const reason = await measurementItemReason(ctx, userId, learnMeasurementItemPinsSchema.parse(row.assessmentPins.itemPins), row, row.scoringBinding)
-    if (reason) return unavailable(reason)
-  }
+  const reason = await assessmentGrantReason(ctx, userId, row, request.expectedRevision)
+  if (reason) return unavailable(reason)
   const pins = row.assessmentPins
   const now = Date.now()
   const deliveryGrantId = await ctx.db.insert('learnAssessmentExposures', {
