@@ -1,6 +1,6 @@
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
 import { finalizeLearnDelayedCheckSession } from './lib/learnV2DelayedDelivery'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, readLearnFixedPlanChecks, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks'
+import { hasLearnReflowPlanAuthority, hasLearnStartedSessionBinding, isDedicatedLearnCheck, isLearnCanvasColdContinuation, readLearnOrdinaryPlanSessions, readLearnCarriedSessions, readLearnFixedPlanChecks, requireLearnActiveWorkPlan, learnSessionReadLimit } from './lib/learnV2FixedChecks'
 import { v } from 'convex/values'
 import { z } from 'zod'
 import { learnIdSchema } from '../shared/learn-v2-responses'
@@ -36,8 +36,8 @@ const schedulingReceiptSchema = z.union([
     reasonCodes: z.array(z.enum(['capacity_available', 'prerequisites_ordered', 'reviews_spaced', 'buffer_reserved', 'insufficient_capacity', 'final_buffer_missing'])).max(8).optional(), parentRevisionId: learnIdSchema<'studyPlanRevisions'>().optional() }),
   z.object({ _id: learnIdSchema<'studyPlanRevisions'>(), status: z.literal('accepted'), voidStatus: z.literal('scheduled'), sessionCount: z.number().int().min(0).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
   z.object({ _id: learnIdSchema<'studySessions'>(), status: z.literal('missed'), revision: z.number().int().positive() }),
-  z.object({ missedSessionIds: z.array(learnIdSchema<'studySessions'>()).max(MAX_SESSIONS) }),
-  z.object({ successorPlanRevisionId: learnIdSchema<'studyPlanRevisions'>(), changedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), preservedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), recordRevision: z.number().int().positive() }),
+  z.object({ missedSessionIds: z.array(learnIdSchema<'studySessions'>()).max(learnSessionReadLimit(MAX_SESSIONS) - 1) }),
+  z.object({ successorPlanRevisionId: learnIdSchema<'studyPlanRevisions'>(), changedSessionIds: z.array(z.string().max(200)).max(MAX_SESSIONS), preservedSessionIds: z.array(z.string().max(200)).max(learnSessionReadLimit(MAX_SESSIONS) - 1), recordRevision: z.number().int().positive() }),
 ])
 
 async function digest(value: unknown) {
@@ -252,10 +252,10 @@ export const markExpiredSessionsMissed = mutation({
     const missedSessionIds: Id<'studySessions'>[] = []
     const revision = await ctx.db.get(activeRevisionId)
     if (!revision || revision.userId !== userId || revision.studyPlanId !== plans[0]!._id) throw new Error('Current active Study Plan revision not found')
-    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', revision._id)).take(MAX_SESSIONS + 1)
-    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, revision, MAX_SESSIONS) : []
+    const currentSessions = await readLearnOrdinaryPlanSessions(ctx, userId, revision._id, MAX_SESSIONS)
+    if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, revision) : []
     const sessions = [...new Map([...currentSessions, ...fixed].map(row => [row._id, row])).values()]
-    if (sessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
     for (const session of sessions) {
       if (LEARN_MEASUREMENT_CAPABILITIES.responses && session.assessmentPurpose === 'measurement_delayed' && session.assessmentOpportunityId
         && ['planned', 'ready', 'in_progress'].includes(session.status) && now >= (session.scheduledEndAt ?? session.scheduledStartAt)) {
@@ -322,10 +322,11 @@ export const reflowFutureIncomplete = mutation({
     const planRoot = await ctx.db.get(plan.studyPlanId)
     if (!planRoot || planRoot.userId !== userId || planRoot.activeRevisionId !== plan._id) throw new Error('Study-plan revision is not current')
     await requireLearnActiveWorkPlan(ctx, userId, plan)
-    const currentSessions = await ctx.db.query('studySessions').withIndex('by_userId_and_studyPlanRevisionId_and_scheduledStartAt', q => q.eq('userId', userId).eq('studyPlanRevisionId', plan._id)).take(MAX_SESSIONS + 1)
+    const currentSessions = await readLearnOrdinaryPlanSessions(ctx, userId, plan._id, MAX_SESSIONS)
     if (currentSessions.length > MAX_SESSIONS) throw new Error('Study plan session count is outside the bounded contract')
-    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan, MAX_SESSIONS) : []
-    const sessions = currentSessions.filter(row => !isDedicatedLearnCheck(row))
+    const carried = await readLearnCarriedSessions(ctx, userId, plan, MAX_SESSIONS - currentSessions.length)
+    const fixed = LEARN_MEASUREMENT_CAPABILITIES.responses ? await readLearnFixedPlanChecks(ctx, userId, plan) : []
+    const sessions = [...currentSessions, ...carried]
     const storedInput = JSON.parse(plan.inputSnapshot ?? '{}') as StudyPlanSchedulingInput
     const validPriorities = new Set<SchedulingPriority>(['overdue_retained_review', 'prerequisite_remediation', 'due_review', 'new_learning', 'optional_enrichment'])
     const reflow = rescheduleStudySessions({
@@ -356,6 +357,12 @@ export const reflowFutureIncomplete = mutation({
     const carriedStatuses = new Set(['planned', 'ready', 'in_progress', 'blocked', 'generation_failed', 'needs_reschedule'])
     for (const sessionId of reflow.preservedSessionIds) {
       const session = sessions.find(row => String(row._id) === sessionId)
+      if (session?.status === 'in_progress' && isLearnCanvasColdContinuation(session)) {
+        const sourcePlan = await ctx.db.get(session.studyPlanRevisionId)
+        if (!sourcePlan || !await hasLearnStartedSessionBinding(ctx, userId, session, sourcePlan)) throw new Error('Started session binding is unavailable')
+        await ctx.db.patch(session._id, { carriedPlanRevisionId: successorId })
+        continue
+      }
       if (!session || session.scheduledEndAt === undefined || session.scheduledEndAt <= now || !carriedStatuses.has(session.status)) continue
       // Content belongs to the immutable old session identity. A successor
       // shell must regenerate rather than exposing `ready` without content.
