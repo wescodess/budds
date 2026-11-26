@@ -32,7 +32,7 @@ const due = makeFunctionReference<'mutation', { userId: string, through?: number
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(START); policy.protocol = syntheticDeliveryProtocol(); policy.responses = true; LEARN_REPORT_APPROVALS.splice(0) })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.useRealTimers(); LEARN_REPORT_APPROVALS.splice(0) })
 
-async function journey(reserve: boolean, shared?: Awaited<ReturnType<typeof assessmentDeliveryFixture>>['t'], identity = deliveryIdentity) {
+async function journey(reserve: boolean, shared?: Awaited<ReturnType<typeof assessmentDeliveryFixture>>['t'], identity = deliveryIdentity, capacity = false) {
   const userId = identity.tokenIdentifier
   const definition = { configurationId: 'today.synthetic', configurationVersion: 'today.synthetic.v1', kind: 'legacy_baseline' as const,
     requestedModel: 'synthetic/model', endpoint: null, identity: { mappingVersion: 'synthetic.identity.v1', canonicalModel: 'synthetic/model',
@@ -63,6 +63,11 @@ async function journey(reserve: boolean, shared?: Awaited<ReturnType<typeof asse
     openrouter_metadata: { requested: 'synthetic/model', strategy: 'direct', attempt: 1,
       endpoints: { available: [{ provider: 'Synthetic Provider', model: 'synthetic/model', selected: true }] }, pipeline: [] } }))))
   for (const name of ['OPENROUTER_API_KEY', 'CF_ACCOUNT_ID', 'CLOUDFLARE_AI_GATEWAY_ID']) vi.stubEnv(name, 'synthetic-unused')
+  if (capacity) await f.t.run(async ctx => {
+    for (let index = 0; index < 128; index++) await ctx.db.insert('studySessions', { userId, studyPlanRevisionId: f.graph.studyPlanRevisionId,
+      primaryObjectiveId: f.graph.objectiveId, status: 'completed', revision: 1, scheduledStartAt: Date.now(),
+      schedulerVersion: 'learn-v2.delayed-delivery.v1', assessmentPurpose: 'measurement_delayed' })
+  })
   expect(await f.owner.action(api.learnV2Mastery.submitMasteryAttempt, { studySessionId: f.graph.studySessionId,
     expectedSessionRevision: 3, expectedContentRevision: 1, expectedPlanRecordRevision: 1, expectedBlueprintRecordRevision: 1,
     response: 'My separate-case application.', confidence: 3, idempotencyKey: 'integration_independent_1234567890' }))
@@ -134,11 +139,11 @@ async function beginReport(f: Awaited<ReturnType<typeof journey>>, cohort: Await
   return { viewer, reportRunId: report.reportRunId }
 }
 
-async function cohortJourney(reserve: boolean, count: number) {
-  const first = await journey(reserve)
+async function cohortJourney(reserve: boolean, count: number, capacity = false) {
+  const first = await journey(reserve, undefined, deliveryIdentity, capacity)
   const cohort = [first]
   for (let index = 1; index < count; index++) cohort.push(await journey(false, first.t,
-    { subject: `integration-${index}`, tokenIdentifier: `https://auth.example|integration-${index}` }))
+    { subject: `integration-${index}`, tokenIdentifier: `https://auth.example|integration-${index}` }, capacity))
   return cohort
 }
 
@@ -254,6 +259,26 @@ test('system-late undelivered checks remain missing outcomes in a sealed C6 repo
   for (const row of pinned) expect(row).toMatchObject({ dueWorkThrough: Date.now(), historyCoverage: 'complete' })
   expect(await f.t.run(ctx => ctx.db.get(later.reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
 }, 30_000)
+
+test('dedicated capacity loss is system missing in sealed C6 episodes and first-check claims', async () => {
+  const cohort = await cohortJourney(false, 5, true)
+  const f = cohort[0]!
+  expect(f.original).toMatchObject({ phase: 'cancelled', operationalEligibility: 'blocked', reasonCode: 'system_check_capacity' })
+  const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
+  vi.setSystemTime(day30.openAt)
+  for (const learner of cohort) await f.t.mutation(due, { userId: learner.learnerId, through: Date.now() })
+  expect(await f.t.run(ctx => ctx.db.get(day30._id))).toMatchObject({ phase: 'cancelled', reasonCode: 'system_check_capacity' })
+  vi.setSystemTime(day30.closeAt + 86_400_000)
+  const { reportRunId } = await beginReport(f, cohort, 'system_capacity_report_1234567890')
+  const input = await sealedMeasurementReportInput(f.t, reportRunId)
+  const episodes = input.rows.filter(row => row.kind === 'episode')
+  expect(episodes).toHaveLength(10)
+  for (const row of episodes) expect(row).toMatchObject({ disposition: 'missing_delayed', reasonCodes: ['system_check_capacity'], delayed: null })
+  const claims = input.rows.filter(row => row.kind === 'first_check_claim_v2')
+  expect(claims).toHaveLength(5)
+  for (const row of claims) expect(row).toMatchObject({ firstSlot: { kind: 'linked', unresolvedReason: 'system_check_capacity', acceptance: null, result: null } })
+  expect(await f.t.run(ctx => ctx.db.get(reportRunId))).toMatchObject({ sourceCoverage: 'complete' })
+})
 
 test('report pinning leaves coverage unknown for an owner with an unapplied close edge', async () => {
   const cohort = await cohortJourney(false, 5)

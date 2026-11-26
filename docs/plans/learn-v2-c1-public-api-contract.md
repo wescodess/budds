@@ -79,9 +79,17 @@ Pages return at most four pointers. One, two and four normal checks arrive on th
 
 Today projects its existing session first. The shared strict allowance stays 3,072 reads. It reserves 896 before another full candidate and 48 for saved metadata discovery; initial admission also reserves the maximum version-batch queries. If session projection leaves insufficient initial headroom, `pointer_page_budget` returns an empty unavailable envelope and permits a separate `getCheckPointers({})` invocation. Actual resource exhaustion propagates. Owner-scoped playability, claims, supports, access, retained-body and saved-receipt caches last only for the invocation and invalidate after every write. Pointer reads authorize no content and dispatch no scoring.
 
-The #579 opt-in v2 fixtures retain those reservations under native transaction limits. Four maximum ready checks (six forms, 32 claims, 64 evidence rows and 64 document-backed sources per family) use 2,809 database queries, 4,818 documents and 4,161,178 read bytes on the first Today page. Matched v1/v2 reads use identical query counts for one, two and four ready checks: 733, 1,425 and 2,809. The map-authority reads reuse the invocation cache. Four mixed-state checks use 2,060 queries; four ready checks with retired historical labels use 2,827; four closed receipts use 1,409. A maximum ready family also passes with the shared allowance restricted to the unchanged 896-read reservation. All return their expected first page without increasing the reservation or regenerating C4 goldens.
+The #579 opt-in v2 fixtures originally recorded the following measurements before dedicated-session partitioning, under native transaction limits. Four maximum ready checks (six forms, 32 claims, 64 evidence rows and 64 document-backed sources per family) used 2,809 database queries, 4,818 documents and 4,161,178 read bytes on the first Today page. Matched v1/v2 reads used identical query counts for one, two and four ready checks: 733, 1,425 and 2,809. The map-authority reads reuse the invocation cache. Four mixed-state checks used 2,060 queries; four ready checks with retired historical labels used 2,827; four closed receipts used 1,409. A maximum ready family also passes with the shared allowance restricted to the unchanged 896-read reservation. Dedicated-session partitioning adds up to ten bounded metadata index reads to Today projection. All return their expected first page without increasing the production allowance or either pointer reservation, or regenerating C4 goldens.
 
 `startStudySession` retains its argument envelope. New Today/deep-link enrollment uses the C5 dedicated-check binder to create a separate cold-check session, content record, Canvas thread and assessment activity. The planned lesson is never converted, repinned or consumed. Today retains that lesson row, with `assessment.kind: check` and the Canvas pointer while the answer is missing. Its content envelope has no teaching blocks until saving. Sealing completes only the dedicated check session; the lesson becomes `teach` and starts through its original C5 teaching/delivery path, independently of scoring success. The status pointer and planned lesson coexist before and after saving. The same lock applies when a dedicated delayed check on that assignment becomes due: the current unanswered check is selected through the bounded assignment/horizon index, and saving it releases the later lesson. Future placeholders do not lock it. The lock holds only while that check has a playable pointer. If a `v2_today` check becomes unplayable (entitlement or pilot revoked, thread lost, evidence or authority withdrawn), the lesson resolves as `teach` and Today shows no row for it. Starting the lesson then closes each due unplayable check through the shared opportunity update: an `operationalEligibility: blocked` fact carrying the current binder reason (for example `canvas_not_admitted`), followed by `phase: cancelled`, which also cancels its dedicated session. C6 therefore counts it as `access_provider_blocked`, never as a learner miss or abandonment. An unplayable cold check is then also marked `cold_after_teaching` by the existing instruction record. Legacy `v2_canvas` cohorts keep their previous lock, because Today teaching would mix their treatment. Dedicated cold checks remain fixed through repeated plan reflows, including rollback, with their original check/session pins.
+
+Canvas-entered cold checks also use a dedicated check session. After sealing, `learnAdaptiveCanvas.startCanvasSession` takes the original instructional session ID, expected session/content revisions and an idempotency key. It authorizes the exact sealed Canvas cold check and the current post-seal/open-check gate, starts the original session's canonical independent application, and returns only Canvas attachment references. Its application grant and response surface are `canvas`; its instruction receipt records `learn-v2.instructional-flow.v2_canvas.v1`. It never calls the Today instruction recorder. Replay rechecks current Canvas, pilot, evidence and publication pins without a second application or teaching exposure. Today-treatment assignments cannot use this entry. Original instructional content remains immutable; the ordinary application binds its exact publication through opportunity/session pins. No migration repairs older Canvas layouts that converted the instructional session itself. The capability remains off, and the Canvas cold writer and this continuation both return before any write unless enrollment, delivery and responses are enabled.
+
+With responses enabled, dedicated cold and delayed checks have a separate creation allowance of 128 across the bounded C5 plan lineage. Every dedicated writer checks it in the same transaction before inserting or converting a session. Capacity loss records `system_check_capacity` as system missing, without a learner miss; a retained placeholder is removed instead of becoming a blocked lesson. Hub and Mission retain 32 ordinary sessions, scheduling retains 600, and Today retains 128 ordinary candidates. Indexed scheduler-version ranges exclude dedicated reservations from ordinary reads, including historical overflow and stranded reservations. Fixed-check lists show at most 128 rows; Today omits its dedicated candidates if their active allowance overflows and still selects ordinary work. Enrollment history and Canvas origin lookup read ordinary rows independently. Capability-off reads retain their original indexes, bounds and output; immutable check pins and teaching admission are unchanged.
+
+After `future_incomplete_reflow`, preparation and continuation also accept the authorized active successor's regenerated instructional session. They use C5's `hasLearnReflowPlanAuthority` and `requireLearnActiveWorkPlan` checks, retaining the same owner, plan root, Void, Blueprint revision/record and objective. The successor must retain the original session's placement identity; the bounded original-plan lookup must find exactly one instructional origin whose publication matches the cold wrapper's frozen digest. The lookup uses the existing 600-session plan bound. Unrelated placements, roots, objectives, broken/ambiguous ancestry and overflow remain denied. The successor application needs current T0 evidence, registered instructional lineage and complete exact-check separation, plus the existing sealed-check and relevant-open-check gate. It records Canvas teaching without changing the cold check's frozen pins or saved response. C4 continues to withhold teaching payloads tied to the retired publication; continuation authorizes the successor application without reopening those payloads.
+
+With the responses capability on, reflow carries only the Canvas cold-check continuation started through `startCanvasSession`. That entry stamps `studySessions.canvasColdCheckId` after validating the dedicated cold check and instructional lineage. Reflow and all carried-work readers require that stamp, its admitted Canvas assignment and dedicated check, the exact started-content/application binding, and the bounded same-owner/root/Void/Blueprint C5 successor chain. Optional `carriedPlanRevisionId` records successor membership and is indexed with owner and cold-check identity. Repeated reflows carry the same canonical session, content pins, assistance, application, grant and Canvas without cloning or repinning them. Follow-up work uses the validated active plan. Capability-off and every session outside this continuation scope keep dev's ordinary reflow, read and submission behavior, including historical empty shells; no general reflow repair or migration is included. Carried active publications retain authority, while unstarted publications retired by reflow remain subject to the preceding C4 rule.
 
 The optional `checkSurface` binding on the assignment and non-calibration check context is `{ version: string, surface: today | canvas, measurementFlow: v2_today | v2_canvas }`. New Today records freeze `surface: canvas` and `measurementFlow: v2_today` in both places. The stored version accepts historical labels. Server derivation requires the bindings to agree with the assignment's frozen flow and actual session/Canvas authority. Delivery grants and response `flow` describe the bound surface; measurement flow describes teaching. A Today-bound check cannot be rebound to Canvas teaching, and removing or changing its surface cannot authorize acceptance. Ordinary Today instruction stays `v2_today` and does not create `mixed_flow`. No caller-supplied flow, binding or owner field is added to the public command envelope.
 
@@ -111,6 +119,101 @@ Bindings absent from existing C5 Today assignments retain C5's Today grant, read
 The pointer is discovered from opportunities independently of active sessions. It survives completion of dedicated check sessions and remains available even if Today has no next lesson. Today session-content envelopes withhold bound check prompts, answers, scores and feedback; Canvas owns recovery. Optional `users.learnTodayCheckSurfaceVersion` records that an owner entered this cohort and selects its pointer envelope after rollback in one indexed owner lookup. It grants no row, destination or content authority. Legacy frozen Canvas-flow cohorts retain their existing lookup. The existing assignment, opportunity and response indexes remain additive. This amendment adds only optional stored fields on users, assignments, non-calibration check contexts and C6 strata; it adds no table or index. Their version fields accept historical strings. No migration, scorer identity or UI change is included. After merging #572, the due-work binder `learnDelayedCheckBindingBlock` applies Canvas gates from the frozen surface binding rather than `flow`, admits dedicated cold rows through its purpose guard and re-checks Canvas playability for already-bound Today-surface checks, so the scheduler's closing blocker uses the same surface-aware reason.
 
 With `todayCanvasChecks` off and no assignment previously enrolled through the new Today Canvas path, existing endpoints follow the dev path byte-for-byte; `getCheckPointers` returns only its disabled envelope. Responses off always dominates, including for stored Canvas assignments. Ordinary Canvas preparation retains its original branch. Existing C4 goldens are retained unchanged. Registered journey, toggle, pagination and boundary evidence is in `convex/learnV2TodayPointers.test.ts`, including first-page maximum inventories, closed and mixed-state overflow, six/twelve-family continuation, the before/after-scoring recovery matrix, historical-version continuation, thread deletion and completed-work recovery under native transaction limits; provider and publication adapters are synthetic, and independent review, deployed behavior and learner experience remain separate proof boundaries.
+
+### #587 additive Canvas timing and practice reference
+
+With responses and `todayCanvasChecks` enabled, only checks with purpose
+`measurement_cold`, `measurement_delayed` or `retained_transfer` carry
+`checkTiming` on `assessment` (including the `loadAssessmentCanvas` question
+projection) and their saved `checkReceipt`:
+
+```ts
+checkTiming: {
+  version: 'learn-v2.canvas-check-timing.v1',
+  timing: 'this_session' | 'about_a_week' | 'about_a_month' | 'earlier' | 'retained'
+}
+```
+
+This independently versioned, optional extension leaves the existing assessment
+fields and receipt version/state union intact. The shared strict receipt parser
+and Convex validator accept the extension. Both Canvas query and delivery reads
+use the same helper, earliest granted teaching exposure, scope checks, elapsed-day
+buckets and `earlier` fallback as Today pointer v2. Missing topic labels do not
+invent a title or remove coarse timing. No exact time or held-out detail is added.
+Query-snapshot staleness has the same approximate semantics as Today.
+
+`independent_application` and all other purposes omit `checkTiming`. The approved
+delayed-check design does not authorize a timing line for ordinary application
+checks. When `checkTiming` is absent, the UI shows no timing line and retains its
+existing application content; absence must not be interpreted as `earlier`.
+The unknown-class copy fallback below applies only when timing metadata is present.
+
+The owner-approved Canvas entry copy is:
+
+| Class | Canvas copy |
+| --- | --- |
+| `about_a_week` | A check on last week's work |
+| `about_a_month` | A check on work from about a month ago |
+| `this_session` | A check on this topic |
+| `earlier`, `retained`, unknown | A check on an earlier topic |
+
+Every owned saved receipt also adds this optional, independently versioned
+reference, including `result_unconfirmed` and `closed`:
+
+```ts
+postSealReference: {
+  version: 'learn-v2.post-seal-teaching.v1',
+  assessmentOpportunityId: Id<'learnAssessmentOpportunities'>
+}
+```
+
+It can be passed directly to the existing Canvas aliases `getPostSealTeaching`,
+`openPostSealPractice` and `publishPostSealFeedback`, and used as the reference
+portion of `authorizePracticeAssistance`. It conveys identity only, with no
+content, phase, score or capability claim. An unconfirmed/closed receipt still
+omits `assessment` and cannot infer pass/fail or authorize a scoring retry.
+The endpoints reauthorize the authenticated owner and the complete post-seal
+contract on each read, opening and help replay. An accepted cancellation may
+retain separate-case practice, while evidence loss, relevant open checks,
+revocation or failed separation deny content. Lessons and hints still require a
+valid scored failure; worked examples retain the separate-practice gate.
+
+Neither `checkTiming` nor `postSealReference` is emitted with `todayCanvasChecks`
+off, including frozen Canvas recovery receipts, and responses off retains its existing path. No
+additional timing reads run in the off state. Today v1 pointers and C4 goldens
+are unchanged. These fields introduce no storage, grant, authority or UI change.
+
+Canvas `assessment` (from both question and saved-check reads) and `checkReceipt`
+also carry the optional additive field:
+
+```ts
+assessmentPurpose?: 'measurement_cold' | 'measurement_delayed' | 'retained_transfer'
+```
+
+It copies `opportunity.purpose.kind` only for these three purposes whenever the
+responses capability is on, independently of `todayCanvasChecks`. This includes
+Canvas-native checks with `todayCanvasChecks` off and frozen-cohort recovery
+receipts after rollback, including closed or unconfirmed receipts that omit
+`assessment`. `independent_application` and every other purpose omit the field;
+responses off omits it everywhere and preserves the existing off-state shape.
+The field carries no timing, content or authority and grants no delivery,
+scoring or post-seal access. Existing envelope versions and C4 goldens remain
+unchanged.
+
+Before a Canvas check starts, its `assessment` returns `reasonCode: 'awaiting_start'`
+and omits `observations` only when the shared Canvas attachment predicate would
+allow a fresh delivery grant: responses and delivery are on, the pilot admits the
+learner, the complete stored plan core matches its canonical snapshot, the
+ungranted assessment reference rebuilds exactly, the session is ready, and the
+opportunity is `ready` with no delivery grant or submission, inside its open
+window, with all current attachment and delivery authority intact. Start calls
+`attachReadySession` with the projection's `session.studySessionId` and
+`session.revision` as `studySessionId` and `expectedSessionRevision`; a successful
+attach grants delivery and the next Canvas read returns the delivered check. This adds no
+prompt, response specification, answer content or timing authority. It changes
+neither `assessmentPurpose` nor `checkTiming`. True not-admitted and closed checks
+retain `reasonCode: 'not_admitted'` and `observations: 'no_observations'`;
+responses-off, delivered and saved projections remain unchanged.
 
 Argument and return validators live in `convex/lib/learnV2PublicContract.ts`. They are importable by application and server adapters and contain no private scorer or source loader. Existing shared schemas supply semantic validation, including original-envelope bytes, finite numbers, exact response text, code-unit limits and URL-safe command keys. Invalid wire input produces a bounded generic error. The new public functions accept no owner, cohort, scorer, phase, trusted grant object or draft payload.
 

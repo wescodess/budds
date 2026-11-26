@@ -6,7 +6,7 @@ import {
   learnReportFactSchema, type LearnReportInputSnapshot, type LearnReportSourceFact,
 } from '../../shared/learn-v2-measurement-report'
 import { deriveLearnScorerConfiguration, learnAssessmentBoundSurface } from '../../shared/learn-v2-measurement'
-import { learnFirstCheckClaimSchema, LEARN_SYSTEM_DUE_WORK_LATE } from '../../shared/learn-v2-delayed-check'
+import { learnFirstCheckClaimSchema, isLearnSystemMissingReason } from '../../shared/learn-v2-delayed-check'
 import { learnSerializedBytes } from '../../shared/learn-v2-responses'
 import { LEARN_MEASUREMENT_STORAGE_LIMITS as limits } from '../../shared/learn-v2-measurement-storage-manifest'
 import { hasAccountDeletionTombstone } from './accountDeletionTombstone'
@@ -132,7 +132,7 @@ function savedClock(rows: Fact[]) {
 }
 function slotDisposition(facts: Fact[], accepted: Awaited<ReturnType<typeof outcome>>): Episode['disposition'] {
   const latest = facts.at(-1)?.fact
-  if (latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE) return 'missing_delayed'
+  if (latest?.kind === 'opportunity' && isLearnSystemMissingReason(latest.reasonCode)) return 'missing_delayed'
   if (operational(facts) === 'blocked') return 'access_provider_blocked'
   if (accepted.assistanceState && accepted.assistanceState !== 'unassisted') return 'assisted_contaminated'
   if (latest?.kind === 'opportunity' && ['cancelled', 'abandoned'].includes(latest.status)) return 'abandoned'
@@ -205,7 +205,7 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
         replacementAcceptance: replacedOutcome.acceptance, replacement: replacedOutcome.result, replacementPolicy: approval.replacementPolicy,
         operationalEligibility: delayed ? operational(delayed.facts) : 'pending',
         disposition: coldOutcome.assistanceState && coldOutcome.assistanceState !== 'unassisted' ? 'assisted_contaminated' : slotDisposition(delayed?.facts ?? [], delayedOutcome),
-        reasonCodes: delayedFact?.kind === 'opportunity' && delayedFact.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE ? [LEARN_SYSTEM_DUE_WORK_LATE] : [],
+        reasonCodes: delayedFact?.kind === 'opportunity' && isLearnSystemMissingReason(delayedFact.reasonCode) ? [delayedFact.reasonCode!] : [],
         mixedFlow: [coldOutcome, delayedOutcome].some(outcome => outcome.acceptance !== null && outcome.flow !== fact.snapshot.flow),
         treatmentEpochChanged: [coldOutcome, delayedOutcome].some(outcome => outcome.acceptance !== null && outcome.epoch !== fact.snapshot.epoch),
         coldReplacement: coldReplacement ? { assessmentOpportunityId: coldReplacement.opportunity._id,
@@ -278,7 +278,7 @@ export async function normalizeLearnReportInventory(ctx: QueryCtx, run: Doc<'lea
     firstCheckOpportunityId: opportunity._id, checkSequence: slot.checkSequence, clock,
     stateAtEligibility: eligibility?.kind === 'opportunity' ? eligibility.stateAtEligibility ?? 'unknown' : 'unknown',
     stateAtAcceptance: accepted.stateAtAcceptance, acceptance: accepted.acceptance, result: accepted.result,
-    unresolvedReason: latest?.kind === 'opportunity' && latest.reasonCode === LEARN_SYSTEM_DUE_WORK_LATE ? LEARN_SYSTEM_DUE_WORK_LATE
+    unresolvedReason: latest?.kind === 'opportunity' && isLearnSystemMissingReason(latest.reasonCode) ? latest.reasonCode!
       : ['valid_scored', 'missing_delayed'].includes(disposition) ? null : disposition }
   const keys = await deriveLearnReportComputationKeys({ reportRunId: run._id, ownerTokenIdentifier: userId, ...opportunity })
   if (resolved?.firstSlot.kind === 'linked') {

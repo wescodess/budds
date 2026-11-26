@@ -18,7 +18,7 @@ import { privacyDigest } from './lib/learnV2ResponsePrivacy'
 import { readLearnAssessmentStateForOwner } from './lib/learnV2AssessmentDelivery'
 import type { LearnV2AssessmentState } from './lib/learnV2PublicContract'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck } from './lib/learnV2FixedChecks'
+import { hasLearnSessionReflowAuthority, isDedicatedLearnCheck, LEARN_DELAYED_DELIVERY_VERSION, readLearnOrdinaryStatusSessions, MAX_LEARN_DEDICATED_CHECKS } from './lib/learnV2FixedChecks'
 import { hasAdaptiveExperienceAccess } from './lib/adaptiveLearnAccess'
 import { prepareCanvasSessionForOwner, readCanvasCheckPointerForOwner } from './learnAdaptiveCanvas'
 import { LEARN_TODAY_CHECK_LIMIT, LEARN_TODAY_CLOSED_CHECK_DAYS, LEARN_TODAY_CHECK_POINTER_VERSION, isFrozenTodayCanvasAssignment, todayCanvasChecksEnabled, type LearnTodayCheckPointer } from '../shared/learn-v2-today-check'
@@ -436,14 +436,21 @@ export const getCheckPointers = query({
 // to-do item: it remains invisible until the plan/generation path repairs it.
 async function projectToday(ctx: QueryCtx, userId: string) {
     const sessions: Doc<'studySessions'>[] = []
+    const dedicated: Doc<'studySessions'>[] = []
+    let dedicatedOverflow = false
     for (const status of ACTIVE_SESSION_STATUSES) {
       const remaining = MAX_SESSIONS - sessions.length
-      const rows = await ctx.db.query('studySessions')
-        .withIndex('by_userId_and_status_and_scheduledStartAt', q => q.eq('userId', userId).eq('status', status))
-        .take(remaining + 1)
+      const rows = await readLearnOrdinaryStatusSessions(ctx, userId, status, remaining)
       if (rows.length > remaining) return { status: 'blocked' as const, reason: 'today_candidate_limit' }
       sessions.push(...rows)
+      if (LEARN_MEASUREMENT_CAPABILITIES.responses && !dedicatedOverflow) {
+        const checks = await ctx.db.query('studySessions').withIndex('by_userId_and_status_and_schedulerVersion', q =>
+          q.eq('userId', userId).eq('status', status).eq('schedulerVersion', LEARN_DELAYED_DELIVERY_VERSION)).take(MAX_LEARN_DEDICATED_CHECKS - dedicated.length + 1)
+        if (checks.length + dedicated.length > MAX_LEARN_DEDICATED_CHECKS) dedicatedOverflow = true
+        else dedicated.push(...checks)
+      }
     }
+    if (!dedicatedOverflow) sessions.push(...dedicated.filter(isDedicatedLearnCheck))
     const now = Date.now()
     const candidates: Candidate[] = []
     for (const session of sessions) {
@@ -462,7 +469,7 @@ async function projectToday(ctx: QueryCtx, userId: string) {
       const blueprint = plan?.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId); const objective = await ctx.db.get(session.primaryObjectiveId)
       const voidRow = plan && await ctx.db.get(plan.learningVoidId); const folder = voidRow && await ctx.db.get(voidRow.folderId)
       const currentPlan = plan && root && (root.activeRevisionId === plan._id && plan.status === 'accepted'
-        || isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan))
+        || await hasLearnSessionReflowAuthority(ctx, userId, session, plan))
       if (!plan || !root || !blueprint || !objective || !voidRow || !folder || plan.userId !== userId || root.userId !== userId || blueprint.userId !== userId || objective.userId !== userId || voidRow.userId !== userId || folder.userId !== userId || !currentPlan || blueprint.status !== 'accepted' || plan.blueprintRecordRevision !== blueprint.recordRevision || objective.blueprintRevisionId !== blueprint._id) continue
       try { await requireActiveBlueprint(ctx, userId, voidRow, blueprint._id) }
       catch (error) {

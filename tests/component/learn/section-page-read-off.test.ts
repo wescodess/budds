@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getFunctionName } from 'convex/server'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { flushPromises } from '@vue/test-utils'
@@ -33,6 +33,10 @@ mockNuxtImport('usePreFetchSection', () => () => ({ nextSectionReady: ref(false)
 vi.mock('~/composables/useFolderPageContext', () => ({ injectFolderContext: () => ({ folderId: computed(() => 'folder_1') }) }))
 
 const pagePath = ['~', 'pages', 'app', 'folders', '[id]', 'learn', '[courseId]', '[sectionId].vue'].join('/')
+
+beforeAll(async () => {
+  await import(pagePath)
+})
 
 describe('section page while responses are off', () => {
   beforeEach(() => {

@@ -4,7 +4,7 @@ import { LEARN_MEASUREMENT_ITEM_LIMITS as itemLimits } from '../../shared/learn-
 import { responsePrivacyReadContext, privacyRead } from './learnV2PrivacyReadContext'
 import { v, type PropertyValidators, type ObjectType } from 'convex/values'
 import { measurementAllocationMatches } from './learnV2MeasurementAllocation'
-import { hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
+import { hasLearnCarriedSessionAuthority, hasLearnReflowPlanAuthority } from './learnV2FixedChecks'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx, MutationCtx } from '../_generated/server'
 import { requireAuth } from './auth'
@@ -237,8 +237,11 @@ export async function resolveAssessmentDisclosureContext(ctx: ReadCtx, assessmen
   const contextPins = row.contextPins
   if (contextPins.kind !== 'calibration') {
     const [root, plan] = await Promise.all([ctx.db.get(contextPins.studyPlanId), ctx.db.get(contextPins.studyPlanRevisionId)])
-    const frozenPlan = plan && (row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
+    const carriedSession = contextPins.kind === 'session' && (row.purpose.kind === 'independent_application' || row.purpose.kind === 'retained_transfer')
+      ? await ctx.db.get(contextPins.studySessionId) : null
+    const frozenPlan = plan && ((row.purpose.kind === 'measurement_cold' || row.purpose.kind === 'measurement_delayed')
       && await hasLearnReflowPlanAuthority(ctx, userId, plan, contextPins.planRecordRevision)
+      || carriedSession && await hasLearnCarriedSessionAuthority(ctx, userId, carriedSession, plan, contextPins.planRecordRevision))
     pinsMatch &&= Boolean(root?.userId === userId && plan?.userId === userId && plan.studyPlanId === root._id
       && root.learningVoidId === row.learningVoidId && plan.learningVoidId === row.learningVoidId
       && plan.blueprintRevisionId === row.blueprintRevisionId && plan.revision === contextPins.planRevision

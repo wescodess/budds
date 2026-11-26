@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 import { adaptiveRecoveryCopy } from '~~/shared/learn-adaptive-recovery'
@@ -22,6 +22,10 @@ const base = {
   activity: { id: 'diagnostic:thread_1', status: 'eligible', planRevision: 1, primitive: { contractVersion: 'learn-adaptive.activity-contract.v1', rendererVersion: 'learn-adaptive.renderer.v1', type: 'diagnostic_prompt', action: 'submit_response', testId: 'learn-primitive-diagnostic-prompt', props: { prompt: 'What do you already know?', responseFormat: 'short_text', assistance: 'none' } }, response: null,
     requiredAction: { kind: 'submit_response', label: 'Save response' } },
 }
+
+beforeAll(async () => {
+  await import('~/components/learn-adaptive/DiagnosticCanvas.vue')
+})
 
 describe('standalone diagnostic Canvas', () => {
   beforeEach(() => { continueDraft.mockReset().mockResolvedValue({ kind: 'ok' }); submit.mockReset().mockResolvedValue({ kind: 'ok' }); renderAck.mockReset().mockResolvedValue({ status: 'recorded' }); renderFailure.mockReset().mockResolvedValue({ recorded: true }); applyOverride.mockReset().mockResolvedValue({ kind: 'ok', revision: 3, value: { fixedNextPlan: { version: 'learn-adaptive.fixed-next-plan.v1', inputOption: 'time_45', nextActivity: 'continue_with_time', availableTime: '45', difficulty: 'same', maxNewActivities: 1, authority: 'server_revalidate_at_boundary' } } }); isOnline.value = true; sessionStorage.clear() })

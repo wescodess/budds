@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 
@@ -21,6 +21,14 @@ mockNuxtImport('useOfflineAttempts', () => () => ({ queueReviewItemRating: vi.fn
 mockNuxtImport('useOfflineSync', () => () => ({ pendingCount: ref(0), isSyncing: ref(false) }))
 
 const page = (...parts: string[]) => ['~', 'pages', 'app', 'learn', ...parts].join('/')
+
+beforeAll(async () => {
+  await Promise.all([
+    import(page('[learningVoidId]', 'index.vue')),
+    import(page('[learningVoidId]', 'calibration.vue')),
+    import(page('review.vue')),
+  ])
+})
 
 describe('Learn V2 workspace reads', () => {
   beforeEach(() => {

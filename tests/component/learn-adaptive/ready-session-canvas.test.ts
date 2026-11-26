@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { getFunctionName } from 'convex/server'
 import { prepareAdaptiveCommand } from '~~/shared/adaptive-command-authority'
@@ -30,6 +30,10 @@ const canvas = {
   session: { studySessionId: 'session_1', revision: 2, contentRevision: 1, planRecordRevision: 5, blueprintRecordRevision: 3, scheduledStartAt: 0, scheduledEndAt: null, timezone: 'UTC' },
   responsePrompt: 'Explain why an apple falls.',
 }
+
+beforeAll(async () => {
+  await import('~/components/learn-adaptive/ReadySessionCanvas.vue')
+})
 
 describe('ready adaptive Canvas', () => {
   beforeEach(() => {

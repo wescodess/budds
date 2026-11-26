@@ -344,3 +344,20 @@ otherwise unchanged.
 Accepted residual: one Void's 64-row exposure budget is shared across all of its
 checks, prompts and help, so many checks in one Void can still exhaust it; this
 amendment bounds each slot's share and does not change that budget.
+
+## Receipt reference amendment: #587
+
+Enabled Canvas saved-check receipts expose `postSealReference: Reference`,
+including `result_unconfirmed` and `closed`, as specified in the
+[public API contract](learn-v2-c1-public-api-contract.md#587-additive-canvas-timing-and-practice-reference).
+This reference addresses the same existing endpoints and creates no new authority.
+An owned accepted receipt can retain this identity when its content is unavailable;
+post-seal access and publication still fail closed under runtime.1–runtime.3.
+Practice remains reachable during pending, failed or unconfirmed scoring, and for
+an accepted-invalid cancellation where runtime.2 permits it. Closed receipts due
+to access/evidence loss or other failed gates cannot release practice merely by
+carrying the reference. Relevant open checks, canonical sealing and delivery,
+current pins, revocation, publication and exact separate-case proof remain
+mandatory. Feedback retains its valid-score gate; lessons and hints retain their
+valid-failure gate. No endpoint arguments, disabled response, stored record,
+acceptance snapshot or capability default changes.

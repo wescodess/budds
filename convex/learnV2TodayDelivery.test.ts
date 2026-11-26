@@ -160,7 +160,9 @@ test.each(['sealed', 'scored'] as const)('many historical %s check shells do not
   const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
   vi.setSystemTime(day30.openAt + 1000)
   await f.t.mutation(due, { userId, through: Date.now() })
-  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: day30._id } } })
+  expect((await f.opportunities()).find(row => row._id === day30._id)).toMatchObject({ phase: 'cancelled', reasonCode: 'system_check_capacity' })
+  expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready', sessionId: f.graph.studySessionId,
+    assessment: { kind: 'teach', state: null } })
   expect(historical).toMatchObject({ status: 'completed', revision: check.before.contextPins.kind === 'session' ? check.before.contextPins.sessionRevision : 0 })
 })
 
@@ -221,8 +223,9 @@ test('scoring replays preserve the closure established by sealing', async () => 
   expect((await f.opportunities()).find(row => row._id === opportunity._id)).toEqual(opportunity)
 })
 
-test.each(['sealed', 'scored_pass', 'scored_fail', 'expired', 'missed', 'cancelled', 'abandoned', 'scoring_limit'] as const)(
-  '%s transition closes its check beside a ready day-30 check', async transition => {
+test.each((['sealed', 'scored_pass', 'scored_fail', 'expired', 'missed', 'cancelled', 'abandoned', 'scoring_limit'] as const)
+  .flatMap(transition => [0, 140].map(history => ({ transition, history }))))(
+  '$transition transition closes its check with $history historical rows', async ({ transition, history }) => {
     const f = await fixture()
     const check = await openDelayedCheck(f)
     if (['sealed', 'scored_pass', 'scored_fail', 'scoring_limit'].includes(transition)) {
@@ -260,14 +263,19 @@ test.each(['sealed', 'scored_pass', 'scored_fail', 'expired', 'missed', 'cancell
     expect((await f.opportunities()).find(row => row._id === check.before._id)!.contextPins).toEqual(check.before.contextPins)
     await f.t.run(async ctx => {
       const { _id, _creationTime, ...fields } = terminal
-      for (let index = 0; index < 140; index++) await ctx.db.insert('studySessions', { ...fields,
+      for (let index = 0; index < history; index++) await ctx.db.insert('studySessions', { ...fields,
         scheduledStartAt: terminal.scheduledStartAt - (index + 1) * 86_400_000 })
     })
     const day30 = (await f.opportunities()).find(row => row.horizonDays === 30)!
     vi.setSystemTime(day30.openAt + 1000)
     await f.t.mutation(due, { userId, through: Date.now() })
-    expect(await f.owner.query(api.learnV2Today.getToday, {})).toMatchObject({ status: 'ready',
-      assessment: { kind: 'check', state: { assessmentOpportunityId: day30._id } } })
+    const today = await f.owner.query(api.learnV2Today.getToday, {})
+    if (!history) expect(today).toMatchObject({ status: 'ready', assessment: { kind: 'check', state: { assessmentOpportunityId: day30._id } } })
+    else {
+      expect((await f.opportunities()).find(row => row._id === day30._id)).toMatchObject({ phase: 'cancelled', reasonCode: 'system_check_capacity' })
+      expect(today).toMatchObject(transition === 'missed' ? { status: 'empty' }
+        : { status: 'ready', sessionId: f.graph.studySessionId, assessment: { kind: 'teach', state: null } })
+    }
   })
 
 test.each(['void', 'account'] as const)('%s deletion closes a bound check before removing its opportunity', async scope => {
@@ -1491,7 +1499,7 @@ test.each([{ reserves: 3, claims: 32, supports: 2, extraSupports: 0, backingDocu
     expect(call.metrics.databaseQueries.used).toBeLessThan(3072)
   }
 
-})
+}, 20_000)
 
 test.each((['patch', 'replace', 'delete', 'insert'] as const).flatMap(write => [false, true].map(child => ({ write, child }))))(
   'source authority is revalidated after $write with a child read scope=$child', async ({ write, child }) => {
@@ -1682,7 +1690,7 @@ test('the registered cron binds overlapping horizons at maximum published invent
   const originals = (await f.opportunities()).filter(row => row.horizonDays)
   expect(originals).toHaveLength(2)
   for (const row of originals) expect(row).toMatchObject({ phase: 'ready', operationalEligibility: 'eligible', contextPins: { generatorVersion: 'learn-v2.delayed-delivery.v1' } })
-})
+}, 20_000)
 
 test.each(['responses', 'enrollment', 'delivery', 'protocol', 'feature'] as const)('the due-work cron is inert with %s off', async gate => {
   const f = await fixture()

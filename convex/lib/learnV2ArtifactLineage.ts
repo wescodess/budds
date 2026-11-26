@@ -1,3 +1,4 @@
+import { hasLearnCarriedSessionAuthority } from './learnV2FixedChecks'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '../../shared/learn-v2-measurement-storage-manifest'
 import { propagatesResponseReadBudget } from './learnV2PrivacyReadContext'
 import { normalizeLearnCasePrompt } from '../../shared/learn-v2-case-prompt'
@@ -576,11 +577,13 @@ async function liveSessionBlock(scope: Invocation, userId: string, row: Artifact
   const session = await scope.get(content.studySessionId)
   if (!session || session.userId !== userId || !['ready', 'in_progress', 'completed'].includes(session.status)) unavailable()
   const plan = await scope.get(session.studyPlanRevisionId)
-  if (!plan || plan.userId !== userId || plan.status !== 'accepted' || !plan.blueprintRevisionId) unavailable()
+  if (!plan || plan.userId !== userId || !plan.blueprintRevisionId) unavailable()
+  const carried = await hasLearnCarriedSessionAuthority(ctx, userId, session, plan)
+  if (plan.status !== 'accepted' && !carried) unavailable()
   const stable = await scope.get(plan.studyPlanId)
   const learningVoid = await liveVoid(scope, userId, plan.learningVoidId)
   // Mirrors learnV2SessionContent.getSessionContent and learnAdaptiveCanvas.loadReadyCanvas.
-  if (!stable || stable.userId !== userId || stable.learningVoidId !== learningVoid._id || stable.activeRevisionId !== plan._id
+  if (!stable || stable.userId !== userId || stable.learningVoidId !== learningVoid._id || (stable.activeRevisionId !== plan._id && !carried)
     || content.studyPlanRevisionId !== plan._id || content.blueprintRevisionId !== plan.blueprintRevisionId
     || content.objectiveId !== session.primaryObjectiveId
     || (session.status !== 'ready' && (session.startedSessionContentId !== content._id || session.startedSessionContentRevision !== content.revision))) unavailable()

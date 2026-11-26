@@ -56,7 +56,7 @@ import { bindSessionApplication } from './lib/learnV2SessionApplication';
 import { assertMeasurementScoringContract } from '../server/utils/learn-v2-measurement-item-contract';
 import { MeasurementItemBoundsError } from '../shared/learn-v2-measurement-item-limits';
 import { readLearnDelayedCheckBinding } from './lib/learnV2DelayedDelivery';
-import { hasLearnReflowPlanAuthority, isDedicatedLearnCheck, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks';
+import { hasLearnSessionReflowAuthority, requireLearnActiveWorkPlan } from './lib/learnV2FixedChecks';
 
 const TYPE = "session_content_generation";
 const LEASE_MS = 5 * 60_000;
@@ -1447,7 +1447,7 @@ export const startStudySession = mutation({
       throw new LearnSessionContentInputError("Study session is not ready");
     const stable = await ctx.db.get(plan.studyPlanId);
     if (!stable || (stable.activeRevisionId !== plan._id || plan.status !== "accepted")
-      && !(isDedicatedLearnCheck(session) && await hasLearnReflowPlanAuthority(ctx, userId, plan)))
+      && !(await hasLearnSessionReflowAuthority(ctx, userId, session, plan)))
       throw new LearnSessionContentInputError("Study session is not current");
     const learningVoid = await ctx.db.get(plan.learningVoidId);
     const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
@@ -1695,14 +1695,15 @@ const getSessionContentRead = defineTeachingRead({
     if (isTestOnlyMeasurementSession(session)) return null;
     if (session.status !== "ready" && session.status !== "in_progress") return null;
     const plan = await ctx.db.get(session.studyPlanRevisionId);
-    if (!plan || plan.userId !== userId || plan.status !== "accepted")
-      return null;
+    if (!plan || plan.userId !== userId) return null;
+    const carried = await hasLearnSessionReflowAuthority(ctx, userId, session, plan);
+    if (plan.status !== "accepted" && !carried) return null;
     const stable = await ctx.db.get(plan.studyPlanId);
     const learningVoid = await ctx.db.get(plan.learningVoidId);
     const blueprint = plan.blueprintRevisionId && await ctx.db.get(plan.blueprintRevisionId);
     if (
       !stable ||
-      stable.activeRevisionId !== plan._id ||
+      (stable.activeRevisionId !== plan._id && !carried) ||
       !learningVoid ||
       learningVoid.userId !== userId ||
       !blueprint ||
