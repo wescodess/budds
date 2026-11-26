@@ -5,6 +5,7 @@ import { getFunctionName, makeFunctionReference } from 'convex/server'
 import type { Doc } from './_generated/dataModel'
 import { assessmentDeliveryFixture, deliveryIdentity, publishDeliveryTeaching, syntheticDeliveryProtocol } from '../tests/fixtures/learn-v2-assessment-delivery'
 import { prepareAndRegisterInstructionalArtifactsForOwner, instructionalReservationSemanticAdapter } from './lib/learnV2ArtifactLineage'
+import * as responsePrivacy from './lib/learnV2ResponsePrivacy'
 import * as helpAdmission from './lib/learnV2HelpAdmission'
 import * as postSealTeaching from './lib/learnV2PostSealTeaching'
 import { measurementItemAdapters } from './lib/learnV2MeasurementItems'
@@ -802,4 +803,159 @@ test('issuer isolation, unauthenticated calls and account deletion guard both en
   await expect(f.help()).rejects.toThrow(/deletion/)
   await expect(f.prepare()).rejects.toThrow(/deletion/)
   await expect(f.publishFeedback()).rejects.toThrow(/deletion/)
+})
+
+test.each(['feedback', 'lesson'] as const)('citation resolver returns only the disclosed %s source in drawer shape', async kind => {
+  const f = await fixture({ score: true, citationSource: true })
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching[kind]) throw new Error('Expected disclosed teaching')
+  const sourceRef = teaching[kind]!.citations[0]!.sourceRef
+  const result = await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef })
+  expect(result).toEqual({ version, status: 'available', evidence: { kind: 'factual', activityId: f.opportunity._id,
+    eligibility: 'historical', readOnly: true, integrityState: 'accepted', claims: [{ claimId: sourceRef,
+      claimText: teaching.feedback!.text, claimStatus: 'unknown', integrityState: 'accepted', source: {
+        origin: 'user_url', locator: 'rule:1', sourceSnapshotId: f.graph.sourceSnapshotId, sourceSnapshotRevision: 1, sourceRecordRevision: 1,
+      } }] } })
+  expect(JSON.stringify(result)).not.toMatch(/PRIVATE-|MEASUREMENT-|measurement_item|criteria|rubric|referenceSolution|declaredStimulus/)
+  const other = teaching[kind]!.citations[1]!.sourceRef
+  const resolved = await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef: other })
+  expect(resolved).toMatchObject({ status: 'available', evidence: { claims: [{ source: { sourceSnapshotId: f.citationSource!.sourceSnapshotId } }] } })
+  if (resolved.status === 'available') expect(resolved.evidence.claims).toHaveLength(1)
+})
+
+test.each(['foreign', 'unauthenticated', 'tampered', 'undisclosed', 'withdrawn', 'revoked', 'open_check', 'pins', 'grant', 'score', 'publication', 'access', 'deleted_account'] as const)(
+  'citation resolver fails closed for %s', async gate => {
+    const f = await fixture({ score: true })
+    const teaching = await f.read()
+    if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+    let sourceRef = teaching.feedback.citations[0]!.sourceRef
+    const input = () => ({ postSealReference: f.reference, sourceRef })
+    expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, input())).toMatchObject({ status: 'available' })
+    if (gate === 'access') await f.t.mutation(internal.learnV2Access.setCohortEntitlement, { tokenIdentifier: deliveryIdentity.tokenIdentifier, enabled: false })
+    let reader = f.owner
+    if (gate === 'foreign') reader = f.t.withIdentity({ tokenIdentifier: 'https://foreign.example|citation', subject: 'citation' })
+    if (gate === 'tampered') sourceRef = `${sourceRef.slice(0, -1)}${sourceRef.endsWith('0') ? '1' : '0'}`
+    if (gate === 'undisclosed') sourceRef = 'source_' + 'a'.repeat(64)
+    await f.t.run(async ctx => {
+      if (gate === 'withdrawn') {
+        const source = (await ctx.db.query('learnPostSealTeachingSources').take(2))[0]!
+        await ctx.db.patch(source._id, { evidenceStatus: 'evidence_unavailable', invalidatedAt: Date.now(), content: { status: 'purged', reasonCode: 'evidence_unavailable', purgedAt: Date.now() } })
+      }
+      if (gate === 'revoked') await ctx.db.patch(f.graph.sourceSnapshotId, { rightsStatus: 'prohibited' })
+      if (gate === 'pins') await ctx.db.patch(f.graph.objectiveId, { assessmentContract: 'changed' })
+      if (gate === 'grant') await ctx.db.patch(f.opportunity.deliveryGrantId!, { status: 'unknown' })
+      if (gate === 'publication') {
+        const source = (await ctx.db.query('learnPostSealTeachingSources').take(2))[0]!
+        if (source.content.status !== 'available') throw new Error('Expected publication')
+        await ctx.db.patch(source._id, { content: { ...source.content, publication: { ...source.content.publication, payloadDigest: 'sha256:' + '0'.repeat(64) } } })
+      }
+      if (gate === 'score') {
+        const row = (await ctx.db.get(f.opportunity._id))!
+        await ctx.db.patch(row.authoritativeAttemptId!, { serverScorePercent: 100 })
+      }
+      if (gate === 'open_check') await ctx.db.insert('learnAssessmentOpportunities', { ...postSealApplicationFields(f.opportunity),
+        phase: 'test_open', submissionId: undefined, authoritativeAttemptId: undefined, scoringJobId: undefined })
+      if (gate === 'deleted_account') await ctx.db.insert('accountDeletionJobs', { userId: deliveryIdentity.tokenIdentifier, status: 'active', phase: 'learnV2', startedAt: Date.now(), updatedAt: Date.now() })
+    })
+    const result = gate === 'unauthenticated'
+      ? await f.t.query(api.learnV2PostSealTeaching.getPostSealCitationSource, input())
+      : await reader.query(api.learnV2PostSealTeaching.getPostSealCitationSource, input())
+    expect(result).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+  })
+
+test('citation resolver returns disabled with responses off even for missing or foreign references', async () => {
+  const f = await fixture({ score: true })
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+  policy.responses = false
+  expect(await f.t.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
+    postSealReference: f.reference, sourceRef: teaching.feedback.citations[0]!.sourceRef,
+  })).toEqual({ version, status: 'unavailable', reasonCode: 'disabled' })
+})
+
+test('citation resolver binds a source to the addressed receipt rather than another receipt', async () => {
+  const first = await fixture({ score: true, citationSource: true })
+  vi.restoreAllMocks()
+  vi.spyOn(instructionalReservationSemanticAdapter, 'compare').mockResolvedValue({ decision: 'pass', coverage: 'complete' })
+  const second = await fixture({ score: true })
+  const teaching = await first.read()
+  if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+  const sourceRef = teaching.feedback.citations[1]!.sourceRef
+  expect(await first.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: first.reference, sourceRef })).toMatchObject({ status: 'available' })
+  expect(await second.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: second.reference, sourceRef })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+})
+
+test.each(['https://example.com/private/path?token=secret', 'file:///private/source'])(
+  'citation resolver sanitizes source locators: %s', async locator => {
+    const f = await fixture({ score: true })
+    await f.t.run(ctx => ctx.db.patch(f.graph.sourceExcerptId, { locator }))
+    const teaching = await f.read()
+    if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+    const result = await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
+      postSealReference: f.reference, sourceRef: teaching.feedback.citations[0]!.sourceRef,
+    })
+    expect(result).toMatchObject({ status: 'available', evidence: { claims: [{ source: { locator: locator.startsWith('https:') ? 'https://example.com/' : null } }] } })
+  })
+
+async function replacePublishedCitations(f: Awaited<ReturnType<typeof fixture>>, references: string[], lessonReferences = references) {
+  const comparisons: Array<Record<string, unknown> & { delivery: { kind: string, content: unknown } }> = []
+  const digest = responsePrivacy.privacyDigest
+  const capture = vi.spyOn(responsePrivacy, 'privacyDigest').mockImplementation(async value => {
+    if (value && typeof value === 'object' && 'policy' in value && value.policy === 'learn-v2.post-seal-case-separation.v2' && 'delivery' in value) {
+      comparisons.push(structuredClone(value) as typeof comparisons[number])
+    }
+    return digest(value)
+  })
+  try { expect(await f.read()).toMatchObject({ status: 'available' }) }
+  finally { capture.mockRestore() }
+  const source = await f.source()
+  if (source.content.status !== 'available') throw new Error('Expected publication')
+  const payload = structuredClone(source.content.payload)
+  for (const kind of ['feedback', 'lesson'] as const) {
+    const content = payload[kind]
+    if (content) content.citations = (kind === 'lesson' ? lessonReferences : references).map(sourceRef => ({ sourceRef, label: 'Accepted source' }))
+  }
+  const proofs = []
+  for (const kind of ['feedback', 'lesson'] as const) {
+    const comparison = comparisons.find(value => value.delivery.kind === kind)
+    if (!comparison || !payload[kind]) throw new Error('Expected teaching comparison')
+    comparison.delivery.content = payload[kind]
+    proofs.push(await digest({ policy: 'learn-v2.post-seal-case-separation.v2', corpusDigest: await digest(comparison), decision: 'pass', coverage: 'complete' }))
+  }
+  const publication = { ...source.content.publication, payloadDigest: await digest(payload),
+    validationDigest: await digest(['learn-v2.post-seal-publication.v1', source.attemptId, ...proofs]) }
+  await f.t.run(ctx => ctx.db.patch(source._id, { content: { status: 'available', payload, publication } }))
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { citations: references.map(sourceRef => ({ sourceRef })) } })
+}
+
+test('citation resolver recomputes a digest even when the published citation matches client input', async () => {
+  const f = await fixture({ score: true })
+  const sourceRef = 'source_' + 'f'.repeat(64)
+  await replacePublishedCitations(f, [sourceRef])
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
+    postSealReference: f.reference, sourceRef,
+  })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+})
+
+test('citation resolver rejects a withdrawn citation even while its source remains a live publication dependency', async () => {
+  const f = await fixture({ score: true, citationSource: true })
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+  const [withdrawn, retained] = teaching.feedback.citations
+  await replacePublishedCitations(f, [retained!.sourceRef])
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
+    postSealReference: f.reference, sourceRef: withdrawn!.sourceRef,
+  })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+})
+
+test('citation resolver resolves a source cited only by the disclosed lesson', async () => {
+  const f = await fixture({ score: true, citationSource: true })
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback || !teaching.lesson) throw new Error('Expected teaching')
+  const [feedback, lesson] = teaching.feedback.citations
+  await replacePublishedCitations(f, [feedback!.sourceRef], [lesson!.sourceRef])
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
+    postSealReference: f.reference, sourceRef: lesson!.sourceRef,
+  })).toMatchObject({ status: 'available', evidence: { claims: [{ claimText: teaching.lesson.paragraphs.join('\n\n'),
+    source: { sourceSnapshotId: f.citationSource!.sourceSnapshotId } }] } })
 })

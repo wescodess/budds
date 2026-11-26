@@ -361,3 +361,73 @@ current pins, revocation, publication and exact separate-case proof remain
 mandatory. Feedback retains its valid-score gate; lessons and hints retain their
 valid-failure gate. No endpoint arguments, disabled response, stored record,
 acceptance snapshot or capability default changes.
+
+## Citation source runtime amendment: #598
+
+`learnV2PostSealTeaching.getPostSealCitationSource` is a learner-facing query.
+It accepts `{ postSealReference: Reference, sourceRef: string }`, where the
+reference comes from the addressed saved-check receipt and `sourceRef` comes
+from that check's currently disclosed feedback or lesson. The reference remains
+`learn-v2.post-seal-teaching.v1`; this amendment changes no existing endpoint.
+
+```ts
+type CitationSource =
+  | { version: Version; status: 'unavailable'; reasonCode: 'disabled' | 'unavailable' }
+  | {
+      version: Version
+      status: 'available'
+      evidence: {
+        kind: 'factual'
+        activityId: string // The addressed opportunity ID, never the current activity.
+        eligibility: 'historical'
+        readOnly: true
+        integrityState: 'accepted'
+        claims: [{
+          claimId: string // The opaque sourceRef.
+          claimText: string
+          claimStatus: 'unknown'
+          integrityState: 'accepted'
+          source: {
+            origin: 'folder_document' | 'user_url' | 'open_database' | 'general_web_search'
+            locator: string | null
+            sourceSnapshotId: string
+            sourceSnapshotRevision: number
+            sourceRecordRevision: number
+          }
+        }]
+      }
+    }
+```
+
+The `evidence` object is compatible with the ordinary activity evidence drawer.
+It contains exactly one source. `claimText` is already disclosed feedback text,
+or the cited lesson's paragraphs joined with two newlines when only the lesson
+cites it. A feedback citation takes precedence when both cite the source. No
+additional claim prose, source body or excerpt body is loaded into the result.
+The locator uses ordinary teaching's public sanitization: HTTP(S) origin only,
+a permitted bounded label, or null. Snapshot IDs and revisions have the same
+meaning as in the ordinary drawer; this new endpoint alone permits them after
+post-seal authorization. They do not grant further access.
+
+Every read reuses current post-seal teaching authority and publication checks:
+authenticated ownership and account deletion, scope/access, relevant open checks,
+canonical sealing and delivery grant, current pins, valid scoring and the
+feedback/lesson disclosure gates, source dependencies, publication and case
+separation. It first requires that the requested reference occurs in currently
+disclosed content, then recomputes `source_${sha256([publicationPolicy,
+sourceSnapshotId])}` from that publication's server-owned dependencies using the
+existing citation digest convention. Client input is never interpreted as a
+snapshot ID or locator. A citation from another receipt resolves only if that
+receipt itself currently discloses the same citation and source; the opaque
+reference is not a receipt-specific access token.
+
+Responses off returns `{ version, status: 'unavailable', reasonCode: 'disabled' }`.
+Every handler failure otherwise returns exactly `{ version, status: 'unavailable',
+reasonCode: 'unavailable' }`, without identity, source detail or failure reason.
+Malformed Convex wire arguments remain subject to platform validation before the
+handler. The query writes nothing. It reads at most two publication candidates
+and 65 source links (overflow fails closed), inherits the bounded teaching
+inventory and privacy read budget, bounds sourceRef to 200 code units, and
+rejects a result over 64 KiB. The measurement activity's evidence, item, prompt,
+stimulus, rubric, criteria, answer key, sibling sources and provider payloads
+never become drawer content. No `app/` code or capability default changes.

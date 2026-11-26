@@ -10,6 +10,8 @@ import { measurementItemAdapters } from './learnV2MeasurementItems'
 import { learnCasePromptsMatch } from '../../shared/learn-v2-case-prompt'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { privacyDigest, canonicalPrivacyJson, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { sanitizePublicSourceLocator } from './learnV2SourceSanitization'
+import { unavailablePostSealCitation, type PostSealCitationSource } from './learnV2PostSealCitationContract'
 import { documentHasCurrentRevision } from './learnV2BackingSource'
 import { postSealApplicationFields } from './learnV2PostSealStamp'
 import { receiptFields, getLearnMeasurementScorer } from './learnV2MeasurementScoring'
@@ -30,7 +32,7 @@ import {
   fingerprintLearnPracticeHelpRequest, learnPostSealTeachingSourceStorageSchema, learnPostSealPracticeBindingStorageSchema,
   learnPostSealHelpReceiptStorageSchema, learnPostSealSourceLinkStorageSchema,
 } from '../../shared/learn-v2-post-seal-storage'
-import { learnPracticeSlotAssistanceStorageSchema, learnResponseDependencySchema, learnRevisionSchema, learnTextSchema, parseLearnContract } from '../../shared/learn-v2-responses'
+import { learnSerializedBytes, LEARN_V2_RESPONSE_LIMITS, learnPracticeSlotAssistanceStorageSchema, learnResponseDependencySchema, learnRevisionSchema, learnTextSchema, parseLearnContract } from '../../shared/learn-v2-responses'
 
 type ReadCtx = QueryCtx | MutationCtx
 type Dependency = z.infer<typeof learnArtifactSourceDependencySchema>
@@ -604,6 +606,39 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
     else if (result.status === 'available' && practice && result.practice) result.availability.help = await helpAvailability(ctx, userId, authority, practice)
     return parseLearnContract(learnPostSealTeachingSchema, result)
   } catch (error) { return unavailableLearnPostSealTeaching(validationReason(error)) }
+}
+
+export async function readPostSealCitationForOwner(ctx: QueryCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, sourceRef: string): Promise<PostSealCitationSource> {
+  ctx = measurementReadContext(ctx, userId)
+  const teaching = await readPostSealTeachingForOwner(ctx, userId, id)
+  if (teaching.status !== 'available' || !sourceRef.length || sourceRef.length > 200) return unavailablePostSealCitation()
+  const cited = [teaching.feedback, teaching.lesson].find(content => content?.citations.some(citation => citation.sourceRef === sourceRef))
+  if (!cited) return unavailablePostSealCitation()
+  const authority = await checkAuthority(ctx, userId, id)
+  const sources = await ctx.db.query('learnPostSealTeachingSources').withIndex('by_userId_and_submissionId', q =>
+    q.eq('userId', userId).eq('submissionId', authority.response._id)).take(2)
+  if (sources.length !== 1) return unavailablePostSealCitation()
+  const links = await sourceLinks(ctx, userId, { teachingSourceId: sources[0]!._id })
+  if (links.length > 64) return unavailablePostSealCitation()
+  for (const link of links) {
+    const dependency = link.dependency
+    if (!dependency || dependency.kind !== 'snapshot' && dependency.kind !== 'excerpt') continue
+    if (`source_${(await privacyDigest([policy, dependency.sourceSnapshotId])).slice(7)}` !== sourceRef) continue
+    if (!await liveDependency(ctx, userId, dependency)) return unavailablePostSealCitation()
+    const source = await ctx.db.get(dependency.sourceSnapshotId)
+    const identity = source ? await ctx.db.get(source.sourceIdentityId) : null
+    if (!source || !identity || identity.userId !== userId || identity.tombstonedAt !== undefined) return unavailablePostSealCitation()
+    const excerptLink = links.find(value => value.dependency?.kind === 'excerpt' && value.dependency.sourceSnapshotId === source._id)
+    const excerpt = excerptLink?.dependency?.kind === 'excerpt' ? await ctx.db.get(excerptLink.dependency.sourceExcerptId) : null
+    const result: PostSealCitationSource = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', evidence: {
+      kind: 'factual', activityId: id, eligibility: 'historical', readOnly: true, integrityState: 'accepted',
+      claims: [{ claimId: sourceRef, claimText: 'text' in cited ? cited.text : cited.paragraphs.join('\n\n'), claimStatus: 'unknown', integrityState: 'accepted',
+        source: { origin: identity.origin, locator: sanitizePublicSourceLocator(excerpt?.locator) ?? null,
+          sourceSnapshotId: source._id, sourceSnapshotRevision: source.revision, sourceRecordRevision: source.recordRevision! } }],
+    } }
+    return learnSerializedBytes(result) <= LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes ? result : unavailablePostSealCitation()
+  }
+  return unavailablePostSealCitation()
 }
 
 export async function postSealPracticeAcceptanceAuthority(ctx: ReadCtx, userId: string, slot: Doc<'learnResponseSlots'>): Promise<boolean> {
