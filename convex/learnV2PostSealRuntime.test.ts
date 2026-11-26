@@ -34,8 +34,9 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers() })
 
-async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boolean, citationSource?: boolean } = {}) {
-  const f = await assessmentDeliveryFixture({ transactionLimits: true })
+async function fixture(options: { prepare?: boolean, score?: boolean, pass?: boolean, citationSource?: boolean, measurementOnlySource?: boolean } = {}) {
+  const f = await assessmentDeliveryFixture({ transactionLimits: true,
+    ...(options.measurementOnlySource ? { inventory: { claims: 3, supports: 2, sources: 2 } } : {}) })
   const contentId = await publishDeliveryTeaching(f)
   const blocks = await f.t.run(ctx => ctx.db.query('sessionContentBlocks').withIndex('by_userId_and_sessionContentId_and_order', q =>
     q.eq('userId', deliveryIdentity.tokenIdentifier).eq('sessionContentId', contentId)).take(16))
@@ -925,13 +926,14 @@ async function replacePublishedCitations(f: Awaited<ReturnType<typeof fixture>>,
   const publication = { ...source.content.publication, payloadDigest: await digest(payload),
     validationDigest: await digest(['learn-v2.post-seal-publication.v1', source.attemptId, ...proofs]) }
   await f.t.run(ctx => ctx.db.patch(source._id, { content: { status: 'available', payload, publication } }))
-  expect(await f.read()).toMatchObject({ status: 'available', feedback: { citations: references.map(sourceRef => ({ sourceRef })) } })
+  expect(await f.read()).toMatchObject({ status: 'available' })
 }
 
 test('citation resolver recomputes a digest even when the published citation matches client input', async () => {
   const f = await fixture({ score: true })
   const sourceRef = 'source_' + 'f'.repeat(64)
   await replacePublishedCitations(f, [sourceRef])
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: null, lesson: null })
   expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, {
     postSealReference: f.reference, sourceRef,
   })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
@@ -958,4 +960,66 @@ test('citation resolver resolves a source cited only by the disclosed lesson', a
     postSealReference: f.reference, sourceRef: lesson!.sourceRef,
   })).toMatchObject({ status: 'available', evidence: { claims: [{ claimText: teaching.lesson.paragraphs.join('\n\n'),
     source: { sourceSnapshotId: f.citationSource!.sourceSnapshotId } }] } })
+})
+
+
+async function measurementOnlyCitation(f: Awaited<ReturnType<typeof fixture>>) {
+  const instructional = await f.t.run(ctx => ctx.db.query('learnArtifactSourceLinks').take(64))
+  const instructionalIds = new Set(instructional.flatMap(({ dependency }) => dependency && (dependency.kind === 'snapshot' || dependency.kind === 'excerpt') ? [dependency.sourceSnapshotId] : []))
+  const measurement = await f.t.run(ctx => ctx.db.query('learnMeasurementSupports').take(64))
+  const sourceId = [...new Set(measurement.map(row => row.sourceSnapshotId))].find(id => !instructionalIds.has(id))
+  if (!sourceId) throw new Error('Expected a measurement-only source')
+  return { sourceId, sourceRef: `source_${(await responsePrivacy.privacyDigest(['learn-v2.post-seal-publication.v1', sourceId])).slice(7)}` }
+}
+
+test('citation resolver excludes measurement-only sources while shared instructional sources remain citable', async () => {
+  const f = await fixture({ score: true, measurementOnlySource: true })
+  const { sourceId, sourceRef } = await measurementOnlyCitation(f)
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback || !teaching.lesson) throw new Error('Expected teaching')
+  for (const content of [teaching.feedback, teaching.lesson]) expect(content.citations.map(citation => citation.sourceRef)).not.toContain(sourceRef)
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+  const stored = await f.source()
+  if (stored.content.status !== 'available') throw new Error('Expected publication')
+  for (const content of [stored.content.payload.feedback, stored.content.payload.lesson]) {
+    expect(content?.citations.map(citation => citation.sourceRef)).not.toContain(sourceRef)
+  }
+  const sharedRef = teaching.feedback.citations[0]!.sourceRef
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef: sharedRef })).toMatchObject({ status: 'available', evidence: { claims: [{ source: { sourceSnapshotId: f.graph.sourceSnapshotId } }] } })
+  const links = await f.t.run(ctx => ctx.db.query('learnPostSealSourceLinks').take(64))
+  expect(links.some(link => link.dependency && (link.dependency.kind === 'snapshot' || link.dependency.kind === 'excerpt') && link.dependency.sourceSnapshotId === sourceId)).toBe(true)
+})
+
+test('citation resolver keeps measurement-only dependencies as revocation authority', async () => {
+  const f = await fixture({ score: true, measurementOnlySource: true })
+  const { sourceId } = await measurementOnlyCitation(f)
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+  const sourceRef = teaching.feedback.citations[0]!.sourceRef
+  await f.t.run(ctx => ctx.db.patch(sourceId, { rightsStatus: 'prohibited' }))
+  expect(await f.read()).toMatchObject({ status: 'unavailable' })
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+})
+
+
+test('citation resolver filters measurement-only citations from existing publications without rewriting storage', async () => {
+  const f = await fixture({ score: true, measurementOnlySource: true })
+  const { sourceRef } = await measurementOnlyCitation(f)
+  const teaching = await f.read()
+  if (teaching.status !== 'available' || !teaching.feedback) throw new Error('Expected feedback')
+  const sharedRef = teaching.feedback.citations[0]!.sourceRef
+  await replacePublishedCitations(f, [sharedRef, sourceRef])
+  const stored = await f.source()
+  expect(await f.read()).toMatchObject({ status: 'available', feedback: { citations: [{ sourceRef: sharedRef }] }, lesson: { citations: [{ sourceRef: sharedRef }] } })
+  expect(await f.source()).toEqual(stored)
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef: sharedRef })).toMatchObject({ status: 'available', evidence: { claims: [{ source: { sourceSnapshotId: f.graph.sourceSnapshotId } }] } })
+})
+
+
+test('citation resolver denies a legacy measurement-only source with a valid published digest', async () => {
+  const f = await fixture({ score: true, measurementOnlySource: true })
+  const { sourceRef } = await measurementOnlyCitation(f)
+  await replacePublishedCitations(f, [sourceRef])
+  expect(await f.owner.query(api.learnV2PostSealTeaching.getPostSealCitationSource, { postSealReference: f.reference, sourceRef })).toEqual({ version, status: 'unavailable', reasonCode: 'unavailable' })
 })

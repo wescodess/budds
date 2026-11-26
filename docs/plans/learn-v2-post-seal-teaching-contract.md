@@ -368,7 +368,8 @@ acceptance snapshot or capability default changes.
 It accepts `{ postSealReference: Reference, sourceRef: string }`, where the
 reference comes from the addressed saved-check receipt and `sourceRef` comes
 from that check's currently disclosed feedback or lesson. The reference remains
-`learn-v2.post-seal-teaching.v1`; this amendment changes no existing endpoint.
+`learn-v2.post-seal-teaching.v1`. The enabled citation-output change below also
+applies to existing post-seal teaching endpoints; their wire shapes are unchanged.
 
 ```ts
 type CitationSource =
@@ -415,7 +416,7 @@ canonical sealing and delivery grant, current pins, valid scoring and the
 feedback/lesson disclosure gates, source dependencies, publication and case
 separation. It first requires that the requested reference occurs in currently
 disclosed content, then recomputes `source_${sha256([publicationPolicy,
-sourceSnapshotId])}` from that publication's server-owned dependencies using the
+sourceSnapshotId])}` from that publication's server-owned instructional lineage using the
 existing citation digest convention. Client input is never interpreted as a
 snapshot ID or locator. A citation from another receipt resolves only if that
 receipt itself currently discloses the same citation and source; the opaque
@@ -425,9 +426,34 @@ Responses off returns `{ version, status: 'unavailable', reasonCode: 'disabled' 
 Every handler failure otherwise returns exactly `{ version, status: 'unavailable',
 reasonCode: 'unavailable' }`, without identity, source detail or failure reason.
 Malformed Convex wire arguments remain subject to platform validation before the
-handler. The query writes nothing. It reads at most two publication candidates
-and 65 source links (overflow fails closed), inherits the bounded teaching
-inventory and privacy read budget, bounds sourceRef to 200 code units, and
+handler. The query writes nothing. It inherits the bounded publication, instructional
+lineage and teaching reads (including 65-link overflow probes) and privacy read
+budget, bounds sourceRef to 200 code units, and
 rejects a result over 64 KiB. The measurement activity's evidence, item, prompt,
 stimulus, rubric, criteria, answer key, sibling sources and provider payloads
 never become drawer content. No `app/` code or capability default changes.
+
+### Instructional citation boundary
+
+With `responses` enabled, newly published feedback and lessons cite only snapshot
+sources in the explanation's verified instructional lineage, including its
+verified origins. Citation resolution uses that same instructional dependency
+set, including only instructional excerpts when selecting a locator. A snapshot
+shared by instruction and measurement remains citable; a snapshot used only by
+the measurement response cannot be cited or resolved, even with a valid digest.
+
+The complete union of instructional and response dependencies remains unchanged
+for publication manifests, stored revocation links, evidence validation and every
+authority check. Losing a measurement-only dependency still withholds teaching
+and citation detail. The smaller citation set is never substituted for that
+complete authority set.
+
+This narrows existing enabled post-seal output: new publications omit
+measurement-only citations, and reads of previously published payloads filter
+citations against the current verified instructional lineage after checking the
+original publication. Feedback or a lesson with no remaining citations is
+withheld; fully withheld published feedback reports
+`availability.feedback: 'unavailable'`. Reads do not rewrite stored payloads or publication digests.
+The existing responses capability gates publication and projection before this
+behavior runs. With responses off, stored teaching is unchanged and every
+existing disabled response and endpoint retains its prior behavior.
