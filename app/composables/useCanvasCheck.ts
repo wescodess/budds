@@ -337,14 +337,16 @@ export function useCanvasCheck(options: {
     if (id) void score(id)
   }
 
-  watch([() => available.value?.phase, submissionId, options.isOnline], ([phase, id, online]) => {
-    if (phase === 'submitted_sealed' && id && online && scoreRequestedFor !== id) void score(id)
+  watch([() => available.value?.phase, submissionId, options.isOnline, busy], ([phase, id, online, working]) => {
+    if (phase === 'submitted_sealed' && id && online && !working && scoreRequestedFor !== id) void score(id)
   }, { flush: 'post', immediate: true })
 
   const MAX_PUBLISH_ATTEMPTS = 3
   const feedbackPublishBusy = ref(false)
   let publishFor: string | null = null
   let publishAttempts = 0
+
+  let publishRecoveryPending = false
 
   async function publishFeedback(id: string) {
     if (publishFor !== id) {
@@ -355,12 +357,27 @@ export function useCanvasCheck(options: {
     publishAttempts += 1
     feedbackPublishBusy.value = true
     try { await publishFeedbackMutation.mutate(teachingReference).catch(() => undefined) }
-    finally { feedbackPublishBusy.value = false }
+    finally {
+      feedbackPublishBusy.value = false
+      if (publishRecoveryPending) requestPublication()
+    }
   }
 
-  watch([feedbackPublishing, submissionId, options.isOnline], ([publishing, id, online]) => {
-    if (publishing && id && online && !feedbackPublishBusy.value) void publishFeedback(id)
-  }, { flush: 'post', immediate: true })
+  function requestPublication() {
+    const id = submissionId.value
+    if (!feedbackPublishing.value || !id || !options.isOnline.value) {
+      publishRecoveryPending = false
+      return
+    }
+    if (feedbackPublishBusy.value) {
+      publishRecoveryPending = true
+      return
+    }
+    publishRecoveryPending = false
+    void publishFeedback(id)
+  }
+
+  watch([feedbackPublishing, submissionId, options.isOnline], requestPublication, { flush: 'post', immediate: true })
 
   const practiceAnswer = ref('')
   const practiceMissing = ref(false)
@@ -412,8 +429,8 @@ export function useCanvasCheck(options: {
     finally { practiceOpening.value = false }
   }
 
-  watch([() => view.value.kind === 'receipt' ? view.value.receipt : null, () => availability.value?.practice.status, submissionId, options.isOnline], ([receipt, status, id, online]) => {
-    if (receipt === 'saved' && status === 'not_opened' && id && online && canTeachSeparateCase.value && autoOpenedFor !== id) {
+  watch([() => view.value.kind === 'receipt' ? view.value.receipt : null, () => availability.value?.practice.status, submissionId, options.isOnline, practiceOpening], ([receipt, status, id, online, opening]) => {
+    if (receipt === 'saved' && status === 'not_opened' && id && online && !opening && canTeachSeparateCase.value && autoOpenedFor !== id) {
       autoOpenedFor = id
       void openPractice()
     }

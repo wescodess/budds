@@ -1462,6 +1462,108 @@ describe('Canvas check', () => {
       expect(entry.emitted('today')).toBeUndefined()
     })
 
+    const publishingRead = () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+      feedback: null, lesson: null, practice: null, availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
+    const deferred = <T>() => {
+      let resolve!: (value: T) => void
+      let reject!: (cause: unknown) => void
+      const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+      return { promise, resolve, reject }
+    }
+
+    it('recovers publication that returned to publishing while a request was in flight, within the bound', async () => {
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      teachingData.value = publishingRead()
+      const first = deferred<unknown>()
+      publishFeedbackCommand.mockImplementationOnce(() => first.promise).mockImplementation(async () => teachingData.value)
+      const wrapper = await mountCheck()
+      await vi.waitFor(() => expect(publishFeedbackCommand).toHaveBeenCalledOnce())
+      teachingData.value = unavailableTeaching('test_open')
+      await flushPromises()
+      teachingData.value = publishingRead()
+      await flushPromises()
+      expect(publishFeedbackCommand).toHaveBeenCalledOnce()
+      first.resolve(unavailableTeaching('test_open'))
+      await vi.waitFor(() => expect(publishFeedbackCommand).toHaveBeenCalledTimes(2))
+      await flushPromises()
+      expect(publishFeedbackCommand).toHaveBeenCalledTimes(2)
+      for (let round = 0; round < 4; round++) {
+        teachingData.value = unavailableTeaching('test_open')
+        await flushPromises()
+        teachingData.value = publishingRead()
+        await flushPromises()
+      }
+      expect(publishFeedbackCommand).toHaveBeenCalledTimes(3)
+      expect(wrapper.find('[data-testid="learn-canvas-check-feedback-publishing"]').exists()).toBe(true)
+    })
+
+    it('scores a sealed answer whose phase arrived while another command was busy', async () => {
+      const pending = deferred<unknown>()
+      accept.mockImplementationOnce(() => pending.promise)
+      const wrapper = await mountCheck()
+      await fillAnswer(wrapper)
+      await wrapper.get('[data-testid="learn-canvas-check-submit"]').trigger('click')
+      await vi.waitFor(() => expect(accept).toHaveBeenCalledOnce())
+      stateData.value = available('submitted_sealed', SUBMISSION, 3, capabilities({ canRequestAssistance: true, canTeachSeparateCase: true }))
+      await flushPromises()
+      expect(score).not.toHaveBeenCalled()
+      pending.reject(new Error('network'))
+      await vi.waitFor(() => expect(score).toHaveBeenCalledOnce())
+      expect(scoreMasterySubmissionSchema.parse(score.mock.calls[0]![0]).submissionId).toBe(SUBMISSION)
+    })
+
+    it('still makes its one automatic practice opening after a manual opening settles', async () => {
+      stateData.value = sealed('reconciliation_required')
+      workData.value = workState()
+      const notOpened = () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'scoring_pending', practice: { status: 'not_opened' }, help: null } })
+      teachingData.value = notOpened()
+      const manual = deferred<unknown>()
+      openPracticeCommand.mockImplementationOnce(() => manual.promise)
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
+      await vi.waitFor(() => expect(openPracticeCommand).toHaveBeenCalledOnce())
+      stateData.value = sealed('scoring_pending')
+      await flushPromises()
+      expect(openPracticeCommand).toHaveBeenCalledOnce()
+      manual.resolve(unavailableTeaching('test_open'))
+      await vi.waitFor(() => expect(openPracticeCommand).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true))
+      await flushPromises()
+      expect(openPracticeCommand).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps focus in practice input when a result arrives, and announces it', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      const wrapper = await mountCheck()
+      const field = wrapper.get('[data-testid="learn-canvas-check-practice-answer"]')
+      ;(field.element as HTMLTextAreaElement).focus()
+      await field.setValue('Habitat sets')
+      expect(document.activeElement).toBe(field.element)
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      teachingData.value = teachingAvailable({ lesson: null })
+      await flushPromises()
+      await nextTick()
+      expect(receiptKind(wrapper)).toBe('passed')
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="learn-canvas-check-practice-answer"]').element)
+      expect(wrapper.get('p.sr-only[aria-live="polite"]').text()).toBe('Passed: you still had it')
+    })
+
+    it('moves focus to an arriving result when nothing in the check has focus', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      const wrapper = await mountCheck()
+      ;(document.activeElement as HTMLElement | null)?.blur()
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      await vi.waitFor(() => expect(document.activeElement?.textContent).toBe('Not yet: part of this slipped'))
+      expect(wrapper.get('p.sr-only[aria-live="polite"]').text()).toBe('Not yet: part of this slipped')
+    })
+
     it.each([
       ['about_a_week', 'A check on last week’s work'],
       ['about_a_month', 'A check on work from about a month ago'],

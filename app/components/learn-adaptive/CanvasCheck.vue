@@ -91,9 +91,16 @@ const entryHeading = computed(() => (props.binding.timing && entryHeadings[props
 const savedAtFormat = new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 const savedAtLabel = computed(() => receipt.value?.acceptedAt ? savedAtFormat.format(receipt.value.acceptedAt) : null)
 
+const root = ref<HTMLElement | null>(null)
+
 async function focusOn(target: Ref<HTMLElement | null>) {
   await nextTick()
   if (props.active) target.value?.focus()
+}
+
+function checkHoldsFocus() {
+  const active = document.activeElement
+  return Boolean(active && active !== document.body && root.value?.contains(active))
 }
 
 let questionFocusPending = false
@@ -114,7 +121,10 @@ watch(viewKey, (next, previous) => {
     notice.value = 'Answer saved and locked'
     void focusOn(receiptHeading)
   }
-  if (next === 'invalid' || next === 'passed' || next === 'not_yet') void focusOn(receiptHeading)
+  if (next === 'invalid' || next === 'passed' || next === 'not_yet') {
+    notice.value = receiptContent[next].title
+    if (!checkHoldsFocus()) void focusOn(receiptHeading)
+  }
 })
 
 async function onSubmit() {
@@ -146,7 +156,7 @@ async function openPractice() {
 </script>
 
 <template>
-  <section class="w-full" data-testid="learn-canvas-check" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
+  <section ref="root" class="w-full" data-testid="learn-canvas-check" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <header v-if="showHeader">
       <p class="font-inter text-xs font-medium text-muted-foreground">{{ view.kind === 'open' ? 'Check' : 'Void' }} · {{ intent }}</p>
       <h1 id="learn-canvas-title" class="mt-2 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl">{{ outcome }}</h1>
