@@ -936,7 +936,8 @@ describe('Canvas check', () => {
       const leave = wrapper.get('[data-testid="learn-canvas-check-receipt"] [data-testid="learn-canvas-check-leave"]')
       expect(leave.text()).toBe('Back to Today')
       await leave.trigger('click')
-      expect(wrapper.emitted('leave')).toHaveLength(1)
+      expect(wrapper.emitted('today')).toHaveLength(1)
+      expect(wrapper.emitted('leave')).toBeUndefined()
     })
 
     it('keeps Back to Today off the result card while a lesson exists or the read is pending', async () => {
@@ -1388,6 +1389,77 @@ describe('Canvas check', () => {
       await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice"]').exists()).toBe(true))
       expect(openPracticeCommand).toHaveBeenCalledTimes(2)
       expect(wrapper.find('[data-testid="learn-canvas-check-practice-open-error"]').exists()).toBe(false)
+    })
+
+    it('keeps an open practice answer through the switch from pending to a passed result', async () => {
+      stateData.value = sealed('scoring_pending')
+      workData.value = workState()
+      teachingData.value = teachingAvailable({ feedback: null, lesson: null })
+      const wrapper = await mountCheck()
+      await wrapper.get('[data-testid="learn-canvas-check-practice-answer"]').setValue('Habitat sets the range.')
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      teachingData.value = teachingAvailable({ lesson: null })
+      await flushPromises()
+      expect(receiptKind(wrapper)).toBe('passed')
+      const field = wrapper.get('[data-testid="learn-canvas-check-practice-answer"]').element as HTMLTextAreaElement
+      expect(field.value).toBe('Habitat sets the range.')
+      expect(JSON.parse(sessionStorage.getItem(`learn-response:owner_1:thread_1:practice:${OPPORTUNITY}`)!).response).toBe('Habitat sets the range.')
+      expect(wrapper.findAll('button').filter(button => button.classes().includes('bg-primary') && button.classes().includes('rounded-xl'))).toHaveLength(1)
+      teachingData.value = teachingAvailable({ lesson: null, practice: null })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-practice-answer"]').exists()).toBe(false)
+    })
+
+    it('retries publication once authority returns after a denial, without looping', async () => {
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      const publishing = () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
+      teachingData.value = publishing()
+      publishFeedbackCommand
+        .mockImplementationOnce(async () => { teachingData.value = unavailableTeaching('test_open'); return teachingData.value })
+        .mockImplementationOnce(async () => { teachingData.value = teachingAvailable({ lesson: null, practice: null }); return teachingData.value })
+      const wrapper = await mountCheck()
+      await vi.waitFor(() => expect(publishFeedbackCommand).toHaveBeenCalledOnce())
+      await flushPromises()
+      expect(wrapper.find('[data-testid="learn-canvas-check-feedback"]').exists()).toBe(false)
+      teachingData.value = publishing()
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-feedback"]').exists()).toBe(true))
+      expect(publishFeedbackCommand).toHaveBeenCalledTimes(2)
+      expect(openPracticeCommand).not.toHaveBeenCalled()
+    })
+
+    it('stops retrying publication after a bounded number of attempts', async () => {
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      const publishing = () => learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice: null, availability: { feedback: 'feedback_publishing', practice: { status: 'not_opened' }, help: null } })
+      teachingData.value = publishing()
+      publishFeedbackCommand.mockImplementation(async () => unavailableTeaching('test_open'))
+      await mountCheck()
+      for (let round = 0; round < 5; round++) {
+        await flushPromises()
+        teachingData.value = unavailableTeaching('test_open')
+        await flushPromises()
+        teachingData.value = publishing()
+      }
+      await flushPromises()
+      expect(publishFeedbackCommand).toHaveBeenCalledTimes(3)
+    })
+
+    it('sends Today actions to Today and Learn exits to Learn', async () => {
+      stateData.value = scored('scored_pass')
+      workData.value = workState({ result: result(['pass']) })
+      const passed = await mountCheck()
+      await passed.get('[data-testid="learn-canvas-check-continue"]').trigger('click')
+      expect(passed.emitted('today')).toHaveLength(1)
+      expect(passed.emitted('leave')).toBeUndefined()
+      stateData.value = ready()
+      const entry = await mountCheck({ canvas: serverAssessmentCanvas({ opportunityId: OPPORTUNITY, phase: 'ready', awaitingStart: true }) })
+      await entry.get('[data-testid="learn-canvas-check-leave"]').trigger('click')
+      expect(entry.emitted('leave')).toHaveLength(1)
+      expect(entry.emitted('today')).toBeUndefined()
     })
 
     it.each([

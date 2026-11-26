@@ -12,7 +12,7 @@ const props = withDefaults(defineProps<{
   showHeader?: boolean
   active?: boolean
 }>(), { showHeader: true, active: true })
-const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElement] }>()
+const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement] }>()
 
 const { isOnline } = useOnlineStatus()
 const {
@@ -65,6 +65,7 @@ const receiptBody = computed(() => {
   }
 })
 const showFullPractice = computed(() => Boolean(practice.value) && (receipt.value?.receipt === 'saved' || practiceExpanded.value))
+watch(showFullPractice, (shown) => { if (shown) practiceExpanded.value = true }, { immediate: true })
 const showCollapsedPractice = computed(() => practiceOffered.value && !showFullPractice.value
   && (receipt.value?.receipt === 'saved' ? practiceOpenFailed.value : receipt.value?.receipt === 'scoring_failed' || receipt.value?.receipt === 'unconfirmed' || receipt.value?.receipt === 'invalid' || (receipt.value?.receipt === 'not_yet' && !lesson.value)))
 const shownHelp = computed(() => {
@@ -232,8 +233,8 @@ async function openPractice() {
           </template>
           <p v-else-if="feedbackPublishing" role="status" data-testid="learn-canvas-check-feedback-publishing" class="mt-4 flex items-center gap-2 text-sm leading-6 text-foreground"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting feedback on your answer.</p>
         </div>
-        <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('leave')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
-        <div v-if="lessonUnavailable" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button></div>
+        <div v-if="receipt.receipt === 'passed'" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-continue" :class="primaryAction" @click="emit('today')">Continue to today’s session<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button></div>
+        <div v-if="lessonUnavailable" class="mt-5 flex flex-wrap items-center gap-3"><button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('today')">Back to Today</button></div>
       </section>
 
       <section v-if="lesson" data-testid="learn-canvas-check-lesson" :aria-labelledby="`${id}-lesson`" :class="card">
@@ -243,7 +244,7 @@ async function openPractice() {
         <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
         <div class="mt-5 flex flex-wrap items-center gap-3">
           <button v-if="practiceOffered && !showFullPractice" type="button" data-testid="learn-canvas-check-try-practice" :disabled="practiceOpening || !isOnline" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
-          <button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('leave')">Back to Today</button>
+          <button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('today')">Back to Today</button>
         </div>
         <p v-if="practiceOpenFailed && !showFullPractice" role="alert" data-testid="learn-canvas-check-practice-open-error" class="mt-3 flex items-start gap-2 text-sm font-medium text-foreground"><CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />Could not load support. Try again.</p>
       </section>

@@ -482,6 +482,7 @@ const evidenceDrawerProps = computed(() => ({
 }))
 
 function leave() { void router.push(safeDestination.value) }
+function goToday() { void router.push('/app/learn/today') }
 </script>
 
 <template>
@@ -610,7 +611,7 @@ function leave() { void router.push(safeDestination.value) }
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-show="currentCanvasVisible">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @inspect-evidence="inspectEvidence" />
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @today="goToday" @inspect-evidence="inspectEvidence" />
           <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" />

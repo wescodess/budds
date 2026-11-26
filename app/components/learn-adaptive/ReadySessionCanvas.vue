@@ -50,7 +50,7 @@ function readyPrimitiveForCanvas(primitive: ValidatedAdaptiveActivityPrimitive):
 }
 
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
-const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElement] }>()
+const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement] }>()
 const { isOnline } = useOnlineStatus()
 const checkBinding = computed(() => canvasCheckBinding(props.canvas))
 const checkMode = computed(() => Boolean(checkBinding.value))
@@ -461,7 +461,7 @@ async function submitWithValidation() {
 </script>
 
 <template>
-  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="canvasCheckIdentity(checkBinding)" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @inspect-evidence="emit('inspectEvidence', $event)" />
+  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="canvasCheckIdentity(checkBinding)" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-evidence="emit('inspectEvidence', $event)" />
   <section v-else class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>

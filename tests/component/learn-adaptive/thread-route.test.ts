@@ -1045,6 +1045,33 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    it('routes Today actions to Today and the Learn exit to the Void', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      checkTeaching.value = null
+      canvas.value = checkCanvas()
+      checkState.value = { ...assessment('scored_pass', 'submission_1'), capabilities: { ...assessment('scored_pass').capabilities, canReadFeedback: true } }
+      checkWork.value = { version: 'learn-v2.public-api.v1', status: 'available', target: { assessmentOpportunityId: 'opportunity_1' }, revision: 3, state: 'accepted',
+        work: { version: 'learn-v2.assessment-disclosure.v1', submissionId: 'submission_1', acceptedAt: 1_800_000_000_000, confidence: 4,
+          assistanceSnapshot: { policyVersion: 'learn-v2.assistance.session-wide.v1', state: 'unassisted', assistanceRevision: 0, substantiveHintUsedAt: null, answerRevealedAt: null, priorExposure: 'prospectively_unexposed', outsideHelp: 'unknown', pasteObserved: 'unknown', focusLossObserved: 'unknown', instrumentationVersion: 'learn-v2.instrumentation.unknown.v1', instrumentationProvenance: 'test' },
+          validitySnapshot: { policyVersion: 'learn-v2.assessment-validity.v1', status: 'valid', measurementEligible: true, masteryEligible: true, exclusionReasons: [] },
+          currentEligibility: 'eligible', body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'Saved answer' } },
+          result: { attemptId: 'attempt_1', scorePercent: 90, thresholdPercent: 80, scoreCommittedAt: 1_800_000_100_000, feedbackCodes: ['pass'] } } }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const push = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined)
+      await wrapper.get('[data-testid="learn-canvas-check-continue"]').trigger('click')
+      expect(push).toHaveBeenLastCalledWith('/app/learn/today')
+      wrapper.unmount()
+
+      checkState.value = { ...assessment('ready'), capabilities: { ...assessment('ready').capabilities, canDeliver: true } }
+      canvas.value = serverAssessmentCanvas({ opportunityId: 'opportunity_1', phase: 'ready', awaitingStart: true })
+      const entry = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1' })
+      const entryPush = vi.spyOn(entry.vm.$router, 'push').mockResolvedValue(undefined)
+      await entry.get('[data-testid="learn-canvas-check-entry"] [data-testid="learn-canvas-check-leave"]').trigger('click')
+      expect(entryPush).toHaveBeenLastCalledWith('/app/learn/void_1')
+      entry.unmount()
+    })
+
     it('keeps the existing Canvas while responses are off: no check, no hidden tools, no reference', async () => {
       capabilities.responses = false
       const Page = await import(path)

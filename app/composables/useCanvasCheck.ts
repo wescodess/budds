@@ -341,19 +341,25 @@ export function useCanvasCheck(options: {
     if (phase === 'submitted_sealed' && id && online && scoreRequestedFor !== id) void score(id)
   }, { flush: 'post', immediate: true })
 
+  const MAX_PUBLISH_ATTEMPTS = 3
   const feedbackPublishBusy = ref(false)
-  let publishRequestedFor: string | null = null
+  let publishFor: string | null = null
+  let publishAttempts = 0
 
   async function publishFeedback(id: string) {
+    if (publishFor !== id) {
+      publishFor = id
+      publishAttempts = 0
+    }
+    if (publishAttempts >= MAX_PUBLISH_ATTEMPTS) return
+    publishAttempts += 1
     feedbackPublishBusy.value = true
-    publishRequestedFor = id
-    try { await publishFeedbackMutation.mutate(teachingReference) }
-    catch { publishRequestedFor = null }
+    try { await publishFeedbackMutation.mutate(teachingReference).catch(() => undefined) }
     finally { feedbackPublishBusy.value = false }
   }
 
   watch([feedbackPublishing, submissionId, options.isOnline], ([publishing, id, online]) => {
-    if (publishing && id && online && !feedbackPublishBusy.value && publishRequestedFor !== id) void publishFeedback(id)
+    if (publishing && id && online && !feedbackPublishBusy.value) void publishFeedback(id)
   }, { flush: 'post', immediate: true })
 
   const practiceAnswer = ref('')
