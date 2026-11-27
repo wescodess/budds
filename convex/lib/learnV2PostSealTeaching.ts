@@ -10,6 +10,8 @@ import { measurementItemAdapters } from './learnV2MeasurementItems'
 import { learnCasePromptsMatch } from '../../shared/learn-v2-case-prompt'
 import { measurementReadContext } from './learnV2MeasurementReadContext'
 import { privacyDigest, canonicalPrivacyJson, sourceBodyAvailable } from './learnV2ResponsePrivacy'
+import { sanitizePublicSourceLocator } from './learnV2SourceSanitization'
+import { unavailablePostSealCitation, type PostSealCitationSource } from './learnV2PostSealCitationContract'
 import { documentHasCurrentRevision } from './learnV2BackingSource'
 import { postSealApplicationFields } from './learnV2PostSealStamp'
 import { receiptFields, getLearnMeasurementScorer } from './learnV2MeasurementScoring'
@@ -30,7 +32,7 @@ import {
   fingerprintLearnPracticeHelpRequest, learnPostSealTeachingSourceStorageSchema, learnPostSealPracticeBindingStorageSchema,
   learnPostSealHelpReceiptStorageSchema, learnPostSealSourceLinkStorageSchema,
 } from '../../shared/learn-v2-post-seal-storage'
-import { learnPracticeSlotAssistanceStorageSchema, learnResponseDependencySchema, learnRevisionSchema, learnTextSchema, parseLearnContract } from '../../shared/learn-v2-responses'
+import { learnSerializedBytes, LEARN_V2_RESPONSE_LIMITS, learnPracticeSlotAssistanceStorageSchema, learnResponseDependencySchema, learnRevisionSchema, learnTextSchema, parseLearnContract } from '../../shared/learn-v2-responses'
 
 type ReadCtx = QueryCtx | MutationCtx
 type Dependency = z.infer<typeof learnArtifactSourceDependencySchema>
@@ -230,7 +232,7 @@ async function blockAuthority(ctx: ReadCtx, userId: string, authority: Authority
   }
   const complete = normalizeDependencies([...authority.dependencies, ...dependencies])
   for (const dependency of complete) if (!await liveDependency(ctx, userId, dependency)) deny('evidence_unavailable')
-  return { block, content, bound, claims: claims.filter(claim => claimOrders.includes(claim.order)), checkCaseId, caseId: candidate.caseId, dependencies: complete,
+  return { block, content, bound, claims: claims.filter(claim => claimOrders.includes(claim.order)), checkCaseId, caseId: candidate.caseId, dependencies: complete, instructionalDependencies: dependencies.length ? normalizeDependencies(dependencies) : [],
     validationDigest: await privacyDigest({ policy, checkCaseId, validation: bound.validation, cases: bound.cases }) }
 }
 async function separateCaseProof(ctx: ReadCtx, userId: string, authority: Authority, proof: Awaited<ReturnType<typeof blockAuthority>>,
@@ -460,6 +462,19 @@ async function instructionalBlock(ctx: ReadCtx, userId: string, authority: Autho
   return await blockAuthority(ctx, userId, authority, matches[0]!._id, kind)
 }
 type TeachingPayload = Extract<Doc<'learnPostSealTeachingSources'>['content'], { status: 'available' }>['payload']
+async function instructionalSourceRefs(dependencies: Dependency[]) {
+  const ids = [...new Set(dependencies.flatMap(dependency => dependency.kind === 'snapshot' || dependency.kind === 'excerpt' ? [dependency.sourceSnapshotId] : []))]
+  if (ids.length > 16) deny()
+  const refs: string[] = []
+  for (const id of ids) refs.push(`source_${(await privacyDigest([policy, id])).slice(7)}`)
+  return refs
+}
+async function instructionalTeaching(payload: TeachingPayload, dependencies: Dependency[]): Promise<TeachingPayload> {
+  const refs = new Set(await instructionalSourceRefs(dependencies))
+  const feedback = payload.feedback ? { ...payload.feedback, citations: payload.feedback.citations.filter(citation => refs.has(citation.sourceRef)) } : null
+  const lesson = payload.lesson ? { ...payload.lesson, citations: payload.lesson.citations.filter(citation => refs.has(citation.sourceRef)) } : null
+  return { feedback: feedback?.citations.length ? feedback : null, lesson: lesson?.citations.length ? lesson : null }
+}
 async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authority, validate: boolean, stored?: TeachingPayload) {
   const attempt = authority.row.authoritativeAttemptId ? await ctx.db.get(authority.row.authoritativeAttemptId) : null
   if (!attempt || attempt.userId !== userId || attempt.submissionId !== authority.response._id
@@ -470,10 +485,9 @@ async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authorit
   const dependencies = explanation.dependencies
   let actual = stored
   if (!actual) {
-    const citations = []
-    const sources = [...new Set(explanation.dependencies.flatMap(dependency => dependency.kind === 'snapshot' || dependency.kind === 'excerpt' ? [dependency.sourceSnapshotId] : []))]
-    if (!sources.length || sources.length > 16) deny()
-    for (const [index, id] of sources.entries()) citations.push({ sourceRef: `source_${(await privacyDigest([policy, id])).slice(7)}`, label: postSealFeedbackCopy.citationLabel(index) })
+    const refs = await instructionalSourceRefs(explanation.instructionalDependencies)
+    if (!refs.length) deny()
+    const citations = refs.map((sourceRef, index) => ({ sourceRef, label: postSealFeedbackCopy.citationLabel(index) }))
     actual = { feedback: { tier: 'T0', text: postSealFeedbackCopy.text(explanation.claims[0]!.claim), citations },
       lesson: !passed ? { tier: 'T0', paragraphs: [explanation.block.content!], citations } : null }
   }
@@ -483,7 +497,7 @@ async function teachingPayload(ctx: ReadCtx, userId: string, authority: Authorit
   if (actual.feedback.tier === 'T0' && !explanation.claims.some(claim => claim.claim === actual.feedback!.text)) deny('evidence_unavailable')
   const lesson = actual.lesson ? await separateCaseProof(ctx, userId, authority, explanation, validate,
     { kind: 'lesson', content: actual.lesson, texts: actual.lesson.paragraphs }) : null
-  return { payload: actual, dependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, feedback.validationDigest, lesson?.validationDigest ?? null]) }
+  return { payload: actual, dependencies, instructionalDependencies: explanation.instructionalDependencies, validationDigest: await privacyDigest([policy, authority.row.authoritativeAttemptId, feedback.validationDigest, lesson?.validationDigest ?? null]) }
 }
 
 export async function preparePostSealPracticeForOwner(ctx: MutationCtx, userId: string, id: Id<'learnAssessmentOpportunities'>) {
@@ -593,6 +607,7 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
       q.eq('userId', userId).eq('submissionId', authority.response._id)).take(2)
     if (rows.length > 1 || !rows.length && authority.row.authoritativeAttemptId) deny()
     const source = rows[0]
+    let disclosed: TeachingPayload | null = null
     if (source) {
       parseLearnContract(learnPostSealTeachingSourceStorageSchema, postSealApplicationFields(source))
       if (source.content.status === 'purged') deny('evidence_unavailable')
@@ -603,6 +618,7 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
       } else {
         const teaching = await teachingPayload(ctx, userId, authority, false, source.content.payload)
         await verifyPublication(ctx, userId, { ...source, content: source.content }, { teachingSourceId: source._id }, teaching.dependencies, teaching.validationDigest)
+        disclosed = await instructionalTeaching(source.content.payload, teaching.instructionalDependencies)
       }
     }
     const bindings = await ctx.db.query('learnPostSealPracticeBindings').withIndex('by_userId_and_submissionId', q =>
@@ -615,13 +631,43 @@ export async function readPostSealTeachingForOwner(ctx: ReadCtx, userId: string,
     }
     const result = projectPostSealTeaching({ assessmentOpportunityId: id, submissionId: authority.response._id,
       attemptId: authority.row.authoritativeAttemptId ?? null,
-      feedback: source?.content.status === 'available' ? source.content.payload.feedback : null,
-      lesson: source?.content.status === 'available' ? source.content.payload.lesson : null,
+      feedback: disclosed?.feedback ?? null,
+      lesson: disclosed?.lesson ?? null,
       practice: practice ? { responseSlotId: practice.slot._id, revision: practice.slot.revision, tier: 'T0', prompt: practice.binding.content.status === 'available' ? practice.binding.content.payload.prompt : null } : null }, authority.context)
+    if (result.status === 'available' && source?.content.status === 'available' && !disclosed?.feedback) result.availability.feedback = 'unavailable'
     if (result.status === 'available' && practiceFailure) result.availability.practice = { status: 'unavailable', reasonCode: practiceFailure }
     else if (result.status === 'available' && practice && result.practice) result.availability.help = await helpAvailability(ctx, userId, authority, practice)
     return parseLearnContract(learnPostSealTeachingSchema, result)
   } catch (error) { return unavailableLearnPostSealTeaching(validationReason(error)) }
+}
+
+export async function readPostSealCitationForOwner(ctx: QueryCtx, userId: string, id: Id<'learnAssessmentOpportunities'>, sourceRef: string): Promise<PostSealCitationSource> {
+  ctx = measurementReadContext(ctx, userId)
+  const teaching = await readPostSealTeachingForOwner(ctx, userId, id)
+  if (teaching.status !== 'available' || !sourceRef.length || sourceRef.length > 200) return unavailablePostSealCitation()
+  const cited = [teaching.feedback, teaching.lesson].find(content => content?.citations.some(citation => citation.sourceRef === sourceRef))
+  if (!cited) return unavailablePostSealCitation()
+  const authority = await checkAuthority(ctx, userId, id)
+  const explanation = await instructionalBlock(ctx, userId, authority, await instructionalContent(ctx, userId, authority), 'explanation')
+  const dependencies = explanation.instructionalDependencies
+  for (const dependency of dependencies) {
+    if (dependency.kind !== 'snapshot' && dependency.kind !== 'excerpt') continue
+    if (`source_${(await privacyDigest([policy, dependency.sourceSnapshotId])).slice(7)}` !== sourceRef) continue
+    if (!await liveDependency(ctx, userId, dependency)) return unavailablePostSealCitation()
+    const source = await ctx.db.get(dependency.sourceSnapshotId)
+    const identity = source ? await ctx.db.get(source.sourceIdentityId) : null
+    if (!source || !identity || identity.userId !== userId || identity.tombstonedAt !== undefined) return unavailablePostSealCitation()
+    const excerptDependency = dependencies.find(value => value.kind === 'excerpt' && value.sourceSnapshotId === source._id)
+    const excerpt = excerptDependency?.kind === 'excerpt' ? await ctx.db.get(excerptDependency.sourceExcerptId) : null
+    const result: PostSealCitationSource = { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', evidence: {
+      kind: 'factual', activityId: id, eligibility: 'historical', readOnly: true, integrityState: 'accepted',
+      claims: [{ claimId: sourceRef, claimText: 'text' in cited ? cited.text : cited.paragraphs.join('\n\n'), claimStatus: 'unknown', integrityState: 'accepted',
+        source: { origin: identity.origin, locator: sanitizePublicSourceLocator(excerpt?.locator) ?? null,
+          sourceSnapshotId: source._id, sourceSnapshotRevision: source.revision, sourceRecordRevision: source.recordRevision! } }],
+    } }
+    return learnSerializedBytes(result) <= LEARN_V2_RESPONSE_LIMITS.maxEnvelopeBytes ? result : unavailablePostSealCitation()
+  }
+  return unavailablePostSealCitation()
 }
 
 export async function postSealPracticeAcceptanceAuthority(ctx: ReadCtx, userId: string, slot: Doc<'learnResponseSlots'>): Promise<boolean> {
