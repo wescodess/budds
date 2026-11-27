@@ -3,7 +3,7 @@ import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import { useAdaptiveComparisonDraft } from '~/composables/useAdaptiveComparisonDraft'
-import { canvasCheckBinding, useStableCheckIdentity } from '~/composables/useCanvasCheck'
+import { canvasCheckBinding, useStableCheckIdentity, type CanvasCheckCitationRequest } from '~/composables/useCanvasCheck'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 import { adaptiveActivityFallbackForReason, type AdaptiveActivityValidationReason, type ValidatedAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
 import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
@@ -50,7 +50,7 @@ function readyPrimitiveForCanvas(primitive: ValidatedAdaptiveActivityPrimitive):
 }
 
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
-const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement] }>()
+const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement], inspectCitation: [origin: HTMLButtonElement, request: CanvasCheckCitationRequest] }>()
 const { isOnline } = useOnlineStatus()
 const checkBinding = computed(() => canvasCheckBinding(props.canvas))
 const checkMode = computed(() => Boolean(checkBinding.value))
@@ -464,7 +464,7 @@ async function submitWithValidation() {
 </script>
 
 <template>
-  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="checkIdentity ?? undefined" :announce-on-mount="checkReplaced" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-evidence="emit('inspectEvidence', $event)" />
+  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="checkIdentity ?? undefined" :announce-on-mount="checkReplaced" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-citation="(origin, request) => emit('inspectCitation', origin, request)" />
   <section v-else class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>

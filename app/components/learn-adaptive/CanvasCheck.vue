@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Component, Ref } from 'vue'
 import { BookOpen, ChevronRight, CircleAlert, CircleCheck, Clock, Eye, Lightbulb, LoaderCircle, Lock, RotateCw, TriangleAlert, WifiOff } from '@lucide/vue'
-import { useCanvasCheck, type CanvasCheckBinding, type CanvasCheckReceiptKind } from '~/composables/useCanvasCheck'
+import { useCanvasCheck, type CanvasCheckBinding, type CanvasCheckCitationRequest, type CanvasCheckReceiptKind } from '~/composables/useCanvasCheck'
 
 const props = withDefaults(defineProps<{
   ownerId: string
@@ -13,14 +13,14 @@ const props = withDefaults(defineProps<{
   active?: boolean
   announceOnMount?: boolean
 }>(), { showHeader: true, active: true, announceOnMount: false })
-const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement] }>()
+const emit = defineEmits<{ leave: [], today: [], inspectCitation: [origin: HTMLButtonElement, request: CanvasCheckCitationRequest] }>()
 
 const { isOnline } = useOnlineStatus()
 const {
   view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, startRefused, busy, restored,
   invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
   practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
-  assistance, assistanceDenied, assistanceLimit,
+  assistance, assistanceDenied, assistanceLimit, citationRequest,
   start, submit, retryScore, openPractice: openPracticeCase, submitPractice, requestAssistance,
 } = useCanvasCheck({ ownerId: props.ownerId, threadId: props.threadId, binding: () => props.binding, isOnline })
 
@@ -164,8 +164,9 @@ function textTail(text: string) {
   return text.trimEnd().slice(tailIndex(text))
 }
 
-function inspectCitation(event: MouseEvent) {
-  if (event.currentTarget instanceof HTMLButtonElement) emit('inspectEvidence', event.currentTarget)
+function inspectCitation(event: MouseEvent, sourceRef: string) {
+  const request = citationRequest(sourceRef)
+  if (request && event.currentTarget instanceof HTMLButtonElement) emit('inspectCitation', event.currentTarget, request)
 }
 
 async function openPractice() {
@@ -256,8 +257,8 @@ async function openPractice() {
           </template>
           <template v-if="feedback">
             <p data-testid="learn-canvas-check-feedback-caption" class="mt-4 font-inter text-xs font-medium text-muted-foreground">Feedback on your answer<template v-if="feedback.tier === 'T1'"> · <span data-testid="learn-canvas-check-feedback-label" class="text-foreground">from the web, not yet verified</span></template></p>
-            <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(feedback.text) }}<span class="whitespace-nowrap">{{ textTail(feedback.text) }}<button v-for="(citation, index) in feedback.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></span><button v-for="(citation, index) in feedback.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 2 }}</button></p>
-            <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
+            <p data-testid="learn-canvas-check-feedback" class="mt-2 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(feedback.text) }}<span class="whitespace-nowrap">{{ textTail(feedback.text) }}<button v-for="(citation, index) in feedback.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation($event, citation.sourceRef)">{{ index + 1 }}</button></span><button v-for="(citation, index) in feedback.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation($event, citation.sourceRef)">{{ index + 2 }}</button></p>
+            <p v-for="(citation, index) in feedback.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation($event, citation.sourceRef)">{{ citation.label }}</button></p>
           </template>
           <p v-else-if="feedbackPublishing" role="status" data-testid="learn-canvas-check-feedback-publishing" class="mt-4 flex items-center gap-2 text-sm leading-6 text-foreground"><LoaderCircle :class="['h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none', attention]" aria-hidden="true" />Getting feedback on your answer.</p>
         </div>
@@ -268,8 +269,8 @@ async function openPractice() {
       <section v-if="lesson" data-testid="learn-canvas-check-lesson" :aria-labelledby="`${id}-lesson`" :class="card">
         <h2 :id="`${id}-lesson`" class="font-dm-sans text-lg font-semibold text-foreground">Let’s rebuild the missing part</h2>
         <p v-if="lesson.tier === 'T1'" data-testid="learn-canvas-check-lesson-label" class="mt-1 font-inter text-xs font-medium text-foreground">From the web, not yet verified</p>
-        <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(paragraph) }}<span class="whitespace-nowrap">{{ textTail(paragraph) }}<button v-for="(citation, index) in lesson.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 1 }}</button></span><button v-for="(citation, index) in lesson.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation">{{ index + 2 }}</button></p>
-        <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation">{{ citation.label }}</button></p>
+        <p v-for="(paragraph, paragraphIndex) in lesson.paragraphs" :key="paragraphIndex" class="mt-3 whitespace-pre-wrap break-words text-[15px] leading-7 text-foreground">{{ textHead(paragraph) }}<span class="whitespace-nowrap">{{ textTail(paragraph) }}<button v-for="(citation, index) in lesson.citations.slice(0, 1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 1}: ${citation.label}`" :class="citationBadge" @click="inspectCitation($event, citation.sourceRef)">{{ index + 1 }}</button></span><button v-for="(citation, index) in lesson.citations.slice(1)" :key="citation.sourceRef" type="button" :aria-label="`Source ${index + 2}: ${citation.label}`" :class="citationBadge" @click="inspectCitation($event, citation.sourceRef)">{{ index + 2 }}</button></p>
+        <p v-for="(citation, index) in lesson.citations" :key="citation.sourceRef" class="mt-1 flex items-center gap-2 text-sm"><span aria-hidden="true" :class="sourceBadge">{{ index + 1 }}</span><button type="button" :class="[textLink, 'gap-2 text-left']" @click="inspectCitation($event, citation.sourceRef)">{{ citation.label }}</button></p>
         <div class="mt-5 flex flex-wrap items-center gap-3">
           <button v-if="practiceOffered && !showFullPractice" type="button" data-testid="learn-canvas-check-try-practice" :disabled="practiceOpening || !isOnline" :class="primaryAction" @click="openPractice">Try a practice case<ChevronRight class="h-4 w-4 shrink-0" aria-hidden="true" /></button>
           <button type="button" data-testid="learn-canvas-check-leave" :class="secondaryAction" @click="emit('today')">Back to Today</button>

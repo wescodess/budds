@@ -5,7 +5,7 @@ import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { learnVoidRoute } from '~/utils/learn-void-routes'
-import { canvasCheckBinding } from '~/composables/useCanvasCheck'
+import { canvasCheckBinding, type CanvasCheckCitationRequest } from '~/composables/useCanvasCheck'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 const route = useRoute()
@@ -449,7 +449,7 @@ const currentActivityRoute = computed(() => {
 function activityRoute(activityId: string) {
   return learnVoidRoute(threadId.value, { ...route.query, activity: activityId }, route.hash)
 }
-const evidenceActivityId = computed(() => selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
+const evidenceActivityId = computed(() => checkBound.value ? null : selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
 const evidenceQuery = import.meta.client
   ? useTeachingQuery(api.learnAdaptiveEvidence.getThreadActivityEvidence, computed(() => ({ threadId: threadId.value as never, activityId: evidenceActivityId.value ?? '' })), { enabled: computed(() => allowed.value && Boolean(thread.value && evidenceActivityId.value)) })
   : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
@@ -471,6 +471,29 @@ function inspectEvidence(origin: HTMLButtonElement) {
   evidenceReturnFocus.value = origin
   evidenceOpenRequest.value += 1
 }
+const citationRequest = shallowRef<CanvasCheckCitationRequest | null>(null)
+const citationOpenRequest = ref(0)
+const citationReturnFocus = ref<HTMLButtonElement | null>(null)
+const citationQuery = useSkippableConvexQuery(api.learnV2PostSealTeaching.getPostSealCitationSource,
+  () => import.meta.client && checkBound.value && citationRequest.value ? citationRequest.value as never : 'skip')
+function inspectCitation(origin: HTMLButtonElement, request: CanvasCheckCitationRequest) {
+  citationRequest.value = request
+  citationReturnFocus.value = origin
+  citationOpenRequest.value += 1
+}
+const citationDrawerProps = computed(() => {
+  const result = citationQuery.data.value
+  const resolved = result?.status === 'available' ? result.evidence : null
+  return {
+    evidence: resolved as never,
+    pending: Boolean(citationRequest.value) && !result,
+    sourceState: resolved ? 'ready' : 'unavailable',
+    safeDestination: safeDestination.value,
+    safeDestinationLabel: safeDestinationLabel.value,
+    openRequest: citationOpenRequest.value,
+    returnFocusTo: citationReturnFocus.value,
+  }
+})
 const evidenceDrawerProps = computed(() => ({
   evidence: evidence.value as never,
   pending: evidenceQuery.pending.value,
@@ -611,7 +634,7 @@ function goToday() { void router.push('/app/learn/today') }
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-show="currentCanvasVisible">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="checkBound ? `${ownerId}:${canvas.thread.id}:check` : `${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @today="goToday" @inspect-evidence="inspectEvidence" />
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="checkBound ? `${ownerId}:${canvas.thread.id}:check` : `${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @today="goToday" @inspect-evidence="inspectEvidence" @inspect-citation="inspectCitation" />
           <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" />
@@ -633,7 +656,7 @@ function goToday() { void router.push('/app/learn/today') }
         </div>
       </section>
 
-      <LearnAdaptiveEvidenceDrawer v-if="checkBound && !checkLocked" v-bind="evidenceDrawerProps" hide-trigger />
+      <LearnAdaptiveEvidenceDrawer v-if="checkBound && !checkLocked" v-bind="citationDrawerProps" hide-trigger />
 
       <section v-if="!toolsHiddenForCheck" class="mt-6" aria-labelledby="learn-thread-history-title">
         <h2 id="learn-thread-history-title" class="font-dm-sans text-lg font-semibold">Recent activity</h2>

@@ -623,12 +623,37 @@ describe('Canvas check', () => {
       expect(wrapper.find('[data-testid="learn-canvas-check-lesson"]').exists()).toBe(false)
     })
 
-    it('opens the Evidence drawer from a citation', async () => {
-      stateData.value = scored('scored_pass')
-      workData.value = workState({ result: result(['pass']) })
+    it.each([
+      ['feedback badge', 'scored_pass', 'pass', '[data-testid="learn-canvas-check-feedback"] button[aria-label="Source 1: Biology notes"]'],
+      ['lesson badge', 'scored_fail', 'needs_review', '[data-testid="learn-canvas-check-lesson"] button[aria-label="Source 1: Biology notes"]'],
+      ['source label', 'scored_pass', 'pass', 'button:not([aria-label])'],
+    ])('asks for a %s citation through the post-seal reference, never generic evidence', async (_name, phase, code, selector) => {
+      stateData.value = scored(phase as 'scored_pass' | 'scored_fail')
+      workData.value = workState({ result: result([code]) })
       const wrapper = await mountCheck()
-      await wrapper.get('button[aria-label="Source 1: Biology notes"]').trigger('click')
-      expect(wrapper.emitted('inspectEvidence')).toHaveLength(1)
+      const button = wrapper.findAll(selector).find(node => node.text() === '1' || node.text() === 'Biology notes')!
+      await button.trigger('click')
+      expect(wrapper.emitted('inspectEvidence')).toBeUndefined()
+      const [origin, request] = wrapper.emitted('inspectCitation')![0] as [HTMLButtonElement, unknown]
+      expect(origin).toBe(button.element)
+      expect(request).toEqual({ postSealReference: { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: OPPORTUNITY }, sourceRef: 'source_1' })
+    })
+
+    it('treats teaching withheld for want of citations as feedback unavailable, keeping practice and help', async () => {
+      stateData.value = scored('scored_fail')
+      workData.value = workState({ result: result(['needs_review']) })
+      teachingData.value = learnPostSealTeachingSchema.parse({ version: LEARN_V2_POST_SEAL_TEACHING_VERSION, status: 'available', assessmentOpportunityId: OPPORTUNITY,
+        feedback: null, lesson: null, practice, availability: { feedback: 'unavailable', practice: { status: 'available' }, help: helpOpen } })
+      const wrapper = await mountCheck()
+      await flushPromises()
+      expect(receiptKind(wrapper)).toBe('not_yet')
+      expect(wrapper.find('[data-testid="learn-canvas-check-feedback"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-lesson"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="learn-canvas-check-feedback-publishing"]').exists()).toBe(false)
+      expect(wrapper.find('button[aria-label^="Source"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="learn-canvas-check-continue-practice"]').trigger('click')
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-practice-answer"]').exists()).toBe(true))
+      expect(wrapper.find('[data-testid="learn-canvas-check-hint"]').exists() || wrapper.find('[data-testid="learn-canvas-check-worked-example"]').exists()).toBe(true)
     })
 
     it('adds the cited lesson and a practice case after a valid miss', async () => {

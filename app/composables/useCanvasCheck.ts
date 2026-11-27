@@ -91,6 +91,7 @@ export function useStableCheckIdentity(binding: () => CanvasCheckBinding | null 
   })
 }
 export type CanvasCheckHelpKind = 'hint' | 'worked_example'
+export type CanvasCheckCitationRequest = { postSealReference: { version: typeof LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: string }, sourceRef: string }
 export type CanvasCheckReceiptKind = 'saved' | 'scoring_failed' | 'unconfirmed' | 'invalid' | 'passed' | 'not_yet'
 export type CanvasCheckView =
   | { kind: 'loading' }
@@ -555,11 +556,16 @@ export function useCanvasCheck(options: {
     finally { practiceBusy.value = false }
   }
 
+  function citationRequest(sourceRef: string): CanvasCheckCitationRequest | null {
+    const id = postSealId.value
+    return id ? { postSealReference: { version: LEARN_V2_POST_SEAL_TEACHING_VERSION, assessmentOpportunityId: id }, sourceRef } : null
+  }
+
   return {
     view, answer, confidence, answerMissing, confidenceMissing, submitFailure, startFailed, startRefused, busy, restored,
     canTeachSeparateCase, invalidBySource, feedback, feedbackPublishing, lesson, lessonUnavailable, practice, practiceOffered, help,
     practiceAnswer, practiceMissing, practiceBusy, practiceFailed, practiceSaved, practiceOpening, practiceOpenFailed,
-    assistance, assistanceDenied, assistanceLimit,
+    assistance, assistanceDenied, assistanceLimit, citationRequest,
     start, submit, retryScore, openPractice, submitPractice, requestAssistance,
   }
 }

@@ -25,6 +25,7 @@ const canvasPending = ref(false)
 const checkState = shallowRef<Record<string, unknown> | null>(null)
 const checkWork = shallowRef<Record<string, unknown> | null>(null)
 const checkTeaching = shallowRef<Record<string, unknown> | null>(null)
+const citationSource = shallowRef<Record<string, unknown> | null>(null)
 const diagnosticPending = ref(false)
 const user = ref<{ _id: string } | null>({ _id: 'owner_1' })
 const requestedRoute = reactive({ params: { threadId: 'thread_1' }, query: { activity: undefined as string | undefined, check: undefined as string | undefined } })
@@ -64,7 +65,7 @@ mockNuxtImport('useConvexAction', () => () => ({ mutate: vi.fn() }))
 mockNuxtImport('useConvexQuery', () => (reference: never, args: unknown) => {
   const name = getFunctionName(reference)
   calls(name, args)
-  return { data: name === 'learnV2Assessments:getAssessmentState' ? checkState : name.endsWith(':getResponseState') ? checkWork : name.endsWith(':getPostSealTeaching') ? checkTeaching : name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
+  return { data: name === 'learnV2PostSealTeaching:getPostSealCitationSource' ? citationSource : name === 'learnV2Assessments:getAssessmentState' ? checkState : name.endsWith(':getResponseState') ? checkWork : name.endsWith(':getPostSealTeaching') ? checkTeaching : name === 'users:getUser' ? user : name === 'learnAdaptive:getThread' ? projection : name === 'learnAdaptive:getMemory' ? memory : name === 'learnAdaptive:listThreadContributions' ? contributions : name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnostic : name === 'learnAdaptiveEvidence:getThreadActivityEvidence' ? evidence : name === 'learnAdaptive:getArtifactCanvas' ? artifact : name === 'learnAdaptive:getReflectionCanvas' ? reflection : name === 'learnAdaptive:listThreadArtifacts' ? ref([]) : canvas,
     pending: name === 'learnAdaptiveRecovery:getDiagnosticCanvas' ? diagnosticPending : name === 'learnAdaptiveCanvas:getCanvas' ? canvasPending : ref(false),
     error: name === 'learnAdaptiveCanvas:getCanvas' ? canvasError : ref(null) }
 })
@@ -76,6 +77,7 @@ beforeAll(async () => {
 })
 
 describe('adaptive thread route isolation', () => {
+  beforeEach(() => { citationSource.value = null })
   beforeEach(() => { allowed.value = true; isOnline.value = true; canvas.value = null; diagnostic.value = null; artifact.value = null; reflection.value = null; evidence.value = null; memory.value = null; projection.value = null; checkState.value = null; checkWork.value = null; checkTeaching.value = null; canvasPending.value = false; diagnosticPending.value = false; user.value = { _id: 'owner_1' }; requestedRoute.params.threadId = 'thread_1'; requestedRoute.query.activity = undefined; calls.mockClear(); documentSubscriptions.mockClear(); mutationCalls.mockClear(); memoryMutationCalls.mockReset().mockResolvedValue({ kind: 'ok', revision: 4 }); canvasError.value = null; sessionStorage.clear() })
 
   it('does not subscribe to folder documents for a no-source thread', async () => {
@@ -673,8 +675,8 @@ describe('adaptive thread route isolation', () => {
       expect(wrapper.find('[data-testid="learn-selected-history"]').exists()).toBe(false)
       expect(wrapper.find('[data-testid="learn-canvas-check"]').exists()).toBe(true)
       expectToolsHidden(wrapper)
-      const args = { get value() { return recordedArgs<{ activityId: string }>('learnAdaptiveEvidence:getThreadActivityEvidence') } }
-      expect(args.value.activityId).toBe('activity_1')
+      expect(calls.mock.calls.filter(([name]) => name === 'learnAdaptiveEvidence:getThreadActivityEvidence')
+        .map(([, args]) => (isRef(args) ? args.value : args) as { activityId: string }).some(args => args.activityId === 'activity_1')).toBe(false)
       wrapper.unmount()
     })
 
@@ -760,10 +762,19 @@ describe('adaptive thread route isolation', () => {
       wrapper.unmount()
     })
 
+    const resolvedSource = (activityId: string, locator: string) => ({ version: 'learn-v2.post-seal-teaching.v1', status: 'available', evidence: {
+      kind: 'factual', activityId, eligibility: 'historical', readOnly: true, integrityState: 'accepted',
+      claims: [{ claimId: 'source_1', claimText: 'You explained it.', claimStatus: 'unknown', integrityState: 'accepted',
+        source: { origin: 'user_url', locator, sourceSnapshotId: 'snapshot_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] } })
+    const genericCanary = () => ({ ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
+      claims: [{ claimId: 'claim_generic', claimText: 'Measurement activity canary', claimStatus: 'fact', integrityState: 'accepted', source: { origin: 'user_url', locator: 'generic:canary', sourceSnapshotId: 'snapshot_x', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] })
+    const genericReads = () => calls.mock.calls.filter(([name]) => name === 'learnAdaptiveEvidence:getThreadActivityEvidence').length
+    const citationArgs = () => recordedArgs<{ postSealReference: unknown, sourceRef: string }>('learnV2PostSealTeaching:getPostSealCitationSource')
+
     it.each([
       ['feedback', 'scored_pass', 'pass', '[data-testid="learn-canvas-check-feedback"]'],
       ['lesson', 'scored_fail', 'needs_review', '[data-testid="learn-canvas-check-lesson"]'],
-    ])('opens the Evidence drawer from a %s citation with no trigger of its own', async (_name, phase, code, container) => {
+    ])('resolves a %s citation through its post-seal source and returns focus on close', async (_name, phase, code, container) => {
       const Page = await import(path)
       projection.value = missionThread()
       canvas.value = checkCanvas()
@@ -771,17 +782,74 @@ describe('adaptive thread route isolation', () => {
       checkWork.value = { status: 'available', work: { acceptedAt: 1, validitySnapshot: { status: 'valid', exclusionReasons: [] }, currentEligibility: 'eligible', body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'My sealed answer.' } }, result: { feedbackCodes: [code] } } }
       const citations = [{ sourceRef: 'source_1', label: 'Biology notes' }]
       checkTeaching.value = { status: 'available', feedback: { tier: 'T0', text: 'You explained it.', citations }, lesson: { tier: 'T0', paragraphs: ['Every enzyme has a range.'], citations }, practice: null }
-      evidence.value = { ownerId: 'owner_1', threadId: 'thread_1', kind: 'factual', activityId: 'activity_1', eligibility: 'eligible', readOnly: false, integrityState: 'accepted',
-        claims: [{ claimId: 'claim_1', claimText: 'Enzymes have a working range.', claimStatus: 'fact', integrityState: 'accepted', source: { origin: 'user_url', locator: 'page:7', sourceSnapshotId: 'source_1', sourceSnapshotRevision: 1, sourceRecordRevision: 1 } }] }
+      evidence.value = genericCanary()
+      citationSource.value = resolvedSource('opportunity_1', 'page:7')
       const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
       await vi.waitFor(() => expect(wrapper.find(`${container} [aria-label="Source 1: Biology notes"]`).exists()).toBe(true))
-      expect(wrapper.find('[data-testid="learn-evidence-open"]').exists()).toBe(false)
       expectToolsHidden(wrapper)
       const citation = wrapper.get(`${container} [aria-label="Source 1: Biology notes"]`)
       await citation.trigger('click')
       await vi.waitFor(() => expect(document.querySelector('[data-testid="learn-evidence-drawer"]')?.textContent).toContain('page:7'))
+      const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]')!
+      expect(drawer.textContent).not.toContain('generic:canary')
+      expect(drawer.textContent).not.toContain('Measurement activity canary')
+      expect(drawer.contains(document.activeElement)).toBe(true)
+      expect(citationArgs()).toEqual({ postSealReference: { version: 'learn-v2.post-seal-teaching.v1', assessmentOpportunityId: 'opportunity_1' }, sourceRef: 'source_1' })
+      expect(genericReads()).toBe(0)
       ;(document.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
       await vi.waitFor(() => expect(document.activeElement).toBe(citation.element))
+      wrapper.unmount()
+    })
+
+    it('resolves a citation on an older addressed receipt through that receipt’s post-seal reference', async () => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      requestedRoute.query.check = 'older_ref'
+      const receipt = serverCheckReceipt({ reference: 'older_ref', state: 'result_unconfirmed', answer: 'Older answer', confidence: 3, postSealOpportunityId: 'opportunity_old' })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_old', phase: 'reconciliation_required', activityId: 'activity_0', receipt })
+      const citations = [{ sourceRef: 'source_1', label: 'Biology notes' }]
+      checkTeaching.value = { status: 'available', feedback: null, lesson: { tier: 'T0', paragraphs: ['Every enzyme has a range.'], citations }, practice: null,
+        availability: { feedback: 'available', practice: { status: 'not_opened' }, help: null } }
+      citationSource.value = resolvedSource('opportunity_old', 'page:12')
+      checkState.value = null
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?check=older_ref', attachTo: document.body })
+      expect(wrapper.get('[data-testid="learn-canvas-check-receipt"]').attributes('data-receipt')).toBe('unconfirmed')
+      wrapper.unmount()
+      requestedRoute.query.check = 'older_ref'
+      checkState.value = { ...assessment('scored_fail', 'submission_1'), capabilities: { ...assessment('scored_fail').capabilities, canReadFeedback: true } }
+      const scored = serverCheckReceipt({ reference: 'older_ref', state: 'result_ready', answer: 'Older answer', confidence: 3, postSealOpportunityId: 'opportunity_old',
+        result: { attemptId: 'attempt_1', scorePercent: 40, thresholdPercent: 80, scoreCommittedAt: 1_800_000_100_000, feedbackCodes: ['needs_review'] } })
+      canvas.value = serverSavedCheckCanvas({ opportunityId: 'opportunity_old', phase: 'scored_fail', activityId: 'activity_0', receipt: scored })
+      checkWork.value = { status: 'available', work: { acceptedAt: 1, validitySnapshot: { status: 'valid', exclusionReasons: [] }, currentEligibility: 'eligible', body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'Older answer' } }, result: { feedbackCodes: ['needs_review'] } } }
+      const addressed = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1?check=older_ref', attachTo: document.body })
+      await vi.waitFor(() => expect(addressed.find('[data-testid="learn-canvas-check-lesson"] [aria-label="Source 1: Biology notes"]').exists()).toBe(true))
+      await addressed.get('[data-testid="learn-canvas-check-lesson"] [aria-label="Source 1: Biology notes"]').trigger('click')
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="learn-evidence-drawer"]')?.textContent).toContain('page:12'))
+      expect(citationArgs()).toEqual({ postSealReference: { version: 'learn-v2.post-seal-teaching.v1', assessmentOpportunityId: 'opportunity_old' }, sourceRef: 'source_1' })
+      expect(genericReads()).toBe(0)
+      ;(document.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
+      addressed.unmount()
+    })
+
+    it.each(['unavailable', 'disabled'] as const)('shows the drawer’s existing unavailable state when the citation source is %s', async (reasonCode) => {
+      const Page = await import(path)
+      projection.value = missionThread()
+      canvas.value = checkCanvas()
+      checkState.value = { ...assessment('scored_pass', 'submission_1'), capabilities: { ...assessment('scored_pass').capabilities, canReadFeedback: true } }
+      checkWork.value = { status: 'available', work: { acceptedAt: 1, validitySnapshot: { status: 'valid', exclusionReasons: [] }, currentEligibility: 'eligible', body: { bodyAvailability: 'available', payload: { kind: 'text', text: 'My sealed answer.' } }, result: { feedbackCodes: ['pass'] } } }
+      checkTeaching.value = { status: 'available', feedback: { tier: 'T0', text: 'You explained it.', citations: [{ sourceRef: 'source_1', label: 'Biology notes' }] }, lesson: null, practice: null }
+      evidence.value = genericCanary()
+      citationSource.value = { version: 'learn-v2.post-seal-teaching.v1', status: 'unavailable', reasonCode }
+      const wrapper = await mountSuspended(Page.default, { route: '/app/learn/void/thread_1', attachTo: document.body })
+      await vi.waitFor(() => expect(wrapper.find('[data-testid="learn-canvas-check-feedback"] [aria-label="Source 1: Biology notes"]').exists()).toBe(true))
+      await wrapper.get('[data-testid="learn-canvas-check-feedback"] [aria-label="Source 1: Biology notes"]').trigger('click')
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="learn-evidence-drawer"]')).not.toBeNull())
+      const drawer = document.querySelector('[data-testid="learn-evidence-drawer"]')!
+      expect(drawer.querySelector('[data-testid="learn-evidence-status"]')?.textContent).toBe('Evidence unavailable')
+      expect(drawer.textContent).toContain('Evidence details are unavailable. Your response remains in place.')
+      expect(drawer.textContent).not.toContain('generic:canary')
+      expect(genericReads()).toBe(0)
+      ;(document.querySelector('[data-testid="learn-evidence-close"]') as HTMLButtonElement).click()
       wrapper.unmount()
     })
 
