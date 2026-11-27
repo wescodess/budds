@@ -100,6 +100,8 @@ Independent review and its final-head ledger remain required under [review-gate]
 The proof does not establish the owner decisions and environment checks below; synthetic approvals authorize none of them.
 
 - Require the complete deterministic proof, full checks and independent review ledger at the final head. Resolve #599 items 1 and 3 before enabling measurement: cross-Void Today capacity accounting and carried-row read resilience.
+- Resolve #559 before enabling the responses capability: the approved "check is open" state on every teaching surface, implemented and validated in the UI and at the registered endpoint boundary.
+- Resolve #560 before enabling the responses capability: durable `requested_denied` facts when a wrapped teaching mutation is denied, validated through the registered endpoints.
 - Confirm required learner UI approvals, implementation and integration under #361, #441 and #442 and reporting presentation under #367; verify browser/device journeys separately.
 - Preserve and approve the real baseline SHA and protocol under #362 before Phase D reaches participants. Freeze epoch, anchor, timezone, half-open day-7/day-30 windows, replacement policy, cohort, enrollment interval, sample and release boundary; protect follow-up.
 - Separately authorize deployment, environment configuration and any required migration/backfill.
