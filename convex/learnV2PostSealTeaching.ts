@@ -1,13 +1,27 @@
 import { v } from 'convex/values'
-import { internalMutation, mutation } from './_generated/server'
+import { internalMutation, mutation, query } from './_generated/server'
 import { internal } from './_generated/api'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '../shared/learn-v2-measurement-storage-manifest'
+import { postSealCitationArgs, postSealCitationValidator, unavailablePostSealCitation } from './lib/learnV2PostSealCitationContract'
 import { requireAuth } from './lib/auth'
-import { preparePostSealPracticeForOwner, publishPostSealTeachingForOwner, readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
+import { readPostSealCitationForOwner, preparePostSealPracticeForOwner, publishPostSealTeachingForOwner, readPostSealTeachingForOwner } from './lib/learnV2PostSealTeaching'
 import { purgePostSealSourceLink } from './lib/learnV2PostSealRetention'
 import { postSealTeachingArgs, postSealTeachingReferenceSchema, postSealTeachingValidator, parsePublicLearnRequest, type LearnV2PostSealTeaching } from './lib/learnV2PublicContract'
 import { requireOwnedSubmission, requireOwnedResponseTarget } from './lib/learnV2PublicAccess'
 
 const accessPurgeTables = ['learnPostSealTeachingSources', 'learnPostSealPracticeBindings', 'learnPostSealHelpReceipts', 'learnPostSealSourceLinks'] as const
+
+export const getPostSealCitationSource = query({
+  args: postSealCitationArgs, returns: postSealCitationValidator,
+  handler: async (ctx, args) => {
+    if (!LEARN_MEASUREMENT_CAPABILITIES.responses) return unavailablePostSealCitation('disabled')
+    try {
+      const userId = await requireAuth(ctx)
+      const reference = parsePublicLearnRequest(postSealTeachingReferenceSchema, args.postSealReference)
+      return await readPostSealCitationForOwner(ctx, userId, reference.assessmentOpportunityId, args.sourceRef)
+    } catch { return unavailablePostSealCitation() }
+  },
+})
 
 export const openPractice = mutation({
   args: postSealTeachingArgs, returns: postSealTeachingValidator,
