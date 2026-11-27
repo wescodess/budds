@@ -55,6 +55,7 @@ export const disclosureProofInventory = [
   { surface: 'learnV2Assessments.getAssessmentState', owner: 'C5.1 #432 / C5.4 #435', tests: ['convex/learnV2AssessmentDelivery.test.ts'] },
   { surface: 'learnV2Assessments.grantAssessmentDelivery', owner: 'C5.1 #432 / C5.4 #435', tests: ['convex/learnV2AssessmentDelivery.test.ts'] },
   { surface: 'learnV2Assessments.getPostSealTeaching', owner: 'C5.6 #535', tests: ['convex/learnV2PostSealRuntime.test.ts', 'convex/learnV2PostSealTransitions.test.ts'] },
+  { surface: 'learnV2PostSealTeaching.getPostSealCitationSource', owner: 'C5.6 #535', tests: ['convex/learnV2PostSealRuntime.test.ts'] },
   { surface: 'learnV2PostSealTeaching.openPractice', owner: 'C5.6 #535', tests: ['convex/learnV2PostSealRuntime.test.ts', 'convex/learnV2PostSealTransitions.test.ts'] },
   { surface: 'learnV2PostSealTeaching.publishFeedback', owner: 'C5.6 #535', tests: ['convex/learnV2PostSealRuntime.test.ts'] },
   { surface: 'learnV2Assistance.authorizePracticeAssistance', owner: 'C5.6 #535', tests: ['convex/learnV2PostSealRuntime.test.ts', 'convex/learnV2PostSealTransitions.test.ts'] },

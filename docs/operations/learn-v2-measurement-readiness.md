@@ -1,6 +1,6 @@
 # C6.4 deterministic collection handoff
 
-This is synthetic application evidence for [#440](https://github.com/wescodess/budds/issues/440). Normal merge `65b34eb6` brings in `dev` at `c737fd82`, including [#586](https://github.com/wescodess/budds/pull/586)'s Canvas continuation correction. It preserves the earlier #582, #581 and #576 integrations. Report computation remains `learn-v2.report-code.c6.2.v9`, report/source versions remain v3/v4, and check surface remains distinct from teaching flow. Authored changes are tests, fixtures and this handoff; no production code, schema, capability default, UI, deployment or provider spend is changed here.
+This is synthetic application evidence for [#440](https://github.com/wescodess/budds/issues/440). Normal merge `ef8b359f` brings in `dev` at `c7a20760`, including [#600](https://github.com/wescodess/budds/pull/600)'s post-seal citation filtering. It retains `0db29ba8` and its #559/#560 activation checklist, the earlier merge `65b34eb6` with [#586](https://github.com/wescodess/budds/pull/586)'s Canvas continuation correction, and the #582, #581 and #576 integrations. Report computation remains `learn-v2.report-code.c6.2.v9`, report/source versions remain v3/v4, and check surface remains distinct from teaching flow. Authored changes are tests, fixtures and this handoff; no production code, schema, capability default, UI, deployment or provider spend is changed here.
 
 ## Registered proof
 
@@ -29,7 +29,7 @@ The trusted report starts with the approved synthetic roster, pins owner waterma
 
 A mixed 20-learner report separately distinguishes Today/Today, Today/Canvas, Canvas/Canvas and a second observed scorer upstream on Today/Today. Each group has five pairs and gain 100 at day 7. The two observed identities under one frozen binding retain unknown population and null all-eligible bounds; the other groups retain their five-episode denominators and [100,100] bounds. Flow, surface and observed scorer identity cannot pool.
 
-Controls include unauthorized direct report/export/download RPCs, unaudited legacy-query refusal, owned metadata exports and foreign export denial, answer/private-scoring canaries, immutable acceptance/case/scorer pins, scorer replay without another dispatch, integrity invalidation and physical source purge. Invalidated online readers withhold aggregates while retained snapshot inputs stay frozen. All 148 disclosure inventory surfaces have explicit owner/test mappings, including the Canvas continuation entry. Every measurement table remains enumerated for export and bounded deletion. The separate deletion control's sentinels never enter collection reports or the CLI. Operational/outcome metrics stay fixture-only and experiment assignment stays authenticated-learner v1.
+Controls include unauthorized direct report/export/download RPCs, unaudited legacy-query refusal, owned metadata exports and foreign export denial, answer/private-scoring canaries, immutable acceptance/case/scorer pins, scorer replay without another dispatch, integrity invalidation and physical source purge. Invalidated online readers withhold aggregates while retained snapshot inputs stay frozen. All 149 disclosure inventory surfaces have explicit owner/test mappings, including the Canvas continuation entry and #600's post-seal citation resolver. Every measurement table remains enumerated for export and bounded deletion. The separate deletion control's sentinels never enter collection reports or the CLI. Operational/outcome metrics stay fixture-only and experiment assignment stays authenticated-learner v1.
 
 ## Proof boundaries
 
@@ -37,9 +37,27 @@ The former original-session Canvas blocker is replaced by a positive registered 
 
 Collection remains subject to the owner work below, including #599's activation holds. Browser/device behavior, live semantic/provider adapters, deployment, real baseline/outcomes and production capacity/concurrency are unproven. Successful synthetic execution is not collection or release permission.
 
-## Validation at the updated branch
+## Citation inventory validation
 
-Only focused suites and both typechecks run locally, serially with one worker. Each test invocation uses `--testTimeout=30000`; existing explicit per-case deadlines, including the 300-second cohort budget, remain unchanged. Build, full `pnpm verify` and `pnpm verify:learn-v2-beta` are not run here; the orchestrator's exact runner owns the full gates at the final head. Earlier validation records are historical and grant no pass at this head.
+After merging #600, the inventory control reproduced A2's `expected length of 4 but got 5` failure. The fixture now maps `learnV2PostSealTeaching.getPostSealCitationSource` to owner `C5.6 #535` and `convex/learnV2PostSealRuntime.test.ts`. The proof requires all five audited post-seal surfaces and retains exact inventory equality, uniqueness and existing-test checks across 149 mappings.
+
+On 2026-11-26, **67 tests across three complete files passed**: command proof 8/8, report contract 7/7 and CLI 52/52. Each file ran serially with one worker, followed by both typechecks; 646 Convex index names were validated. The complete proof took 155.11 seconds with no timeout. All three collection journeys, Canvas original-session continuation and exact C6 flow/surface/denominator assertions hold with #600's citation filtering. No journey fixtures or accounting expectations changed.
+
+Exact passing commands, run separately in order:
+
+```sh
+source ~/.budds-orchestrator/ci-env.sh && pnpm exec vitest run convex/learnV2Measurement.e2e.test.ts --maxWorkers=1 --testTimeout=30000 --reporter=verbose
+source ~/.budds-orchestrator/ci-env.sh && pnpm exec vitest run convex/learnV2MeasurementReportContract.test.ts --maxWorkers=1 --testTimeout=30000
+source ~/.budds-orchestrator/ci-env.sh && pnpm exec vitest run scripts/learn-v2-measurement-report.test.ts --maxWorkers=1 --testTimeout=30000
+source ~/.budds-orchestrator/ci-env.sh && pnpm typecheck
+source ~/.budds-orchestrator/ci-env.sh && pnpm typecheck:convex
+```
+
+The broader suites below, including the citation resolver's runtime suite, were not rerun in this follow-up. Build, full verification and beta remain with the orchestrator's exact runner. No live providers or production operations ran.
+
+## Previous focused validation
+
+The earlier pass at `ebb34add` ran focused suites and both typechecks locally, serially with one worker. Each test invocation used `--testTimeout=30000`; existing explicit per-case deadlines, including the 300-second cohort budget, remained unchanged. Build, full `pnpm verify` and `pnpm verify:learn-v2-beta` were not run here; the orchestrator's exact runner owns the full gates at the final head. These results are historical and grant no pass at the updated head.
 
 On 2026-11-26, **1,544 tests across 18 complete files passed**, followed by both typechecks. The whole eight-case command-proof file passed together (175.35 seconds). No timeout occurred in this serial run. The added Canvas contract, ordinary Canvas and capability-off controls all passed.
 

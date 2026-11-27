@@ -384,7 +384,7 @@ test('one trusted snapshot separates teaching flow, check surface and scorer, th
 test('every disclosure surface has an explicit owner and existing regression suites', () => {
   const audit = readFileSync('docs/qa/c4-read-path-audit.md', 'utf8')
   const postSeal = [...audit.matchAll(/^\| `([^`]+)` \| `post_seal_[^`]+` \|/gmu)].map(match => ({ surface: match[1]!, owner: 'C5.6 #535' }))
-  expect(postSeal).toHaveLength(4)
+  expect(postSeal).toHaveLength(5)
   expect(audit).toMatch(/^\| `learnV2Today.getCheckPointers` \| `summary_or_own_work` \|/mu)
   expect(readFileSync('docs/plans/learn-v2-c1-public-api-contract.md', 'utf8')).toContain('`learnAdaptiveCanvas.startCanvasSession`')
   const expected = [...ASSESSMENT_DISCLOSURE_READS.map(([surface]) => ({ surface, owner: 'C4.1 #429' })),
