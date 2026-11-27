@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import type { Infer } from 'convex/values'
+import type { todayCheckPointersValidator } from '~~/convex/lib/learnV2PublicContract'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
+import { LEARN_TODAY_CHECK_POINTER_VERSION, learnTodayCheckPointerSchema } from '#shared/learn-v2-today-check'
 
-type TodayResult = { status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null } | { status: 'pending' | 'blocked' | 'empty', reason?: string, sessionId?: string, sessionRevision?: number, canRetryGeneration?: boolean, nextScheduledAt?: number | null }
+type TodayCheckEnvelope = Infer<typeof todayCheckPointersValidator>
+type TodayResult = ({ status: 'ready', sessionId: string, sessionRevision: number, content: { revision: number }, plan: { recordRevision: number, blueprintRecordRevision: number }, objective: { title: string, capability?: string | null, estimatedMinutes?: number | null }, scheduledStartAt: number, scheduledEndAt?: number | null, timezone: string, mastery?: { state?: string, nextReviewAt?: number | null }, nextScheduledAt?: number | null, assessment?: { kind: string, check?: unknown } } | { status: 'pending' | 'blocked' | 'empty', reason?: string, sessionId?: string, sessionRevision?: number, canRetryGeneration?: boolean, nextScheduledAt?: number | null }) & { checkPointers?: TodayCheckEnvelope }
 const { allowed, checkingAccess } = useLearnV2Access()
-const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
+const today = import.meta.client ? useConvexQuery(api.learnV2Today.getToday, LEARN_MEASUREMENT_CAPABILITIES.responses ? { pointerVersion: LEARN_TODAY_CHECK_POINTER_VERSION } : {}, { enabled: allowed }) : { data: ref<TodayResult | null>(null) }
 const retryMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.retrySessionContentGeneration) : { mutate: async () => ({}) }
 const result = computed(() => today.data?.value as TodayResult | null | undefined)
 const retrying = ref(false)
@@ -46,6 +51,12 @@ watch(liveCandidate, (value) => {
   if (value && !sessionActive.value) retainedCandidate.value = value
 }, { immediate: true })
 const candidate = computed(() => sessionActive.value ? retainedCandidate.value : liveCandidate.value)
+const checkPointers = computed(() => LEARN_MEASUREMENT_CAPABILITIES.responses ? result.value?.checkPointers ?? null : null)
+const checkLock = computed(() => {
+  const assessment = LEARN_MEASUREMENT_CAPABILITIES.responses && result.value?.status === 'ready' ? result.value.assessment : null
+  const parsed = assessment?.kind === 'check' && assessment.check ? learnTodayCheckPointerSchema.safeParse(assessment.check) : null
+  return parsed?.success && parsed.data.state === 'ready' ? parsed.data : null
+})
 function beginSession() {
   retainedCandidate.value = liveCandidate.value ?? retainedCandidate.value
   sessionActive.value = true
@@ -64,17 +75,18 @@ function leaveSession() {
   <main class="min-h-full">
     <section v-if="checkingAccess" data-testid="learn-v2-today-access-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">Checking access…</p></section>
     <section v-else-if="!allowed" data-testid="learn-v2-today-denied" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">This learning experience is not available for this account.</p></section>
-    <section v-else-if="!result || result.status === 'pending'" data-testid="learn-v2-today-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result?.reason ?? 'Preparing your study session…' }}</p></section>
+    <section v-else-if="!result || result.status === 'pending'" data-testid="learn-v2-today-pending" class="mx-auto max-w-2xl p-6" aria-live="polite"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result?.reason ?? 'Preparing your study session…' }}</p><LearnV2MeasurementTodayChecks v-if="checkPointers" class="mt-5" :envelope="checkPointers" /></section>
     <section v-else-if="result.status === 'blocked'" data-testid="learn-v2-today-blocked" class="mx-auto max-w-2xl p-6">
       <p class="font-inter text-xs font-medium uppercase tracking-[0.16em] text-primary">Session recovery</p>
       <h1 class="mt-2 font-dm-sans text-2xl font-semibold">Your learning plan is safe</h1>
       <p class="mt-3 leading-7 text-muted-foreground">{{ blockedMessage }}</p>
       <p v-if="retryError" role="alert" data-testid="learn-v2-retry-error" class="mt-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ retryError }}</p>
       <button v-if="result.canRetryGeneration" type="button" data-testid="learn-v2-retry-generation" :disabled="retrying" class="mt-6 inline-flex min-h-11 items-center rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" @click="retryGeneration">{{ retrying ? 'Preparing a fresh session…' : 'Retry session generation' }}</button>
+      <LearnV2MeasurementTodayChecks v-if="checkPointers" class="mt-6" :envelope="checkPointers" />
     </section>
-    <section v-else-if="result.status !== 'ready' && !candidate" :data-testid="`learn-v2-today-${result.status}`" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result.reason ?? (result.status === 'empty' ? 'Nothing is scheduled for today.' : 'This session needs attention before it can begin.') }}</p></section>
+    <section v-else-if="result.status !== 'ready' && !candidate" :data-testid="`learn-v2-today-${result.status}`" class="mx-auto max-w-2xl p-6"><h1 class="text-2xl font-semibold">Today</h1><p class="mt-2 text-muted-foreground">{{ result.reason ?? (result.status === 'empty' ? 'Nothing is scheduled for today.' : 'This session needs attention before it can begin.') }}</p><LearnV2MeasurementTodayChecks v-if="checkPointers" class="mt-5" :envelope="checkPointers" /></section>
     <template v-else-if="candidate">
-      <LearnV2TodaySession :candidate @started="beginSession" @completed="completeSession" @leave="leaveSession" />
+      <LearnV2TodaySession :candidate :check-pointers="checkPointers" :check-lock="checkLock" @started="beginSession" @completed="completeSession" @leave="leaveSession" />
       <div class="mx-auto w-full max-w-3xl px-4 pb-6 sm:px-6">
         <LearnV2CalendarProjectionCard :study-session-id="candidate.studySessionId" :scheduled-start-at="candidate.scheduledStartAt" />
       </div>

@@ -3,6 +3,7 @@ import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useAdaptiveResponseDraft } from '~/composables/useAdaptiveResponseDraft'
 import { useAdaptiveComparisonDraft } from '~/composables/useAdaptiveComparisonDraft'
+import { canvasCheckBinding, useStableCheckIdentity, type CanvasCheckCitationRequest } from '~/composables/useCanvasCheck'
 import type { AdaptiveFixedNextPlan, AdaptiveOverrideOption } from '~~/shared/learn-adaptive-controls'
 import { adaptiveActivityFallbackForReason, type AdaptiveActivityValidationReason, type ValidatedAdaptiveActivityPrimitive } from '~~/shared/learn-adaptive-activity-registry'
 import { resolveAdaptiveActivityRenderer } from '~~/shared/learn-adaptive-renderer-contract'
@@ -27,6 +28,8 @@ type Canvas = {
   recoveryEvidenceIssue?: 'conflict' | 'gap' | null
   recovery?: { title: string, body: string, action: string } | null
   savedResponse?: { response: string, confidence: number } | null
+  assessment?: { assessmentOpportunityId: string } | null
+  checkReceipt?: unknown
 }
 
 type ReadyPrimitive = Extract<ValidatedAdaptiveActivityPrimitive, { type: 'cited_explanation' | 'worked_example' | 'source_comparison' | 'independent_application' }>
@@ -47,8 +50,13 @@ function readyPrimitiveForCanvas(primitive: ValidatedAdaptiveActivityPrimitive):
 }
 
 const props = withDefaults(defineProps<{ canvas: Canvas, authoritativeRevision?: number, showHeader?: boolean, active?: boolean }>(), { showHeader: true, active: true })
-const emit = defineEmits<{ leave: [], inspectEvidence: [origin: HTMLButtonElement] }>()
+const emit = defineEmits<{ leave: [], today: [], inspectEvidence: [origin: HTMLButtonElement], inspectCitation: [origin: HTMLButtonElement, request: CanvasCheckCitationRequest] }>()
 const { isOnline } = useOnlineStatus()
+const checkBinding = computed(() => canvasCheckBinding(props.canvas))
+const checkMode = computed(() => Boolean(checkBinding.value))
+const checkIdentity = useStableCheckIdentity(() => checkBinding.value)
+const checkReplaced = ref(false)
+watch(checkIdentity, (next, previous) => { if (next && previous && next !== previous) checkReplaced.value = true })
 const startMutation = import.meta.client ? useConvexMutation(api.learnV2SessionContent.startStudySession) : { mutate: async () => ({}) }
 const assistanceMutation = import.meta.client ? useConvexMutation(api.learnV2Mastery.recordAssistanceUse) : { mutate: async () => ({}) }
 const stageMutation = import.meta.client ? useConvexMutation(api.learnAdaptiveCanvas.submitCanvasResponse) : { mutate: async () => ({}) }
@@ -67,6 +75,7 @@ const responseHeading = ref<HTMLElement | null>(null)
 const comparisonHeading = ref<HTMLElement | null>(null)
 const response = ref(props.canvas.savedResponse?.response ?? '')
 const comparisonDraftKey = computed(() => {
+  if (checkMode.value) return null
   const activity = props.canvas.activity
   if ((activity.draftKind ?? (activity.primitive?.type === 'source_comparison' ? 'source_comparison' : null)) !== 'source_comparison') return null
   if (!Number.isSafeInteger(activity.planRevision) || !activity.planRevision || activity.planRevision < 1) return null
@@ -97,7 +106,7 @@ const error = ref<string | null>(null)
 const notice = ref('')
 const scoreState = ref<'idle' | 'pending' | 'complete' | 'unconfirmed' | 'reconciling' | 'blocked'>('idle')
 const staged = ref(!!props.canvas.savedResponse || props.canvas.status === 'submitted' || props.canvas.status === 'scoring' || props.canvas.status === 'reconciling' || props.canvas.status === 'feedback')
-useAdaptiveResponseDraft(comparisonDraftKey.value ? null : `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}`, response, staged, confidence)
+useAdaptiveResponseDraft(checkMode.value || comparisonDraftKey.value ? null : `learn-response:${props.canvas.ownerId}:${props.canvas.thread.id}:${props.canvas.activity.id}`, response, staged, confidence)
 useAdaptiveComparisonDraft(comparisonDraftKey, comparisonChoice, comparisonRationale, staged)
 const startKey = ref<string | null>(null)
 const stageKey = ref<string | null>(null)
@@ -155,7 +164,7 @@ onBeforeUnmount(() => {
 })
 
 watch([started, responseStep, exampleRevealed, isOnline, busy, meaningfulStartRetryTick, () => props.active], async ([hasStarted, showingResponse, , online, , , visible]) => {
-  if (!visible || !hasStarted || !online || meaningfulStartRecorded.value || meaningfulStartPending.value) return
+  if (checkMode.value || !visible || !hasStarted || !online || meaningfulStartRecorded.value || meaningfulStartPending.value) return
   meaningfulStartPending.value = true
   try {
     await nextTick()
@@ -183,7 +192,7 @@ watch([started, responseStep, exampleRevealed, isOnline, busy, meaningfulStartRe
 
 function key(prefix: string) { return `${prefix}-${crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}` }
 const renderValidation = computed(() => {
-  if (props.canvas.status === 'blocked') return { reason: null, primitive: null }
+  if (checkMode.value || props.canvas.status === 'blocked') return { reason: null, primitive: null }
   const primitive = props.canvas.activity.primitive
   const scope = props.canvas.activity.evidenceScope
   if (!primitive || !scope || scope.version !== 'learn-adaptive.canvas-evidence-scope.v1'
@@ -266,10 +275,10 @@ function inspectEvidence(event: MouseEvent) {
 const renderFallback = computed(() => renderFailureCode.value ? adaptiveActivityFallbackForReason(renderFailureCode.value) : null)
 const fallbackAction = ref<HTMLButtonElement | null>(null)
 onMounted(() => {
-  if (props.active && (renderFailureCode.value || (props.canvas.status === 'blocked' && props.canvas.recoveryState !== 'preparing'))) fallbackAction.value?.focus()
+  if (!checkMode.value && props.active && (renderFailureCode.value || (props.canvas.status === 'blocked' && props.canvas.recoveryState !== 'preparing'))) fallbackAction.value?.focus()
 })
 watch([renderFailureCode, () => props.canvas.status, () => props.canvas.recoveryState, () => props.active], async ([reasonCode, status, recoveryState, active]) => {
-  if (!active || (!reasonCode && (status !== 'blocked' || recoveryState === 'preparing'))) return
+  if (checkMode.value || !active || (!reasonCode && (status !== 'blocked' || recoveryState === 'preparing'))) return
   await nextTick()
   fallbackAction.value?.focus()
 })
@@ -455,7 +464,8 @@ async function submitWithValidation() {
 </script>
 
 <template>
-  <section class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
+  <LearnAdaptiveCanvasCheck v-if="checkBinding" :key="checkIdentity ?? undefined" :announce-on-mount="checkReplaced" :owner-id="canvas.ownerId" :thread-id="canvas.thread.id" :outcome="canvas.thread.outcome" :intent="canvas.thread.intent" :binding="checkBinding" :show-header="showHeader" :active="active" @leave="emit('leave')" @today="emit('today')" @inspect-citation="(origin, request) => emit('inspectCitation', origin, request)" />
+  <section v-else class="w-full" data-testid="learn-adaptive-canvas" :aria-labelledby="showHeader ? 'learn-canvas-title' : undefined" :aria-label="showHeader ? undefined : 'Current activity'">
     <p v-if="showHeader" class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ canvas.thread.intent }}</p>
     <h1 v-if="showHeader" id="learn-canvas-title" class="mt-2 font-dm-sans text-3xl font-bold">{{ canvas.thread.outcome }}</h1>
     <p class="mt-2 text-sm text-muted-foreground">{{ canvas.activity.purpose }}</p>

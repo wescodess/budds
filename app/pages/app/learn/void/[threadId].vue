@@ -5,16 +5,19 @@ import { CircleAlert } from '@lucide/vue'
 import { api } from '#convex/api'
 import { LEARN_ADAPTIVE_SURFACE } from '~/utils/learn-adaptive-surface'
 import { learnVoidRoute } from '~/utils/learn-void-routes'
+import { canvasCheckBinding, type CanvasCheckCitationRequest } from '~/composables/useCanvasCheck'
+import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 const route = useRoute()
 const router = useRouter()
 const threadId = computed(() => String(route.params.threadId))
+const checkReference = computed(() => LEARN_MEASUREMENT_CAPABILITIES.responses && typeof route.query.check === 'string' && route.query.check ? route.query.check : null)
 const { allowed, checkingAccess, fallbackRoute } = useLearnAdaptiveAccess()
 const threadQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptive.getThread, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
   : { data: ref(null), pending: ref(false) }
 const canvasQuery = import.meta.client
-  ? useTeachingQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
+  ? useTeachingQuery(api.learnAdaptiveCanvas.getCanvas, computed(() => checkReference.value ? { threadId: threadId.value as never, checkReference: checkReference.value } : { threadId: threadId.value as never }), { enabled: allowed })
   : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
 const diagnosticQuery = import.meta.client
   ? useConvexQuery(api.learnAdaptiveRecovery.getDiagnosticCanvas, computed(() => ({ threadId: threadId.value as never })), { enabled: allowed })
@@ -394,8 +397,9 @@ function retryMemoryCommand() { if (pendingMemoryCommand.value) void runMemoryCo
 const canvas = computed(() => {
   const value = canvasQuery.data.value
   const current = thread.value
+  const addressed = Boolean(checkReference.value) && (value as { checkReceipt?: { reference?: unknown } } | null)?.checkReceipt?.reference === checkReference.value
   return current?.thread.authorityKind === 'v2_mission' && value?.thread.id === current.thread.id
-    && value.ownerId === ownerId.value && value.activity.id === current.currentActivity?.id ? value : null
+    && value.ownerId === ownerId.value && (addressed || value.activity.id === current.currentActivity?.id) ? value : null
 })
 const diagnostic = computed(() => {
   const value = diagnosticQuery.data.value
@@ -425,11 +429,19 @@ const detailFailure = computed(() => detailQueries.value.map(query => query.fail
 function retryDetail() { for (const query of detailQueries.value) if (query.failure.value) void query.refresh() }
 const rollback = computed(() => thread.value?.thread.lifecycle === 'rollback')
 const endedReadOnly = computed(() => thread.value?.thread.lifecycle === 'ended' && reflection.value?.status !== 'completed')
+const checkBinding = computed(() => canvasCheckBinding(canvas.value as never))
+const checkBound = computed(() => Boolean(checkBinding.value))
+const { locked: checkLocked, open: checkPhaseOpen } = useCanvasCheckLock(() => checkBinding.value)
+const toolsHiddenForCheck = computed(() => checkBound.value || (LEARN_MEASUREMENT_CAPABILITIES.responses && thread.value?.thread.authorityKind === 'v2_mission' && Boolean(canvasQuery.pending.value)))
 const selectedActivityId = computed(() => typeof route.query.activity === 'string' ? route.query.activity : null)
-const selectedHistory = computed(() => thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
-const showCurrent = computed(() => !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
+const selectedHistory = computed(() => checkBound.value ? null : thread.value?.history.find((item: { id: string }) => item.id === selectedActivityId.value) ?? null)
+const showCurrent = computed(() => toolsHiddenForCheck.value || !selectedActivityId.value || selectedActivityId.value === thread.value?.currentActivity?.id)
 const canvasUnsafe = computed(() => Boolean(canvas.value && canvas.value.status !== 'blocked' && thread.value?.thread.evidenceState !== 'ready'))
-const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !rollback.value && !endedReadOnly.value)
+const savedReceiptBound = computed(() => Boolean(checkBinding.value?.receipt))
+const lifecycleHidesCanvas = computed(() => (rollback.value || endedReadOnly.value) && !savedReceiptBound.value)
+const currentCanvasVisible = computed(() => showCurrent.value && !canvasUnsafe.value && !lifecycleHidesCanvas.value)
+const checkPresented = computed(() => checkBound.value && currentCanvasVisible.value)
+const checkOpen = computed(() => checkPresented.value && checkPhaseOpen.value)
 const currentActivityRoute = computed(() => {
   const { activity: _activity, ...query } = route.query
   return learnVoidRoute(threadId.value, query, route.hash)
@@ -437,7 +449,7 @@ const currentActivityRoute = computed(() => {
 function activityRoute(activityId: string) {
   return learnVoidRoute(threadId.value, { ...route.query, activity: activityId }, route.hash)
 }
-const evidenceActivityId = computed(() => selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
+const evidenceActivityId = computed(() => checkBound.value ? null : selectedHistory.value?.id ?? (showCurrent.value ? thread.value?.currentActivity?.id : null))
 const evidenceQuery = import.meta.client
   ? useTeachingQuery(api.learnAdaptiveEvidence.getThreadActivityEvidence, computed(() => ({ threadId: threadId.value as never, activityId: evidenceActivityId.value ?? '' })), { enabled: computed(() => allowed.value && Boolean(thread.value && evidenceActivityId.value)) })
   : { data: ref(null), pending: ref(false), failure: computed(() => null), refresh: async () => {} }
@@ -459,8 +471,41 @@ function inspectEvidence(origin: HTMLButtonElement) {
   evidenceReturnFocus.value = origin
   evidenceOpenRequest.value += 1
 }
+const citationRequest = shallowRef<CanvasCheckCitationRequest | null>(null)
+const citationOpenRequest = ref(0)
+const citationReturnFocus = ref<HTMLButtonElement | null>(null)
+const citationQuery = useSkippableConvexQuery(api.learnV2PostSealTeaching.getPostSealCitationSource,
+  () => import.meta.client && checkBound.value && citationRequest.value ? citationRequest.value as never : 'skip')
+function inspectCitation(origin: HTMLButtonElement, request: CanvasCheckCitationRequest) {
+  citationRequest.value = request
+  citationReturnFocus.value = origin
+  citationOpenRequest.value += 1
+}
+const citationDrawerProps = computed(() => {
+  const result = citationQuery.data.value
+  const resolved = result?.status === 'available' ? result.evidence : null
+  return {
+    evidence: resolved as never,
+    pending: Boolean(citationRequest.value) && !result,
+    sourceState: resolved ? 'ready' : 'unavailable',
+    safeDestination: safeDestination.value,
+    safeDestinationLabel: safeDestinationLabel.value,
+    openRequest: citationOpenRequest.value,
+    returnFocusTo: citationReturnFocus.value,
+  }
+})
+const evidenceDrawerProps = computed(() => ({
+  evidence: evidence.value as never,
+  pending: evidenceQuery.pending.value,
+  sourceState: (selectedHistory.value ? evidence.value?.integrityState : thread.value?.thread.evidenceState) ?? 'unavailable',
+  safeDestination: safeDestination.value,
+  safeDestinationLabel: safeDestinationLabel.value,
+  openRequest: evidenceOpenRequest.value,
+  returnFocusTo: evidenceReturnFocus.value,
+}))
 
 function leave() { void router.push(safeDestination.value) }
+function goToday() { void router.push('/app/learn/today') }
 </script>
 
 <template>
@@ -476,20 +521,20 @@ function leave() { void router.push(safeDestination.value) }
       <p role="status">This Void is unavailable.</p>
       <NuxtLink :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-4 inline-flex min-h-11 items-center text-primary underline">{{ safeDestinationLabel }}</NuxtLink>
     </section>
-    <div v-else-if="thread" class="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6" data-testid="learn-adaptive-thread-shell">
+    <div v-else-if="thread" :class="checkBound ? 'mx-auto w-full max-w-3xl px-4 py-6 sm:px-6 sm:py-8' : 'mx-auto w-full max-w-3xl px-4 py-8 sm:px-6'" data-testid="learn-adaptive-thread-shell">
       <header>
-        <p class="text-xs font-medium uppercase tracking-wide text-primary">Void · {{ thread.thread.intent }}</p>
-        <h1 class="mt-2 font-dm-sans text-3xl font-bold">{{ thread.thread.outcome }}</h1>
-        <p v-if="thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
-        <p v-if="thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
-        <p class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
-        <div class="mt-3 flex items-center gap-3">
-          <LearnAdaptiveEvidenceDrawer :evidence="evidence as never" :pending="evidenceQuery.pending.value" :source-state="selectedHistory ? evidence?.integrityState ?? 'unavailable' : thread.thread.evidenceState" :safe-destination="safeDestination" :safe-destination-label="safeDestinationLabel" :open-request="evidenceOpenRequest" :return-focus-to="evidenceReturnFocus" />
+        <p :class="checkBound ? 'font-inter text-xs font-medium text-muted-foreground' : 'text-xs font-medium uppercase tracking-wide text-primary'">{{ checkOpen ? 'Check' : 'Void' }} · {{ thread.thread.intent }}</p>
+        <h1 :class="checkBound ? 'mt-2 font-dm-sans text-2xl font-bold text-foreground sm:text-3xl' : 'mt-2 font-dm-sans text-3xl font-bold'">{{ thread.thread.outcome }}</h1>
+        <p v-if="!toolsHiddenForCheck && thread.thread.goal && thread.thread.goal !== thread.thread.outcome" class="mt-2 text-sm text-muted-foreground" data-testid="learn-thread-goal">Goal: {{ thread.thread.goal }}</p>
+        <p v-if="!toolsHiddenForCheck && thread.unresolvedPoint" class="mt-2 text-sm" data-testid="learn-thread-unresolved">Still open: {{ thread.unresolvedPoint }}</p>
+        <p v-if="!toolsHiddenForCheck" class="mt-3 rounded-lg bg-[var(--learn-evidence)] px-3 py-2 text-sm text-muted-foreground" role="status" aria-live="polite">{{ thread.thread.lifecycle }} · Evidence {{ thread.thread.evidenceState }}</p>
+        <div v-if="!toolsHiddenForCheck" class="mt-3 flex items-center gap-3">
+          <LearnAdaptiveEvidenceDrawer v-bind="evidenceDrawerProps" />
           <LearnAdaptiveMemoryDrawer :key="`${ownerId}:${threadId}`" :memory="memory as never" :pending="memoryQuery.pending.value" :busy="memoryBusy" :error="memoryError" :notice="memoryNotice" :retry-available="Boolean(pendingMemoryCommand)" @set-preference="requestMemoryCommand" @delete-artifact="requestMemoryArtifactDeletion" @request-promotion="requestMemoryPromotion" @refresh="reviewCurrentMemory" @retry="retryMemoryCommand" />
         </div>
       </header>
 
-      <section v-if="thread.currentActivity || thread.artifact" class="mt-6 rounded-xl border border-border bg-card p-5" aria-label="Saved learning context" data-testid="learn-thread-resume-context">
+      <section v-if="!toolsHiddenForCheck && (thread.currentActivity || thread.artifact)" class="mt-6 rounded-xl border border-border bg-card p-5" aria-label="Saved learning context" data-testid="learn-thread-resume-context">
         <p v-if="thread.currentActivity" class="text-sm">Current activity: {{ thread.currentActivity.purpose }} · {{ thread.currentActivity.status }}</p>
         <p v-if="thread.currentActivity?.attribution" class="mt-2 text-sm text-muted-foreground" data-testid="learn-current-contribution-origin">{{ contributionOrigin(thread.currentActivity.attribution.sourceFeature, thread.currentActivity.attribution.classification, thread.currentActivity.attribution.sourceStatus) }}</p>
         <p v-if="thread.attemptContext?.priorOutcome" class="mt-2 text-sm">Previous attempt: {{ thread.attemptContext.priorOutcome }}</p>
@@ -497,7 +542,7 @@ function leave() { void router.push(safeDestination.value) }
         <p v-if="thread.artifact" class="mt-2 text-sm">{{ thread.artifact.historical ? 'Historical artifact' : thread.artifact.status === 'saved' ? 'Saved artifact' : 'Draft artifact' }}: {{ thread.artifact.title }}</p>
       </section>
 
-      <section class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
+      <section v-if="!toolsHiddenForCheck" class="mt-6 rounded-xl border border-border bg-[var(--learn-context-surface)] p-5" aria-labelledby="learn-thread-next-title">
         <h2 id="learn-thread-next-title" class="font-dm-sans text-lg font-semibold">Your next move</h2>
         <p v-if="thread.completion" class="mt-2 text-sm" data-testid="learn-representative-outcome" role="status">{{ thread.completion.status === 'passed' ? 'Representative task passed.' : 'Representative task needs more practice.' }} This result describes the scored task, not mastery.</p>
         <p class="mt-2 text-sm">{{ rollback ? 'Back to Learn' : thread.currentActivity || ['draft', 'ready'].includes(thread.thread.lifecycle) ? thread.nextAction.label : 'Review this Void from your learning home.' }}</p>
@@ -505,7 +550,7 @@ function leave() { void router.push(safeDestination.value) }
         <NuxtLink v-if="thread.nextAction.kind === 'clarify' && (canvas || diagnostic)" :to="safeDestination" class="mt-2 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--learn-focus-ring)]">{{ safeDestinationLabel }}</NuxtLink>
       </section>
 
-      <section class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
+      <section v-if="!toolsHiddenForCheck" class="mt-6 rounded-xl border border-border bg-card p-5" aria-labelledby="learn-thread-contributions-title" data-testid="learn-thread-contributions">
         <h2 id="learn-thread-contributions-title" class="font-dm-sans text-lg font-semibold">Recent contributions</h2>
         <p class="mt-2 text-sm text-muted-foreground">Choose a recorded contribution to make an attributed, unscored planning activity. Its source will be checked first. This does not verify facts or award mastery.</p>
         <div v-if="thread.thread.sourceScope?.kind === 'document' || thread.thread.sourceScope?.kind === 'folder'" class="mt-4 rounded-lg border border-border p-3" data-testid="learn-thread-document-producer">
@@ -562,7 +607,7 @@ function leave() { void router.push(safeDestination.value) }
         <p v-if="contributionConversionNotice" class="mt-3 text-sm" role="status" data-testid="learn-thread-conversion-notice">{{ contributionConversionNotice }}</p>
       </section>
 
-      <section class="mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
+      <section :class="checkPresented ? undefined : 'mt-6 rounded-xl bg-[var(--learn-activity-surface)] p-4'" data-testid="learn-adaptive-canvas-frame" aria-label="Current learning activity">
         <div v-if="selectedActivityId && !showCurrent" data-testid="learn-selected-history" class="rounded-lg border border-border p-5">
           <template v-if="selectedHistory">
             <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Past activity · {{ selectedHistory.status }}</p>
@@ -578,18 +623,18 @@ function leave() { void router.push(safeDestination.value) }
           <p class="mt-2 text-sm text-muted-foreground">This factual activity cannot continue until its source is reviewed. Your response draft remains in place.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-if="showCurrent && rollback" data-testid="learn-thread-rollback-recovery" class="rounded-lg border border-border p-5" role="status">
+        <div v-if="showCurrent && rollback && !savedReceiptBound" data-testid="learn-thread-rollback-recovery" class="rounded-lg border border-border p-5" role="status">
           <h2 class="font-dm-sans text-lg font-semibold">This activity is unavailable</h2>
           <p class="mt-2 text-sm text-muted-foreground">Your goal and past activity remain available for review. Open Learn to choose a safe next step.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
-        <div v-if="showCurrent && endedReadOnly" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
+        <div v-if="showCurrent && endedReadOnly && !savedReceiptBound" data-testid="learn-thread-ended-history" class="rounded-lg border border-border p-5" role="status">
           <h2 class="font-dm-sans text-lg font-semibold">This Void has ended</h2>
           <p class="mt-2 text-sm text-muted-foreground">Your learning memory and past activity remain available for review.</p>
           <NuxtLink :to="safeDestination" class="mt-3 inline-flex min-h-11 items-center text-sm text-[var(--learn-action)] underline">{{ safeDestinationLabel }}</NuxtLink>
         </div>
         <div v-show="currentCanvasVisible">
-          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="`${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @inspect-evidence="inspectEvidence" />
+          <LearnAdaptiveReadySessionCanvas v-if="canvas" :key="checkBound ? `${ownerId}:${canvas.thread.id}:check` : `${ownerId}:${canvas.thread.id}:${canvas.activity.id}`" :canvas="canvas as never" :authoritative-revision="Math.max(thread.thread.revision, canvas.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" @today="goToday" @inspect-evidence="inspectEvidence" @inspect-citation="inspectCitation" />
           <LearnAdaptiveArtifactWorkspace v-else-if="artifact" :key="`${ownerId}:${artifact.thread.id}:${artifact.activity.id}`" :canvas="artifact as never" :authoritative-revision="Math.max(thread.thread.revision, artifact.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveReflectionNextMove v-else-if="reflection" :key="`${ownerId}:${reflection.thread.id}:${reflection.activity.id}`" :canvas="reflection as never" :authoritative-revision="Math.max(thread.thread.revision, reflection.thread.revision)" :active="currentCanvasVisible" @leave="leave" />
           <LearnAdaptiveDiagnosticCanvas v-else-if="diagnostic" :key="`${ownerId}:${diagnostic.thread.id}:${diagnostic.activity?.id ?? 'draft'}`" :canvas="diagnostic as never" :authoritative-revision="Math.max(thread.thread.revision, diagnostic.thread.revision)" :show-header="false" :active="currentCanvasVisible" @leave="leave" />
@@ -611,7 +656,9 @@ function leave() { void router.push(safeDestination.value) }
         </div>
       </section>
 
-      <section class="mt-6" aria-labelledby="learn-thread-history-title">
+      <LearnAdaptiveEvidenceDrawer v-if="checkBound && !checkLocked" v-bind="citationDrawerProps" hide-trigger />
+
+      <section v-if="!toolsHiddenForCheck" class="mt-6" aria-labelledby="learn-thread-history-title">
         <h2 id="learn-thread-history-title" class="font-dm-sans text-lg font-semibold">Recent activity</h2>
         <p v-if="thread.history.length === 0" class="mt-2 text-sm text-muted-foreground">Your activity history will appear here.</p>
         <ol v-else class="mt-3 space-y-2">
@@ -622,7 +669,7 @@ function leave() { void router.push(safeDestination.value) }
           </li>
         </ol>
       </section>
-      <NuxtLink v-if="canvas || diagnostic || artifact || reflection" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
+      <NuxtLink v-if="(canvas || diagnostic || artifact || reflection) && (!checkBound || checkPresented)" :to="safeDestination" data-testid="learn-adaptive-safe-destination" class="mt-6 inline-flex min-h-11 items-center text-sm text-muted-foreground underline">{{ safeDestinationLabel }}</NuxtLink>
     </div>
   </section>
 </template>

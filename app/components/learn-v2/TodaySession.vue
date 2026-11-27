@@ -3,7 +3,10 @@ import { useTeachingQuery } from '~/composables/useTeachingQuery'
 import { LEARN_MEASUREMENT_CAPABILITIES } from '#shared/learn-v2-measurement-storage-manifest'
 
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ArrowLeft, BookOpenCheck, ChevronRight, CircleAlert, CircleCheck, Eye, Lightbulb, ShieldCheck } from '@lucide/vue'
+import { ArrowLeft, BookOpenCheck, ChevronRight, CircleAlert, CircleCheck, Eye, Lightbulb, Lock, ShieldCheck } from '@lucide/vue'
+import { learnTodayCheckPointerSchema, type LearnTodayCheckPointer } from '#shared/learn-v2-today-check'
+import type { Infer } from 'convex/values'
+import type { todayCheckPointersValidator } from '~~/convex/lib/learnV2PublicContract'
 import { api } from '#convex/api'
 import { getErrorMessage } from '~~/shared/errors'
 import { useOnlineStatus } from '~/composables/useOnlineStatus'
@@ -25,6 +28,7 @@ type Candidate = {
   nextScheduledAt?: number
   progress: { retained: number, independent: number, total: number }
 }
+type TodayCheckEnvelope = Infer<typeof todayCheckPointersValidator>
 type Block = { kind: string, content: string, order?: number }
 type SessionContent = { revision: number, blocks: Block[], adaptivePresentation?: { purpose: string, reasonCode: string, requiredAction: { kind: 'continue', label: string }, composition: { type: 'cited_explanation', testId: string, heading: string, explanation: string } } } | null
 type Feedback = {
@@ -35,7 +39,7 @@ type Feedback = {
   feedback?: { criterionResults: Array<{ key: string, label: string, awarded: boolean, message: string }>, misconceptionFeedback: Array<{ tag: string, message: string }> }
 }
 
-const { candidate } = defineProps<{ candidate: Candidate }>()
+const { candidate, checkPointers = null, checkLock = null } = defineProps<{ candidate: Candidate, checkPointers?: TodayCheckEnvelope | null, checkLock?: LearnTodayCheckPointer | null }>()
 const emit = defineEmits<{ leave: [], started: [], completed: [] }>()
 const { isOnline } = useOnlineStatus()
 
@@ -70,6 +74,16 @@ const meaningfulStartPending = ref(false)
 const meaningfulStartRetryTick = ref(0)
 const adaptiveActionElement = ref<HTMLButtonElement | null>(null)
 const meaningfulStartOperableSeen = ref(false)
+const startLock = shallowRef<LearnTodayCheckPointer | null>(null)
+let authoritativeVersion = 0
+watch(() => [checkPointers, checkLock], () => {
+  authoritativeVersion++
+  startLock.value = null
+})
+const lessonLock = computed(() => started.value ? null : startLock.value ?? checkLock)
+const showChecks = computed(() => Boolean(checkPointers || lessonLock.value))
+const listedChecks = shallowRef<LearnTodayCheckPointer[]>([])
+const lockHeader = computed(() => lessonLock.value ? listedChecks.value.find(check => check.reference === lessonLock.value!.reference) ?? lessonLock.value : null)
 let meaningfulStartRetryAttempt = 0
 let meaningfulStartRetryTimer: ReturnType<typeof setTimeout> | undefined
 let meaningfulStartDisposed = false
@@ -180,12 +194,26 @@ function move(next: typeof phase.value) {
   phase.value = next
   notice.value = `Now in ${next.replaceAll('_', ' ')}.`
 }
+function canvasLock(result: { status?: string, assessment?: { kind?: string, check?: unknown } }) {
+  if (result.status !== 'assessment' || result.assessment?.kind !== 'check' || !result.assessment.check) return null
+  const parsed = learnTodayCheckPointerSchema.safeParse(result.assessment.check)
+  return parsed.success && parsed.data.state === 'ready' ? parsed.data : null
+}
 async function start() {
-  if (!isOnline.value || busy.value || started.value) return
+  if (!isOnline.value || busy.value || started.value || lessonLock.value) return
   busy.value = true; error.value = null
   startKey.value ??= makeKey('learn-v2-start')
+  const requestedVersion = authoritativeVersion
   try {
-    const result = await startMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, idempotencyKey: startKey.value }) as { sessionContentRevision?: number }
+    const result = await startMutation.mutate({ studySessionId: candidate.studySessionId as never, expectedSessionRevision: sessionRevision.value, expectedContentRevision: contentRevision.value, idempotencyKey: startKey.value }) as { sessionContentRevision?: number, status?: string, assessment?: { kind?: string, check?: unknown } }
+    const lock = canvasLock(result)
+    if (lock) {
+      startKey.value = null
+      if (requestedVersion !== authoritativeVersion) return
+      startLock.value = lock
+      notice.value = 'Your check comes first. Today’s session opens after your check.'
+      return
+    }
     sessionRevision.value += 1
     contentRevision.value = result.sessionContentRevision ?? contentRevision.value
     started.value = true
@@ -239,6 +267,7 @@ async function retryScore() { await submit() }
           <h1 id="today-session-title" class="mt-2 font-dm-sans text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{{ candidate.objectiveTitle }}</h1>
           <p v-if="candidate.capability" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.capability }}</p>
           <p data-testid="learn-v2-session-reason" class="mt-2 text-sm leading-6 text-muted-foreground">{{ candidate.reason }}</p>
+          <LearnV2MeasurementTodayCheckHeader v-if="lockHeader" :pointer="lockHeader" />
         </div>
         <button type="button" data-testid="learn-v2-leave" class="inline-flex shrink-0 items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:border-stone-600 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none forced-colors:border-current" aria-label="Leave study session and return to your workspace" @click="emit('leave')">
           <ArrowLeft class="h-4 w-4" aria-hidden="true" />
@@ -258,6 +287,7 @@ async function retryScore() { await submit() }
     </header>
 
     <div class="mt-5 space-y-4">
+      <LearnV2MeasurementTodayChecks v-if="showChecks" :envelope="checkPointers" :lock="lessonLock" @checks="listedChecks = $event" />
       <p v-if="!isOnline" id="learn-v2-offline-notice" data-testid="learn-v2-offline-notice" role="status" class="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm leading-6 text-amber-100 forced-colors:border-current">Server-scored sessions require a connection. No offline attempt is queued.</p>
       <p v-if="contentPaused" role="status" data-testid="learn-v2-content-paused" class="flex items-start gap-2 rounded-lg border border-border px-4 py-3 text-sm leading-6 text-foreground forced-colors:border-current"><CircleAlert class="mt-1 size-4 shrink-0 text-[var(--learn-attention)]" aria-hidden="true" /><span class="min-w-0">{{ contentPaused.message }}</span></p>
       <p v-if="error" role="alert" data-testid="learn-v2-error" class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm leading-6 text-destructive forced-colors:border-current">{{ error }}</p>
@@ -280,7 +310,8 @@ async function retryScore() { await submit() }
         <BookOpenCheck class="h-6 w-6 text-primary" aria-hidden="true" />
         <h2 class="mt-4 font-dm-sans text-xl font-semibold text-foreground">A focused, evidence-grounded session</h2>
         <p class="mt-2 max-w-xl leading-7 text-muted-foreground">You will retrieve what you know, work through one capability, and finish with an independent application. Take the time you need.</p>
-        <button type="button" data-testid="learn-v2-start" :disabled="busy || !isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="start">{{ busy ? 'Starting…' : 'Start' }}<ChevronRight v-if="!busy" class="h-4 w-4" aria-hidden="true" /></button>
+        <p v-if="lessonLock" data-testid="learn-v2-session-locked" class="mt-6 inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 font-inter text-xs font-medium text-muted-foreground forced-colors:border-current"><Lock class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />Opens after your check</p>
+        <button v-else type="button" data-testid="learn-v2-start" :disabled="busy || !isOnline" :aria-describedby="!isOnline ? 'learn-v2-offline-notice' : undefined" class="mt-6 inline-flex min-h-11 items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none" @click="start">{{ busy ? 'Starting…' : 'Start' }}<ChevronRight v-if="!busy" class="h-4 w-4" aria-hidden="true" /></button>
       </article>
 
       <template v-else>
